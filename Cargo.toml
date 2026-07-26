@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/engine-core",
+    "crates/engine-render",
+    "crates/engine-cli",
+]
+
+# engine-assets lands at M3 (glTF + textures); omitted until it has content.
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+engine-core = { path = "crates/engine-core" }
+engine-render = { path = "crates/engine-render" }
+
+wgpu = "30"
+# 0.31 is still beta; stay on the stable line for the foundation.
+winit = "0.30"
+glam = "0.33"
+pollster = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.dev]
+# wgpu and its shader-compiler dependencies are painfully slow unoptimized,
+# and they are almost never the code under debug. Optimize deps, not us.
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 3

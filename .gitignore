@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Render output from `engine screenshot` / `engine diff-render`
+/out
+*.png
+!examples/**/baseline*.png
+
+.DS_Store
