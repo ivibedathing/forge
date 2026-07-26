@@ -18,7 +18,7 @@ using ordinary bash + file edits, no bespoke integration required.
 ## 2. Core Principles
 
 1. **Text-first, human/agent-readable formats everywhere.** No binary scene
-   or asset metadata. RON or JSON for scenes, materials, prefabs. Git-diffable
+   or asset metadata. JSON for scenes, materials, prefabs. Git-diffable
    by construction.
 2. **No hidden state.** Everything the engine needs to reconstruct a scene
    lives in text files on disk. No editor-only in-memory state, no opaque
@@ -44,9 +44,9 @@ using ordinary bash + file edits, no bespoke integration required.
 - **Graphics API:** wgpu (targets Vulkan/Metal/DX12, cross-platform)
 - **Windowing:** winit
 - **Math:** glam
-- **Serialization:** serde + RON (or JSON) for scene/asset files
+- **Serialization:** serde + JSON for scene/asset files (resolved, see §9)
 - **Image I/O:** image crate (screenshot export)
-- **ECS:** hecs or bevy_ecs (lightweight, not the full Bevy engine)
+- **ECS:** hecs (lightweight, not the full Bevy engine — resolved, see §9)
 - **Build system:** Cargo (workspace with multiple crates, see below)
 
 ## 4. Workspace Layout
@@ -63,53 +63,73 @@ engine/
     component-schema.json       # generated JSON Schema for all components
   examples/
     scenes/
-      demo_scene.ron
+      demo_scene.json
   docs/
     scene-format.md
     component-reference.md      # auto-generated from doc comments
 ```
 
-## 5. Scene File Format (example, RON)
+## 5. Scene File Format (JSON)
 
-```ron
-(
-    name: "demo_scene",
-    entities: [
-        (
-            name: "Player",
-            components: [
-                Transform(position: (0.0, 1.0, 0.0), rotation: (0,0,0,1), scale: (1,1,1)),
-                Mesh(asset: "meshes/capsule.glb"),
-                Camera(fov: 60.0, near: 0.1, far: 1000.0, active: true),
-            ],
-        ),
-        (
-            name: "Cube1",
-            components: [
-                Transform(position: (0.0, 3.0, 0.0), rotation: (0,0,0,1), scale: (1,1,1)),
-                Mesh(asset: "meshes/cube.glb"),
-                Material(albedo: (1.0, 0.0, 0.0), metallic: 0.0, roughness: 0.8),
-            ],
-        ),
-    ],
-)
+Format resolved 2026-07-27: **JSON**, not the RON originally sketched here. See §9.
+
+```json
+{
+  "name": "demo_scene",
+  "entities": [
+    {
+      "name": "Player",
+      "components": [
+        { "type": "Transform",
+          "position": [0.0, 1.0, 0.0],
+          "rotation": [0.0, 0.0, 0.0, 1.0],
+          "scale":    [1.0, 1.0, 1.0] },
+
+        { "type": "Mesh", "asset": "meshes/capsule.glb" },
+
+        { "type": "Camera", "fov": 60.0, "near": 0.1, "far": 1000.0, "active": true }
+      ]
+    },
+    {
+      "name": "Cube1",
+      "components": [
+        { "type": "Transform",
+          "position": [0.0, 3.0, 0.0],
+          "rotation": [0.0, 0.0, 0.0, 1.0],
+          "scale":    [1.0, 1.0, 1.0] },
+
+        { "type": "Mesh", "asset": "meshes/cube.glb" },
+
+        { "type": "Material",
+          "albedo": [1.0, 0.0, 0.0],
+          "metallic": 0.0,
+          "roughness": 0.8 }
+      ]
+    }
+  ]
+}
 ```
 
 Design notes:
+- Components are **internally tagged** on `"type"`, so a component is one flat object rather than a
+  nested single-key wrapper. This is the shape `jq` is pleasant against and the shape an LLM is
+  least likely to get wrong.
 - Every entity has a stable `name` used for CLI targeting (`engine edit-entity Cube1 --set position=0,5,0`) as a convenience layer over direct text edits.
 - Components are plain data; all engine logic lives in systems, not on components.
 - Assets are referenced by relative path, never by opaque ID.
+- JSON has no comments. Anything a scene needs to say about itself has to be a real, schema'd field
+  — this is the accepted cost of the format choice.
 
 ## 6. CLI Surface (v1 target)
 
 | Command | Purpose |
 |---|---|
 | `engine build` | Compile the project, report structured errors |
-| `engine validate <scene.ron>` | Check scene against component schemas, report structured errors |
-| `engine run-scene <scene.ron>` | Launch windowed viewer for a scene |
-| `engine screenshot <scene.ron> --out out.png [--camera Player] [--width 1280 --height 720]` | Headless render to PNG — the key agent feedback tool |
+| `engine validate <scene.json>` | Check scene against component schemas, report structured errors |
+| `engine run-scene <scene.json>` | Launch windowed viewer for a scene |
+| `engine screenshot <scene.json> --out out.png [--camera Player] [--width 1280 --height 720]` | Headless render to PNG — the key agent feedback tool |
 | `engine list-components` | Dump schema of all registered components as JSON |
-| `engine diff-render <scene.ron> <baseline.png> --out diff.png` | Pixel-diff current render vs a baseline, for regression checks |
+| `engine diff-render <scene.json> <baseline.png> --out diff.png` | Pixel-diff current render vs a baseline, for regression checks |
 
 All commands exit non-zero on failure and print errors as JSON to stderr:
 ```json
@@ -120,10 +140,10 @@ All commands exit non-zero on failure and print errors as JSON to stderr:
 
 This is the core workflow the whole design serves:
 
-1. Claude Code edits a `.ron` scene file or a Rust system/component.
-2. Runs `engine validate scene.ron` — fast structural check.
+1. Claude Code edits a `.json` scene file or a Rust system/component.
+2. Runs `engine validate scene.json` — fast structural check.
 3. Runs `engine build` — compiler + engine build errors surface as structured JSON.
-4. Runs `engine screenshot scene.ron --out /tmp/check.png`.
+4. Runs `engine screenshot scene.json --out /tmp/check.png`.
 5. Views the PNG directly (Claude Code/Claude can view images).
 6. Iterates based on what it sees, no human in the loop required.
 
@@ -137,7 +157,7 @@ can run in CI.
    hardcoded triangle. Confirms the graphics stack works end to end.
 2. **M1 — CLI skeleton.** `engine build`, `engine run-scene`, `engine screenshot`
    (even against a hardcoded scene). Establish the JSON error convention early.
-3. **M2 — Scene format + ECS.** RON scene loading, hecs/bevy_ecs integration,
+3. **M2 — Scene format + ECS.** JSON scene loading, hecs integration,
    Transform + Mesh + Camera components, schema export.
 4. **M3 — Asset pipeline.** glTF mesh loading, basic texture loading.
 5. **M4 — Materials + lighting.** PBR-ish material component, one directional
@@ -150,16 +170,34 @@ can run in CI.
 
 ## 9. Open Design Questions (to resolve early, with Claude Code)
 
-- RON vs JSON for scene files (RON is more Rust-native and readable; JSON is
-  more universally tooling-friendly — worth deciding before M2).
-- ECS crate choice: `hecs` (minimal, you write more) vs `bevy_ecs` (more
-  batteries, heavier dependency, pulls in some Bevy conventions).
+### Resolved
+
+**Scene format — JSON** (2026-07-27). The deciding argument was §1's own success criterion: the
+agent works "using ordinary bash + file edits," and `jq` is ordinary bash whereas RON has no
+equivalent. Secondary: §6's `component-schema.json` validates JSON files natively, so the schema
+and the scene are one serialization rather than two, and external tools can validate without a Rust
+parser. Third: the primary user is an LLM, which edits JSON more reliably than RON.
+
+Given up: RON's comments and lighter punctuation. RON remains the nicer format to hand-edit; this
+engine optimizes for the agent, per §2.
+
+**ECS — `hecs` 0.11** (2026-07-27). Chosen over `bevy_ecs` mainly to limit churn exposure. M0
+already lost a build cycle to wgpu's API breaking between major versions; `bevy_ecs` is 0.19,
+breaks every Bevy release, and requires a much newer MSRV. Measured: hecs pulls 6 transitive deps
+and cold-builds in ~1.2s, `bevy_ecs` pulls 128 and takes ~12.3s. v1's system count doesn't justify
+a scheduler.
+
+Given up: `bevy_ecs` change detection, which would make hot reload (below) easier. If hot reload
+becomes a priority this is the decision to revisit.
+
+### Still open
+
 - How much of a "runtime scripting" layer to add (Lua/Rhai) vs. everything
   being compiled Rust systems — affects how much an agent can hot-iterate
   without a full rebuild.
 - Whether to target a live "hot reload" workflow (re-run without recompiling
   Rust when only scene data changes) — likely high value for agent iteration
-  speed.
+  speed. Note this interacts with the ECS choice above.
 
 ## 10. Non-Goals (for v1)
 

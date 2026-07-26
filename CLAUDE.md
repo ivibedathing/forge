@@ -65,18 +65,18 @@ Planned Cargo workspace (design doc §4), dependency order bottom-up:
 - `crates/engine-assets` — mesh/texture loading, asset schema
 - `crates/engine-cli` — the `engine` binary; the primary interface
 
-Supporting: `schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.ron`,
+Supporting: `schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`,
 `docs/component-reference.md` (generated from doc comments).
 
-Stack: Rust + wgpu (Vulkan/Metal/DX12) + winit + glam + serde/RON + `image` for PNG export.
-ECS crate is `hecs` or `bevy_ecs` — **undecided**, see below.
+Stack: Rust + wgpu 30 (Vulkan/Metal/DX12) + winit 0.30 + glam + serde/JSON + hecs + `image` for
+PNG export.
 
 ## Non-negotiable invariants
 
 These are what make the engine agent-operable. Violating one breaks the core premise, so raise it
 with the user rather than working around it:
 
-1. **No binary scene or asset-metadata formats.** Scenes, materials, and prefabs are RON/JSON and
+1. **No binary scene or asset-metadata formats.** Scenes, materials, and prefabs are JSON and
    git-diffable by construction.
 2. **No hidden state.** Everything needed to reconstruct a scene lives in text files on disk. No
    editor-only in-memory state; no opaque GUIDs without an in-repo lookup table.
@@ -100,24 +100,24 @@ with the user rather than working around it:
 ## Commands (target CLI — mostly not yet present, see "Current state")
 
 ```
-engine build                                    # compile; structured errors
-engine validate <scene.ron>                     # schema-check a scene
-engine run-scene <scene.ron>                    # windowed viewer
-engine screenshot <scene.ron> --out out.png [--camera Player] [--width 1280 --height 720]
-engine list-components                          # dump all component schemas as JSON
-engine diff-render <scene.ron> <baseline.png> --out diff.png
+engine build                                     # compile; structured errors
+engine validate <scene.json>                     # schema-check a scene
+engine run-scene <scene.json>                    # windowed viewer
+engine screenshot <scene.json> --out out.png [--camera Player] [--width 1280 --height 720]
+engine list-components                           # dump all component schemas as JSON
+engine diff-render <scene.json> <baseline.png> --out diff.png
 ```
 
 `engine screenshot` is the single most important command in the project — it is what closes the
 agent's edit→see loop. Prioritize it accordingly; keep it headless and keep it fast.
 
-Standard Cargo commands apply once the workspace exists (`cargo build`, `cargo test`,
-`cargo test -p engine-core <test_name>` for a single test).
+Standard Cargo commands: `cargo build`, `cargo test --workspace`, and
+`cargo test -p engine-core <test_name>` for a single test.
 
 ## Build order
 
 Follow the milestones in design doc §8: ~~M0 window+triangle~~ (done) → M1 CLI skeleton + JSON
-error convention → M2 RON scenes + ECS → M3 glTF/texture assets → M4 materials + lighting → M5
+error convention → M2 JSON scenes + ECS → M3 glTF/texture assets → M4 materials + lighting → M5
 validation hardening → M6 diff-render. M5 is deliberately *not* last-priority work; structured
 validation is as load-bearing as rendering features here.
 
@@ -127,13 +127,40 @@ pixels) is written in `tests/headless_render.rs`. Lifting that into the CLI is t
 the test dodges: it uses a 256px-wide target so rows are already 256-byte aligned. Arbitrary
 `--width` values need real `COPY_BYTES_PER_ROW_ALIGNMENT` padding and unpadding.
 
+## Settled decisions
+
+Resolved deliberately with the user; don't relitigate without raising it.
+
+**Scene format: JSON**, not the RON the design doc sketched. The agent loop is specified as
+"ordinary bash," and `jq` is ordinary bash while RON has no equivalent. Invariant #7 wants scenes
+validated against `schemas/component-schema.json` — with JSON the schema and the file are the same
+serialization, so third-party tooling can validate too. And the primary user is an LLM, which edits
+JSON more reliably than RON. Accepted cost: **JSON has no comments**, so anything a scene needs to
+say about itself must be a real field, not a `//`.
+
+Components are **internally tagged** with `"type"`:
+
+```json
+{ "type": "Transform", "position": [0.0, 3.0, 0.0], "scale": [1.0, 1.0, 1.0] }
+```
+
+Note that serde's internally-tagged representation buffers during deserialization and rejects
+newtype variants over non-struct types — keep components as plain structs and this stays fine.
+
+**ECS: `hecs`** (0.11), not `bevy_ecs`. Primarily churn, not performance: `bevy_ecs` is 0.19 and
+breaks every Bevy release, and this project already spent a build cycle on wgpu's API churn — a
+second fast-moving dependency at the core of the data model is the same bet twice. hecs is a small
+stable API at MSRV 1.65 with 6 transitive deps and a ~1.2s cold build, against 128 deps and ~12.3s
+for `bevy_ecs`. v1 has too few systems to need a scheduler; write system ordering by hand.
+
+What this gives up: `bevy_ecs` change detection would have helped with hot reload. If hot reload
+becomes a priority, that tradeoff is worth revisiting — it is the one argument that could reverse
+this.
+
 ## Open decisions — ask, don't assume
 
-Design doc §9 lists choices the user wants to settle deliberately. If a task forces one, surface it
-rather than picking silently:
+Still unsettled (design doc §9). If a task forces one, surface it rather than picking silently:
 
-- RON vs JSON for scene files (decide before M2)
-- `hecs` vs `bevy_ecs`
 - Runtime scripting (Lua/Rhai) vs compiled-Rust systems only
 - Whether to support hot reload of scene data without a Rust rebuild
 
