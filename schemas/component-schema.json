@@ -1,0 +1,361 @@
+{
+  "component": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One component as it appears in a scene file.\n\nInternally tagged on `\"type\"`, so each component is a flat object\nrather than a single-key wrapper — the shape `jq` is pleasant\nagainst and the shape an LLM is least likely to get wrong.",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.",
+        "properties": {
+          "position": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Euler angles in **degrees**, `[x, y, z]`, applied in X→Y→Z intrinsic\norder (glam `EulerRot::XYZ`). Identity is `[0, 0, 0]`.\n\nDegrees rather than a quaternion is a settled decision (design doc §9):\nan agent told to \"rotate 45° about Y\" writes `[0.0, 45.0, 0.0]`\ndirectly, whereas an unlabeled `[x, y, z, w]` array invites silent\nordering bugs.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "scale": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": {
+            "const": "Transform",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Renderable geometry, referenced by relative path (invariant 3).\n\nUntil M3 lands glTF loading, only the `builtin:` primitives resolve; see\n[`crate::mesh::BuiltinMesh`]. A real path is accepted by the schema and by\n`engine validate` — it is a valid scene — but fails at render time with a\nstructured error rather than silently drawing nothing.",
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "type": {
+            "const": "Mesh",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "asset"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A viewpoint. `engine screenshot --camera <name>` selects one by entity name.",
+        "properties": {
+          "active": {
+            "default": false,
+            "description": "Marks the camera used when none is named explicitly.\n\nExactly one camera in a scene may set this. Zero or several is a\nvalidation error rather than a warning-plus-guess: a deterministic\nfailure is cheaper for an agent than a nondeterministic success.",
+            "type": "boolean"
+          },
+          "far": {
+            "default": 1000.0,
+            "format": "float",
+            "type": "number"
+          },
+          "fov": {
+            "default": 60.0,
+            "description": "Vertical field of view, in degrees.",
+            "format": "float",
+            "type": "number"
+          },
+          "near": {
+            "default": 0.10000000149011612,
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "Camera",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Surface appearance. Consumed properly at M4; at M2 only `albedo` is used,\nas a flat unlit color.",
+        "properties": {
+          "albedo": {
+            "default": [
+              0.800000011920929,
+              0.800000011920929,
+              0.800000011920929
+            ],
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "metallic": {
+            "default": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "roughness": {
+            "default": 0.8999999761581421,
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "Material",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "ComponentData"
+  },
+  "components": [
+    "Transform",
+    "Mesh",
+    "Camera",
+    "Material"
+  ],
+  "scene": {
+    "$defs": {
+      "ComponentData": {
+        "description": "One component as it appears in a scene file.\n\nInternally tagged on `\"type\"`, so each component is a flat object\nrather than a single-key wrapper — the shape `jq` is pleasant\nagainst and the shape an LLM is least likely to get wrong.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.",
+            "properties": {
+              "position": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "rotation": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "Euler angles in **degrees**, `[x, y, z]`, applied in X→Y→Z intrinsic\norder (glam `EulerRot::XYZ`). Identity is `[0, 0, 0]`.\n\nDegrees rather than a quaternion is a settled decision (design doc §9):\nan agent told to \"rotate 45° about Y\" writes `[0.0, 45.0, 0.0]`\ndirectly, whereas an unlabeled `[x, y, z, w]` array invites silent\nordering bugs.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "scale": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": {
+                "const": "Transform",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Renderable geometry, referenced by relative path (invariant 3).\n\nUntil M3 lands glTF loading, only the `builtin:` primitives resolve; see\n[`crate::mesh::BuiltinMesh`]. A real path is accepted by the schema and by\n`engine validate` — it is a valid scene — but fails at render time with a\nstructured error rather than silently drawing nothing.",
+            "properties": {
+              "asset": {
+                "type": "string"
+              },
+              "type": {
+                "const": "Mesh",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "asset"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A viewpoint. `engine screenshot --camera <name>` selects one by entity name.",
+            "properties": {
+              "active": {
+                "default": false,
+                "description": "Marks the camera used when none is named explicitly.\n\nExactly one camera in a scene may set this. Zero or several is a\nvalidation error rather than a warning-plus-guess: a deterministic\nfailure is cheaper for an agent than a nondeterministic success.",
+                "type": "boolean"
+              },
+              "far": {
+                "default": 1000.0,
+                "format": "float",
+                "type": "number"
+              },
+              "fov": {
+                "default": 60.0,
+                "description": "Vertical field of view, in degrees.",
+                "format": "float",
+                "type": "number"
+              },
+              "near": {
+                "default": 0.10000000149011612,
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "Camera",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Surface appearance. Consumed properly at M4; at M2 only `albedo` is used,\nas a flat unlit color.",
+            "properties": {
+              "albedo": {
+                "default": [
+                  0.800000011920929,
+                  0.800000011920929,
+                  0.800000011920929
+                ],
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "metallic": {
+                "default": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "roughness": {
+                "default": 0.8999999761581421,
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "Material",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "EntityDef": {
+        "additionalProperties": false,
+        "description": "One entity in a scene file.",
+        "properties": {
+          "components": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ComponentData"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "Unique within the scene; this is what CLI commands target (invariant 4).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "A scene file, exactly as it appears on disk.",
+    "properties": {
+      "entities": {
+        "items": {
+          "$ref": "#/$defs/EntityDef"
+        },
+        "type": "array"
+      },
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "entities"
+    ],
+    "title": "SceneFile",
+    "type": "object"
+  }
+}

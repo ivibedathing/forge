@@ -4,16 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0 is done.** The Cargo workspace exists and renders a triangle, verified by pixel readback.
-Everything after M0 in the milestone list is unbuilt — most of the CLI table below does not exist
-yet.
+**M0–M2 are done** (plus most of M1's CLI). JSON scenes load into hecs, render headlessly to PNG,
+and validate with all-errors-at-once reporting. Verified by 60 tests including offscreen pixel
+readback, and by rendering `examples/scenes/demo_scene.json` and looking at it.
 
 What works today:
 
 ```
-engine run [--width 1280 --height 720]   # windowed viewer, M0 triangle. No scene loading yet.
+engine validate <scene.json>             # every error at once, each with file/line/did_you_mean
+engine screenshot <scene.json> --out x.png [--camera N] [--width W --height H]
+engine run-scene <scene.json>            # windowed scene viewer
+engine list-components                   # scene + component JSON Schemas
+engine build                             # cargo build, diagnostics re-emitted as engine errors
+engine run                               # M0 triangle (stack proof)
 engine info                              # selected GPU adapter as JSON
 ```
+
+Meshes are `builtin:cube` / `builtin:plane` / `builtin:triangle` until M3; a file path in
+`Mesh.asset` fails validation with `asset_not_found`. Line numbers on semantic errors come from
+`engine-core/src/lineindex.rs` (path → line lookup; serde_json discards spans). The checked-in
+`schemas/component-schema.json` is enforced by `engine-core/tests/repo_contracts.rs` — regenerate
+with `engine list-components > schemas/component-schema.json` after touching any component.
 
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).

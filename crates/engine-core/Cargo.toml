@@ -7,5 +7,7 @@ publish.workspace = true
 
 [dependencies]
 glam.workspace = true
+hecs.workspace = true
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
