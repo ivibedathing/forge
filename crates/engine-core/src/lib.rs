@@ -1,13 +1,20 @@
-//! Core engine types: structured errors, math re-exports, and (from M2) the
-//! ECS and scene graph.
+//! Core engine types: structured errors, components, scenes, and the ECS world
+//! they instantiate.
 //!
 //! This crate must not depend on the renderer or on any windowing library —
 //! headless tooling (`engine validate`, `engine list-components`) links only
 //! this, and must stay usable on a machine with no GPU.
 
+pub mod components;
 pub mod error;
+pub mod lineindex;
+pub mod mesh;
+pub mod scene;
+pub mod schema;
+pub mod validate;
 
 pub use error::{EngineError, Result};
+pub use scene::{Scene, SceneFile};
 
 /// Math types, re-exported so downstream crates share one `glam` version.
 pub mod math {

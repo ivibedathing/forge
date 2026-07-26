@@ -1,28 +1,30 @@
 //! Windowed presentation: surface setup and swapchain lifecycle.
 //!
-//! Everything here is window-specific by design. The headless path (M1) goes
-//! straight from `Gpu` to `Renderer` and never touches this module.
+//! Everything here is window-specific by design; the headless path never
+//! touches this module. `WindowTarget` owns the surface plumbing and nothing
+//! else — what gets drawn each frame is the caller's business, passed in as a
+//! closure, so the triangle viewer and the scene viewer share every line of
+//! acquire/present handling.
 
 use std::sync::Arc;
 
 use engine_core::{EngineError, Result};
 
-use crate::{Frame, Gpu, Renderer};
+use crate::Gpu;
 
 /// A window surface plus the GPU state needed to present to it.
 pub struct WindowTarget {
     pub gpu: Gpu,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    renderer: Renderer,
 }
 
 impl WindowTarget {
-    /// Build a surface for `window` and a renderer matching its format.
+    /// Build a surface for `window`.
     ///
-    /// Takes an `Arc<Window>` so the surface can borrow the window for
-    /// `'static`; wgpu requires the window to outlive the surface, and an Arc
-    /// is how that is expressed without unsafe.
+    /// Takes an `Arc<W>` so the surface can borrow the window for `'static`;
+    /// wgpu requires the window to outlive the surface, and an Arc is how that
+    /// is expressed without unsafe.
     pub fn new<W>(window: Arc<W>, width: u32, height: u32) -> Result<Self>
     where
         W: wgpu::DisplayAndWindowHandle + 'static,
@@ -38,8 +40,7 @@ impl WindowTarget {
 
         let gpu = pollster::block_on(Gpu::new(instance, Some(&surface)))?;
 
-        // A zero-sized surface is not configurable; callers that may be
-        // minimized should skip creation until there is real area.
+        // A zero-sized surface is not configurable; clamp rather than fail.
         let (width, height) = (width.max(1), height.max(1));
 
         let config = surface
@@ -53,14 +54,20 @@ impl WindowTarget {
 
         surface.configure(&gpu.device, &config);
 
-        let renderer = Renderer::new(&gpu.device, config.format);
-
         Ok(Self {
             gpu,
             surface,
             config,
-            renderer,
         })
+    }
+
+    /// The swapchain's texture format; pipelines must be built for this.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -74,21 +81,24 @@ impl WindowTarget {
         self.surface.configure(&self.gpu.device, &self.config);
     }
 
-    /// Draw and present one frame.
-    pub fn render(&mut self) -> Result<()> {
+    /// Acquire a frame, hand it to `draw`, and present it.
+    ///
+    /// Transient acquisition states (occluded, outdated, lost…) are absorbed
+    /// here: the frame is skipped or the surface reconfigured, and `draw`
+    /// simply is not called. Only unrecoverable states become errors.
+    pub fn render_with(
+        &mut self,
+        draw: impl FnOnce(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView),
+    ) -> Result<()> {
         use wgpu::CurrentSurfaceTexture as Acquired;
 
         // `suboptimal` defers reconfiguration until after present: configuring
         // a surface while one of its textures is still alive panics.
         let (surface_texture, suboptimal) = match self.surface.get_current_texture() {
             Acquired::Success(texture) => (texture, false),
-
-            // Usable this frame, but the swapchain no longer matches the
-            // surface. Draw it, then reconfigure.
             Acquired::Suboptimal(texture) => (texture, true),
 
-            // Nothing to draw into right now. Skip the frame; these clear up on
-            // their own.
+            // Nothing to draw into right now; these clear up on their own.
             Acquired::Timeout | Acquired::Occluded => return Ok(()),
 
             // Recoverable by reconfiguring. No texture is alive here, so it is
@@ -98,8 +108,6 @@ impl WindowTarget {
                 return Ok(());
             }
 
-            // A validation error was raised and captured by an error scope.
-            // This is a bug in our usage, not a transient condition.
             Acquired::Validation => {
                 return Err(EngineError::new(
                     "surface_validation_error",
@@ -112,19 +120,7 @@ impl WindowTarget {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.renderer.draw(
-            &self.gpu.device,
-            &self.gpu.queue,
-            Frame {
-                view: &view,
-                clear: wgpu::Color {
-                    r: 0.05,
-                    g: 0.05,
-                    b: 0.07,
-                    a: 1.0,
-                },
-            },
-        );
+        draw(&self.gpu.device, &self.gpu.queue, &view);
 
         self.gpu.queue.present(surface_texture);
 

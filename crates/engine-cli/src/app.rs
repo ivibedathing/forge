@@ -1,9 +1,18 @@
 //! The winit application handler for windowed viewing.
+//!
+//! One app, two paint modes: the M0 triangle (`engine run`) and a loaded scene
+//! (`engine run-scene`). The split lives here rather than in two app structs
+//! because everything except the per-frame draw — window creation, resize,
+//! error plumbing — is identical.
 
 use std::sync::Arc;
 
+use engine_core::components::Camera;
+use engine_core::math::Mat4;
+use engine_core::scene::RenderItem;
 use engine_core::{EngineError, Result};
-use engine_render::WindowTarget;
+use engine_render::scene_renderer::{self, ScenePass, SceneRenderer};
+use engine_render::{Frame, Renderer, WindowTarget};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -11,15 +20,38 @@ use winit::{
     window::{Window, WindowId},
 };
 
+/// What to render, decided before the window exists.
+pub enum Content {
+    /// The M0 proof-of-life triangle.
+    Triangle,
+    /// A loaded scene, flattened to a draw list.
+    Scene {
+        items: Vec<RenderItem>,
+        camera: Camera,
+        camera_model: Mat4,
+    },
+}
+
+/// GPU-side state, created once the window exists.
+enum Paint {
+    Triangle(Renderer),
+    Scene {
+        renderer: SceneRenderer,
+        depth: wgpu::TextureView,
+    },
+}
+
 pub struct ViewerApp {
     title: String,
     width: u32,
     height: u32,
+    content: Content,
 
-    // Populated on `resumed`, which is the only point at which winit guarantees
-    // a window can be created. On desktop this fires once at startup.
+    // Populated on `resumed`, the only point at which winit guarantees a
+    // window can be created. On desktop this fires once at startup.
     window: Option<Arc<Window>>,
     target: Option<WindowTarget>,
+    paint: Option<Paint>,
 
     /// Set when a frame fails unrecoverably; drained by `into_result` so the
     /// process can exit non-zero with structured JSON.
@@ -27,13 +59,15 @@ pub struct ViewerApp {
 }
 
 impl ViewerApp {
-    pub fn new(title: impl Into<String>, width: u32, height: u32) -> Self {
+    pub fn new(title: impl Into<String>, width: u32, height: u32, content: Content) -> Self {
         Self {
             title: title.into(),
             width,
             height,
+            content,
             window: None,
             target: None,
+            paint: None,
             error: None,
         }
     }
@@ -50,6 +84,57 @@ impl ViewerApp {
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: EngineError) {
         self.error = Some(error);
         event_loop.exit();
+    }
+
+    fn redraw(&mut self) -> Result<()> {
+        let (Some(target), Some(paint)) = (self.target.as_mut(), self.paint.as_mut()) else {
+            return Ok(());
+        };
+
+        match (paint, &self.content) {
+            (Paint::Triangle(renderer), _) => target.render_with(|device, queue, view| {
+                renderer.draw(
+                    device,
+                    queue,
+                    Frame {
+                        view,
+                        clear: scene_renderer::DEFAULT_CLEAR,
+                    },
+                );
+            }),
+
+            (
+                Paint::Scene { renderer, depth },
+                Content::Scene {
+                    items,
+                    camera,
+                    camera_model,
+                },
+            ) => {
+                let (width, height) = target.size();
+                let view_projection = scene_renderer::view_projection(
+                    camera,
+                    *camera_model,
+                    width as f32 / height as f32,
+                );
+                target.render_with(|device, queue, view| {
+                    renderer.draw(
+                        device,
+                        queue,
+                        ScenePass {
+                            target: view,
+                            depth,
+                            items,
+                            view_projection,
+                            clear: scene_renderer::DEFAULT_CLEAR,
+                        },
+                    );
+                })
+            }
+
+            // Scene paint is only ever built from scene content.
+            (Paint::Scene { .. }, Content::Triangle) => unreachable!(),
+        }
     }
 }
 
@@ -77,34 +162,52 @@ impl ApplicationHandler for ViewerApp {
         };
 
         let size = window.inner_size();
-        match WindowTarget::new(window.clone(), size.width, size.height) {
-            Ok(target) => {
-                self.window = Some(window);
-                self.target = Some(target);
+        let target = match WindowTarget::new(window.clone(), size.width, size.height) {
+            Ok(target) => target,
+            Err(e) => return self.fail(event_loop, e),
+        };
+
+        let paint = match self.content {
+            Content::Triangle => {
+                Paint::Triangle(Renderer::new(&target.gpu.device, target.format()))
             }
-            Err(e) => self.fail(event_loop, e),
-        }
+            Content::Scene { .. } => {
+                let (width, height) = target.size();
+                Paint::Scene {
+                    renderer: SceneRenderer::new(&target.gpu.device, target.format()),
+                    depth: scene_renderer::depth_texture(&target.gpu.device, width, height),
+                }
+            }
+        };
+
+        self.window = Some(window);
+        self.target = Some(target);
+        self.paint = Some(paint);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let Some(target) = self.target.as_mut() else {
-            return;
-        };
-
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::Resized(size) => {
-                target.resize(size.width, size.height);
+                if let Some(target) = self.target.as_mut() {
+                    target.resize(size.width, size.height);
+                    // The depth buffer must track the swapchain size exactly.
+                    if let Some(Paint::Scene { depth, .. }) = self.paint.as_mut() {
+                        *depth = scene_renderer::depth_texture(
+                            &target.gpu.device,
+                            size.width,
+                            size.height,
+                        );
+                    }
+                }
             }
 
             WindowEvent::RedrawRequested => {
-                if let Err(e) = target.render() {
+                if let Err(e) = self.redraw() {
                     return self.fail(event_loop, e);
                 }
-                // Keep drawing. M0 has no simulation to step, so this is just a
-                // continuous redraw; a real frame pacer arrives with the
-                // runtime loop.
+                // Keep drawing; there is no simulation to pace yet.
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }

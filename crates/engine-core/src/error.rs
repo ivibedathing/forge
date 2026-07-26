@@ -29,6 +29,8 @@ pub struct ErrorContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub component: Option<String>,
@@ -38,6 +40,11 @@ pub struct ErrorContext {
     /// Set when the offending name is a near-miss for something known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub did_you_mean: Option<String>,
+
+    /// The entities or values an ambiguous choice was between, so an agent can
+    /// resolve the ambiguity without re-reading the scene.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidates: Option<Vec<String>>,
 }
 
 /// A structured engine error.
@@ -86,6 +93,11 @@ impl EngineError {
         self
     }
 
+    pub fn column(mut self, column: u32) -> Self {
+        self.context_mut().column = Some(column);
+        self
+    }
+
     pub fn entity(mut self, entity: impl Into<String>) -> Self {
         self.context_mut().entity = Some(entity.into());
         self
@@ -103,6 +115,15 @@ impl EngineError {
 
     pub fn did_you_mean(mut self, suggestion: impl Into<String>) -> Self {
         self.context_mut().did_you_mean = Some(suggestion.into());
+        self
+    }
+
+    pub fn candidates<I, S>(mut self, candidates: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.context_mut().candidates = Some(candidates.into_iter().map(Into::into).collect());
         self
     }
 
