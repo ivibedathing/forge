@@ -124,6 +124,16 @@ registry! {
     ASSET_LOAD_FAILED = "asset_load_failed", Input,
         "the asset file exists but could not be parsed";
 
+    // ── diff-render ────────────────────────────────────────────────────
+    RENDER_MISMATCH = "render_mismatch", Input,
+        "the rendered scene differs from its baseline beyond tolerance";
+    BASELINE_NOT_FOUND = "baseline_not_found", Input,
+        "the baseline PNG path does not exist";
+    BASELINE_INVALID = "baseline_invalid", Input,
+        "the baseline file is not a decodable, non-empty PNG";
+    DIMENSION_MISMATCH = "dimension_mismatch", Input,
+        "the two images being compared have different dimensions";
+
     // ── engine build ───────────────────────────────────────────────────
     COMPILE_ERROR = "compile_error", Input,
         "a rustc error, re-emitted with its file/line";

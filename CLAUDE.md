@@ -4,25 +4,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M5 are done** (plus most of M1's CLI). JSON scenes load into hecs, render headlessly to PNG
+**M0–M6 are done** (plus most of M1's CLI). JSON scenes load into hecs, render headlessly to PNG
 with PBR lighting, validate with all-errors-at-once reporting under a formalized CLI contract,
-and reference glTF mesh files. Verified by 137 tests including offscreen pixel readback and an
-end-to-end CLI suite, and by rendering the example scenes — including the verification fixtures
-from `milestone-verification-scenes.md` (`verify/m4_lighting.json` renders correctly;
-`verify/m5_broken.json` is committed **broken** and must never validate — its failing with all
-seven planted errors is the pass condition, pinned by `repo_contracts.rs`).
+reference glTF mesh files, and pin their renders against committed baselines with
+`engine diff-render`. Verified by 151 tests including offscreen pixel readback and an end-to-end
+CLI suite, and by the verification fixtures from `milestone-verification-scenes.md`
+(`verify/m4_lighting.json` diff-renders bit-exactly against
+`verify/baselines/m4_lighting.png`; `verify/m5_broken.json` is committed **broken** and must
+never validate — its failing with all seven planted errors is the pass condition, pinned by
+`repo_contracts.rs`). **From M6 on, the standard check's "look at the PNGs" step is
+`engine diff-render` against the committed baselines** — each later milestone adds its scene's
+baseline in the same commit that adds the scene.
 
 What works today:
 
 ```
 engine validate <scene.json>... [--strict]  # every error at once; multi-file; --strict promotes warnings
 engine screenshot <scene.json> --out x.png [--camera N] [--width W --height H]
+engine diff-render <scene.json> <baseline.png> [--out diff.png] [--threshold N] [--max-diff-percent P]
 engine run-scene <scene.json>            # windowed scene viewer
 engine list-components                   # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
 engine run                               # M0 triangle (stack proof)
 engine info                              # selected GPU adapter as JSON
 ```
+
+Diff-render (M6): the pure comparison lives in `engine-render/src/diff.rs` (no GPU — unit-tests
+everywhere); the CLI decodes the baseline, renders at the baseline's dimensions (no
+--width/--height; re-bless to resize), and reports pass/fail with `diff_pixels`,
+`max_channel_delta`, and `diff_bounds`. Defaults are bit-exact; determinism is promised
+same-machine/same-adapter only, so baselines are per-adapter artifacts and the report carries
+the adapter name. The diff PNG's three pixel classes (red violation / yellow within-threshold /
+faded-gray identical) are pinned formulas — see `docs/cli-contract.md`. Blessing is
+`engine screenshot` — no separate bless flag, deliberately. The report prints on both pass and
+fail (a documented stdout exception).
 
 `Mesh.asset` is `builtin:cube` / `builtin:plane` / `builtin:sphere` / `builtin:triangle`, or a
 `.gltf`/`.glb` path relative to the scene file. Reference checks (existence, extension,
@@ -169,8 +184,8 @@ Standard Cargo commands: `cargo build`, `cargo test --workspace`, and
 
 Follow the milestones in design doc §8: ~~M0 window+triangle~~ → ~~M1 CLI skeleton + JSON
 error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ → ~~M4 materials +
-lighting~~ → ~~M5 validation hardening~~ (all done) → M6 diff-render. Each milestone from M4 on
-ends by running its fixture from `milestone-verification-scenes.md`.
+lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ (all done; next per roadmap: M7).
+Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any
 `TextureView`, `Gpu::new` takes an optional surface, and the readback path (texture → buffer →

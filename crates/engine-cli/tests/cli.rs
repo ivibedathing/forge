@@ -317,3 +317,178 @@ fn m4_lighting_fixture_still_validates_clean() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// ── diff-render ────────────────────────────────────────────────────────
+
+#[test]
+fn missing_baseline_is_baseline_not_found() {
+    let scene = scene_file("diff-nobase", VALID);
+    let output = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg("does/not/exist.png")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(codes_of(&stderr_lines(&output)), ["baseline_not_found"]);
+}
+
+#[test]
+fn undecodable_baseline_is_baseline_invalid() {
+    let scene = scene_file("diff-badbase", VALID);
+    let fake = scene.with_file_name("baseline.png");
+    std::fs::write(&fake, "this is not a png").unwrap();
+
+    let output = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&fake)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(codes_of(&stderr_lines(&output)), ["baseline_invalid"]);
+}
+
+#[test]
+fn broken_scene_reports_all_errors_before_any_render() {
+    let scene = scene_file("diff-broken", BROKEN);
+    let baseline = scene.with_file_name("baseline.png");
+    // A real 1x1 PNG so the baseline stage passes without a GPU.
+    image::RgbaImage::from_raw(1, 1, vec![0, 0, 0, 255])
+        .unwrap()
+        .save(&baseline)
+        .unwrap();
+
+    let output = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&output));
+    assert!(codes.contains(&"unknown_component".to_string()), "{codes:?}");
+    assert!(codes.contains(&"duplicate_entity_name".to_string()), "{codes:?}");
+}
+
+/// The §7 same-machine determinism promise as an executable claim, plus the
+/// full agent loop: bless → diff (pass) → edit → diff (fail with located
+/// damage). Skips cleanly when this machine has no GPU, the same policy as
+/// headless_render.rs.
+#[test]
+fn bless_then_diff_round_trip() {
+    const SCENE: &str = r#"{"name":"diffscene","entities":[
+        {"name":"Cam","components":[
+            {"type":"Transform","position":[0.0,1.5,5.0]},
+            {"type":"Camera","active":true}]},
+        {"name":"Cube","components":[
+            {"type":"Transform","position":[0.0,1.0,0.0]},
+            {"type":"Mesh","asset":"builtin:cube"},
+            {"type":"Material","albedo":[0.8,0.1,0.1]}]}
+    ]}"#;
+
+    let scene = scene_file("diff-roundtrip", SCENE);
+    let baseline = scene.with_file_name("baseline.png");
+
+    // Bless via screenshot — the identical offscreen path, so a screenshot
+    // is a valid baseline by construction.
+    let bless = engine()
+        .arg("screenshot")
+        .arg(&scene)
+        .arg("--out")
+        .arg(&baseline)
+        .arg("--width")
+        .arg("96")
+        .arg("--height")
+        .arg("64")
+        .output()
+        .unwrap();
+    if !bless.status.success() {
+        let stderr = String::from_utf8_lossy(&bless.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "screenshot failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    }
+
+    // Self-diff at bit-exact defaults must pass with zero difference.
+    let diff_out = scene.with_file_name("selfdiff.png");
+    let self_diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--out")
+        .arg(&diff_out)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        self_diff.status.code(),
+        Some(0),
+        "self-diff must be deterministic: {}",
+        String::from_utf8_lossy(&self_diff.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&self_diff).trim()).unwrap();
+    assert_eq!(report["pass"], true);
+    assert_eq!(report["diff_pixels"], 0);
+    assert_eq!(report["width"], 96, "render size comes from the baseline");
+    assert_eq!(report["height"], 64);
+    assert!(report["diff_bounds"].is_null(), "no bounds when nothing differs");
+    assert!(report["adapter"].is_string());
+    assert!(diff_out.exists(), "diff image is written on pass too");
+
+    // A real change must fail loudly, with the damage located.
+    let changed = scene.with_file_name("changed.json");
+    std::fs::write(&changed, SCENE.replace("[0.8,0.1,0.1]", "[0.1,0.1,0.9]")).unwrap();
+
+    let fail_out = scene.with_file_name("faildiff.png");
+    let changed_diff = engine()
+        .arg("diff-render")
+        .arg(&changed)
+        .arg(&baseline)
+        .arg("--out")
+        .arg(&fail_out)
+        .output()
+        .unwrap();
+
+    assert_eq!(changed_diff.status.code(), Some(1));
+    assert_eq!(
+        codes_of(&stderr_lines(&changed_diff)),
+        ["render_mismatch"],
+        "one structured error on stderr"
+    );
+
+    // The report still prints on failure — the documented exception.
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&changed_diff).trim()).unwrap();
+    assert_eq!(report["pass"], false);
+    assert!(report["diff_pixels"].as_u64().unwrap() > 0);
+    let bounds = &report["diff_bounds"];
+    assert!(bounds["max_x"].as_u64().unwrap() >= bounds["min_x"].as_u64().unwrap());
+
+    // The diff PNG classifies: red violations inside the bounds, none outside.
+    let diff_png = image::open(&fail_out).unwrap().to_rgba8();
+    let (min_x, min_y) = (
+        bounds["min_x"].as_u64().unwrap() as u32,
+        bounds["min_y"].as_u64().unwrap() as u32,
+    );
+    let (max_x, max_y) = (
+        bounds["max_x"].as_u64().unwrap() as u32,
+        bounds["max_y"].as_u64().unwrap() as u32,
+    );
+    let mut red_inside = 0u32;
+    for (x, y, pixel) in diff_png.enumerate_pixels() {
+        let inside = x >= min_x && x <= max_x && y >= min_y && y <= max_y;
+        if pixel.0 == [255, 0, 0, 255] {
+            assert!(inside, "red pixel outside diff_bounds at ({x}, {y})");
+            red_inside += 1;
+        }
+    }
+    assert!(red_inside > 0, "the recolored cube must show as red");
+}

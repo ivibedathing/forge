@@ -13,6 +13,7 @@ use crate::gpu::Gpu;
 use crate::scene_renderer::{self, SceneRenderer};
 
 /// An RGBA8 image in CPU memory, tightly packed (no row padding).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
@@ -47,11 +48,28 @@ pub fn render(
     width: u32,
     height: u32,
 ) -> Result<Image> {
+    render_with_adapter(items, camera, camera_model, lights, width, height).map(|(image, _)| image)
+}
+
+/// [`render`], also reporting which adapter drew the image.
+///
+/// `engine diff-render` carries the adapter name in its report because
+/// cross-adapter baseline failures are the expected hard case — the report
+/// should include the one fact that diagnoses them.
+pub fn render_with_adapter(
+    items: &[RenderItem],
+    camera: &Camera,
+    camera_model: Mat4,
+    lights: ResolvedLights,
+    width: u32,
+    height: u32,
+) -> Result<(Image, String)> {
     let (width, height) = (width.max(1), height.max(1));
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
     let instance = Gpu::default_instance();
     let gpu = pollster::block_on(Gpu::new(instance, None))?;
+    let adapter = gpu.adapter_info().name;
 
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("screenshot-target"),
@@ -88,7 +106,7 @@ pub fn render(
         },
     );
 
-    read_back(&gpu, &texture, width, height)
+    read_back(&gpu, &texture, width, height).map(|image| (image, adapter))
 }
 
 /// Copy a rendered texture into CPU memory, undoing wgpu's row alignment.
