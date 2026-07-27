@@ -51,22 +51,14 @@ fn m10_script_verify_scene_is_valid() {
 
 #[test]
 fn demo_scene_is_valid() {
-    let source = repo_file("examples/scenes/demo_scene.json");
-    let errors = engine_core::validate::validate_source(&source, "examples/scenes/demo_scene.json");
-    assert!(
-        errors.is_empty(),
-        "the checked-in demo scene no longer validates:\n{}",
-        errors
-            .iter()
-            .map(|e| e.to_json())
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
+    // The demo scene references meshes/truck.glb, so validation must run
+    // against its real location like the other file-referencing scenes.
+    assert_scene_validates("examples/scenes/demo_scene.json");
 }
 
 /// Validate a scene that references real files, so validation must see the
-/// scene's actual location — hence the absolute path, unlike the in-memory
-/// demo scene test.
+/// scene's actual location — hence the absolute path rather than an
+/// in-memory source string.
 fn assert_scene_validates(relative: &str) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative);
     let display = path.display().to_string();
@@ -220,12 +212,33 @@ fn error_code_registry_matches_the_docs() {
     assert_eq!(documented.len(), registry.len());
 }
 
+/// Serves builtins for real and file meshes as stand-in geometry, after
+/// checking the reference resolves against the demo scene's directory.
+/// engine-core cannot parse glTF (that is engine-assets' job), but this test
+/// can still pin that every referenced file exists and produces a draw item.
+struct DemoAssets;
+
+impl engine_core::mesh::MeshSource for DemoAssets {
+    fn load_mesh(&self, asset: &str) -> engine_core::Result<engine_core::mesh::MeshData> {
+        let scene_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/scenes");
+        match engine_core::mesh::MeshAsset::resolve(asset, &scene_dir)? {
+            engine_core::mesh::MeshAsset::Builtin(builtin) => Ok(builtin.data()),
+            engine_core::mesh::MeshAsset::File(_) => {
+                Ok(engine_core::mesh::BuiltinMesh::Cube.data())
+            }
+        }
+    }
+}
+
 #[test]
 fn demo_scene_loads_and_draws_everything() {
     let source = repo_file("examples/scenes/demo_scene.json");
-    let scene = engine_core::Scene::from_source(&source, "demo_scene.json").unwrap();
+    // The real path, because loading resolves meshes/truck.glb against the
+    // scene file's directory.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/scenes/demo_scene.json");
+    let scene = engine_core::Scene::from_source(&source, &path.display().to_string()).unwrap();
 
-    assert_eq!(scene.entity_count(), 7);
+    assert_eq!(scene.entity_count(), 8);
     scene.camera(None).expect("demo scene has an active camera");
     assert!(
         scene.lights().sun.is_some() && scene.lights().ambient.is_some(),
@@ -233,12 +246,12 @@ fn demo_scene_loads_and_draws_everything() {
     );
 
     let items = scene
-        .render_items(&engine_core::mesh::BuiltinAssets)
+        .render_items(&DemoAssets)
         .expect("all demo assets resolve");
     assert_eq!(
         items.len(),
-        4,
-        "Ground, Cube1, Cube2, Sphere1 — lights and camera draw nothing"
+        5,
+        "Ground, Cube1, Cube2, Sphere1, truck — lights and camera draw nothing"
     );
 }
 
