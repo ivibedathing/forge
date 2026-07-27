@@ -76,11 +76,12 @@ command ever reports only the first error.
 ```
 engine validate <scene.json>... [--strict]   # one or more files; aggregate verdict
 engine screenshot <scene.json> --out x.png [--camera N] [--width W --height H]
-engine run-scene <scene.json> [--camera N]
+engine run-scene <scene.json> [--camera N] [--record-input f.input.jsonl]
 engine diff-render <scene.json> <baseline.png> [--out diff.png] [--camera N]
                    [--threshold N] [--max-diff-percent P]
 engine edit <scene.json> [--watch]           # GUI editor; --watch = read-only
-engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
+engine simulate <scene.json> --steps N [--input f.input.jsonl]
+                [--bake out.json] [--trace t.jsonl]
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine filmstrip <scene.json> --out strip.png [--start/--end/--frames/--columns]
 engine list-animations <scene-or-clip> [--schema]
@@ -180,7 +181,32 @@ file, line, and the owning entity, exit 1. Baking captures script-driven
 state: any Transform/RigidBody field that differs from the file's rest value
 is written back, everything else byte-preserved.
 
-## Validation against the published schema
+## Input
+
+Keyboard input is sampled per fixed step — scripts ask `world.key("ArrowUp")`
+— and exists headlessly only as an `*.input.jsonl` timeline: sparse JSONL
+keyframes of the *complete* held set, each in effect from its `step` (0-based)
+until the next line, nothing held before the first:
+
+```jsonl
+{"step": 0, "held": ["ArrowUp"]}
+{"step": 120, "held": ["ArrowUp", "ArrowLeft"]}
+{"step": 300, "held": []}
+```
+
+Key names are the W3C `KeyboardEvent.code` values from a curated allowlist
+(arrows, `KeyA`–`KeyZ`, `Digit0`–`Digit9`, `Space`, `Enter`, shift/control);
+an unknown name is `unknown_key` with `did_you_mean`, malformed lines are
+`input_parse_error`, non-increasing steps are `unsorted_input_steps` — every
+error at once, with the timeline's file/line.
+
+`--input <f>` on `simulate` / `screenshot` / `diff-render` / `raycast`
+replays a timeline while stepping; the same timeline twice is byte-identical
+(the golden-trace promise extends to input), and no `--input` means no keys
+held. `engine run-scene` is the play mode — the keyboard feeds the same
+held-set live, and `--record-input <f>` writes a timeline line whenever the
+held set changes, so a human play session becomes a committable artifact that
+`--input` replays exactly: record once, regression-test forever.
 
 `schemas/component-schema.json` (from `engine list-components`) carries the
 same numeric range constraints `engine validate` enforces, so third-party

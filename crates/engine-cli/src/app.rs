@@ -5,19 +5,22 @@
 //! because everything except the per-frame draw — window creation, resize,
 //! error plumbing — is identical.
 
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
 use engine_core::components::Camera;
+use engine_core::input::InputState;
 use engine_core::math::Mat4;
 use engine_core::scene::RenderItem;
-use engine_core::{EngineError, Result};
+use engine_core::{codes, EngineError, Result};
 use engine_render::scene_renderer::{self, ScenePass, SceneRenderer};
 use engine_render::{Frame, Renderer, WindowTarget};
 use winit::{
     application::ApplicationHandler,
-    event::WindowEvent,
+    event::{ElementState, WindowEvent},
     event_loop::ActiveEventLoop,
+    keyboard::PhysicalKey,
     window::{Window, WindowId},
 };
 
@@ -46,10 +49,59 @@ pub struct Simulation {
     pub players: Vec<engine_core::animation::LoadedPlayer>,
     pub scripts: Option<engine_script::ScriptHost>,
     pub assets: engine_assets::AssetServer,
+    /// `--camera` from the invocation, so the per-frame camera re-resolve
+    /// follows the same entity the session started on.
+    pub camera_name: Option<String>,
+    /// The keys held right now, fed by window events and sampled at each
+    /// fixed step — scripts never see a between-steps edge.
+    pub held: InputState,
+    pub recorder: Option<InputRecorder>,
     pub accumulator: f32,
     pub t: f32,
     pub step_index: u64,
     pub last: Option<Instant>,
+}
+
+/// `--record-input`: writes one timeline line whenever the held set changes,
+/// flushed per line so an aborted session still leaves a valid replay file.
+pub struct InputRecorder {
+    file: std::fs::File,
+    last: Option<InputState>,
+}
+
+impl InputRecorder {
+    pub fn create(path: &std::path::Path) -> Result<Self> {
+        let file = std::fs::File::create(path).map_err(|e| {
+            EngineError::new(
+                codes::SCENE_WRITE_FAILED,
+                format!("could not create input recording: {e}"),
+            )
+            .file(path.display().to_string())
+        })?;
+        Ok(Self { file, last: None })
+    }
+
+    /// Record `held` as the set in effect from `step` onward, if it changed.
+    fn sample(&mut self, step: u64, held: &InputState) -> Result<()> {
+        if self.last.as_ref() == Some(held) {
+            return Ok(());
+        }
+        // An initial empty set is the file's implicit starting state; only
+        // record it as a line when it is a *return* to empty.
+        if self.last.is_none() && held.is_empty() {
+            return Ok(());
+        }
+        writeln!(self.file, "{}", held.timeline_line(step))
+            .and_then(|()| self.file.flush())
+            .map_err(|e| {
+                EngineError::new(
+                    codes::SCENE_WRITE_FAILED,
+                    format!("could not write input recording: {e}"),
+                )
+            })?;
+        self.last = Some(held.clone());
+        Ok(())
+    }
 }
 
 /// GPU-side state, created once the window exists.
@@ -152,15 +204,24 @@ impl ViewerApp {
                             sim.t,
                         );
                     }
-                    if sim.physics.is_some() || sim.scripts.is_some() {
+                    if sim.physics.is_some() || sim.scripts.is_some() || sim.recorder.is_some()
+                    {
                         sim.accumulator += elapsed;
                         while sim.accumulator >= dt {
+                            if let Some(recorder) = &mut sim.recorder {
+                                if let Err(e) = recorder.sample(sim.step_index, &sim.held) {
+                                    self.error = Some(e);
+                                    break;
+                                }
+                            }
                             if let Some(scripts) = &sim.scripts {
                                 // A failing script ends the session with a
                                 // structured error, like any render failure.
-                                if let Err(e) = scripts
-                                    .step(&mut sim.scene.world, sim.step_index)
-                                {
+                                if let Err(e) = scripts.step(
+                                    &mut sim.scene.world,
+                                    sim.step_index,
+                                    &sim.held,
+                                ) {
                                     self.error = Some(e);
                                     break;
                                 }
@@ -174,6 +235,14 @@ impl ViewerApp {
                     }
                     if let Ok(fresh) = sim.scene.render_items(&sim.assets) {
                         *items = fresh;
+                    }
+                    // Scripts may drive the camera entity (a chase camera);
+                    // follow it rather than the pose captured at load.
+                    if let Ok((fresh_camera, fresh_transform)) =
+                        sim.scene.camera(sim.camera_name.as_deref())
+                    {
+                        *camera = fresh_camera;
+                        *camera_model = fresh_transform.matrix();
                     }
                 }
                 let (width, height) = target.size();
@@ -256,6 +325,25 @@ impl ApplicationHandler for ViewerApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
+            // The play mode: hardware key codes become the held set the next
+            // fixed step samples. Keys outside the engine's allowlist are
+            // dropped inside `press`.
+            WindowEvent::KeyboardInput { event: key, .. } => {
+                if let Content::Scene {
+                    simulation: Some(sim),
+                    ..
+                } = &mut self.content
+                {
+                    if let PhysicalKey::Code(code) = key.physical_key {
+                        let name = format!("{code:?}");
+                        match key.state {
+                            ElementState::Pressed => sim.held.press(&name),
+                            ElementState::Released => sim.held.release(&name),
+                        }
+                    }
+                }
+            }
+
             WindowEvent::Resized(size) => {
                 if let Some(target) = self.target.as_mut() {
                     target.resize(size.width, size.height);
@@ -281,6 +369,32 @@ impl ApplicationHandler for ViewerApp {
             }
 
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine_core::input::is_known_key;
+    use winit::keyboard::KeyCode;
+
+    /// The viewer turns hardware codes into key names via `Debug` — this is
+    /// only sound while winit's `KeyCode` Debug names match the W3C code
+    /// names in `KNOWN_KEYS`. A winit upgrade that renames them must fail
+    /// here, not silently produce a keyboard that types nothing.
+    #[test]
+    fn winit_keycode_debug_names_match_the_allowlist() {
+        for (code, name) in [
+            (KeyCode::ArrowUp, "ArrowUp"),
+            (KeyCode::ArrowDown, "ArrowDown"),
+            (KeyCode::ArrowLeft, "ArrowLeft"),
+            (KeyCode::ArrowRight, "ArrowRight"),
+            (KeyCode::KeyW, "KeyW"),
+            (KeyCode::Space, "Space"),
+            (KeyCode::ShiftLeft, "ShiftLeft"),
+        ] {
+            assert_eq!(format!("{code:?}"), name);
+            assert!(is_known_key(name));
         }
     }
 }

@@ -10,6 +10,7 @@ pub mod codes;
 pub mod components;
 pub mod error;
 pub mod formatter;
+pub mod input;
 pub mod lineindex;
 pub mod mesh;
 pub mod scene;

@@ -43,7 +43,9 @@ enum Command {
         height: u32,
     },
 
-    /// Open a window and render a scene.
+    /// Open a window and render a scene. The keyboard drives scripts that
+    /// call world.key(); --record-input turns a play session into a
+    /// replayable timeline.
     RunScene {
         scene: PathBuf,
         /// Render from this entity's camera instead of the active one.
@@ -53,6 +55,10 @@ enum Command {
         width: u32,
         #[arg(long, default_value_t = 720)]
         height: u32,
+        /// Record the held-key timeline to this .input.jsonl file — replay
+        /// it headlessly with --input on simulate/screenshot/diff-render.
+        #[arg(long)]
+        record_input: Option<PathBuf>,
     },
 
     /// Render a scene headlessly to a PNG — the agent's eyes.
@@ -63,6 +69,9 @@ enum Command {
         /// Simulate this many physics steps first — edit, simulate, LOOK.
         #[arg(long, default_value_t = 0)]
         steps: u32,
+        /// Replay this .input.jsonl timeline while stepping.
+        #[arg(long)]
+        input: Option<PathBuf>,
         /// Render the animated pose at this scene time (seconds).
         #[arg(long, default_value_t = 0.0)]
         time: f32,
@@ -88,6 +97,9 @@ enum Command {
         /// moments of simulation get visual regression coverage.
         #[arg(long, default_value_t = 0)]
         steps: u32,
+        /// Replay this .input.jsonl timeline while stepping.
+        #[arg(long)]
+        input: Option<PathBuf>,
         /// Compare the animated pose at this scene time (seconds).
         #[arg(long, default_value_t = 0.0)]
         time: f32,
@@ -165,6 +177,9 @@ enum Command {
         scene: PathBuf,
         #[arg(long)]
         steps: u32,
+        /// Replay this .input.jsonl timeline while stepping.
+        #[arg(long)]
+        input: Option<PathBuf>,
         #[arg(long)]
         bake: Option<PathBuf>,
         #[arg(long)]
@@ -183,6 +198,9 @@ enum Command {
         /// Simulate this many steps before casting.
         #[arg(long, default_value_t = 0)]
         steps: u32,
+        /// Replay this .input.jsonl timeline while stepping.
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// Check scenes against the component schemas; report every error.
@@ -229,20 +247,23 @@ fn main() {
             camera,
             width,
             height,
-        } => run_scene(scene, camera.as_deref(), width, height),
+            record_input,
+        } => run_scene(scene, camera.as_deref(), width, height, record_input),
         Command::Screenshot {
             scene,
             out,
             steps,
+            input,
             time,
             camera,
             width,
             height,
-        } => screenshot(scene, out, steps, time, camera.as_deref(), width, height),
+        } => screenshot(scene, out, steps, input, time, camera.as_deref(), width, height),
         Command::DiffRender {
             scene,
             baseline,
             steps,
+            input,
             time,
             out,
             camera,
@@ -252,6 +273,7 @@ fn main() {
             scene,
             baseline,
             steps,
+            input,
             time,
             out,
             camera.as_deref(),
@@ -294,15 +316,17 @@ fn main() {
         Command::Simulate {
             scene,
             steps,
+            input,
             bake,
             trace,
-        } => simulate::simulate_command(scene, steps, bake, trace),
+        } => simulate::simulate_command(scene, steps, input, bake, trace),
         Command::Raycast {
             scene,
             from,
             dir,
             steps,
-        } => simulate::raycast_command(scene, from, dir, steps),
+            input,
+        } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::ListComponents => {
             print!("{}", engine_core::schema::canonical_json());
@@ -552,10 +576,12 @@ fn load_scene(path: &PathBuf) -> Result<Scene> {
 /// exception to "nothing on stdout on failure": a failing run still tells
 /// the agent exactly how much differs and where); on mismatch, additionally
 /// `render_mismatch` on stderr and exit 1.
+#[allow(clippy::too_many_arguments)]
 fn diff_render(
     scene_path: PathBuf,
     baseline_path: PathBuf,
     steps: u32,
+    input_path: Option<PathBuf>,
     time: f32,
     out: Option<PathBuf>,
     camera_name: Option<&str>,
@@ -564,6 +590,7 @@ fn diff_render(
 ) -> Result<()> {
     // Baseline first: it is cheap, needs no GPU, and defines the render size.
     let baseline = load_baseline(&baseline_path)?;
+    let input = simulate::load_input(input_path.as_deref())?;
 
     let mut scene = load_scene(&scene_path)?;
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
@@ -571,7 +598,7 @@ fn diff_render(
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
     if steps > 0 {
-        simulate::run(&mut scene, &scene_path, steps, None)?;
+        simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
     }
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -811,15 +838,18 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn screenshot(
     scene_path: PathBuf,
     out: PathBuf,
     steps: u32,
+    input_path: Option<PathBuf>,
     time: f32,
     camera_name: Option<&str>,
     width: u32,
     height: u32,
 ) -> Result<()> {
+    let input = simulate::load_input(input_path.as_deref())?;
     let mut scene = load_scene(&scene_path)?;
     // System order: sample animations, then physics, then render.
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
@@ -827,7 +857,7 @@ fn screenshot(
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
     if steps > 0 {
-        simulate::run(&mut scene, &scene_path, steps, None)?;
+        simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
     }
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -868,6 +898,7 @@ fn run_scene(
     camera_name: Option<&str>,
     width: u32,
     height: u32,
+    record_input: Option<PathBuf>,
 ) -> Result<()> {
     let scene = load_scene(&scene_path)?;
     let (camera, camera_transform) = scene.camera(camera_name)?;
@@ -877,23 +908,35 @@ fn run_scene(
     let title = format!("engine — {}", scene.name);
 
     // Physics and animated scenes come alive in the viewer; static scenes
-    // stay static.
+    // stay static (unless a recording was asked for, which needs the step
+    // clock running to have steps to record against).
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
     let scripts =
         engine_script::ScriptHost::build(&scene.world, &scene_path, scene.physics.timestep_hz)?;
     let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
-    let simulation = if has_physics || !players.is_empty() || scripts.is_some() {
+    let simulation = if has_physics
+        || !players.is_empty()
+        || scripts.is_some()
+        || record_input.is_some()
+    {
         let physics = if has_physics {
             Some(engine_physics::PhysicsWorld::build(&scene.world, &scene.physics)?)
         } else {
             None
         };
+        let recorder = record_input
+            .as_deref()
+            .map(crate::app::InputRecorder::create)
+            .transpose()?;
         Some(crate::app::Simulation {
             scene,
             physics,
             players,
             scripts,
             assets,
+            camera_name: camera_name.map(String::from),
+            held: engine_core::input::InputState::default(),
+            recorder,
             accumulator: 0.0,
             t: 0.0,
             step_index: 0,

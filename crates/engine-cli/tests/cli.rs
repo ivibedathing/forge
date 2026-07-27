@@ -907,3 +907,191 @@ fn script_parse_errors_fail_validation() {
     assert!(codes.contains(&"script_parse_error".to_string()), "{codes:?}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ── Input (M11) ────────────────────────────────────────────────────────
+
+/// A minimal input-driven scene: the script moves Mover +1 in x on every
+/// step where ArrowUp is held.
+fn input_fixture(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("engine-m11-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(
+        dir.join("scripts/move.rhai"),
+        r#"fn step(world, step) {
+            if world.key("ArrowUp") {
+                let p = world.position("Mover");
+                world.set_position("Mover", p[0] + 1.0, p[1], p[2]);
+            }
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.json"),
+        r#"{"name":"m11","entities":[
+            {"name":"Mover","components":[
+                {"type":"Transform","position":[0.0,0.0,0.0]},
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Script","source":"scripts/move.rhai"}
+            ]},
+            {"name":"Cam","components":[{"type":"Camera","active":true}]}
+        ]}"#,
+    )
+    .unwrap();
+    dir
+}
+
+fn baked_position(baked: &Path, entity: &str) -> Vec<f64> {
+    let scene: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(baked).unwrap()).unwrap();
+    scene["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == entity)
+        .and_then(|e| {
+            e["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["type"] == "Transform")
+        })
+        .and_then(|t| t["position"].as_array())
+        .map(|p| p.iter().map(|v| v.as_f64().unwrap()).collect())
+        .unwrap()
+}
+
+/// `--input` reaches scripts, keyframes hold until replaced, and replaying
+/// the same timeline twice is byte-identical — the record-once,
+/// regression-test-forever contract.
+#[test]
+fn input_replay_reaches_scripts_and_is_deterministic() {
+    let dir = input_fixture("replay");
+    // Held during steps 3..6 → exactly 3 moves.
+    std::fs::write(
+        dir.join("lap.input.jsonl"),
+        "{\"step\": 3, \"held\": [\"ArrowUp\"]}\n{\"step\": 6, \"held\": []}\n",
+    )
+    .unwrap();
+
+    let bake = |out: &str| {
+        let path = dir.join(out);
+        let output = engine()
+            .arg("simulate")
+            .arg(dir.join("scene.json"))
+            .args(["--steps", "10"])
+            .arg("--input")
+            .arg(dir.join("lap.input.jsonl"))
+            .arg("--bake")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        path
+    };
+    let first = bake("a.json");
+    let second = bake("b.json");
+
+    assert_eq!(baked_position(&first, "Mover"), vec![3.0, 0.0, 0.0]);
+    assert_eq!(
+        std::fs::read(&first).unwrap(),
+        std::fs::read(&second).unwrap(),
+        "same timeline, same bytes"
+    );
+
+    // No timeline means no keys held: nothing moves, and the bake preserves
+    // the file byte-for-byte.
+    let output = engine()
+        .arg("simulate")
+        .arg(dir.join("scene.json"))
+        .args(["--steps", "10"])
+        .arg("--bake")
+        .arg(dir.join("none.json"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read(dir.join("none.json")).unwrap(),
+        std::fs::read(dir.join("scene.json")).unwrap(),
+        "no input, no change"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A broken timeline reports every error at once — unknown keys with
+/// did_you_mean, junk lines, non-increasing steps — and exits 1 with an
+/// empty stdout.
+#[test]
+fn a_broken_input_timeline_reports_every_error_at_once() {
+    let dir = input_fixture("badinput");
+    std::fs::write(
+        dir.join("bad.input.jsonl"),
+        concat!(
+            "{\"step\": 0, \"held\": [\"ArowUp\"]}\n",
+            "junk\n",
+            "{\"step\": 0, \"held\": [\"Space\"]}\n",
+        ),
+    )
+    .unwrap();
+
+    let output = engine()
+        .arg("simulate")
+        .arg(dir.join("scene.json"))
+        .args(["--steps", "1"])
+        .arg("--input")
+        .arg(dir.join("bad.input.jsonl"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout_of(&output).is_empty(), "stdout must be silent on failure");
+
+    let lines = stderr_lines(&output);
+    let codes = codes_of(&lines);
+    assert!(codes.contains(&"unknown_key".to_string()), "{codes:?}");
+    assert!(codes.contains(&"input_parse_error".to_string()), "{codes:?}");
+    assert!(codes.contains(&"unsorted_input_steps".to_string()), "{codes:?}");
+
+    let typo = lines.iter().find(|l| l["error"] == "unknown_key").unwrap();
+    assert_eq!(typo["did_you_mean"], "ArrowUp");
+    assert_eq!(typo["line"], 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The committed demo: replaying the recorded lap drives the car around the
+/// track and back to the start line. This is the M11 verification fixture —
+/// interactive gameplay, verified headlessly from text files alone.
+#[test]
+fn the_committed_lap_timeline_drives_the_car_around_the_track() {
+    let scene = repo_path("examples/scenes/car_track.json");
+    let timeline = repo_path("examples/scenes/car_track_lap.input.jsonl");
+    let dir = std::env::temp_dir().join(format!("engine-m11-lap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // The baked copy lands in a temp dir; that's fine because the test only
+    // reads its JSON, never loads its (scene-relative) assets.
+    let bake_at = |steps: &str, out: &str| {
+        let path = dir.join(out);
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", steps])
+            .arg("--input")
+            .arg(&timeline)
+            .arg("--bake")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        path
+    };
+
+    // Mid-lap: far side of the circuit (the north straight, z ≈ -9).
+    let mid = baked_position(&bake_at("300", "mid.json"), "Car");
+    assert!(mid[2] < -5.0, "mid-lap the car is on the far straight: {mid:?}");
+
+    // Full lap: back on the start line, within half a car length.
+    let end = baked_position(&bake_at("600", "end.json"), "Car");
+    let (dx, dz) = (end[0], end[2] - 9.0);
+    let distance = (dx * dx + dz * dz).sqrt();
+    assert!(distance < 0.5, "lap must close on the start line: {end:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}

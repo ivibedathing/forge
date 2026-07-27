@@ -708,6 +708,38 @@ structured errors in one run.
 
 ---
 
+## M11 — Input (keyboard, replayable)
+
+**Scene:** `examples/scenes/car_track.json` — the drivable-car demo itself: a barrier-lined
+rectangular circuit, a truck with `scripts/car.rhai` (arrow keys: up/down throttle, left/right
+steer), and a scripted chase camera (`world.look_at`). **Timeline:**
+`examples/scenes/car_track_lap.input.jsonl` — a committed 587-step recording that laps the
+circuit clockwise.
+
+The pass condition is the M11 thesis — *interactive never means unverifiable*:
+
+```bash
+engine validate examples/scenes/car_track.json
+# Replay the lap headlessly; the car must return to the start line:
+engine simulate examples/scenes/car_track.json --steps 600 \
+    --input examples/scenes/car_track_lap.input.jsonl --bake /tmp/lap.json
+# → Car back within 0.5 of [0, 0.47, 9] (pinned by the CLI test suite)
+engine diff-render examples/scenes/car_track.json \
+    examples/scenes/verify/baselines/m11_lap.png --steps 600 \
+    --input examples/scenes/car_track_lap.input.jsonl
+# → bit-exact; a recorded drive is a pinnable render like any other pose
+engine run-scene examples/scenes/car_track.json   # the playable version
+```
+
+A broken timeline (typo'd key, junk line, non-increasing steps) must fail with every error at
+once — `unknown_key` + `did_you_mean`, `input_parse_error`, `unsorted_input_steps` — and the
+M8 golden trace must still match: no `--input` means no keys held, byte-for-byte.
+
+**What this regresses:** the whole input path (timeline parse → `world.key` → script → bake /
+render), `world.look_at`, and the determinism promise extended over recorded input.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):

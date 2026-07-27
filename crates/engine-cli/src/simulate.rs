@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use engine_core::components::{RigidBody, Transform};
 use engine_core::formatter::{self, number_from_f32, SetComponentField};
+use engine_core::input::{InputState, InputTimeline};
 use engine_core::{codes, EngineError, Result, Scene};
 use engine_physics::PhysicsWorld;
 use glam::Vec3;
@@ -20,12 +21,15 @@ fn vec3_json(v: Vec3) -> Value {
 }
 
 /// Step a scene `steps` times — scripts then physics, per the fixed system
-/// order — optionally writing a JSONL trace. Returns the physics world (for
-/// queries) and the total contact count.
+/// order — optionally replaying an input timeline and writing a JSONL
+/// trace. Returns the physics world (for queries) and the total contact
+/// count. No timeline means no keys held, which keeps every pre-input trace
+/// and baseline byte-identical.
 pub fn run(
     scene: &mut Scene,
     scene_path: &Path,
     steps: u32,
+    input: Option<&InputTimeline>,
     mut trace: Option<&mut dyn Write>,
 ) -> Result<(PhysicsWorld, u64)> {
     let scripts =
@@ -33,10 +37,13 @@ pub fn run(
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics)?;
     let trace_names = physics.dynamic_entity_names(&scene.world);
     let mut contacts = 0u64;
+    let no_keys = InputState::default();
 
     for step in 1..=steps {
         if let Some(scripts) = &scripts {
-            scripts.step(&mut scene.world, u64::from(step) - 1)?;
+            let step_index = u64::from(step) - 1;
+            let held = input.map_or(&no_keys, |t| t.held_at(step_index));
+            scripts.step(&mut scene.world, step_index, held)?;
         }
         let events = physics.step(&mut scene.world);
 
@@ -172,6 +179,22 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
     formatter::write_atomic(out, &baked)
 }
 
+/// Load an `--input` timeline, if one was given. Every timeline error is
+/// emitted; the last one becomes the command's result, matching the
+/// all-errors-at-once scene-loading pattern.
+pub fn load_input(path: Option<&Path>) -> Result<Option<InputTimeline>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    InputTimeline::load(path).map(Some).map_err(|mut errors| {
+        let last = errors.pop().expect("timeline errors are never empty");
+        for error in errors {
+            error.emit();
+        }
+        last
+    })
+}
+
 /// Parse an `x,y,z` CLI argument.
 pub fn parse_vec3(text: &str) -> Result<Vec3> {
     let parts: Vec<f32> = text
@@ -197,9 +220,11 @@ pub fn parse_vec3(text: &str) -> Result<Vec3> {
 pub fn simulate_command(
     scene_path: PathBuf,
     steps: u32,
+    input_path: Option<PathBuf>,
     bake_path: Option<PathBuf>,
     trace_path: Option<PathBuf>,
 ) -> Result<()> {
+    let input = load_input(input_path.as_deref())?;
     let report = crate::report_scene_diagnostics(&scene_path);
     let display = scene_path.display().to_string();
     if report.errors > 0 {
@@ -228,6 +253,7 @@ pub fn simulate_command(
         &mut scene,
         &scene_path,
         steps,
+        input.as_ref(),
         trace_file.as_mut().map(|f| f as &mut dyn Write),
     )?;
 
@@ -256,9 +282,11 @@ pub fn raycast_command(
     from: String,
     direction: String,
     steps: u32,
+    input_path: Option<PathBuf>,
 ) -> Result<()> {
     let from = parse_vec3(&from)?;
     let direction = parse_vec3(&direction)?;
+    let input = load_input(input_path.as_deref())?;
 
     let report = crate::report_scene_diagnostics(&scene_path);
     let display = scene_path.display().to_string();
@@ -273,7 +301,7 @@ pub fn raycast_command(
     let mut scene = Scene::from_source(&source, &display)
         .map_err(|mut errors| errors.pop().expect("non-empty"))?;
 
-    let (mut physics, _) = run(&mut scene, &scene_path, steps, None)?;
+    let (mut physics, _) = run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
     physics.refresh_queries();
 
     let result = match physics.raycast(from, direction) {
