@@ -16,6 +16,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use engine_core::components::{Name, Script, Transform};
+use engine_core::input::{self, InputState};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
 use rhai::packages::{BasicArrayPackage, BasicMathPackage, CorePackage, Package};
@@ -49,6 +50,10 @@ struct WorldApi {
     world: Rc<RefCell<World>>,
     names: Rc<HashMap<String, hecs::Entity>>,
     dt: f32,
+    /// The keys held during the current step (M11). Empty unless the caller
+    /// has input to offer, so runs without `--input` behave exactly as they
+    /// did before input existed.
+    input: Rc<InputState>,
 }
 
 impl WorldApi {
@@ -95,6 +100,24 @@ fn curated_engine() -> rhai::Engine {
     engine.register_fn("dt", |w: &mut WorldApi| f64::from(w.dt));
 
     engine.register_fn(
+        "key",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<bool, Box<EvalAltResult>> {
+            if !input::is_known_key(name) {
+                // Deterministic failure over a silently-never-pressed key.
+                let mut message = format!("{name:?} names no known key");
+                if let Some(suggestion) = input::closest_key(name) {
+                    message.push_str(&format!(" (did you mean {suggestion:?}?)"));
+                }
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    message.into(),
+                    Position::NONE,
+                )));
+            }
+            Ok(w.input.is_held(name))
+        },
+    );
+
+    engine.register_fn(
         "position",
         |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
             w.with_transform(name, |t| vec3_array(t.position))
@@ -129,6 +152,41 @@ fn curated_engine() -> rhai::Engine {
          -> std::result::Result<(), Box<EvalAltResult>> {
             w.with_transform(name, |t| {
                 t.rotation = glam::Vec3::new(x as f32, y as f32, z as f32);
+            })
+        },
+    );
+    engine.register_fn(
+        "look_at",
+        |w: &mut WorldApi,
+         name: &str,
+         x: f64,
+         y: f64,
+         z: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_transform(name, |t| {
+                let forward = glam::Vec3::new(x as f32, y as f32, z as f32) - t.position;
+                if forward.length_squared() < 1e-12 {
+                    return; // aiming at yourself is a no-op, not an error
+                }
+                // Camera convention: an entity faces its local -Z, so +Z is
+                // the vector *away* from the target; +Y stays as close to
+                // world-up as the aim allows (a level horizon — the reason
+                // this exists, since composing pitch and yaw through the
+                // XYZ Euler order introduces roll).
+                let back = -forward.normalize();
+                let right = glam::Vec3::Y.cross(back);
+                let right = if right.length_squared() < 1e-9 {
+                    glam::Vec3::X // straight up or down: any right works
+                } else {
+                    right.normalize()
+                };
+                let up = back.cross(right);
+                let (rx, ry, rz) = glam::Quat::from_mat3(&glam::Mat3::from_cols(
+                    right, up, back,
+                ))
+                .to_euler(glam::EulerRot::XYZ);
+                t.rotation =
+                    glam::Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees());
             })
         },
     );
@@ -236,14 +294,16 @@ impl ScriptHost {
         }))
     }
 
-    /// Run every script's `step` for step index `step`. The world is moved
-    /// into the scripts' reach for the duration and moved back out even on
+    /// Run every script's `step` for step index `step`, with `input` as the
+    /// held-key set for the duration of the step. The world is moved into
+    /// the scripts' reach for the duration and moved back out even on
     /// error, so a failing script never swallows the ECS.
-    pub fn step(&self, world: &mut World, step: u64) -> Result<()> {
+    pub fn step(&self, world: &mut World, step: u64, input: &InputState) -> Result<()> {
         let api = WorldApi {
             world: Rc::new(RefCell::new(std::mem::take(world))),
             names: Rc::clone(&self.names),
             dt: self.dt,
+            input: Rc::new(input.clone()),
         };
 
         let mut failure: Option<EngineError> = None;
@@ -372,7 +432,7 @@ mod tests {
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
         for step in 0..150 {
-            host.step(&mut scene.world, step).unwrap();
+            host.step(&mut scene.world, step, &InputState::default()).unwrap();
         }
 
         let entity = scene.entity("Mover").unwrap();
@@ -389,7 +449,7 @@ mod tests {
             r#"fn step(world, step) { world.position("Nobody"); }"#,
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0).unwrap_err();
+        let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("Nobody"), "{}", error.message);
         assert_eq!(error.context().unwrap().entity.as_deref(), Some("Mover"));
@@ -408,7 +468,7 @@ mod tests {
             r#"fn step(world, step) { let x = 0; loop { x += 1; } }"#,
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0).unwrap_err();
+        let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -443,6 +503,80 @@ mod tests {
     }
 
     #[test]
+    fn look_at_aims_the_local_minus_z_with_a_level_horizon() {
+        let dir = temp_dir("lookat");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                if step == 0 { world.look_at("Mover", 0.0, 0.25, -5.0); }
+                if step == 1 { world.look_at("Mover", 5.0, 0.25, 0.0); }
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let entity = scene.entity("Mover").unwrap();
+
+        host.step(&mut scene.world, 0, &InputState::default()).unwrap();
+        let r = scene.world.get::<&Transform>(entity).unwrap().rotation;
+        assert!(r.abs_diff_eq(glam::Vec3::ZERO, 1e-4), "straight ahead is identity: {r}");
+
+        host.step(&mut scene.world, 1, &InputState::default()).unwrap();
+        let t = *scene.world.get::<&Transform>(entity).unwrap();
+        // Facing +X from the origin: forward (-Z rotated) must be +X, and
+        // the entity's up must stay world-up (no roll).
+        let rotation = glam::Quat::from_euler(
+            glam::EulerRot::XYZ,
+            t.rotation.x.to_radians(),
+            t.rotation.y.to_radians(),
+            t.rotation.z.to_radians(),
+        );
+        let forward = rotation * -glam::Vec3::Z;
+        assert!(forward.abs_diff_eq(glam::Vec3::X, 1e-4), "forward is {forward}");
+        let up = rotation * glam::Vec3::Y;
+        assert!(up.abs_diff_eq(glam::Vec3::Y, 1e-4), "up is {up}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scripts_read_held_keys_and_typos_fail_with_a_suggestion() {
+        let dir = temp_dir("keys");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                if world.key("ArrowUp") {
+                    let p = world.position("Mover");
+                    world.set_position("Mover", p[0] + 1.0, p[1], p[2]);
+                }
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+
+        let mut held = InputState::default();
+        held.press("ArrowUp");
+        host.step(&mut scene.world, 0, &held).unwrap();
+        host.step(&mut scene.world, 1, &InputState::default()).unwrap();
+
+        let entity = scene.entity("Mover").unwrap();
+        let x = scene.world.get::<&Transform>(entity).unwrap().position.x;
+        assert!((x - 1.0).abs() < 1e-6, "only the held step moves: x = {x}");
+
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.key("ArowUp"); }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host
+            .step(&mut scene.world, 0, &InputState::default())
+            .unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(
+            error.message.contains("did you mean \"ArrowUp\""),
+            "{}",
+            error.message
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn no_time_or_io_exists_in_the_sandbox() {
         let dir = temp_dir("sandbox");
         let (mut scene, path) = scene_with_script(
@@ -450,7 +584,7 @@ mod tests {
             r#"fn step(world, step) { timestamp(); }"#,
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0).unwrap_err();
+        let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
         assert_eq!(
             error.error, "script_runtime_error",
             "timestamp() must not exist: {error:?}"

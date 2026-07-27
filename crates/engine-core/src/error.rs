@@ -219,7 +219,7 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 
 /// Closest candidate to `needle` by Levenshtein distance, if within a
 /// similarity threshold that scales with word length.
-fn closest_match<'a>(
+pub(crate) fn closest_match<'a>(
     needle: &str,
     candidates: impl IntoIterator<Item = &'a str>,
 ) -> Option<String> {

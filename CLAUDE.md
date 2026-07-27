@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M10 are done — the v1 roadmap is complete** (plus most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M11 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -21,16 +21,16 @@ What works today:
 
 ```
 engine validate <scene.json>... [--strict]  # every error at once; multi-file; --strict promotes warnings
-engine screenshot <scene.json> --out x.png [--steps N] [--time T] [--camera N] [--width W --height H]
-engine diff-render <scene.json> <baseline.png> [--steps N] [--time T] [--out diff.png] [--threshold N] [--max-diff-percent P]
+engine screenshot <scene.json> --out x.png [--steps N] [--input f] [--time T] [--camera N] [--width W --height H]
+engine diff-render <scene.json> <baseline.png> [--steps N] [--input f] [--time T] [--out diff.png] [--threshold N] [--max-diff-percent P]
 engine edit <scene.json> [--watch]       # GUI editor; --watch = read-only supervision mode
-engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
-engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
+engine simulate <scene.json> --steps N [--input f] [--bake out.json] [--trace t.jsonl]
+engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
 engine list-animations <scene-or-clip> [--schema]
 # Script component: {"type": "Script", "source": "scripts/x.rhai"} — runs fn step(world, step)
 # once per fixed step (order: animations → scripts → physics → render)
-engine run-scene <scene.json>            # windowed scene viewer
+engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode (keyboard reaches scripts)
 engine list-components                   # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
 engine run                               # M0 triangle (stack proof)
@@ -164,6 +164,24 @@ runtime errors are `script_runtime_error`, exit 1, world intact. Bake is change-
 script-driven kinematics land in baked files. Kinematic-vs-fixed contact events are opted in
 via `ActiveCollisionTypes` (rapier skips them by default; a scripted platform crossing a
 static sensor needs them). Bake next to the scene, not /tmp — relative paths.
+
+Input (M11, `input-design.md`): keyboard input sampled per fixed step on the shared integer
+clock — scripts ask `world.key("ArrowUp")` (unknown names are runtime errors with
+`did_you_mean`). Live keys exist only in `engine run-scene`; headlessly, input is an
+`*.input.jsonl` timeline (sparse keyframes of the complete held set, in effect from their
+0-based `step` until the next line; strictly increasing steps) replayed via `--input` on
+simulate/screenshot/diff-render/raycast — same timeline, byte-identical results, and no
+`--input` means no keys held, so all pre-M11 traces/baselines are untouched.
+`run-scene --record-input` writes a timeline whenever the held set changes: record a play
+session once, regression-test it forever. Key names are the curated W3C-code allowlist in
+`engine_core::input::KNOWN_KEYS`. `world.look_at(name, x, y, z)` aims an entity's local −Z
+with a level horizon (pitch+yaw through the XYZ Euler order would roll — that's why it
+exists); the viewer re-resolves the camera transform every frame so scripts can drive a chase
+camera, and the headless commands already resolved it after stepping. Demo:
+`examples/scenes/car_track.json` + `scripts/car.rhai` (arrow-key truck, chase cam, `TopCam`
+overhead debug camera) + `car_track_lap.input.jsonl` (a committed 587-step lap that returns
+the car to the start line, pinned by CLI test and by
+`verify/baselines/m11_lap.png`).
 
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).

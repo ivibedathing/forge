@@ -135,6 +135,16 @@ registry! {
     SCRIPT_RUNTIME_ERROR = "script_runtime_error", Input,
         "a script failed while running";
 
+    // ── Input (M11) ────────────────────────────────────────────────────
+    INPUT_UNREADABLE = "input_unreadable", Input,
+        "the input timeline file could not be read";
+    INPUT_PARSE_ERROR = "input_parse_error", Input,
+        "an input timeline line is not a valid {\"step\", \"held\"} object";
+    UNKNOWN_KEY = "unknown_key", Input,
+        "an input timeline holds a name that is no known key";
+    UNSORTED_INPUT_STEPS = "unsorted_input_steps", Input,
+        "input timeline steps must be strictly increasing";
+
     // ── Warnings (severity: "warning"; do not affect the exit code
     //    unless promoted by --strict) ────────────────────────────────────
     UNUSED_MATERIAL = "unused_material", Input,

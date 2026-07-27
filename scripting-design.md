@@ -81,10 +81,13 @@ fn step(world, step) {
 | `world.position(name)` / `world.set_position(name, x, y, z)` | `Transform.position` |
 | `world.rotation(name)` / `world.set_rotation(name, x, y, z)` | `Transform.rotation`, Euler degrees |
 | `world.scale(name)` / `world.set_scale(name, x, y, z)` | `Transform.scale` |
+| `world.key(name)` | (M11) `true` if the key is held during this step; unknown key names are runtime errors with a `did you mean` |
+| `world.look_at(name, x, y, z)` | (M11) aim the entity's local −Z at a point with a level horizon — the chase-camera primitive (composing pitch and yaw through the XYZ Euler order rolls the horizon; this computes the decomposition correctly) |
 
 Getters return `[x, y, z]` arrays. A name that resolves to no entity, or an entity without a
 `Transform`, raises a script runtime error naming the entity — deterministic failure over
 silent no-op. Velocity access, material access, spawning, and events are deferred (§7).
+Input semantics (key names, the timeline file `--input` replays) live in `input-design.md`.
 
 ## 5. Workspace
 

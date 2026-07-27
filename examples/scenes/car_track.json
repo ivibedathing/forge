@@ -1,0 +1,1928 @@
+{
+  "name": "car_track",
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            60.0,
+            1.0,
+            44.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:plane"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.16,
+            0.22,
+            0.14
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "RoadSouth",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.02,
+            9.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            35.0,
+            0.04,
+            5.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.09,
+            0.09,
+            0.1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "RoadNorth",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.02,
+            -9.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            35.0,
+            0.04,
+            5.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.09,
+            0.09,
+            0.1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "RoadWest",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -15.0,
+            0.018,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            5.0,
+            0.04,
+            13.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.09,
+            0.09,
+            0.1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "RoadEast",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            15.0,
+            0.018,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            5.0,
+            0.04,
+            13.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.09,
+            0.09,
+            0.1
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "StartLine",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.03,
+            9.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.6,
+            0.04,
+            5.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.6
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX0",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -16.0,
+            0.3,
+            -12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -12.0,
+            0.3,
+            -12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -8.0,
+            0.3,
+            -12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX3",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -4.0,
+            0.3,
+            -12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX4",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.3,
+            -12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX5",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            4.0,
+            0.3,
+            -12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX6",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            8.0,
+            0.3,
+            -12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX7",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            12.0,
+            0.3,
+            -12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX8",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            16.0,
+            0.3,
+            -12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX9",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -16.0,
+            0.3,
+            12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX10",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -12.0,
+            0.3,
+            12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX11",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -8.0,
+            0.3,
+            12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX12",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -4.0,
+            0.3,
+            12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX13",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.3,
+            12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX14",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            4.0,
+            0.3,
+            12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX15",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            8.0,
+            0.3,
+            12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX16",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            12.0,
+            0.3,
+            12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterX17",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            16.0,
+            0.3,
+            12.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ0",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -18.2,
+            0.3,
+            -8.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -18.2,
+            0.3,
+            -4.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -18.2,
+            0.3,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ3",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -18.2,
+            0.3,
+            4.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ4",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -18.2,
+            0.3,
+            8.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ5",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            18.2,
+            0.3,
+            -8.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ6",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            18.2,
+            0.3,
+            -4.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ7",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            18.2,
+            0.3,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ8",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            18.2,
+            0.3,
+            4.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierOuterZ9",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            18.2,
+            0.3,
+            8.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX0",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -9.0,
+            0.3,
+            -5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -4.5,
+            0.3,
+            -5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.3,
+            -5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX3",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            4.5,
+            0.3,
+            -5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX4",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            0.3,
+            -5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX5",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -9.0,
+            0.3,
+            5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX6",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -4.5,
+            0.3,
+            5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX7",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.3,
+            5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX8",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            4.5,
+            0.3,
+            5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerX9",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            0.3,
+            5.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.6,
+            0.6,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerZ0",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -11.8,
+            0.3,
+            -2.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerZ1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -11.8,
+            0.3,
+            2.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerZ2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            11.8,
+            0.3,
+            -2.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.85,
+            0.08,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "BarrierInnerZ3",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            11.8,
+            0.3,
+            2.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.6,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.92,
+            0.92
+          ],
+          "metallic": 0.0,
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Car",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.47,
+            9.0
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            0.0
+          ],
+          "scale": [
+            0.45,
+            0.45,
+            0.45
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "meshes/truck.glb"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.72,
+            0.15,
+            0.12
+          ],
+          "metallic": 0.1,
+          "roughness": 0.55
+        },
+        {
+          "type": "Script",
+          "source": "scripts/car.rhai"
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            -49.13,
+            28.48,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 1.66
+        }
+      ]
+    },
+    {
+      "name": "Ambient",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 0.06
+        }
+      ]
+    },
+    {
+      "name": "ChaseCam",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            8.0,
+            3.2,
+            9.0
+          ],
+          "rotation": [
+            -14.0,
+            90.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "fov": 55.0,
+          "near": 0.1,
+          "far": 200.0,
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "TopCam",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            42.0,
+            0.0
+          ],
+          "rotation": [
+            -90.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "fov": 50.0,
+          "near": 0.1,
+          "far": 200.0,
+          "active": false
+        }
+      ]
+    }
+  ]
+}

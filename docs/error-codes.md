@@ -53,6 +53,10 @@ build fails.
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |
+| `input_unreadable` | 1 | the input timeline file could not be read |
+| `input_parse_error` | 1 | an input timeline line is not a valid {"step", "held"} object |
+| `unknown_key` | 1 | an input timeline holds a name that is no known key |
+| `unsorted_input_steps` | 1 | input timeline steps must be strictly increasing |
 | `unused_material` | 1 | warning: a Material on an entity with no Mesh does nothing |
 | `zero_scale` | 1 | warning: a Transform.scale axis of 0 renders invisibly or degenerate |
 | `scene_unreadable` | 1 | the scene file could not be read |
