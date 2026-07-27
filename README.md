@@ -90,6 +90,13 @@ write on release, each editing its `Transform` field component-wise. The inspect
 generated from the component schema, so a new component is editable the day it exists, and the
 validation panel shows the same structured errors the CLI emits, click-to-select.
 
+Dropping a mesh file onto the window imports it: `.glb`/`.gltf` are referenced in place (or
+copied to `meshes/` beside the scene when outside its tree), and `.blend` files are converted
+to `.glb` by running Blender headlessly (found via `$BLENDER`, `PATH`, or the macOS app
+bundle). Either way the result is one spliced entity — `Transform` + `Mesh` with a relative
+asset path — named after the file and deduplicated (`rock`, `rock-2`, …). Conversion runs on a
+worker thread; a missing Blender is a structured `blender_not_found` in the status bar.
+
 For agents: the hidden flag `--self-screenshot <png> [--self-screenshot-after-ms N]` renders the
 editor UI to a PNG and exits — the way an agent *looks at* the editor itself.
 

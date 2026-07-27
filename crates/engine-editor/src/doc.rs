@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use engine_core::formatter::{self, SetComponentField};
+use engine_core::formatter::{self, AddEntity, SetComponentField};
 use engine_core::scene::{RenderItem, ResolvedLights};
 use engine_core::{EngineError, Scene, SceneFile};
 
@@ -166,6 +166,59 @@ impl SceneDoc {
             },
             Err(e) => {
                 self.notice = Some(format!("edit dropped — {}", e.message));
+            }
+        }
+    }
+
+    /// Append a new entity named `base_name` (deduplicated against the
+    /// fresh file contents: `pyramid`, `pyramid-2`, …). Same commit shape as
+    /// [`apply`](Self::apply): fresh read, splice, atomic write, reload.
+    /// Returns the name actually written, for selection.
+    pub fn add_entity(
+        &mut self,
+        base_name: &str,
+        components: Vec<(String, Vec<(String, serde_json::Value)>)>,
+    ) -> Option<String> {
+        let fresh = match std::fs::read_to_string(&self.path) {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                self.notice = Some(format!("import dropped — cannot read file: {e}"));
+                return None;
+            }
+        };
+
+        let taken: Vec<String> = serde_json::from_str::<serde_json::Value>(&fresh)
+            .ok()
+            .and_then(|root| {
+                root["entities"].as_array().map(|entities| {
+                    entities
+                        .iter()
+                        .filter_map(|e| e["name"].as_str().map(str::to_string))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        let name = crate::import::unique_name(base_name, &taken);
+
+        let edit = AddEntity {
+            name: name.clone(),
+            components,
+        };
+        match formatter::apply_add_entity(&fresh, &edit) {
+            Ok(edited) => match formatter::write_atomic(&self.path, &edited) {
+                Ok(()) => {
+                    self.notice = Some(format!("added entity {name}"));
+                    self.reload_from(edited);
+                    Some(name)
+                }
+                Err(e) => {
+                    self.notice = Some(format!("write failed: {}", e.message));
+                    None
+                }
+            },
+            Err(e) => {
+                self.notice = Some(format!("import dropped — {}", e.message));
+                None
             }
         }
     }

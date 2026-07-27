@@ -1,22 +1,32 @@
 //! The editor application: layout, input routing, and the glue between the
 //! document, the viewport, and the panels.
 
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use egui::{Color32, Rect, Sense, Stroke};
 use engine_core::components::Transform;
 use engine_core::formatter::SetComponentField;
 use engine_core::scene::RenderItem;
+use engine_core::EngineError;
 use glam::{Vec2, Vec3};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::camera::OrbitCamera;
 use crate::doc::SceneDoc;
 use crate::gizmo::{self, Drag, GizmoMode};
+use crate::import::{self, ImportedAsset};
 use crate::inspector::{self, InspectorState};
 use crate::pick;
 use crate::viewport::{grid_items, ViewportRenderer};
 use crate::EditorOptions;
+
+/// A drag-and-drop import running on its worker thread.
+struct PendingImport {
+    /// The dropped file's name, for the status bar.
+    label: String,
+    receiver: mpsc::Receiver<Result<ImportedAsset, EngineError>>,
+}
 
 pub struct EditorApp {
     options: EditorOptions,
@@ -31,6 +41,7 @@ pub struct EditorApp {
     mode: GizmoMode,
     drag: Option<Drag>,
     hot_axis: Option<usize>,
+    imports: Vec<PendingImport>,
     started: Instant,
     screenshot_sent: bool,
 }
@@ -51,6 +62,7 @@ impl EditorApp {
             mode: GizmoMode::Translate,
             drag: None,
             hot_axis: None,
+            imports: Vec::new(),
             started: Instant::now(),
             screenshot_sent: false,
         }
@@ -91,6 +103,84 @@ impl EditorApp {
         }
         self.doc.apply(&edit);
         self.inspector_state.clear();
+    }
+
+    /// Route dropped files into import workers and harvest finished ones
+    /// into entity splices. Conversion (a Blender run for `.blend`) happens
+    /// off-thread; the file write stays on the UI thread with the other
+    /// commits.
+    fn handle_drops(&mut self, ui: &egui::Ui) {
+        let dropped = ui.input(|i| i.raw.dropped_files.clone());
+        for file in dropped {
+            let Some(path) = file.path else { continue };
+            if self.read_only() {
+                self.doc.notice = Some("read-only (--watch): drop ignored".into());
+                continue;
+            }
+            if !import::supported(&path) {
+                self.doc.notice = Some(format!(
+                    "cannot import {} — drop a .blend, .gltf, or .glb file",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ));
+                continue;
+            }
+            let label = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            let scene = self.doc.path.clone();
+            let (sender, receiver) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = sender.send(import::import(&scene, &path));
+            });
+            self.imports.push(PendingImport { label, receiver });
+        }
+
+        let mut finished = Vec::new();
+        self.imports.retain(|pending| match pending.receiver.try_recv() {
+            Ok(result) => {
+                finished.push((pending.label.clone(), result));
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                finished.push((
+                    pending.label.clone(),
+                    Err(EngineError::new(
+                        engine_core::codes::IMPORT_FAILED,
+                        "the import worker died",
+                    )),
+                ));
+                false
+            }
+        });
+
+        for (label, result) in finished {
+            match result {
+                Ok(asset) => {
+                    let added = self.doc.add_entity(
+                        &asset.base_name,
+                        vec![
+                            (
+                                "Transform".into(),
+                                vec![("position".into(), json!([0.0, 0.0, 0.0]))],
+                            ),
+                            (
+                                "Mesh".into(),
+                                vec![("asset".into(), Value::String(asset.asset))],
+                            ),
+                        ],
+                    );
+                    if added.is_some() {
+                        self.selected = added;
+                    }
+                }
+                Err(e) => {
+                    self.doc.notice =
+                        Some(format!("import of {label} failed — {}", e.message));
+                }
+            }
+        }
     }
 
     /// The draw list for this frame: scene items (with gesture preview and
@@ -454,6 +544,19 @@ impl EditorApp {
             }
         }
 
+        // Drop-target feedback while a file hovers over the window.
+        if !self.read_only() && ui.input(|i| !i.raw.hovered_files.is_empty()) {
+            ui.painter()
+                .rect_filled(rect, 0.0, Color32::from_black_alpha(110));
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "drop to import (.blend, .gltf, .glb)",
+                egui::FontId::proportional(18.0),
+                Color32::WHITE,
+            );
+        }
+
         // Empty-scene / invalid-scene message over the viewport.
         if self.doc.items.is_empty() {
             let message = if self.doc.is_valid() {
@@ -549,6 +652,10 @@ impl EditorApp {
                 ui.separator();
                 ui.colored_label(Color32::from_rgb(220, 180, 60), "READ-ONLY (--watch)");
             }
+            for pending in &self.imports {
+                ui.separator();
+                ui.label(format!("importing {}…", pending.label));
+            }
             if let Some(notice) = &self.doc.notice {
                 ui.separator();
                 ui.label(notice);
@@ -572,6 +679,8 @@ impl eframe::App for EditorApp {
             .wgpu_render_state()
             .expect("the editor requires the wgpu backend")
             .clone();
+
+        self.handle_drops(ui);
 
         egui::Panel::bottom("status").show(ui, |ui| self.status_ui(ui));
 

@@ -51,7 +51,13 @@ validation panel shows the same `EngineError`s the CLI emits, click-to-select. V
 (right-drag; shift/middle = pan, scroll = zoom), CPU ray picking, hand-rolled transform gizmos
 — `W` translate / `R` rotate / `S` scale switch modes, world axes mapping straight to
 `Transform` field components (the X ring adds degrees to `rotation[0]`, etc.), preview in
-memory, one write on release. Hidden flag `--self-screenshot <png>
+memory, one write on release. Drag-and-drop import (`engine-editor/src/import.rs`): a dropped
+`.glb`/`.gltf` is referenced in place or copied to `meshes/` beside the scene; a `.blend` is
+converted to `.glb` by running Blender headlessly (`$BLENDER` → `PATH` → macOS app bundle;
+absent Blender = `blender_not_found`), then one entity (`Transform` + `Mesh`, name deduped
+from the file stem) is spliced in via `formatter::apply_add_entity` — the first structure
+edit, E3's opening move. Conversion runs on a worker thread; the Blender-gated end-to-end
+test skips cleanly when Blender is missing. Hidden flag `--self-screenshot <png>
 [--self-screenshot-after-ms N]` renders the editor and exits — the agent's way to *look at* the
 editor. `RenderItem` gained an `entity: String` field for picking/selection.
 

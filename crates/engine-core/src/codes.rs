@@ -163,6 +163,10 @@ registry! {
         "internal bug: a formatted edit produced invalid JSON; nothing was written";
     EDITOR_FAILED = "editor_failed", Environment,
         "the editor window could not start or run";
+    IMPORT_FAILED = "import_failed", Input,
+        "a dropped file could not be converted or copied into the scene's assets";
+    BLENDER_NOT_FOUND = "blender_not_found", Environment,
+        "no Blender executable found to convert a .blend file; install Blender or set $BLENDER";
 
     // ── Assets ─────────────────────────────────────────────────────────
     ASSET_NOT_FOUND = "asset_not_found", Input,
