@@ -23,7 +23,7 @@ pub fn load_gltf(path: &Path) -> Result<MeshData> {
 
     let (document, buffers, _images) = gltf::import(path).map_err(|e| {
         EngineError::new(
-            "asset_load_failed",
+            engine_core::codes::ASSET_LOAD_FAILED,
             format!("could not load glTF file {display}: {e}"),
         )
         .file(&display)
@@ -56,7 +56,7 @@ pub fn load_gltf(path: &Path) -> Result<MeshData> {
 
     if mesh.indices.is_empty() {
         return Err(EngineError::new(
-            "asset_unsupported",
+            engine_core::codes::ASSET_UNSUPPORTED,
             format!("glTF file {display} contains no triangle geometry"),
         )
         .file(&display));
@@ -107,7 +107,7 @@ fn load_primitive(
 ) -> Result<()> {
     if primitive.mode() != gltf::mesh::Mode::Triangles {
         return Err(EngineError::new(
-            "asset_unsupported",
+            engine_core::codes::ASSET_UNSUPPORTED,
             format!(
                 "glTF file {display} has a {:?} primitive; only Triangles are supported",
                 primitive.mode()
@@ -120,7 +120,7 @@ fn load_primitive(
 
     let Some(position_reader) = reader.read_positions() else {
         return Err(EngineError::new(
-            "asset_unsupported",
+            engine_core::codes::ASSET_UNSUPPORTED,
             format!("glTF file {display} has a primitive with no POSITION attribute"),
         )
         .file(display));
@@ -147,7 +147,7 @@ fn load_primitive(
 
     if normals.len() != positions.len() {
         return Err(EngineError::new(
-            "asset_load_failed",
+            engine_core::codes::ASSET_LOAD_FAILED,
             format!(
                 "glTF file {display} has {} positions but {} normals in one primitive",
                 positions.len(),
@@ -163,7 +163,7 @@ fn load_primitive(
     };
     if uvs.len() != positions.len() {
         return Err(EngineError::new(
-            "asset_load_failed",
+            engine_core::codes::ASSET_LOAD_FAILED,
             format!(
                 "glTF file {display} has {} positions but {} texture coordinates in one primitive",
                 positions.len(),

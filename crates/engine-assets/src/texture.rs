@@ -23,9 +23,9 @@ pub fn load_texture(path: &Path) -> Result<TextureData> {
 
     let bytes = std::fs::read(path).map_err(|e| {
         let code = if e.kind() == std::io::ErrorKind::NotFound {
-            "asset_not_found"
+            engine_core::codes::ASSET_NOT_FOUND
         } else {
-            "asset_load_failed"
+            engine_core::codes::ASSET_LOAD_FAILED
         };
         EngineError::new(code, format!("could not read texture {display}: {e}")).file(&display)
     })?;
@@ -33,7 +33,7 @@ pub fn load_texture(path: &Path) -> Result<TextureData> {
     let image = image::load_from_memory(&bytes)
         .map_err(|e| {
             EngineError::new(
-                "asset_load_failed",
+                engine_core::codes::ASSET_LOAD_FAILED,
                 format!("could not decode texture {display}: {e}"),
             )
             .file(&display)

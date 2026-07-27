@@ -68,7 +68,7 @@ impl BuiltinMesh {
             "sphere" => Ok(Self::Sphere),
             "triangle" => Ok(Self::Triangle),
             _ => Err(EngineError::new(
-                "asset_not_found",
+                crate::codes::ASSET_NOT_FOUND,
                 format!("no built-in mesh named {name:?}"),
             )
             .field("asset")
@@ -117,7 +117,7 @@ impl MeshAsset {
 
         if Path::new(asset).is_absolute() {
             return Err(EngineError::new(
-                "asset_path_not_relative",
+                crate::codes::ASSET_PATH_NOT_RELATIVE,
                 format!(
                     "mesh asset {asset:?} is an absolute path; assets are referenced \
                      by path relative to the scene file, so scenes stay portable"
@@ -132,7 +132,7 @@ impl MeshAsset {
             Some(ext) if MESH_EXTENSIONS.contains(&ext.to_lowercase().as_str()) => {}
             _ => {
                 return Err(EngineError::new(
-                    "asset_unsupported",
+                    crate::codes::ASSET_UNSUPPORTED,
                     format!(
                         "mesh asset {asset:?} is not a format the engine reads; \
                          use a .gltf or .glb file, or one of {}",
@@ -146,7 +146,7 @@ impl MeshAsset {
         if !resolved.is_file() {
             let candidates = sibling_candidates(asset, &resolved);
             return Err(EngineError::new(
-                "asset_not_found",
+                crate::codes::ASSET_NOT_FOUND,
                 format!(
                     "no mesh file at {} (asset paths resolve relative to the scene file)",
                     resolved.display()
@@ -208,7 +208,7 @@ impl MeshSource for BuiltinAssets {
         match BuiltinMesh::parse(asset) {
             Some(builtin) => Ok(builtin?.data()),
             None => Err(EngineError::new(
-                "asset_not_found",
+                crate::codes::ASSET_NOT_FOUND,
                 format!(
                     "cannot load {asset:?}: only {} are available in this context \
                      (mesh files load through engine-assets)",

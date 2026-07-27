@@ -2,8 +2,11 @@
 //!
 //! Every command exits non-zero on failure and prints structured JSON errors
 //! to stderr, one per line. Machine-facing success output goes to stdout as
-//! JSON too. Nothing in this binary should ever `panic!` on a user-reachable
-//! path — a panic is an unparseable error, which defeats the point.
+//! JSON too. The full contract — streams, exit codes, the wire format — is
+//! `docs/cli-contract.md`; the short version is that an agent can operate
+//! every command with `jq` and `$?` alone. Nothing in this binary should ever
+//! `panic!` on a user-reachable path, and if something does anyway, the panic
+//! hook keeps even that inside the protocol.
 
 mod app;
 mod build;
@@ -11,7 +14,7 @@ mod build;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use engine_core::{EngineError, Result, Scene};
+use engine_core::{codes, EngineError, Result, Scene};
 use engine_render::Gpu;
 use winit::event_loop::{ControlFlow, EventLoop};
 
@@ -65,21 +68,42 @@ enum Command {
         height: u32,
     },
 
-    /// Check a scene against the component schemas; report every error.
-    Validate { scene: PathBuf },
+    /// Check scenes against the component schemas; report every error.
+    Validate {
+        #[arg(required = true, num_args = 1..)]
+        scenes: Vec<PathBuf>,
+        /// Treat warnings as errors (the CI mode).
+        #[arg(long)]
+        strict: bool,
+    },
 
     /// Print the component and scene JSON Schemas.
     ListComponents,
 
     /// Compile the workspace, re-emitting rustc diagnostics as engine errors.
-    Build,
+    Build {
+        /// Type-check only (cargo check): the same errors in half the time.
+        #[arg(long)]
+        check: bool,
+    },
 
     /// Print the selected GPU adapter as JSON.
     Info,
+
+    /// Panic on purpose — exists so tests can prove the panic hook keeps
+    /// even a crash inside the JSON protocol. Debug builds only.
+    #[cfg(debug_assertions)]
+    #[command(hide = true)]
+    DebugPanic,
 }
 
 fn main() {
-    let cli = Cli::parse();
+    install_panic_hook();
+
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => exit_with_clap_error(error),
+    };
 
     let result = match cli.command {
         Command::Run { width, height } => run_triangle(width, height),
@@ -96,59 +120,227 @@ fn main() {
             width,
             height,
         } => screenshot(scene, out, camera.as_deref(), width, height),
-        Command::Validate { scene } => validate(scene),
+        Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::ListComponents => {
             print!("{}", engine_core::schema::canonical_json());
             Ok(())
         }
-        Command::Build => build::build(),
+        Command::Build { check } => build::build(check),
         Command::Info => info(),
+        #[cfg(debug_assertions)]
+        Command::DebugPanic => panic!("deliberate panic from the hidden debug-panic subcommand"),
     };
 
     if let Err(error) = result {
         error.emit();
-        std::process::exit(1);
+        std::process::exit(error.exit_code());
     }
 }
 
-/// `engine validate` — the one command that reports *all* errors, not the
-/// first. Success prints a summary an agent can assert on.
-fn validate(path: PathBuf) -> Result<()> {
+/// Even a bug must speak the protocol: any panic prints one `EngineError`
+/// line and exits 2. With `RUST_BACKTRACE` set, the backtrace rides inside
+/// the JSON string — escaped, so the one-object-per-line guarantee holds
+/// even then.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let payload: &str = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s
+        } else {
+            "non-string panic payload"
+        };
+
+        let mut message = format!(
+            "internal panic: {payload}; this is an engine bug — the scene and \
+             invocation may be fine"
+        );
+        if std::env::var("RUST_BACKTRACE").is_ok_and(|v| v != "0") {
+            message = format!(
+                "{message}\nbacktrace:\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
+
+        let mut error = EngineError::new(codes::INTERNAL_PANIC, message);
+        if let Some(location) = info.location() {
+            error = error
+                .file(location.file())
+                .line(location.line())
+                .column(location.column());
+        }
+        error.emit();
+        std::process::exit(2);
+    }));
+}
+
+/// clap parse failures are the agent path too — a typo'd flag is exactly the
+/// mistake an agent makes — so they get JSON like everything else, exit 2.
+/// `--help`/`--version` are documentation, not errors, and stay prose.
+fn exit_with_clap_error(error: clap::Error) -> ! {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+
+    if matches!(
+        error.kind(),
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+    ) {
+        let _ = error.print();
+        std::process::exit(0);
+    }
+
+    // The first line of clap's rendering ("error: unrecognized subcommand
+    // 'scrnshot'") is the summary; the rest is usage prose.
+    let rendered = error.render().to_string();
+    let message = rendered
+        .lines()
+        .next()
+        .unwrap_or("invalid invocation")
+        .trim_start_matches("error: ")
+        .to_string();
+
+    let mut engine_error = EngineError::new(codes::INVALID_INVOCATION, message);
+
+    // clap already computed the near-miss; surface it the same way scene
+    // validation does.
+    let suggestion = [
+        ContextKind::SuggestedSubcommand,
+        ContextKind::SuggestedArg,
+        ContextKind::ValidValue,
+    ]
+    .iter()
+    .find_map(|kind| match error.get(*kind) {
+        Some(ContextValue::String(s)) => Some(s.clone()),
+        Some(ContextValue::Strings(s)) => s.first().cloned(),
+        _ => None,
+    });
+    if let Some(suggestion) = suggestion {
+        engine_error = engine_error.did_you_mean(suggestion);
+    }
+
+    engine_error.emit();
+    std::process::exit(2);
+}
+
+/// One scene's full validation report: every structural, semantic, and asset
+/// diagnostic, emitted to stderr in file order.
+struct SceneReport {
+    source: Option<String>,
+    errors: usize,
+    warnings: usize,
+}
+
+/// Run the whole validation pipeline on one file and emit every diagnostic.
+/// Every scene-consuming command calls this, so which command you ran never
+/// changes what you learn about a broken scene — the diagnostics are
+/// byte-identical to `engine validate`'s.
+fn report_scene_diagnostics(path: &PathBuf) -> SceneReport {
     let display = path.display().to_string();
-    let source = std::fs::read_to_string(&path).map_err(|e| {
-        EngineError::new("scene_unreadable", format!("could not read scene: {e}")).file(&display)
-    })?;
+    let source = match std::fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(e) => {
+            EngineError::new(codes::SCENE_UNREADABLE, format!("could not read scene: {e}"))
+                .file(&display)
+                .emit();
+            return SceneReport {
+                source: None,
+                errors: 1,
+                warnings: 0,
+            };
+        }
+    };
 
     // Structural pass first; the asset pass assumes a well-formed scene, and
     // mixing "your JSON is wrong" with "your glTF is corrupt" in one report
     // would double-report every reference the structural pass rejected.
-    let mut errors = engine_core::validate::validate_source(&source, &display);
-    if errors.is_empty() {
-        errors = engine_assets::validate_scene_assets(&source, &display);
-    }
-    if !errors.is_empty() {
-        let count = errors.len();
-        for error in errors {
-            error.emit();
-        }
-        return Err(EngineError::new(
-            "validation_failed",
-            format!("{count} error(s) in {display}"),
-        )
-        .file(&display));
+    let mut diagnostics = engine_core::validate::validate_source(&source, &display);
+    if diagnostics.iter().all(EngineError::is_warning) {
+        diagnostics.extend(engine_assets::validate_scene_assets(&source, &display));
     }
 
-    // Parse is guaranteed to succeed after clean validation.
-    let scene = Scene::from_source(&source, &display)?;
+    let mut errors = 0;
+    let mut warnings = 0;
+    for diagnostic in &diagnostics {
+        if diagnostic.is_warning() {
+            warnings += 1;
+        } else {
+            errors += 1;
+        }
+        diagnostic.emit();
+    }
+
+    SceneReport {
+        source: Some(source),
+        errors,
+        warnings,
+    }
+}
+
+/// `engine validate` — every diagnostic for every file, then an aggregate
+/// verdict. `--strict` promotes warnings to errors, for CI.
+fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
+    let mut errors = 0usize;
+    let mut warnings = 0usize;
+
+    for path in scenes {
+        let report = report_scene_diagnostics(path);
+        errors += report.errors;
+        warnings += report.warnings;
+    }
+
+    let files = scenes.len();
+    if errors > 0 || (strict && warnings > 0) {
+        let strict_note = if errors == 0 {
+            "; --strict treats warnings as errors"
+        } else {
+            ""
+        };
+        return Err(EngineError::new(
+            codes::VALIDATION_FAILED,
+            format!("{errors} error(s) and {warnings} warning(s) across {files} file(s){strict_note}"),
+        ));
+    }
+
     println!(
         "{}",
         serde_json::json!({
             "valid": true,
-            "scene": scene.name,
-            "entities": scene.entity_count(),
+            "files": files,
+            "errors": 0,
+            "warnings": warnings,
         })
     );
     Ok(())
+}
+
+/// Load a scene for rendering, reporting *all* validation errors first.
+fn load_scene(path: &PathBuf) -> Result<Scene> {
+    let report = report_scene_diagnostics(path);
+    let display = path.display().to_string();
+
+    if report.errors > 0 {
+        return Err(EngineError::new(
+            codes::VALIDATION_FAILED,
+            format!("{} error(s) in {display}", report.errors),
+        )
+        .file(&display));
+    }
+
+    let source = report.source.unwrap_or_default();
+    Scene::from_source(&source, &display).map_err(|mut errors| {
+        // Validation was clean, so this is the desync backstop; emit any
+        // surplus records and surface the last as the command's result.
+        let last = errors.pop().unwrap_or_else(|| {
+            EngineError::new(
+                codes::SCENE_PARSE_DESYNC,
+                "scene failed to load after clean validation",
+            )
+            .file(&display)
+        });
+        for error in errors {
+            error.emit();
+        }
+        last
+    })
 }
 
 fn screenshot(
@@ -158,7 +350,7 @@ fn screenshot(
     width: u32,
     height: u32,
 ) -> Result<()> {
-    let scene = Scene::load(&scene_path)?;
+    let scene = load_scene(&scene_path)?;
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
@@ -176,7 +368,7 @@ fn screenshot(
     let png = image::RgbaImage::from_raw(image.width, image.height, image.pixels)
         .expect("offscreen::render returns exactly width*height*4 bytes");
     png.save(&out).map_err(|e| {
-        EngineError::new("png_write_failed", format!("could not write PNG: {e}"))
+        EngineError::new(codes::PNG_WRITE_FAILED, format!("could not write PNG: {e}"))
             .file(out.display().to_string())
     })?;
 
@@ -199,7 +391,7 @@ fn run_scene(
     width: u32,
     height: u32,
 ) -> Result<()> {
-    let scene = Scene::load(&scene_path)?;
+    let scene = load_scene(&scene_path)?;
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
@@ -230,7 +422,7 @@ fn run_triangle(width: u32, height: u32) -> Result<()> {
 fn run_app(mut app: ViewerApp) -> Result<()> {
     let event_loop = EventLoop::new().map_err(|e| {
         EngineError::new(
-            "event_loop_creation_failed",
+            codes::EVENT_LOOP_CREATION_FAILED,
             format!("could not create an event loop: {e}"),
         )
     })?;
@@ -240,7 +432,7 @@ fn run_app(mut app: ViewerApp) -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     event_loop.run_app(&mut app).map_err(|e| {
-        EngineError::new("event_loop_failed", format!("the event loop failed: {e}"))
+        EngineError::new(codes::EVENT_LOOP_FAILED, format!("the event loop failed: {e}"))
     })?;
 
     // A render error inside the loop exits it cleanly; surface it here.
@@ -264,7 +456,7 @@ fn info() -> Result<()> {
         "{}",
         serde_json::to_string_pretty(&json).map_err(|e| {
             EngineError::new(
-                "output_serialization_failed",
+                codes::OUTPUT_SERIALIZATION_FAILED,
                 format!("could not serialize adapter info: {e}"),
             )
         })?

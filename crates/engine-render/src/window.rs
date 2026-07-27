@@ -33,7 +33,7 @@ impl WindowTarget {
 
         let surface = instance.create_surface(window).map_err(|e| {
             EngineError::new(
-                "surface_creation_failed",
+                engine_core::codes::SURFACE_CREATION_FAILED,
                 format!("could not create a render surface for the window: {e}"),
             )
         })?;
@@ -47,7 +47,7 @@ impl WindowTarget {
             .get_default_config(&gpu.adapter, width, height)
             .ok_or_else(|| {
                 EngineError::new(
-                    "surface_unsupported",
+                    engine_core::codes::SURFACE_UNSUPPORTED,
                     "the selected adapter cannot present to this window's surface",
                 )
             })?;
@@ -121,7 +121,7 @@ impl WindowTarget {
 
             Acquired::Validation => {
                 return Err(EngineError::new(
-                    "surface_validation_error",
+                    engine_core::codes::SURFACE_VALIDATION_ERROR,
                     "acquiring a surface frame raised a validation error",
                 ));
             }

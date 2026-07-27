@@ -158,7 +158,7 @@ impl ApplicationHandler for ViewerApp {
                 return self.fail(
                     event_loop,
                     EngineError::new(
-                        "window_creation_failed",
+                        engine_core::codes::WINDOW_CREATION_FAILED,
                         format!("could not create a window: {e}"),
                     ),
                 );
