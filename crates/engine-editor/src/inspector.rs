@@ -12,6 +12,8 @@ use egui::{DragValue, Ui};
 use engine_core::formatter::SetComponentField;
 use serde_json::Value;
 
+use crate::gizmo::AXES;
+
 /// A number that came from an f32 widget, serialized shortest ("0.3", not
 /// "0.30000001192092896").
 pub fn number_from_f32(v: f32) -> Value {
@@ -139,6 +141,33 @@ pub fn ui(
     commits
 }
 
+/// Row labels for a vec3 field: R/G/B for color-like fields, X/Y/Z for
+/// spatial ones. Tints come from [`AXES`] so the inspector letters match
+/// the viewport gizmo arms.
+fn axis_labels(field: &str) -> [(&'static str, egui::Color32); 3] {
+    let letters = if matches!(field, "albedo" | "emissive" | "color") {
+        ["R", "G", "B"]
+    } else {
+        ["X", "Y", "Z"]
+    };
+    [
+        (letters[0], AXES[0].1),
+        (letters[1], AXES[1].1),
+        (letters[2], AXES[2].1),
+    ]
+}
+
+/// Drag speed, displayed decimals, and unit suffix for a vec3 field. Angles
+/// (the file convention is Euler degrees) scrub in half-degree steps; length
+/// -like values in hundredths, three decimals shown like Blender's sidebar.
+fn vec3_style(field: &str) -> (f64, usize, &'static str) {
+    match field {
+        "rotation" => (0.5, 1, "°"),
+        "angular_velocity" => (0.5, 1, "°/s"),
+        _ => (0.01, 3, ""),
+    }
+}
+
 /// One field's widget row. Returns the committed value when this frame ended
 /// a gesture (drag stop / blur), never mid-gesture.
 fn field_widget(
@@ -151,6 +180,13 @@ fn field_widget(
     read_only: bool,
 ) -> Option<Value> {
     let mut committed = None;
+
+    if property["type"].as_str() == Some("array") {
+        ui.add_enabled_ui(!read_only, |ui| {
+            committed = vec3_widget(ui, state, key, field, property, current);
+        });
+        return committed;
+    }
 
     ui.horizontal(|ui| {
         ui.label(field);
@@ -203,43 +239,6 @@ fn field_widget(
                 }
             }
 
-            Some("array") => {
-                let staged = state.staged.get(key).cloned();
-                let mut values: Vec<f64> = staged
-                    .as_ref()
-                    .or(Some(current))
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_f64).collect())
-                    .unwrap_or_default();
-                if values.len() != 3 {
-                    values = vec![0.0; 3];
-                }
-                let (min, max) = bounds_of(&property["items"]);
-
-                let mut changed = false;
-                let mut gesture_ended = false;
-                for value in values.iter_mut() {
-                    let response =
-                        ui.add(DragValue::new(value).speed(0.01).range(min..=max));
-                    changed |= response.changed();
-                    gesture_ended |= response.drag_stopped() || response.lost_focus();
-                }
-                if changed {
-                    let array: Vec<Value> = values
-                        .iter()
-                        .map(|v| number_from_f32(*v as f32))
-                        .collect();
-                    state.staged.insert(key.to_string(), Value::Array(array));
-                }
-                if gesture_ended {
-                    if let Some(staged) = state.staged.remove(key) {
-                        if &staged != current {
-                            committed = Some(staged);
-                        }
-                    }
-                }
-            }
-
             _ => {
                 ui.label(format!("{current}"));
             }
@@ -247,6 +246,68 @@ fn field_widget(
     });
 
     committed
+}
+
+/// A Blender-style vec3 block: the field name above three full-width rows,
+/// one per axis, each row a scrub-draggable value (click to type). Values
+/// stage as one array and commit whole on gesture end, so a drag on X is
+/// still exactly one write.
+fn vec3_widget(
+    ui: &mut Ui,
+    state: &mut InspectorState,
+    key: &str,
+    field: &str,
+    property: &Value,
+    current: &Value,
+) -> Option<Value> {
+    let staged = state.staged.get(key).cloned();
+    let mut values: Vec<f64> = staged
+        .as_ref()
+        .or(Some(current))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_f64).collect())
+        .unwrap_or_default();
+    if values.len() != 3 {
+        values = vec![0.0; 3];
+    }
+    let (min, max) = bounds_of(&property["items"]);
+    let (speed, decimals, suffix) = vec3_style(field);
+
+    ui.label(field);
+    let mut changed = false;
+    let mut gesture_ended = false;
+    let row_height = ui.spacing().interact_size.y;
+    for (value, (letter, color)) in values.iter_mut().zip(axis_labels(field)) {
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [14.0, row_height],
+                egui::Label::new(egui::RichText::new(letter).color(color).strong()),
+            );
+            let response = ui.add_sized(
+                [ui.available_width(), row_height],
+                DragValue::new(value)
+                    .speed(speed)
+                    .range(min..=max)
+                    .fixed_decimals(decimals)
+                    .suffix(suffix),
+            );
+            changed |= response.changed();
+            gesture_ended |= response.drag_stopped() || response.lost_focus();
+        });
+    }
+
+    if changed {
+        let array: Vec<Value> = values.iter().map(|v| number_from_f32(*v as f32)).collect();
+        state.staged.insert(key.to_string(), Value::Array(array));
+    }
+    if gesture_ended {
+        if let Some(staged) = state.staged.remove(key) {
+            if &staged != current {
+                return Some(staged);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -261,6 +322,62 @@ mod tests {
             engine_core::formatter::format_value(&number_from_f32(0.3)),
             "0.3"
         );
+    }
+
+    /// Renders the inspector headlessly and writes a PNG — the agent's way
+    /// to *look at* the inspector, which `--self-screenshot` cannot show
+    /// (it reads back only the viewport texture). Ignored by default; run
+    /// with `cargo test -p engine-editor inspector_preview -- --ignored`.
+    /// Output: `$INSPECTOR_PREVIEW_OUT` or `<temp>/inspector_preview.png`.
+    #[test]
+    #[ignore = "writes a preview image; for interactive/agent verification"]
+    fn inspector_preview() {
+        let schema = engine_core::schema::component_schema();
+        let raw = serde_json::json!({
+            "entities": [{
+                "name": "Cube1",
+                "components": [
+                    { "type": "Transform",
+                      "position": [0.0, 3.0, 0.0],
+                      "rotation": [0.0, 45.0, 0.0],
+                      "scale": [1.0, 1.0, 1.0] },
+                    { "type": "Material", "albedo": [0.8, 0.2, 0.2] }
+                ]
+            }]
+        });
+        let mut state = InspectorState::default();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::Vec2::new(320.0, 480.0))
+            .build_ui(|ui| {
+                ui.heading("inspector");
+                ui.strong("Cube1");
+                super::ui(ui, &mut state, &schema, &raw, "Cube1", false);
+            });
+        harness.run();
+        let image = harness.render().expect("kittest render");
+        let out = std::env::var_os("INSPECTOR_PREVIEW_OUT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("inspector_preview.png"));
+        image.save(&out).expect("save preview png");
+        eprintln!("[inspector-preview] wrote {}", out.display());
+    }
+
+    #[test]
+    fn color_fields_get_rgb_letters_spatial_get_xyz() {
+        assert_eq!(axis_labels("albedo").map(|(l, _)| l), ["R", "G", "B"]);
+        assert_eq!(axis_labels("emissive").map(|(l, _)| l), ["R", "G", "B"]);
+        assert_eq!(axis_labels("color").map(|(l, _)| l), ["R", "G", "B"]);
+        assert_eq!(axis_labels("position").map(|(l, _)| l), ["X", "Y", "Z"]);
+        assert_eq!(axis_labels("half_extents").map(|(l, _)| l), ["X", "Y", "Z"]);
+        // The letter tints are the gizmo arm colors, not a second palette.
+        assert_eq!(axis_labels("position").map(|(_, c)| c), AXES.map(|(_, c)| c));
+    }
+
+    #[test]
+    fn angle_fields_scrub_in_degrees() {
+        assert_eq!(vec3_style("rotation"), (0.5, 1, "°"));
+        assert_eq!(vec3_style("angular_velocity"), (0.5, 1, "°/s"));
+        assert_eq!(vec3_style("position"), (0.01, 3, ""));
     }
 
     #[test]

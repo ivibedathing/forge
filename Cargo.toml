@@ -45,6 +45,7 @@ pollster = "1.0"
 eframe = { git = "https://github.com/emilk/egui", rev = "e6eb00a31c7089d4458c55fcbe5f1253311a7176", default-features = false, features = ["wgpu", "default_fonts"] }
 egui = { git = "https://github.com/emilk/egui", rev = "e6eb00a31c7089d4458c55fcbe5f1253311a7176" }
 egui-wgpu = { git = "https://github.com/emilk/egui", rev = "e6eb00a31c7089d4458c55fcbe5f1253311a7176" }
+egui_kittest = { git = "https://github.com/emilk/egui", rev = "e6eb00a31c7089d4458c55fcbe5f1253311a7176", features = ["wgpu"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
