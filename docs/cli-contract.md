@@ -80,6 +80,8 @@ engine run-scene <scene.json> [--camera N]
 engine diff-render <scene.json> <baseline.png> [--out diff.png] [--camera N]
                    [--threshold N] [--max-diff-percent P]
 engine edit <scene.json> [--watch]           # GUI editor; --watch = read-only
+engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
+engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine list-components                       # scene + component JSON Schemas
 engine info                                  # selected GPU adapter
@@ -134,6 +136,22 @@ There is no bless flag: a baseline *is* a screenshot
 (`engine screenshot scene.json --out baseline.png`) — both commands drive
 the identical offscreen path. Committed baselines live in
 `examples/scenes/verify/baselines/`, per-adapter.
+
+## Simulation
+
+`engine simulate` advances a fixed timestep (`physics.timestep_hz`, integer)
+an explicit number of steps and never reads a clock: same scene + same steps
+= byte-identical results, pinned by committed golden traces. `--trace`
+writes JSONL — one line per dynamic body per step plus contact events
+(`{"step": 30, "contact": ["A", "B"], "started": true}`) — the greppable
+record agents assert on. `--bake` writes a *valid scene file* with
+`Transform`/`RigidBody` velocities updated and every untouched byte
+preserved (the M7 formatter). A bake is a representation checkpoint, not a
+solver snapshot: resuming from a bake agrees with the straight-through run
+to ~1e-4 (quantization + disposable solver caches), not byte-for-byte.
+`--steps N` on `screenshot` and `diff-render` is the edit → simulate → LOOK
+loop; `engine raycast` answers spatial questions in JSON
+(`{"hit": {"entity", "point", "normal", "distance"}}` or `{"hit": null}`).
 
 ## Validation against the published schema
 

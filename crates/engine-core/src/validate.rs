@@ -71,7 +71,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     }
 
     for key in object.keys() {
-        if key != "name" && key != "entities" {
+        if key != "name" && key != "entities" && key != "physics" {
             errors.push(
                 cx.err(
                     codes::UNKNOWN_FIELD,
@@ -79,9 +79,13 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     &format!("/{key}"),
                 )
                 .field(key)
-                .suggest_from(key, ["name", "entities"]),
+                .suggest_from(key, ["name", "entities", "physics"]),
             );
         }
+    }
+
+    if let Some(physics) = object.get("physics") {
+        check_physics_block(&cx, physics, &mut errors);
     }
 
     let entities = match object.get("entities") {
@@ -206,6 +210,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut seen_types: Vec<String> = Vec::new();
         let mut has_mesh = false;
         let mut material_paths: Vec<String> = Vec::new();
+        let mut has_transform = false;
+        let mut scale = glam::Vec3::ONE;
+        let mut rigid_body: Option<(crate::components::BodyKind, String)> = None;
+        let mut collider: Option<(crate::components::ColliderShapeKind, String)> = None;
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
@@ -248,7 +256,85 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 has_mesh = true;
             }
             if type_name == "Material" {
-                material_paths.push(component_path);
+                material_paths.push(component_path.clone());
+            }
+            match checked.parsed {
+                Some(ComponentData::Transform(t)) => {
+                    has_transform = true;
+                    scale = t.scale;
+                }
+                Some(ComponentData::RigidBody(rb)) => {
+                    rigid_body = Some((rb.body, component_path));
+                }
+                Some(ComponentData::Collider(c)) => {
+                    collider = Some((c.shape, component_path));
+                }
+                _ => {}
+            }
+        }
+
+        // ── Cross-component physics checks (design §9) ────────────────
+        if let Some((body, path)) = &rigid_body {
+            if !has_transform {
+                errors.push(
+                    cx.err(
+                        codes::MISSING_TRANSFORM,
+                        format!("entity {name:?} has a RigidBody but no Transform to move"),
+                        path,
+                    )
+                    .entity(name)
+                    .component("RigidBody"),
+                );
+            }
+            if *body == crate::components::BodyKind::Dynamic && collider.is_none() {
+                // An error, not a warning: it would fall forever through
+                // everything, which is a mistake essentially always.
+                errors.push(
+                    cx.err(
+                        codes::MISSING_COLLIDER,
+                        format!(
+                            "entity {name:?} has a dynamic RigidBody but no Collider; \
+                             it would fall forever through everything"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("RigidBody"),
+                );
+            }
+        }
+        if let Some((shape, path)) = &collider {
+            if !has_transform && rigid_body.is_none() {
+                errors.push(
+                    cx.err(
+                        codes::MISSING_TRANSFORM,
+                        format!("entity {name:?} has a Collider but no Transform to place it"),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Collider"),
+                );
+            }
+            let round = matches!(
+                shape,
+                crate::components::ColliderShapeKind::Sphere
+                    | crate::components::ColliderShapeKind::Capsule
+            );
+            if round && !(scale.x == scale.y && scale.y == scale.z) {
+                errors.push(
+                    cx.err(
+                        codes::NONUNIFORM_SCALE_ON_ROUND_COLLIDER,
+                        format!(
+                            "entity {name:?} scales a round collider by [{}, {}, {}]; \
+                             spheres and capsules only take uniform scale",
+                            scale.x, scale.y, scale.z
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Collider")
+                    .field("shape"),
+                );
             }
         }
 
@@ -335,6 +421,9 @@ struct Checked {
     active_camera: bool,
     directional_light: bool,
     ambient_light: bool,
+    /// The parsed component when the shape was clean — what the entity-level
+    /// cross-component checks (physics, M8) read.
+    parsed: Option<ComponentData>,
 }
 
 impl Checked {
@@ -356,6 +445,15 @@ impl ComponentSchemas {
     fn new() -> Self {
         Self {
             schema: crate::schema::component_schema(),
+        }
+    }
+
+    /// Look through a `$ref` to the schema's `$defs` (schemars refs shared
+    /// types like enums). Non-ref schemas come back unchanged.
+    fn resolve<'a>(&'a self, property: &'a Value) -> &'a Value {
+        match property["$ref"].as_str().and_then(|r| r.strip_prefix("#/$defs/")) {
+            Some(name) => &self.schema["$defs"][name],
+            None => property,
         }
     }
 
@@ -482,7 +580,8 @@ fn check_component(
         return Checked::named(type_name);
     };
 
-    let shape_clean = walk_component(cx, variant, object, type_name, entity, component_path, errors);
+    let shape_clean =
+        walk_component(cx, schemas, variant, object, type_name, entity, component_path, errors);
     if !shape_clean {
         // Field names or JSON types are wrong; serde would reject this
         // component, so parsing and the semantic checks below are moot.
@@ -512,6 +611,7 @@ fn check_component(
     };
 
     let mut checked = Checked::named(type_name);
+    checked.parsed = Some(parsed.clone());
 
     match parsed {
         // An unresolvable mesh asset is a validation error, never a silent
@@ -586,6 +686,93 @@ fn check_component(
         ComponentData::DirectionalLight(_) => checked.directional_light = true,
         ComponentData::AmbientLight(_) => checked.ambient_light = true,
         ComponentData::Material(_) => {}
+
+        // The flat Collider struct keeps the file walkable; which fields each
+        // shape requires and forbids is semantic, checked here (design §5).
+        ComponentData::Collider(collider) => {
+            use crate::components::ColliderShapeKind::{Capsule, Cuboid, Sphere};
+
+            let shape_name = match collider.shape {
+                Cuboid => "cuboid",
+                Sphere => "sphere",
+                Capsule => "capsule",
+            };
+            let fields: [(&str, bool, bool); 3] = [
+                // (field, present, wanted-by-this-shape)
+                (
+                    "half_extents",
+                    collider.half_extents.is_some(),
+                    collider.shape == Cuboid,
+                ),
+                (
+                    "radius",
+                    collider.radius.is_some(),
+                    matches!(collider.shape, Sphere | Capsule),
+                ),
+                (
+                    "half_height",
+                    collider.half_height.is_some(),
+                    collider.shape == Capsule,
+                ),
+            ];
+            for (field, present, wanted) in fields {
+                if wanted && !present {
+                    errors.push(
+                        cx.err(
+                            codes::MISSING_FIELD,
+                            format!("{shape_name} colliders require the field {field:?}"),
+                            component_path,
+                        )
+                        .entity(entity)
+                        .component("Collider")
+                        .field(field),
+                    );
+                }
+                if !wanted && present {
+                    errors.push(
+                        cx.err(
+                            codes::SHAPE_FIELD_MISMATCH,
+                            format!("{shape_name} colliders have no field {field:?}"),
+                            &format!("{component_path}/{field}"),
+                        )
+                        .entity(entity)
+                        .component("Collider")
+                        .field(field),
+                    );
+                }
+            }
+
+            // Dimensions are strictly positive; NaN fails too via !(v > 0).
+            let mut dimension = |field: &str, label: String, v: f32| {
+                if !(v > 0.0) {
+                    errors.push(
+                        cx.err(
+                            codes::INVALID_SHAPE_DIMENSION,
+                            format!("Collider.{label} is {v}; it must be greater than 0"),
+                            &format!("{component_path}/{field}"),
+                        )
+                        .entity(entity)
+                        .component("Collider")
+                        .field(field),
+                    );
+                }
+            };
+            if let Some(half_extents) = collider.half_extents {
+                for (i, v) in half_extents.to_array().into_iter().enumerate() {
+                    dimension("half_extents", format!("half_extents[{i}]"), v);
+                }
+            }
+            if let Some(radius) = collider.radius {
+                dimension("radius", "radius".into(), radius);
+            }
+            if let Some(half_height) = collider.half_height {
+                dimension("half_height", "half_height".into(), half_height);
+            }
+        }
+
+        // RigidBody's numeric ranges live in the published schema; the
+        // cross-component requirements (Transform, Collider) are entity-level.
+        ComponentData::RigidBody(_) => {}
     }
 
     checked
@@ -597,6 +784,7 @@ fn check_component(
 /// not make the shape unparseable, so they leave the return value true.
 fn walk_component(
     cx: &Cx<'_>,
+    schemas: &ComponentSchemas,
     variant: &Value,
     object: &Map<String, Value>,
     type_name: &str,
@@ -654,12 +842,47 @@ fn walk_component(
         let Some(property) = properties.get(key.as_str()) else {
             continue; // already reported as unknown
         };
+        let property = schemas.resolve(property);
         let field_path = format!("{component_path}/{key}");
         shape_clean &=
             check_value(cx, property, value, type_name, entity, key, &field_path, errors);
     }
 
     shape_clean
+}
+
+/// The JSON type a property schema names, looking through nullability:
+/// `Option<T>` fields publish `"type": ["<T>", "null"]`. Returns the
+/// non-null type and whether null is allowed.
+fn schema_type(schema: &Value) -> (Option<&str>, bool) {
+    if let Some(t) = schema["type"].as_str() {
+        return (Some(t), false);
+    }
+    if let Some(types) = schema["type"].as_array() {
+        let nullable = types.iter().any(|t| t == "null");
+        let concrete = types
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|t| *t != "null");
+        return (concrete, nullable);
+    }
+    (None, false)
+}
+
+/// The closed set of strings a property schema accepts, if it is an enum.
+/// schemars writes plain enums as `"enum": [...]` and doc-commented ones as
+/// a `oneOf` of `const` entries; both are the same contract.
+fn enum_values(schema: &Value) -> Option<Vec<&str>> {
+    if let Some(values) = schema["enum"].as_array() {
+        return Some(values.iter().filter_map(Value::as_str).collect());
+    }
+    if let Some(variants) = schema["oneOf"].as_array() {
+        let consts: Vec<&str> = variants.iter().filter_map(|v| v["const"].as_str()).collect();
+        if !consts.is_empty() && consts.len() == variants.len() {
+            return Some(consts);
+        }
+    }
+    None
 }
 
 /// Check one field value against its property schema. Returns whether the
@@ -675,7 +898,14 @@ fn check_value(
     json_path: &str,
     errors: &mut Vec<EngineError>,
 ) -> bool {
-    match schema["type"].as_str() {
+    let (type_name, nullable) = schema_type(schema);
+    if nullable && value.is_null() {
+        return true;
+    }
+    // An enum-of-strings schema may carry no top-level "type"; it is a
+    // string field with a closed vocabulary either way.
+    let type_name = type_name.or_else(|| enum_values(schema).map(|_| "string"));
+    match type_name {
         Some("number") => {
             let Some(number) = value.as_number() else {
                 errors.push(
@@ -702,13 +932,41 @@ fn check_value(
         }
 
         Some("string") => {
-            if !value.is_string() {
+            let Some(text) = value.as_str() else {
                 errors.push(
                     cx.wrong_type(field, "string", value, json_path)
                         .entity(entity)
                         .component(component),
                 );
                 return false;
+            };
+
+            // Closed string enums (RigidBody.body, Collider.shape): the walk
+            // must reject unknown variants itself, or serde's rejection would
+            // masquerade as a desync bug. Typos get did_you_mean.
+            if let Some(allowed) = enum_values(schema) {
+                if !allowed.contains(&text) {
+                    let (code, what) = match field {
+                        "shape" => (codes::UNKNOWN_SHAPE, "collider shape"),
+                        "body" => (codes::UNKNOWN_BODY_KIND, "body kind"),
+                        _ => (codes::INVALID_FIELD_TYPE, "value"),
+                    };
+                    errors.push(
+                        cx.err(
+                            code,
+                            format!(
+                                "no {what} named {text:?}; expected one of {}",
+                                allowed.join(", ")
+                            ),
+                            json_path,
+                        )
+                        .entity(entity)
+                        .component(component)
+                        .field(field)
+                        .suggest_from(text, allowed.iter().copied()),
+                    );
+                    return false;
+                }
             }
             true
         }
@@ -858,6 +1116,55 @@ fn fmt_num(v: f64) -> String {
         format!("{}", v as i64)
     } else {
         format!("{v}")
+    }
+}
+
+/// Validate the scene-level `physics` block by hand (the top-level walk is
+/// hand-written; the block is small enough to keep it that way).
+fn check_physics_block(cx: &Cx<'_>, physics: &Value, errors: &mut Vec<EngineError>) {
+    let Some(object) = physics.as_object() else {
+        errors.push(cx.wrong_type("physics", "object", physics, "/physics"));
+        return;
+    };
+
+    for key in object.keys() {
+        if key != "gravity" && key != "timestep_hz" {
+            errors.push(
+                cx.err(
+                    codes::UNKNOWN_FIELD,
+                    format!("the physics block has no field {key:?}"),
+                    &format!("/physics/{key}"),
+                )
+                .field(key)
+                .suggest_from(key, ["gravity", "timestep_hz"]),
+            );
+        }
+    }
+
+    if let Some(gravity) = object.get("gravity") {
+        match gravity.as_array() {
+            Some(items) if items.len() == 3 && items.iter().all(Value::is_number) => {}
+            _ => errors.push(
+                cx.wrong_type("gravity", "array", gravity, "/physics/gravity")
+                    .field("gravity"),
+            ),
+        }
+    }
+
+    if let Some(hz) = object.get("timestep_hz") {
+        let valid = hz.as_u64().is_some_and(|v| v >= 1);
+        if !valid {
+            errors.push(
+                cx.err(
+                    codes::INVALID_PHYSICS_VALUE,
+                    format!(
+                        "physics.timestep_hz is {hz}; it must be an integer of at least 1"
+                    ),
+                    "/physics/timestep_hz",
+                )
+                .field("timestep_hz"),
+            );
+        }
     }
 }
 
@@ -1316,6 +1623,147 @@ mod tests {
             errors[0].context().unwrap().did_you_mean.as_deref(),
             Some("DirectionalLight")
         );
+    }
+
+    const PHYSICS_VALID: &str = r#"{"name":"p","physics":{"gravity":[0.0,-9.81,0.0],"timestep_hz":60},"entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform","scale":[10.0,1.0,10.0]},
+            {"type":"Collider","shape":"cuboid","half_extents":[5.0,0.05,5.0]}
+        ]},
+        {"name":"Cube","components":[
+            {"type":"Transform","position":[0.0,5.0,0.0]},
+            {"type":"RigidBody","body":"dynamic"},
+            {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5]}
+        ]}
+    ]}"#;
+
+    #[test]
+    fn accepts_a_valid_physics_scene() {
+        assert!(codes_of(PHYSICS_VALID).is_empty(), "{:?}", validate_source(PHYSICS_VALID, "t"));
+    }
+
+    #[test]
+    fn suggests_shape_and_body_kind_typos() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"A","components":[
+                {"type":"Transform"},
+                {"type":"RigidBody","body":"dynmaic"},
+                {"type":"Collider","shape":"cubiod","half_extents":[0.5,0.5,0.5]}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+
+        let body = errors.iter().find(|e| e.error == "unknown_body_kind").unwrap();
+        assert_eq!(body.context().unwrap().did_you_mean.as_deref(), Some("dynamic"));
+
+        let shape = errors.iter().find(|e| e.error == "unknown_shape").unwrap();
+        assert_eq!(shape.context().unwrap().did_you_mean.as_deref(), Some("cuboid"));
+    }
+
+    #[test]
+    fn rejects_a_dynamic_body_without_a_collider() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Faller","components":[
+                {"type":"Transform"},{"type":"RigidBody","body":"dynamic"}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].error, "missing_collider");
+        assert_eq!(errors[0].context().unwrap().entity.as_deref(), Some("Faller"));
+    }
+
+    #[test]
+    fn fixed_and_kinematic_bodies_need_no_collider() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"A","components":[{"type":"Transform"},{"type":"RigidBody","body":"fixed"}]},
+            {"name":"B","components":[{"type":"Transform"},{"type":"RigidBody","body":"kinematic"}]}
+        ]}"#;
+        assert!(codes_of(source).is_empty());
+    }
+
+    #[test]
+    fn rejects_physics_components_without_a_transform() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"A","components":[{"type":"RigidBody","body":"fixed"}]},
+            {"name":"B","components":[{"type":"Collider","shape":"sphere","radius":0.5}]}
+        ]}"#;
+        let codes = codes_of(source);
+        assert_eq!(
+            codes.iter().filter(|c| **c == "missing_transform").count(),
+            2,
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_nonuniform_scale_on_round_colliders() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Squished","components":[
+                {"type":"Transform","scale":[1.0,2.0,1.0]},
+                {"type":"Collider","shape":"sphere","radius":0.5}
+            ]},
+            {"name":"FineCuboid","components":[
+                {"type":"Transform","scale":[1.0,2.0,1.0]},
+                {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(source), ["nonuniform_scale_on_round_collider"]);
+    }
+
+    #[test]
+    fn enforces_per_shape_collider_fields() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"A","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"sphere","half_extents":[0.5,0.5,0.5]}
+            ]},
+            {"name":"B","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"cuboid"}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        let codes: Vec<&str> = errors.iter().map(|e| e.error).collect();
+        // Sphere: missing radius AND stray half_extents; cuboid: missing half_extents.
+        assert!(codes.iter().filter(|c| **c == "missing_field").count() == 2, "{errors:?}");
+        assert!(codes.contains(&"shape_field_mismatch"), "{errors:?}");
+    }
+
+    #[test]
+    fn rejects_non_positive_shape_dimensions() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"A","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.0,0.5]}
+            ]},
+            {"name":"B","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"sphere","radius":-1.0}
+            ]}
+        ]}"#;
+        let codes = codes_of(source);
+        assert_eq!(
+            codes.iter().filter(|c| **c == "invalid_shape_dimension").count(),
+            2,
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_bad_timestep() {
+        let source = r#"{"name":"s","physics":{"timestep_hz":0},"entities":[]}"#;
+        assert_eq!(codes_of(source), ["invalid_physics_value"]);
+        let source = r#"{"name":"s","physics":{"timestep_hz":60.5},"entities":[]}"#;
+        assert_eq!(codes_of(source), ["invalid_physics_value"]);
+    }
+
+    #[test]
+    fn rejects_unknown_physics_block_fields() {
+        let source = r#"{"name":"s","physics":{"gravty":[0,-9.81,0]},"entities":[]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors[0].error, "unknown_field");
+        assert_eq!(errors[0].context().unwrap().did_you_mean.as_deref(), Some("gravity"));
     }
 
     #[test]

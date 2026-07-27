@@ -36,6 +36,14 @@ build fails.
 | `multiple_directional_lights` | 1 | more than one DirectionalLight in the scene |
 | `multiple_ambient_lights` | 1 | more than one AmbientLight in the scene |
 | `validation_failed` | 1 | summary error after per-diagnostic reports; see the preceding lines |
+| `unknown_shape` | 1 | a Collider names no known shape kind |
+| `unknown_body_kind` | 1 | a RigidBody names no known body kind |
+| `invalid_shape_dimension` | 1 | a collider dimension must be strictly positive |
+| `shape_field_mismatch` | 1 | a Collider field does not apply to its shape |
+| `nonuniform_scale_on_round_collider` | 1 | sphere and capsule colliders cannot take a nonuniform Transform.scale |
+| `invalid_physics_value` | 1 | a physics setting is outside its meaningful range |
+| `missing_collider` | 1 | a dynamic RigidBody has no Collider and would fall through everything |
+| `missing_transform` | 1 | a RigidBody or Collider needs a Transform on the same entity |
 | `unused_material` | 1 | warning: a Material on an entity with no Mesh does nothing |
 | `zero_scale` | 1 | warning: a Transform.scale axis of 0 renders invisibly or degenerate |
 | `scene_unreadable` | 1 | the scene file could not be read |

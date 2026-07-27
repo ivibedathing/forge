@@ -6,6 +6,7 @@
 //! error plumbing — is identical.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use engine_core::components::Camera;
 use engine_core::math::Mat4;
@@ -30,7 +31,20 @@ pub enum Content {
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
+        /// Present when the scene has physics components: the viewer drives
+        /// the same fixed step through a wall-clock accumulator (the
+        /// headless path stays canonical; frame pacing may vary here).
+        simulation: Option<Simulation>,
     },
+}
+
+/// Live physics for the windowed viewer.
+pub struct Simulation {
+    pub scene: engine_core::Scene,
+    pub physics: engine_physics::PhysicsWorld,
+    pub assets: engine_assets::AssetServer,
+    pub accumulator: f32,
+    pub last: Option<Instant>,
 }
 
 /// GPU-side state, created once the window exists.
@@ -92,7 +106,7 @@ impl ViewerApp {
             return Ok(());
         };
 
-        match (paint, &self.content) {
+        match (paint, &mut self.content) {
             (Paint::Triangle(renderer), _) => target.render_with(|device, queue, view| {
                 renderer.draw(
                     device,
@@ -111,8 +125,27 @@ impl ViewerApp {
                     camera,
                     camera_model,
                     lights,
+                    simulation,
                 },
             ) => {
+                if let Some(sim) = simulation {
+                    let now = Instant::now();
+                    let dt = 1.0 / sim.scene.physics.timestep_hz.max(1) as f32;
+                    let elapsed = sim
+                        .last
+                        .map(|last| (now - last).as_secs_f32())
+                        .unwrap_or(dt)
+                        .min(0.25);
+                    sim.last = Some(now);
+                    sim.accumulator += elapsed;
+                    while sim.accumulator >= dt {
+                        sim.physics.step(&mut sim.scene.world);
+                        sim.accumulator -= dt;
+                    }
+                    if let Ok(fresh) = sim.scene.render_items(&sim.assets) {
+                        *items = fresh;
+                    }
+                }
                 let (width, height) = target.size();
                 let view_projection = scene_renderer::view_projection(
                     camera,

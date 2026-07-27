@@ -492,3 +492,163 @@ fn bless_then_diff_round_trip() {
     }
     assert!(red_inside > 0, "the recolored cube must show as red");
 }
+
+// ── physics (M8) ───────────────────────────────────────────────────────
+
+/// Determinism is the contract: the same scene and step count produce
+/// byte-identical traces, run to run and against the committed golden.
+/// A golden mismatch on a rapier upgrade is a breaking change to review,
+/// never noise to regenerate blindly.
+#[test]
+fn simulation_traces_are_deterministic_and_match_the_golden() {
+    let scene = repo_path("examples/scenes/verify/m8_drop.json");
+    let trace = |name: &str| {
+        let path = std::env::temp_dir().join(format!(
+            "engine-m8-{}-{name}.jsonl",
+            std::process::id()
+        ));
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .arg("--steps")
+            .arg("300")
+            .arg("--trace")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        std::fs::read(&path).unwrap()
+    };
+
+    let first = trace("a");
+    let second = trace("b");
+    assert_eq!(first, second, "twice-run traces must be byte-identical");
+
+    let golden =
+        std::fs::read(repo_path("examples/scenes/verify/baselines/m8_drop.trace.jsonl")).unwrap();
+    assert_eq!(
+        first, golden,
+        "trace drifted from the committed golden — if a rapier upgrade \
+         caused this, review the diff as a breaking change"
+    );
+}
+
+/// Baking is a representation checkpoint, not a bit-perfect solver
+/// snapshot: quantizing to Euler-degree f32 text at the bake boundary (and
+/// dropping solver caches, which are deliberately disposable) shifts the
+/// resumed trajectory by float ulps. The pinned property is agreement
+/// within solver noise, not byte equality.
+#[test]
+fn bake_round_trip_agrees_within_solver_noise() {
+    let scene = repo_path("examples/scenes/verify/m8_drop.json");
+    let dir = std::env::temp_dir().join(format!("engine-m8-bake-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let simulate = |input: &std::path::Path, steps: &str, out: &std::path::Path| {
+        let output = engine()
+            .arg("simulate")
+            .arg(input)
+            .arg("--steps")
+            .arg(steps)
+            .arg("--bake")
+            .arg(out)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+    };
+
+    let mid = dir.join("mid.json");
+    let resumed = dir.join("resumed.json");
+    let straight = dir.join("straight.json");
+    simulate(&scene, "150", &mid);
+    simulate(&mid, "150", &resumed);
+    simulate(&scene, "300", &straight);
+
+    let position = |path: &std::path::Path, entity: &str| -> Vec<f64> {
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let e = root["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == entity)
+            .unwrap();
+        e["components"][0]["position"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    };
+
+    for entity in ["DropCube", "BouncyBall"] {
+        let a = position(&resumed, entity);
+        let b = position(&straight, entity);
+        for axis in 0..3 {
+            assert!(
+                (a[axis] - b[axis]).abs() < 1e-4,
+                "{entity} axis {axis}: resumed {a:?} vs straight {b:?}"
+            );
+        }
+    }
+
+    // And a bake must always be a valid scene file.
+    let output = engine().arg("validate").arg(&resumed).output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn raycast_reports_hits_and_misses_as_json() {
+    let scene = repo_path("examples/scenes/verify/m8_drop.json");
+    let output = engine()
+        .arg("raycast")
+        .arg(&scene)
+        .arg("--from")
+        .arg("0,10,0")
+        .arg("--dir")
+        .arg("0,-1,0")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let result: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    // At step 0 the cube is airborne at x=0, so the ray hits it.
+    assert_eq!(result["hit"]["entity"], "DropCube", "{result}");
+
+    let output = engine()
+        .arg("raycast")
+        .arg(&scene)
+        .arg("--from")
+        .arg("50,10,0")
+        .arg("--dir")
+        .arg("0,-1,0")
+        .output()
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    assert!(result["hit"].is_null(), "{result}");
+}
+
+#[test]
+fn physics_validation_errors_surface_end_to_end() {
+    let scene = scene_file(
+        "physics-broken",
+        r#"{"name":"pb","entities":[
+            {"name":"Faller","components":[
+                {"type":"Transform"},{"type":"RigidBody","body":"dynmaic"}
+            ]},
+            {"name":"Egg","components":[
+                {"type":"Transform","scale":[1.0,2.0,1.0]},
+                {"type":"Collider","shape":"cubiod","radius":0.5}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&output));
+    for expected in ["unknown_body_kind", "unknown_shape"] {
+        assert!(codes.contains(&expected.to_string()), "missing {expected}: {codes:?}");
+    }
+    let lines = stderr_lines(&output);
+    let body = lines.iter().find(|l| l["error"] == "unknown_body_kind").unwrap();
+    assert_eq!(body["did_you_mean"], "dynamic");
+}

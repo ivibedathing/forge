@@ -193,6 +193,15 @@ fn path_of(stack: &[Frame]) -> Option<String> {
     Some(path)
 }
 
+/// A number that came from an f32, serialized shortest ("0.3", never
+/// "0.30000001192092896") — the representation a human would have typed.
+pub fn number_from_f32(v: f32) -> Value {
+    let shortest: f64 = v.to_string().parse().unwrap_or(f64::from(v));
+    serde_json::Number::from_f64(shortest)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
+}
+
 /// Serialize a JSON value in scene-file style: floats keep a decimal point
 /// (`3.0`, not `3`), arrays of scalars go on one line with `", "` separators
 /// — the style every example scene and the M-fixtures use.

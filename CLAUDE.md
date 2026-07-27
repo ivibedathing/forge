@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M7 are done** (plus most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M8 are done** (plus most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -21,9 +21,11 @@ What works today:
 
 ```
 engine validate <scene.json>... [--strict]  # every error at once; multi-file; --strict promotes warnings
-engine screenshot <scene.json> --out x.png [--camera N] [--width W --height H]
-engine diff-render <scene.json> <baseline.png> [--out diff.png] [--threshold N] [--max-diff-percent P]
+engine screenshot <scene.json> --out x.png [--steps N] [--camera N] [--width W --height H]
+engine diff-render <scene.json> <baseline.png> [--steps N] [--out diff.png] [--threshold N] [--max-diff-percent P]
 engine edit <scene.json> [--watch]       # GUI editor; --watch = read-only supervision mode
+engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
+engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine run-scene <scene.json>            # windowed scene viewer
 engine list-components                   # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
@@ -98,6 +100,24 @@ failures are re-rendered as `invalid_invocation` JSON with clap's own `did_you_m
 checked-in `schemas/component-schema.json` is enforced by `engine-core/tests/repo_contracts.rs`
 — regenerate with `engine list-components > schemas/component-schema.json` after touching any
 component, including its range attributes.
+
+Physics (M8, `crates/engine-physics`): **rapier3d pinned =0.34.0** with `enhanced-determinism`
+— and note rapier 0.34 switched to a glam-based math backend (glamx) sharing our exact glam
+version, so no conversion layer exists; read the API in the registry when touching it, and treat
+any golden-trace diff on a rapier upgrade as a breaking change to review. `RigidBody` (body:
+dynamic/kinematic/fixed) + `Collider` (flat struct, `shape` cuboid/sphere/capsule with per-shape
+fields enforced semantically) + optional scene-level `physics` block (`gravity`,
+integer `timestep_hz`). `Transform.scale` scales collider shapes (the fixture's ground collider
+is authored in *local* units for this reason); restitution combines by **max**, documented on
+the component. Angular velocity is degrees/sec (file convention), converted at the rapier
+boundary. Determinism: same file + steps → byte-identical traces, pinned by the committed
+golden `verify/baselines/m8_drop.trace.jsonl` and CLI tests. **Bake round-trip is
+state-equal within ~1e-4, deliberately not byte-equal**: baking quantizes to Euler-degree f32
+text and drops solver caches (disposable by design), so a resumed run drifts by float ulps —
+the CLI test pins the tolerance property. `--steps 0` scene queries need
+`PhysicsWorld::refresh_queries()` (the broad-phase BVH is otherwise only built inside `step`).
+The windowed viewer steps the same fixed dt through a wall-clock accumulator; headless is
+canonical. Physics tests are GPU-free and unconditional — no skip path.
 
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).
@@ -202,8 +222,8 @@ Standard Cargo commands: `cargo build`, `cargo test --workspace`, and
 
 Follow the milestones in design doc §8: ~~M0 window+triangle~~ → ~~M1 CLI skeleton + JSON
 error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ → ~~M4 materials +
-lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ (all
-done; editor E3 structure edits and E4 undo/redo remain as follow-ups; next per roadmap: M8).
+lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ →
+~~M8 physics~~ (all done; editor E3/E4 remain as follow-ups; next per roadmap: M9 animation).
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

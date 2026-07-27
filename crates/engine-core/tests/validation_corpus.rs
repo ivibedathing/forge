@@ -25,6 +25,8 @@ const SHAPE_CODES: &[&str] = &[
     "component_not_object",
     "component_missing_type",
     "unknown_component",
+    "unknown_shape",
+    "unknown_body_kind",
 ];
 
 /// Valid and broken scenes, mixed. Builtin assets only, so validity depends
@@ -58,6 +60,15 @@ const AGREEMENT_CORPUS: &[&str] = &[
         {"name":"A","components":[{"type":"Camera","active":true}]},
         {"name":"B","components":[{"type":"Camera","active":true}]}
     ]}"#,
+    // Physics (M8): valid, semantically broken (serde parses), shape-broken.
+    r#"{"name":"s","physics":{"gravity":[0.0,-9.81,0.0],"timestep_hz":60},"entities":[
+        {"name":"A","components":[{"type":"Transform"},{"type":"RigidBody","body":"dynamic"},
+         {"type":"Collider","shape":"capsule","radius":0.3,"half_height":0.5}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Transform"},{"type":"RigidBody","body":"dynamic"}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Transform"},
+        {"type":"Collider","shape":"sphere","radius":-2.0,"half_extents":[1,1,1]}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"RigidBody","body":"dynmaic"}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Collider","shape":"donut"}]}]}"#,
     // Shape-broken — serde must reject every one of these.
     r#"{"entities":[]}"#,
     r#"{"name":"s"}"#,
