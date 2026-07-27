@@ -363,6 +363,29 @@ fn half() -> f32 {
     0.5
 }
 
+/// Plays an animation clip against scene time (M9).
+///
+/// `clip` is a relative path to a property clip (`*.anim.json`); a
+/// `path#ClipName` glTF fragment is reserved for skeletal clips (not yet
+/// supported). A player in the file is playing — there is no play/pause
+/// runtime state, because pose is a pure function of (files, time).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AnimationPlayer {
+    pub clip: String,
+
+    /// Time multiplier; local time = `t * speed + start_offset`.
+    #[serde(default = "one")]
+    pub speed: f32,
+
+    /// Wrap by clip duration; when false, clamp to the final pose.
+    #[serde(default = "yes")]
+    pub looping: bool,
+
+    #[serde(default)]
+    pub start_offset: f32,
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -412,6 +435,7 @@ components!(
     AmbientLight,
     RigidBody,
     Collider,
+    AnimationPlayer,
 );
 
 #[cfg(test)]
@@ -495,7 +519,8 @@ mod tests {
                 "DirectionalLight",
                 "AmbientLight",
                 "RigidBody",
-                "Collider"
+                "Collider",
+                "AnimationPlayer"
             ]
         );
     }

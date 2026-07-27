@@ -82,6 +82,8 @@ engine diff-render <scene.json> <baseline.png> [--out diff.png] [--camera N]
 engine edit <scene.json> [--watch]           # GUI editor; --watch = read-only
 engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
+engine filmstrip <scene.json> --out strip.png [--start/--end/--frames/--columns]
+engine list-animations <scene-or-clip> [--schema]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine list-components                       # scene + component JSON Schemas
 engine info                                  # selected GPU adapter
@@ -152,6 +154,19 @@ to ~1e-4 (quantization + disposable solver caches), not byte-for-byte.
 `--steps N` on `screenshot` and `diff-render` is the edit → simulate → LOOK
 loop; `engine raycast` answers spatial questions in JSON
 (`{"hit": {"entity", "point", "normal", "distance"}}` or `{"hit": null}`).
+
+## Animation
+
+Pose is a pure function of (files, time): `--time T` on `screenshot` and
+`diff-render` renders the animated pose at scene time T, reproducibly —
+equal times give byte-identical PNGs. `engine filmstrip` tiles N frames over
+a time range into one contact-sheet PNG (default range: the longest clip in
+the scene). `engine list-animations` dumps every clip reachable from a scene
+(or a single `.anim.json`) as JSON — name, duration, track targets — and
+`--schema` prints the clip-file JSON Schema. `engine validate` accepts clip
+files directly (structural checks; entity-name resolution needs a scene and
+happens when validating the scene). Ordering everywhere: sample animations →
+physics (`--steps`) → render.
 
 ## Validation against the published schema
 

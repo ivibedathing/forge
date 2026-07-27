@@ -455,6 +455,40 @@
           "shape"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Plays an animation clip against scene time (M9).\n\n`clip` is a relative path to a property clip (`*.anim.json`); a\n`path#ClipName` glTF fragment is reserved for skeletal clips (not yet\nsupported). A player in the file is playing — there is no play/pause\nruntime state, because pose is a pure function of (files, time).",
+        "properties": {
+          "clip": {
+            "type": "string"
+          },
+          "looping": {
+            "default": true,
+            "description": "Wrap by clip duration; when false, clamp to the final pose.",
+            "type": "boolean"
+          },
+          "speed": {
+            "default": 1.0,
+            "description": "Time multiplier; local time = `t * speed + start_offset`.",
+            "format": "float",
+            "type": "number"
+          },
+          "start_offset": {
+            "default": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "AnimationPlayer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "clip"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -467,7 +501,8 @@
     "DirectionalLight",
     "AmbientLight",
     "RigidBody",
-    "Collider"
+    "Collider",
+    "AnimationPlayer"
   ],
   "scene": {
     "$defs": {
@@ -922,6 +957,40 @@
             "required": [
               "type",
               "shape"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Plays an animation clip against scene time (M9).\n\n`clip` is a relative path to a property clip (`*.anim.json`); a\n`path#ClipName` glTF fragment is reserved for skeletal clips (not yet\nsupported). A player in the file is playing — there is no play/pause\nruntime state, because pose is a pure function of (files, time).",
+            "properties": {
+              "clip": {
+                "type": "string"
+              },
+              "looping": {
+                "default": true,
+                "description": "Wrap by clip duration; when false, clamp to the final pose.",
+                "type": "boolean"
+              },
+              "speed": {
+                "default": 1.0,
+                "description": "Time multiplier; local time = `t * speed + start_offset`.",
+                "format": "float",
+                "type": "number"
+              },
+              "start_offset": {
+                "default": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "AnimationPlayer",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "clip"
             ],
             "type": "object"
           }

@@ -31,6 +31,20 @@ pub fn full_schema() -> Value {
     })
 }
 
+/// Schema for a property-clip file (M9).
+pub fn animation_schema() -> Value {
+    to_value(schemars::schema_for!(crate::animation::ClipFile))
+}
+
+/// The canonical on-disk form of the animation schema
+/// (`schemas/animation-schema.json`), kept in sync by `repo_contracts.rs`.
+pub fn canonical_animation_json() -> String {
+    let mut s = serde_json::to_string_pretty(&animation_schema())
+        .expect("schemas are plain data and cannot fail to serialize");
+    s.push('\n');
+    s
+}
+
 /// Render the canonical on-disk form: pretty-printed, newline-terminated.
 ///
 /// Used by both the CLI and the drift test, so the committed file and the

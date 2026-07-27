@@ -44,6 +44,12 @@ build fails.
 | `invalid_physics_value` | 1 | a physics setting is outside its meaningful range |
 | `missing_collider` | 1 | a dynamic RigidBody has no Collider and would fall through everything |
 | `missing_transform` | 1 | a RigidBody or Collider needs a Transform on the same entity |
+| `unknown_entity` | 1 | an animation track targets an entity name not in the scene |
+| `unknown_property` | 1 | an animation track targets no known Component.field |
+| `type_mismatch` | 1 | a key value's shape does not match the animated field |
+| `unsorted_keys` | 1 | key times must be strictly increasing |
+| `conflicting_tracks` | 1 | two active clips animate the same property of the same entity |
+| `animation_on_dynamic_body` | 1 | a clip animates the Transform of a dynamic RigidBody; make it kinematic |
 | `unused_material` | 1 | warning: a Material on an entity with no Mesh does nothing |
 | `zero_scale` | 1 | warning: a Transform.scale axis of 0 renders invisibly or degenerate |
 | `scene_unreadable` | 1 | the scene file could not be read |

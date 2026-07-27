@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M8 are done** (plus most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M9 are done** (plus most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -21,11 +21,13 @@ What works today:
 
 ```
 engine validate <scene.json>... [--strict]  # every error at once; multi-file; --strict promotes warnings
-engine screenshot <scene.json> --out x.png [--steps N] [--camera N] [--width W --height H]
-engine diff-render <scene.json> <baseline.png> [--steps N] [--out diff.png] [--threshold N] [--max-diff-percent P]
+engine screenshot <scene.json> --out x.png [--steps N] [--time T] [--camera N] [--width W --height H]
+engine diff-render <scene.json> <baseline.png> [--steps N] [--time T] [--out diff.png] [--threshold N] [--max-diff-percent P]
 engine edit <scene.json> [--watch]       # GUI editor; --watch = read-only supervision mode
 engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
+engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
+engine list-animations <scene-or-clip> [--schema]
 engine run-scene <scene.json>            # windowed scene viewer
 engine list-components                   # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
@@ -118,6 +120,20 @@ the CLI test pins the tolerance property. `--steps 0` scene queries need
 `PhysicsWorld::refresh_queries()` (the broad-phase BVH is otherwise only built inside `step`).
 The windowed viewer steps the same fixed dt through a wall-clock accumulator; headless is
 canonical. Physics tests are GPU-free and unconditional — no skip path.
+
+Animation (M9, property clips; skeletal glTF deferred like editor E3/E4): clips are JSON
+(`*.anim.json`, schema in `schemas/animation-schema.json`, regenerated via
+`engine list-animations --schema`), animating `Component.field` on entities by name. Pose is a
+pure function of (files, time) — `--time` on screenshot/diff-render is reproducible down to
+`cmp`-identical PNGs, and t=loop-period equals t=0 byte-for-byte (pinned by CLI test).
+**Rotation interpolates component-wise on Euler degrees** so a 0→360 clip actually spins
+(quaternion slerp would no-op it) — load-bearing, don't "fix" it. Sampling lives in
+`engine-core/src/animation.rs` (step/linear/cubic Catmull-Rom); `set_field` must cover every
+numeric schema field — a drift test walks the schema and calls it. System order: sample
+animations → physics → render. The M8×M9 ownership rule is settled: a clip animating the
+Transform of a **dynamic** body is `animation_on_dynamic_body` (kinematic is the supported
+"animation drives, physics follows" case). Clip-content errors carry the clip file's own
+file/line; `engine validate` accepts clip files directly (structural checks only).
 
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).
@@ -223,7 +239,9 @@ Standard Cargo commands: `cargo build`, `cargo test --workspace`, and
 Follow the milestones in design doc §8: ~~M0 window+triangle~~ → ~~M1 CLI skeleton + JSON
 error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ → ~~M4 materials +
 lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ →
-~~M8 physics~~ (all done; editor E3/E4 remain as follow-ups; next per roadmap: M9 animation).
+~~M8 physics~~ → ~~M9 animation (A0–A1)~~ (all done; editor E3/E4 and M9-A2 skeletal glTF
+skinning remain as follow-ups; next per roadmap: M10 scripting — which forces the open §9
+scripting decision; surface it before implementing).
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

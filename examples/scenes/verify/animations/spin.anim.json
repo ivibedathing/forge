@@ -1,0 +1,14 @@
+{
+  "name": "spin",
+  "tracks": [
+    {
+      "entity": "SpinCube",
+      "property": "Transform.rotation",
+      "interpolation": "linear",
+      "keys": [
+        { "time": 0.0, "value": [0.0, 0.0, 0.0] },
+        { "time": 2.0, "value": [0.0, 360.0, 0.0] }
+      ]
+    }
+  ]
+}

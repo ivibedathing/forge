@@ -63,6 +63,9 @@ enum Command {
         /// Simulate this many physics steps first — edit, simulate, LOOK.
         #[arg(long, default_value_t = 0)]
         steps: u32,
+        /// Render the animated pose at this scene time (seconds).
+        #[arg(long, default_value_t = 0.0)]
+        time: f32,
         /// Render from this entity's camera instead of the active one.
         #[arg(long)]
         camera: Option<String>,
@@ -85,6 +88,9 @@ enum Command {
         /// moments of simulation get visual regression coverage.
         #[arg(long, default_value_t = 0)]
         steps: u32,
+        /// Compare the animated pose at this scene time (seconds).
+        #[arg(long, default_value_t = 0.0)]
+        time: f32,
         /// Write the visual diff here (red: violation, yellow: within
         /// threshold, faded gray: identical). Written on pass and fail.
         #[arg(long)]
@@ -113,6 +119,40 @@ enum Command {
         /// Delay before the self-screenshot, in milliseconds.
         #[arg(long, hide = true, default_value_t = 1500)]
         self_screenshot_after_ms: u64,
+    },
+
+    /// Contact sheet: N animation frames sampled evenly over a time range,
+    /// tiled into one PNG — how motion becomes visible in a single image.
+    Filmstrip {
+        scene: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value_t = 0.0)]
+        start: f32,
+        /// Defaults to the longest clip duration in the scene.
+        #[arg(long)]
+        end: Option<f32>,
+        #[arg(long, default_value_t = 8)]
+        frames: u32,
+        #[arg(long, default_value_t = 4)]
+        columns: u32,
+        /// Per-tile size.
+        #[arg(long, default_value_t = 320)]
+        width: u32,
+        #[arg(long, default_value_t = 180)]
+        height: u32,
+        /// Render from this entity's camera instead of the active one.
+        #[arg(long)]
+        camera: Option<String>,
+    },
+
+    /// Every animation clip reachable from a scene or clip file, as JSON.
+    ListAnimations {
+        /// A scene file or a .anim.json clip file.
+        path: Option<PathBuf>,
+        /// Print the clip-file JSON Schema instead.
+        #[arg(long)]
+        schema: bool,
     },
 
     /// Step physics headlessly: build the world, advance N fixed steps.
@@ -194,14 +234,16 @@ fn main() {
             scene,
             out,
             steps,
+            time,
             camera,
             width,
             height,
-        } => screenshot(scene, out, steps, camera.as_deref(), width, height),
+        } => screenshot(scene, out, steps, time, camera.as_deref(), width, height),
         Command::DiffRender {
             scene,
             baseline,
             steps,
+            time,
             out,
             camera,
             threshold,
@@ -210,11 +252,34 @@ fn main() {
             scene,
             baseline,
             steps,
+            time,
             out,
             camera.as_deref(),
             threshold,
             max_diff_percent,
         ),
+        Command::Filmstrip {
+            scene,
+            out,
+            start,
+            end,
+            frames,
+            columns,
+            width,
+            height,
+            camera,
+        } => filmstrip(
+            scene,
+            out,
+            start,
+            end,
+            frames,
+            columns,
+            width,
+            height,
+            camera.as_deref(),
+        ),
+        Command::ListAnimations { path, schema } => list_animations(path, schema),
         Command::Edit {
             scene,
             watch,
@@ -400,6 +465,24 @@ fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
     let mut warnings = 0usize;
 
     for path in scenes {
+        // A clip file validates as a clip ("tracks", no "entities"): the
+        // same all-at-once contract, structural checks only — entity-name
+        // resolution needs a scene.
+        let is_clip = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .is_some_and(|v| v.get("tracks").is_some() && v.get("entities").is_none());
+        if is_clip {
+            let display = path.display().to_string();
+            let source = std::fs::read_to_string(path).unwrap_or_default();
+            let diagnostics =
+                engine_core::animation::validate_clip_source(&source, &display);
+            for diagnostic in &diagnostics {
+                diagnostic.emit();
+            }
+            errors += diagnostics.len();
+            continue;
+        }
         let report = report_scene_diagnostics(path);
         errors += report.errors;
         warnings += report.warnings;
@@ -470,6 +553,7 @@ fn diff_render(
     scene_path: PathBuf,
     baseline_path: PathBuf,
     steps: u32,
+    time: f32,
     out: Option<PathBuf>,
     camera_name: Option<&str>,
     threshold: u8,
@@ -479,6 +563,10 @@ fn diff_render(
     let baseline = load_baseline(&baseline_path)?;
 
     let mut scene = load_scene(&scene_path)?;
+    let players = engine_core::animation::load_players(&scene, &scene_path)?;
+    if !players.is_empty() {
+        engine_core::animation::apply_all(&mut scene, &players, time);
+    }
     if steps > 0 {
         simulate::run(&mut scene, steps, None)?;
     }
@@ -591,15 +679,150 @@ fn load_baseline(path: &std::path::Path) -> Result<engine_render::Image> {
     })
 }
 
+/// `engine filmstrip` — one PNG, many moments.
+#[allow(clippy::too_many_arguments)]
+fn filmstrip(
+    scene_path: PathBuf,
+    out: PathBuf,
+    start: f32,
+    end: Option<f32>,
+    frames: u32,
+    columns: u32,
+    tile_width: u32,
+    tile_height: u32,
+    camera_name: Option<&str>,
+) -> Result<()> {
+    let mut scene = load_scene(&scene_path)?;
+    let players = engine_core::animation::load_players(&scene, &scene_path)?;
+    let end = end.unwrap_or_else(|| {
+        start + engine_core::animation::longest_duration(&players).max(0.001)
+    });
+
+    let frames = frames.max(1);
+    let columns = columns.max(1).min(frames);
+    let rows = frames.div_ceil(columns);
+    let (camera, camera_transform) = scene.camera(camera_name)?;
+    let assets = engine_assets::AssetServer::for_scene(&scene_path);
+
+    let mut sheet = image::RgbaImage::new(tile_width * columns, tile_height * rows);
+    for frame in 0..frames {
+        let t = if frames == 1 {
+            start
+        } else {
+            start + (end - start) * frame as f32 / (frames - 1) as f32
+        };
+        engine_core::animation::apply_all(&mut scene, &players, t);
+        let items = scene.render_items(&assets)?;
+        let rendered = engine_render::offscreen::render(
+            &items,
+            &camera,
+            camera_transform.matrix(),
+            scene.lights().resolved(),
+            tile_width,
+            tile_height,
+        )?;
+        let tile =
+            image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
+                .expect("offscreen render returns exactly width*height*4 bytes");
+        let x = (frame % columns) * tile_width;
+        let y = (frame / columns) * tile_height;
+        image::imageops::replace(&mut sheet, &tile, i64::from(x), i64::from(y));
+    }
+
+    sheet.save(&out).map_err(|e| {
+        EngineError::new(codes::PNG_WRITE_FAILED, format!("could not write PNG: {e}"))
+            .file(out.display().to_string())
+    })?;
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "written": out.display().to_string(),
+            "frames": frames,
+            "start": start,
+            "end": end,
+            "columns": columns,
+            "tile_width": tile_width,
+            "tile_height": tile_height,
+        })
+    );
+    Ok(())
+}
+
+/// `engine list-animations` — the introspection window (design principle 5).
+fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
+    if schema {
+        print!("{}", engine_core::schema::canonical_animation_json());
+        return Ok(());
+    }
+    let Some(path) = path else {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            "list-animations needs a scene or clip file (or --schema)",
+        ));
+    };
+
+    let display = path.display().to_string();
+    let source = std::fs::read_to_string(&path).map_err(|e| {
+        EngineError::new(codes::SCENE_UNREADABLE, format!("could not read: {e}"))
+            .file(&display)
+    })?;
+    let sniff: serde_json::Value = serde_json::from_str(&source).unwrap_or_default();
+
+    let clip_report = |clip: &engine_core::animation::ClipFile, source_path: &str| {
+        serde_json::json!({
+            "name": clip.name,
+            "source": source_path,
+            "duration": engine_core::animation::duration(clip) as f64,
+            "tracks": clip.tracks.iter().map(|t| serde_json::json!({
+                "entity": t.entity,
+                "property": t.property,
+                "interpolation": format!("{:?}", t.interpolation).to_lowercase(),
+                "keys": t.keys.len(),
+            })).collect::<Vec<_>>(),
+        })
+    };
+
+    let clips: Vec<serde_json::Value> = if sniff.get("tracks").is_some() {
+        // A clip file directly.
+        let clip: engine_core::animation::ClipFile =
+            serde_json::from_str(&source).map_err(|e| {
+                EngineError::new(
+                    codes::ASSET_LOAD_FAILED,
+                    format!("clip does not parse: {e}"),
+                )
+                .file(&display)
+            })?;
+        vec![clip_report(&clip, &display)]
+    } else {
+        // A scene: every player's clip.
+        let scene = load_scene(&path)?;
+        let players = engine_core::animation::load_players(&scene, &path)?;
+        players
+            .iter()
+            .map(|p| clip_report(&p.clip, &p.player.clip))
+            .collect()
+    };
+
+    println!("{}", serde_json::json!({ "clips": clips }));
+    Ok(())
+}
+
 fn screenshot(
     scene_path: PathBuf,
     out: PathBuf,
     steps: u32,
+    time: f32,
     camera_name: Option<&str>,
     width: u32,
     height: u32,
 ) -> Result<()> {
     let mut scene = load_scene(&scene_path)?;
+    // System order: sample animations, then physics, then render.
+    let players = engine_core::animation::load_players(&scene, &scene_path)?;
+    if !players.is_empty() {
+        engine_core::animation::apply_all(&mut scene, &players, time);
+    }
     if steps > 0 {
         simulate::run(&mut scene, steps, None)?;
     }
@@ -650,14 +873,23 @@ fn run_scene(
     let lights = scene.lights().resolved();
     let title = format!("engine — {}", scene.name);
 
-    // Physics scenes come alive in the viewer; static scenes stay static.
-    let simulation = if engine_physics::PhysicsWorld::scene_has_physics(&scene.world) {
-        let physics = engine_physics::PhysicsWorld::build(&scene.world, &scene.physics)?;
+    // Physics and animated scenes come alive in the viewer; static scenes
+    // stay static.
+    let players = engine_core::animation::load_players(&scene, &scene_path)?;
+    let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
+    let simulation = if has_physics || !players.is_empty() {
+        let physics = if has_physics {
+            Some(engine_physics::PhysicsWorld::build(&scene.world, &scene.physics)?)
+        } else {
+            None
+        };
         Some(crate::app::Simulation {
             scene,
             physics,
+            players,
             assets,
             accumulator: 0.0,
+            t: 0.0,
             last: None,
         })
     } else {

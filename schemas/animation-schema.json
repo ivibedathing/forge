@@ -1,0 +1,110 @@
+{
+  "$defs": {
+    "Interpolation": {
+      "oneOf": [
+        {
+          "enum": [
+            "linear"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "step",
+          "description": "Hold each key's value until the next key.",
+          "type": "string"
+        },
+        {
+          "const": "cubic",
+          "description": "Catmull-Rom through the key values; no hand-authored tangents —\ntangent arrays are hostile to text editing.",
+          "type": "string"
+        }
+      ]
+    },
+    "Key": {
+      "additionalProperties": false,
+      "properties": {
+        "time": {
+          "format": "float",
+          "type": "number"
+        },
+        "value": {
+          "$ref": "#/$defs/KeyValue"
+        }
+      },
+      "required": [
+        "time",
+        "value"
+      ],
+      "type": "object"
+    },
+    "KeyValue": {
+      "anyOf": [
+        {
+          "format": "float",
+          "type": "number"
+        },
+        {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      ],
+      "description": "A key's value: a scalar for scalar fields, three components for vector\nfields. The shape must match the animated field (`type_mismatch`)."
+    },
+    "Track": {
+      "additionalProperties": false,
+      "description": "One animated property of one entity.",
+      "properties": {
+        "entity": {
+          "description": "The target entity's stable name (invariant 4).",
+          "type": "string"
+        },
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "default": "linear"
+        },
+        "keys": {
+          "description": "Key times must be strictly increasing. Clip duration is the last key\ntime — there is no separate duration field to drift out of sync.",
+          "items": {
+            "$ref": "#/$defs/Key"
+          },
+          "type": "array"
+        },
+        "property": {
+          "description": "`Component.field`, resolved against the same schema\n`engine list-components` publishes — a new component's fields are\nanimatable the day the component exists.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "property",
+        "keys"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A property clip file, exactly as it appears on disk.",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "tracks": {
+      "items": {
+        "$ref": "#/$defs/Track"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "name",
+    "tracks"
+  ],
+  "title": "ClipFile",
+  "type": "object"
+}
