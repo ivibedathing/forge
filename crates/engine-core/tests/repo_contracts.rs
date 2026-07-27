@@ -51,22 +51,13 @@ fn m10_script_verify_scene_is_valid() {
 
 #[test]
 fn demo_scene_is_valid() {
-    let source = repo_file("examples/scenes/demo_scene.json");
-    let errors = engine_core::validate::validate_source(&source, "examples/scenes/demo_scene.json");
-    assert!(
-        errors.is_empty(),
-        "the checked-in demo scene no longer validates:\n{}",
-        errors
-            .iter()
-            .map(|e| e.to_json())
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
+    // The demo scene references a mesh file (the truck), so it validates
+    // through the absolute-path helper like the other file-referencing scenes.
+    assert_scene_validates("examples/scenes/demo_scene.json");
 }
 
 /// Validate a scene that references real files, so validation must see the
-/// scene's actual location — hence the absolute path, unlike the in-memory
-/// demo scene test.
+/// scene's actual location — hence the absolute path.
 fn assert_scene_validates(relative: &str) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative);
     let display = path.display().to_string();
@@ -220,12 +211,31 @@ fn error_code_registry_matches_the_docs() {
     assert_eq!(documented.len(), registry.len());
 }
 
+/// A [`engine_core::mesh::MeshSource`] that substitutes a cube for file
+/// assets: engine-core cannot parse glTF (that's engine-assets' job), but
+/// this test only counts draw calls, so any mesh data will do for the truck.
+struct StubbedFileAssets;
+
+impl engine_core::mesh::MeshSource for StubbedFileAssets {
+    fn load_mesh(&self, asset: &str) -> engine_core::error::Result<engine_core::mesh::MeshData> {
+        match engine_core::mesh::BuiltinMesh::parse(asset) {
+            Some(builtin) => Ok(builtin?.data()),
+            None => Ok(engine_core::mesh::BuiltinMesh::Cube.data()),
+        }
+    }
+}
+
 #[test]
 fn demo_scene_loads_and_draws_everything() {
+    // The truck's mesh existence check resolves relative to the scene path,
+    // so from_source must see the scene's real location.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("examples/scenes/demo_scene.json");
     let source = repo_file("examples/scenes/demo_scene.json");
-    let scene = engine_core::Scene::from_source(&source, "demo_scene.json").unwrap();
+    let scene = engine_core::Scene::from_source(&source, &path.display().to_string()).unwrap();
 
-    assert_eq!(scene.entity_count(), 7);
+    assert_eq!(scene.entity_count(), 8);
     scene.camera(None).expect("demo scene has an active camera");
     assert!(
         scene.lights().sun.is_some() && scene.lights().ambient.is_some(),
@@ -233,12 +243,12 @@ fn demo_scene_loads_and_draws_everything() {
     );
 
     let items = scene
-        .render_items(&engine_core::mesh::BuiltinAssets)
+        .render_items(&StubbedFileAssets)
         .expect("all demo assets resolve");
     assert_eq!(
         items.len(),
-        4,
-        "Ground, Cube1, Cube2, Sphere1 — lights and camera draw nothing"
+        5,
+        "Ground, Cube1, Cube2, Sphere1, truck — lights and camera draw nothing"
     );
 }
 

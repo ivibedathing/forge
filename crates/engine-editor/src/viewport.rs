@@ -180,13 +180,15 @@ impl ViewportRenderer {
 
 /// The editor grid: thin cuboids on the ground plane, editor-side overlay
 /// data that never touches the scene file. X and Z axes get their gizmo
-/// colors; everything else is quiet gray.
+/// colors, every fifth line is a brighter major line, and the rest are
+/// quiet gray.
 pub fn grid_items() -> Vec<RenderItem> {
     use engine_core::components::Material;
     use engine_core::mesh::BuiltinMesh;
 
     let mut items = Vec::new();
-    let extent = 10.0f32;
+    let half = 20i32;
+    let length = (half * 2) as f32;
     let mut line = |scale: Vec3, position: Vec3, albedo: Vec3| {
         items.push(RenderItem {
             entity: String::new(),
@@ -206,22 +208,25 @@ pub fn grid_items() -> Vec<RenderItem> {
     };
 
     let quiet = Vec3::splat(0.32);
-    for i in -10..=10i32 {
+    let major = Vec3::splat(0.52);
+    for i in -half..=half {
         let offset = i as f32;
         let (thickness, color_x, color_z) = if i == 0 {
-            (0.012, Vec3::new(0.8, 0.25, 0.25), Vec3::new(0.25, 0.4, 0.85))
+            (0.02, Vec3::new(0.8, 0.25, 0.25), Vec3::new(0.25, 0.4, 0.85))
+        } else if i % 5 == 0 {
+            (0.012, major, major)
         } else {
             (0.006, quiet, quiet)
         };
         // Line along X at z = offset.
         line(
-            Vec3::new(extent, thickness, thickness),
+            Vec3::new(length, thickness, thickness),
             Vec3::new(0.0, 0.0, offset),
             color_x,
         );
         // Line along Z at x = offset.
         line(
-            Vec3::new(thickness, thickness, extent),
+            Vec3::new(thickness, thickness, length),
             Vec3::new(offset, 0.0, 0.0),
             color_z,
         );
