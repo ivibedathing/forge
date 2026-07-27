@@ -105,6 +105,16 @@ impl EditorApp {
         self.inspector_state.clear();
     }
 
+    /// Commit a structure edit (add/remove component) through the doc,
+    /// dropping stale staged widget state like any other commit.
+    fn commit_structure(&mut self, edit: impl FnOnce(&mut crate::doc::SceneDoc)) {
+        if self.read_only() {
+            return;
+        }
+        edit(&mut self.doc);
+        self.inspector_state.clear();
+    }
+
     /// Splice a new entity carrying a `builtin:` primitive at the origin —
     /// the same Transform + Mesh shape a drag-and-drop import writes, named
     /// after the primitive and deduplicated by the document.
@@ -767,7 +777,19 @@ impl eframe::App for EditorApp {
                                 read_only,
                             );
                             for edit in commits {
-                                self.commit(edit);
+                                match edit {
+                                    inspector::InspectorEdit::Set(edit) => self.commit(edit),
+                                    inspector::InspectorEdit::AddComponent(component) => {
+                                        self.commit_structure(|doc| {
+                                            doc.add_component(&entity, &component)
+                                        });
+                                    }
+                                    inspector::InspectorEdit::RemoveComponent(component) => {
+                                        self.commit_structure(|doc| {
+                                            doc.remove_component(&entity, &component)
+                                        });
+                                    }
+                                }
                             }
                         } else {
                             ui.label("the file does not parse; fix it in a text editor");

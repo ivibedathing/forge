@@ -60,7 +60,12 @@ edit, E3's opening move. Conversion runs on a worker thread; the Blender-gated e
 test skips cleanly when Blender is missing. A "+ add" menu beside the entities heading
 splices a `builtin:` primitive the same way (Transform at origin + Mesh, name deduped from
 the primitive) — its entries are generated from `BuiltinMesh::ASSETS`, so a new builtin
-appears in the menu for free. Hidden flag `--self-screenshot <png>
+appears in the menu for free. The inspector adds and removes components: "+ add
+component" lists the schema types the entity lacks and splices `{ "type": X }` (absent
+fields *are* the documented defaults) via `formatter::apply_add_component`; a header ❌
+removes one via `apply_remove_component` — both rebase by entity name + component type like
+every mutation. `[0, 1]` RGB triples (`albedo`, `emissive`, light `color`) get a linear-RGB
+color-picker swatch that commits one write per picker session. Hidden flag `--self-screenshot <png>
 [--self-screenshot-after-ms N]` renders the editor and exits — the agent's way to *look at* the
 editor. `RenderItem` gained an `entity: String` field for picking/selection.
 
