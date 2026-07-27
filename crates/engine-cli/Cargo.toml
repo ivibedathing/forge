@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 engine-core.workspace = true
 engine-render.workspace = true
+engine-assets.workspace = true
 winit.workspace = true
 wgpu.workspace = true
 pollster.workspace = true

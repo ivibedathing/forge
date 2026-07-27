@@ -75,12 +75,14 @@ impl Transform {
     }
 }
 
-/// Renderable geometry, referenced by relative path (invariant 3).
+/// Renderable geometry.
 ///
-/// Until M3 lands glTF loading, only the `builtin:` primitives resolve; see
-/// [`crate::mesh::BuiltinMesh`]. A real path is accepted by the schema and by
-/// `engine validate` — it is a valid scene — but fails at render time with a
-/// structured error rather than silently drawing nothing.
+/// `asset` is either a `builtin:` primitive (`builtin:cube`, `builtin:plane`,
+/// `builtin:triangle`) or a `.gltf`/`.glb` file's relative path, resolved
+/// against the directory of the scene file that references it (invariant 3).
+/// `engine validate` checks the reference resolves; a file that exists but
+/// fails to parse is reported by validation's asset pass and again at render
+/// time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Mesh {

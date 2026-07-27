@@ -3,10 +3,9 @@ resolver = "2"
 members = [
     "crates/engine-core",
     "crates/engine-render",
+    "crates/engine-assets",
     "crates/engine-cli",
 ]
-
-# engine-assets lands at M3 (glTF + textures); omitted until it has content.
 
 [workspace.package]
 version = "0.0.0"
@@ -17,12 +16,14 @@ publish = false
 [workspace.dependencies]
 engine-core = { path = "crates/engine-core" }
 engine-render = { path = "crates/engine-render" }
+engine-assets = { path = "crates/engine-assets" }
 
 wgpu = "30"
 # 0.31 is still beta; stay on the stable line for the foundation.
 winit = "0.30"
 glam = { version = "0.33", features = ["serde"] }
 hecs = "0.11"
+gltf = { version = "1.4", default-features = false, features = ["import", "utils"] }
 schemars = "1.2"
 pollster = "1.0"
 serde = { version = "1", features = ["derive"] }

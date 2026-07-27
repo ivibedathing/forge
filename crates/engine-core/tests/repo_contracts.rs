@@ -41,6 +41,25 @@ fn demo_scene_is_valid() {
 }
 
 #[test]
+fn mesh_import_scene_is_valid() {
+    // This scene references a real file, so validation must see the scene's
+    // actual location — hence the absolute path, unlike the demo scene test.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/scenes/mesh_import.json");
+    let display = path.display().to_string();
+    let source = std::fs::read_to_string(&path).unwrap();
+    let errors = engine_core::validate::validate_source(&source, &display);
+    assert!(
+        errors.is_empty(),
+        "the checked-in mesh_import scene no longer validates:\n{}",
+        errors
+            .iter()
+            .map(|e| e.to_json())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
 fn demo_scene_loads_and_draws_everything() {
     let source = repo_file("examples/scenes/demo_scene.json");
     let scene = engine_core::Scene::from_source(&source, "demo_scene.json").unwrap();
@@ -48,7 +67,9 @@ fn demo_scene_loads_and_draws_everything() {
     assert_eq!(scene.entity_count(), 4);
     scene.camera(None).expect("demo scene has an active camera");
 
-    let items = scene.render_items().expect("all demo assets resolve");
+    let items = scene
+        .render_items(&engine_core::mesh::BuiltinAssets)
+        .expect("all demo assets resolve");
     assert_eq!(
         items.len(),
         3,
