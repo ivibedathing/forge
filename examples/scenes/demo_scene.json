@@ -5,9 +5,9 @@
       "name": "Ground",
       "components": [
         { "type": "Transform",
-          "position": [0.0, 0.0, 0.0],
+          "position": [0.0, -0.525, 0.0],
           "rotation": [0.0, 0.0, 0.0],
-          "scale":    [10.0, 1.0, 10.0] },
+          "scale":    [15.941, 1.0, 12.365] },
         { "type": "Mesh", "asset": "builtin:plane" },
         { "type": "Material",
           "albedo": [0.35, 0.4, 0.32],
@@ -19,9 +19,9 @@
       "name": "Cube1",
       "components": [
         { "type": "Transform",
-          "position": [0.0, 0.5, 0.0],
+          "position": [1.073, 1.235, -0.737],
           "rotation": [0.0, 45.0, 0.0],
-          "scale":    [1.0, 1.0, 1.0] },
+          "scale":    [2.853, 0.783, 2.409] },
         { "type": "Mesh", "asset": "builtin:cube" },
         { "type": "Material",
           "albedo": [0.9, 0.15, 0.15],
@@ -33,7 +33,7 @@
       "name": "Cube2",
       "components": [
         { "type": "Transform",
-          "position": [2.2, 0.35, -1.2],
+          "position": [2.2, 0.35, 2.226],
           "rotation": [0.0, 20.0, 0.0],
           "scale":    [0.7, 0.7, 0.7] },
         { "type": "Mesh", "asset": "builtin:cube" },
@@ -62,9 +62,9 @@
       "components": [
         { "type": "Transform",
           "position": [0.0, 0.0, 0.0],
-          "rotation": [-50.0, 30.0, 0.0],
-          "scale":    [1.0, 1.0, 1.0] },
-        { "type": "DirectionalLight", "color": [1.0, 1.0, 1.0], "intensity": 1.0 }
+          "rotation": [-49.13, 28.48, 0.0],
+          "scale":    [0.8, 1.0, 1.0] },
+        { "type": "DirectionalLight", "color": [1.0, 1.0, 1.0], "intensity": 1.66 }
       ]
     },
     {
@@ -81,6 +81,13 @@
           "rotation": [-14.0, 0.0, 0.0],
           "scale":    [1.0, 1.0, 1.0] },
         { "type": "Camera", "fov": 50.0, "near": 0.1, "far": 100.0, "active": true }
+      ]
+    },
+    {
+      "name": "truck",
+      "components": [
+        { "type": "Transform", "position": [-3.976, 0.0, -3.129], "rotation": [-25.541, 87.287, 0.0] },
+        { "type": "Mesh", "asset": "meshes/truck.glb" }
       ]
     }
   ]
