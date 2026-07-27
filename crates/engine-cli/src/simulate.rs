@@ -19,18 +19,25 @@ fn vec3_json(v: Vec3) -> Value {
     Value::Array(v.to_array().into_iter().map(number_from_f32).collect())
 }
 
-/// Step a scene's physics `steps` times, optionally writing a JSONL trace.
-/// Returns the physics world (for queries) and the total contact count.
+/// Step a scene `steps` times — scripts then physics, per the fixed system
+/// order — optionally writing a JSONL trace. Returns the physics world (for
+/// queries) and the total contact count.
 pub fn run(
     scene: &mut Scene,
+    scene_path: &Path,
     steps: u32,
     mut trace: Option<&mut dyn Write>,
 ) -> Result<(PhysicsWorld, u64)> {
+    let scripts =
+        engine_script::ScriptHost::build(&scene.world, scene_path, scene.physics.timestep_hz)?;
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics)?;
     let trace_names = physics.dynamic_entity_names(&scene.world);
     let mut contacts = 0u64;
 
     for step in 1..=steps {
+        if let Some(scripts) = &scripts {
+            scripts.step(&mut scene.world, u64::from(step) - 1)?;
+        }
         let events = physics.step(&mut scene.world);
 
         if let Some(trace) = trace.as_deref_mut() {
@@ -86,54 +93,76 @@ fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
 }
 
 /// Write the simulated state back into the original source text as a valid
-/// scene file: `Transform` and `RigidBody` velocities updated for dynamic
-/// bodies, every other byte preserved.
-pub fn bake(
-    source: &str,
-    scene: &Scene,
-    physics: &PhysicsWorld,
-    out: &Path,
-) -> Result<()> {
-    let mut baked = source.to_string();
+/// scene file, every untouched byte preserved. The rule is change-based:
+/// any `Transform` or `RigidBody` field that differs from the file's rest
+/// value gets spliced — which captures dynamic bodies, script-driven
+/// kinematics, and plain script-moved entities uniformly, without touching
+/// entities nothing moved.
+pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
+    let file: engine_core::SceneFile = serde_json::from_str(source).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_PARSE_DESYNC,
+            format!("bake input no longer parses: {e}"),
+        )
+    })?;
+    use engine_core::components::ComponentData;
 
-    for name in physics.dynamic_entity_names(&scene.world) {
-        let Some(entity) = scene.entity(&name) else {
+    let mut baked = source.to_string();
+    for def in &file.entities {
+        let Some(entity) = scene.entity(&def.name) else {
             continue;
         };
-        let transform = scene
-            .world
-            .get::<&Transform>(entity)
-            .map(|t| *t)
-            .unwrap_or_default();
-        let body = scene.world.get::<&RigidBody>(entity).map(|b| *b);
 
-        let mut edits = vec![
-            SetComponentField {
-                entity: name.clone(),
-                component: "Transform".into(),
-                field: "position".into(),
-                value: vec3_json(transform.position),
-            },
-            SetComponentField {
-                entity: name.clone(),
-                component: "Transform".into(),
-                field: "rotation".into(),
-                value: vec3_json(transform.rotation),
-            },
-        ];
-        if let Ok(body) = body {
-            edits.push(SetComponentField {
-                entity: name.clone(),
-                component: "RigidBody".into(),
-                field: "linear_velocity".into(),
-                value: vec3_json(body.linear_velocity),
-            });
-            edits.push(SetComponentField {
-                entity: name.clone(),
-                component: "RigidBody".into(),
-                field: "angular_velocity".into(),
-                value: vec3_json(body.angular_velocity),
-            });
+        let mut edits: Vec<SetComponentField> = Vec::new();
+        let edit = |field: &str, component: &str, value: Vec3| SetComponentField {
+            entity: def.name.clone(),
+            component: component.into(),
+            field: field.into(),
+            value: vec3_json(value),
+        };
+
+        if def.components.iter().any(|c| matches!(c, ComponentData::Transform(_))) {
+            if let Ok(current) = scene.world.get::<&Transform>(entity) {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::Transform(t) => Some(*t),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                if current.position != rest.position {
+                    edits.push(edit("position", "Transform", current.position));
+                }
+                if current.rotation != rest.rotation {
+                    edits.push(edit("rotation", "Transform", current.rotation));
+                }
+                if current.scale != rest.scale {
+                    edits.push(edit("scale", "Transform", current.scale));
+                }
+            }
+        }
+        if def.components.iter().any(|c| matches!(c, ComponentData::RigidBody(_))) {
+            if let Ok(current) = scene.world.get::<&RigidBody>(entity) {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::RigidBody(b) => Some(*b),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.linear_velocity != rest.linear_velocity {
+                    edits.push(edit("linear_velocity", "RigidBody", current.linear_velocity));
+                }
+                if current.angular_velocity != rest.angular_velocity {
+                    edits.push(edit(
+                        "angular_velocity",
+                        "RigidBody",
+                        current.angular_velocity,
+                    ));
+                }
+            }
         }
         for edit in edits {
             baked = formatter::apply_set_component_field(&baked, &edit)?;
@@ -195,14 +224,15 @@ pub fn simulate_command(
         None => None,
     };
 
-    let (physics, contacts) = run(
+    let (_physics, contacts) = run(
         &mut scene,
+        &scene_path,
         steps,
         trace_file.as_mut().map(|f| f as &mut dyn Write),
     )?;
 
     if let Some(bake_path) = &bake_path {
-        bake(&source, &scene, &physics, bake_path)?;
+        bake(&source, &scene, bake_path)?;
     }
 
     let mut result = json!({
@@ -243,7 +273,7 @@ pub fn raycast_command(
     let mut scene = Scene::from_source(&source, &display)
         .map_err(|mut errors| errors.pop().expect("non-empty"))?;
 
-    let (mut physics, _) = run(&mut scene, steps, None)?;
+    let (mut physics, _) = run(&mut scene, &scene_path, steps, None)?;
     physics.refresh_queries();
 
     let result = match physics.raycast(from, direction) {

@@ -599,14 +599,11 @@ and determinism end to end — `cmp` on PNGs is the strictest check in this whol
 
 ## M10 — Scripting
 
-> **Provisional.** The Lua/Rhai-vs-compiled-Rust question is still open (engine doc §9), and
-> CLAUDE.md says surface it, not pick it. Everything below assumes only: (a) a `Script`
-> component referencing a script by relative path, and (b) deterministic stepping shared with
-> M8's `--steps` clock. **Resolve §9 and write a scripting design doc before implementing;
-> then update the component shape here in the same commit.**
+> **Resolved 2026-07-27: Rhai** (settled with the user; see `scripting-design.md`). Scripts
+> are `.rhai` files defining `fn step(world, step)`, run once per fixed step, before physics.
 
-**Files (shapes provisional):** `examples/scenes/verify/m10_script.json`,
-`examples/scenes/verify/scripts/elevator.<ext>`.
+**Files:** `examples/scenes/verify/m10_script.json`,
+`examples/scenes/verify/scripts/elevator.rhai`.
 
 The scene: a script-driven platform that rises 2 units over the first 120 steps, with a
 sensor collider at the top that the trace must record — scripting observed through the two
@@ -631,7 +628,9 @@ channels that already exist (screenshots and traces) rather than any new one.
         { "type": "Transform", "position": [0.0, 0.25, 0.0], "scale": [1.5, 0.25, 1.5] },
         { "type": "Mesh", "asset": "builtin:cube" },
         { "type": "Material", "albedo": [0.8, 0.6, 0.1], "roughness": 0.5 },
-        { "type": "Script", "source": "scripts/elevator.<ext>" }
+        { "type": "RigidBody", "body": "kinematic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5] },
+        { "type": "Script", "source": "scripts/elevator.rhai" }
       ]
     },
     {
@@ -663,8 +662,17 @@ channels that already exist (screenshots and traces) rather than any new one.
 }
 ```
 
-The script (pseudocode until the language is settled): *each step, if step < 120, move
-Elevator up by 2.0/120 units.*
+The script (the elevator is kinematic so its collider rides the scripted Transform through
+physics, which is what makes the sensor contact traceable):
+
+```rhai
+fn step(world, step) {
+    if step < 120 {
+        let p = world.position("Elevator");
+        world.set_position("Elevator", p[0], p[1] + 2.0 / 120.0, p[2]);
+    }
+}
+```
 
 **Run after implementing M10:**
 

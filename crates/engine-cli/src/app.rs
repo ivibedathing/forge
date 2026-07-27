@@ -44,9 +44,11 @@ pub struct Simulation {
     pub scene: engine_core::Scene,
     pub physics: Option<engine_physics::PhysicsWorld>,
     pub players: Vec<engine_core::animation::LoadedPlayer>,
+    pub scripts: Option<engine_script::ScriptHost>,
     pub assets: engine_assets::AssetServer,
     pub accumulator: f32,
     pub t: f32,
+    pub step_index: u64,
     pub last: Option<Instant>,
 }
 
@@ -150,10 +152,23 @@ impl ViewerApp {
                             sim.t,
                         );
                     }
-                    if let Some(physics) = &mut sim.physics {
+                    if sim.physics.is_some() || sim.scripts.is_some() {
                         sim.accumulator += elapsed;
                         while sim.accumulator >= dt {
-                            physics.step(&mut sim.scene.world);
+                            if let Some(scripts) = &sim.scripts {
+                                // A failing script ends the session with a
+                                // structured error, like any render failure.
+                                if let Err(e) = scripts
+                                    .step(&mut sim.scene.world, sim.step_index)
+                                {
+                                    self.error = Some(e);
+                                    break;
+                                }
+                            }
+                            if let Some(physics) = &mut sim.physics {
+                                physics.step(&mut sim.scene.world);
+                            }
+                            sim.step_index += 1;
                             sim.accumulator -= dt;
                         }
                     }

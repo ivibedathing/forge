@@ -777,3 +777,133 @@ fn animation_scene_errors_fire_with_suggestions() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ── scripting (M10) ────────────────────────────────────────────────────
+
+/// Scripted motion is deterministic and trace-observable: twice-run traces
+/// are byte-identical with scripts running, and the kinematic elevator's
+/// crossing into the static sensor appears as a contact event.
+#[test]
+fn scripted_simulation_is_deterministic_and_sensor_observable() {
+    let scene = repo_path("examples/scenes/verify/m10_script.json");
+    let trace = |name: &str| {
+        let path = std::env::temp_dir()
+            .join(format!("engine-m10-{}-{name}.jsonl", std::process::id()));
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .arg("--steps")
+            .arg("150")
+            .arg("--trace")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        std::fs::read_to_string(&path).unwrap()
+    };
+
+    let first = trace("a");
+    assert_eq!(first, trace("b"), "determinism must hold with scripts running");
+    assert!(
+        first.contains(r#""contact":["Elevator","TopSensor"],"started":true"#),
+        "the sensor crossing must be trace-visible"
+    );
+}
+
+/// A bake after a scripted run captures script-driven state (the kinematic
+/// elevator's risen Transform) and is itself a valid scene file.
+#[test]
+fn scripted_bake_is_a_valid_scene_with_the_moved_state() {
+    let scene = repo_path("examples/scenes/verify/m10_script.json");
+    // Bake next to the scene so relative script/asset paths keep resolving.
+    let out = repo_path(&format!(
+        "examples/scenes/verify/.m10-bake-test-{}.json",
+        std::process::id()
+    ));
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .arg("--steps")
+        .arg("120")
+        .arg("--bake")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    let validate = engine().arg("validate").arg(&out).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0));
+
+    let baked: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    let y = baked["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Elevator")
+        .unwrap()["components"][0]["position"][1]
+        .as_f64()
+        .unwrap();
+    assert!((y - 2.25).abs() < 1e-3, "elevator baked at {y}, expected ~2.25");
+    std::fs::remove_file(&out).ok();
+}
+
+/// A script runtime error surfaces as structured JSON naming the script
+/// file and line, exit 1 — never a panic, never a silent no-op.
+#[test]
+fn script_runtime_errors_are_structured() {
+    let dir = std::env::temp_dir().join(format!("engine-m10-err-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(
+        dir.join("scripts/bad.rhai"),
+        "fn step(world, step) { world.position(\"Ghost\"); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.json"),
+        r#"{"name":"e","entities":[
+            {"name":"Box","components":[{"type":"Transform"},
+                {"type":"Script","source":"scripts/bad.rhai"}]},
+            {"name":"Cam","components":[{"type":"Camera","active":true}]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine()
+        .arg("simulate")
+        .arg(dir.join("scene.json"))
+        .arg("--steps")
+        .arg("3")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stderr_lines(&output);
+    let error = lines.iter().find(|l| l["error"] == "script_runtime_error").unwrap();
+    assert!(error["file"].as_str().unwrap().ends_with("bad.rhai"));
+    assert!(error["line"].is_u64());
+    assert_eq!(error["entity"], "Box");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A script that does not compile fails `engine validate` with the script's
+/// own file and line.
+#[test]
+fn script_parse_errors_fail_validation() {
+    let dir = std::env::temp_dir().join(format!("engine-m10-parse-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(dir.join("scripts/bad.rhai"), "fn step(world step) {}\n").unwrap();
+    std::fs::write(
+        dir.join("scene.json"),
+        r#"{"name":"e","entities":[
+            {"name":"Box","components":[{"type":"Transform"},
+                {"type":"Script","source":"scripts/bad.rhai"}]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine().arg("validate").arg(dir.join("scene.json")).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&output));
+    assert!(codes.contains(&"script_parse_error".to_string()), "{codes:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}

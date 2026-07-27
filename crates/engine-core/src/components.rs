@@ -386,6 +386,18 @@ pub struct AnimationPlayer {
     pub start_offset: f32,
 }
 
+/// Gameplay logic as data (M10): a Rhai script run once per fixed step.
+///
+/// `source` is a relative `.rhai` path defining `fn step(world, step)`.
+/// Scripts mutate the world through a small registered API and never invent
+/// state of their own — baked output after a scripted run is an ordinary
+/// scene file. See `scripting-design.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Script {
+    pub source: String,
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -436,6 +448,7 @@ components!(
     RigidBody,
     Collider,
     AnimationPlayer,
+    Script,
 );
 
 #[cfg(test)]
@@ -520,7 +533,8 @@ mod tests {
                 "AmbientLight",
                 "RigidBody",
                 "Collider",
-                "AnimationPlayer"
+                "AnimationPlayer",
+                "Script"
             ]
         );
     }

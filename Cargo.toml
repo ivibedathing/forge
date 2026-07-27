@@ -7,6 +7,7 @@ members = [
     "crates/engine-cli",
     "crates/engine-editor",
     "crates/engine-physics",
+    "crates/engine-script",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ engine-render = { path = "crates/engine-render" }
 engine-assets = { path = "crates/engine-assets" }
 engine-editor = { path = "crates/engine-editor" }
 engine-physics = { path = "crates/engine-physics" }
+engine-script = { path = "crates/engine-script" }
 
 wgpu = "30"
 # 0.31 is still beta; stay on the stable line for the foundation.
@@ -31,6 +33,9 @@ hecs = "0.11"
 # trajectories without API breaks; a golden-trace diff on upgrade is a
 # breaking change to review, never noise to regenerate blindly.
 rapier3d = { version = "=0.34.0", features = ["enhanced-determinism"] }
+# Pinned exactly (scripting-design.md §1): the script API surface is a
+# contract, and interpreter behavior rides in golden traces.
+rhai = "=1.25.1"
 gltf = { version = "1.4", default-features = false, features = ["import", "utils"] }
 schemars = "1.2"
 pollster = "1.0"
