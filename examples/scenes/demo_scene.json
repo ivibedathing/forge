@@ -86,8 +86,16 @@
     {
       "name": "truck",
       "components": [
-        { "type": "Transform", "position": [-3.976, 0.0, -3.129], "rotation": [-25.541, 87.287, 0.0] },
-        { "type": "Mesh", "asset": "meshes/truck.glb" }
+        { "type": "Transform",
+          "position": [-2.25, -0.095, -4.397],
+          "rotation": [0.0, 120.0, 0.0],
+          "scale":    [0.45, 0.45, 0.45] },
+        { "type": "Mesh", "asset": "meshes/truck.glb" },
+        { "type": "Material",
+          "albedo": [0.72, 0.15, 0.12],
+          "metallic": 0.1,
+          "roughness": 0.55 },
+        { "type": "AnimationPlayer", "clip": "animations/truck_drive.anim.json" }
       ]
     }
   ]
