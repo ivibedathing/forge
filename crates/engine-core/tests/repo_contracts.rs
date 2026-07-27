@@ -72,6 +72,130 @@ fn m4_lighting_verify_scene_is_valid() {
     assert_scene_validates("examples/scenes/verify/m4_lighting.json");
 }
 
+/// The M5 verification fixture is committed **broken** — it packs one
+/// instance of every headline error class into a single file to prove the
+/// all-errors-at-once contract. It *failing* validation, with exactly these
+/// codes, is the pass condition (milestone-verification-scenes.md).
+#[test]
+fn m5_broken_verify_scene_reports_every_planted_error() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("examples/scenes/verify/m5_broken.json");
+    let display = path.display().to_string();
+    let source = std::fs::read_to_string(&path).unwrap();
+    let errors = engine_core::validate::validate_source(&source, &display);
+
+    let dump = || {
+        errors
+            .iter()
+            .map(|e| e.to_json())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // One run reports all of them — never a drip-feed.
+    assert_eq!(errors.len(), 7, "expected exactly the planted errors:\n{}", dump());
+
+    for error in &errors {
+        let context = error.context().expect("every error carries context");
+        assert!(context.line.is_some(), "no line: {}", error.to_json());
+        assert!(context.path.is_some(), "no path: {}", error.to_json());
+    }
+
+    let find = |code: &str, predicate: &dyn Fn(&engine_core::EngineError) -> bool| {
+        errors
+            .iter()
+            .find(|e| e.error == code && predicate(e))
+            .unwrap_or_else(|| panic!("missing {code}:\n{}", dump()))
+    };
+
+    let typo = find("unknown_component", &|e| {
+        e.context().unwrap().component.as_deref() == Some("Meterial")
+    });
+    assert_eq!(
+        typo.context().unwrap().did_you_mean.as_deref(),
+        Some("Material")
+    );
+
+    find("value_out_of_range", &|e| e.message.contains("albedo[0] is 1.5"));
+    find("value_out_of_range", &|e| e.message.contains("roughness is 1.5"));
+    find("value_out_of_range", &|e| e.message.contains("intensity is -2"));
+    find("asset_not_found", &|e| e.message.contains("does_not_exist.glb"));
+
+    let colour = find("unknown_field", &|e| {
+        e.context().unwrap().field.as_deref() == Some("colour")
+    });
+    assert_eq!(
+        colour.context().unwrap().did_you_mean.as_deref(),
+        Some("color")
+    );
+
+    let cameras = find("multiple_active_cameras", &|_| true);
+    assert_eq!(
+        cameras.context().unwrap().candidates,
+        Some(vec!["CameraA".to_string(), "CameraB".to_string()])
+    );
+}
+
+/// `codes.rs` ⟷ `docs/error-codes.md`, both directions: every registered
+/// code appears in the doc with the same exit class and description, and the
+/// doc lists nothing unregistered. Codes are API; this is the enforcement.
+#[test]
+fn error_code_registry_matches_the_docs() {
+    let doc = repo_file("docs/error-codes.md");
+
+    let mut documented = Vec::new();
+    for line in doc.lines() {
+        let Some(rest) = line.strip_prefix("| `") else {
+            continue;
+        };
+        let mut cells = rest.split(" | ");
+        let code = cells
+            .next()
+            .and_then(|c| c.strip_suffix('`'))
+            .unwrap_or_else(|| panic!("malformed row: {line}"));
+        let exit: i32 = cells
+            .next()
+            .and_then(|c| c.trim().parse().ok())
+            .unwrap_or_else(|| panic!("malformed exit cell: {line}"));
+        let description = cells
+            .next()
+            .and_then(|c| c.strip_suffix(" |"))
+            .unwrap_or_else(|| panic!("malformed description cell: {line}"));
+        documented.push((code.to_string(), exit, description.to_string()));
+    }
+
+    let registry = engine_core::codes::REGISTRY;
+    for entry in registry {
+        let row = documented
+            .iter()
+            .find(|(code, _, _)| code == entry.code)
+            .unwrap_or_else(|| {
+                panic!("{} is registered but missing from docs/error-codes.md", entry.code)
+            });
+        assert_eq!(
+            row.1,
+            entry.class.code(),
+            "{}: doc says exit {}, registry says {}",
+            entry.code,
+            row.1,
+            entry.class.code()
+        );
+        assert_eq!(
+            row.2, entry.description,
+            "{}: doc description differs from the registry",
+            entry.code
+        );
+    }
+    for (code, _, _) in &documented {
+        assert!(
+            registry.iter().any(|entry| entry.code == code),
+            "{code} is documented but not registered in codes.rs"
+        );
+    }
+    assert_eq!(documented.len(), registry.len());
+}
+
 #[test]
 fn demo_scene_loads_and_draws_everything() {
     let source = repo_file("examples/scenes/demo_scene.json");

@@ -5,6 +5,7 @@
 //! headless tooling (`engine validate`, `engine list-components`) links only
 //! this, and must stay usable on a machine with no GPU.
 
+pub mod codes;
 pub mod components;
 pub mod error;
 pub mod lineindex;

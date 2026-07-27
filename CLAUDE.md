@@ -4,20 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M4 are done** (plus most of M1's CLI). JSON scenes load into hecs, render headlessly to PNG
-with PBR lighting, validate with all-errors-at-once reporting, and reference glTF mesh files.
-Verified by 101 tests including offscreen pixel readback, and by rendering the example scenes —
-including `examples/scenes/verify/m4_lighting.json`, the M4 fixture from
-`milestone-verification-scenes.md` — and looking at them.
+**M0–M5 are done** (plus most of M1's CLI). JSON scenes load into hecs, render headlessly to PNG
+with PBR lighting, validate with all-errors-at-once reporting under a formalized CLI contract,
+and reference glTF mesh files. Verified by 137 tests including offscreen pixel readback and an
+end-to-end CLI suite, and by rendering the example scenes — including the verification fixtures
+from `milestone-verification-scenes.md` (`verify/m4_lighting.json` renders correctly;
+`verify/m5_broken.json` is committed **broken** and must never validate — its failing with all
+seven planted errors is the pass condition, pinned by `repo_contracts.rs`).
 
 What works today:
 
 ```
-engine validate <scene.json>             # every error at once, each with file/line/did_you_mean
+engine validate <scene.json>... [--strict]  # every error at once; multi-file; --strict promotes warnings
 engine screenshot <scene.json> --out x.png [--camera N] [--width W --height H]
 engine run-scene <scene.json>            # windowed scene viewer
-engine list-components                   # scene + component JSON Schemas
-engine build                             # cargo build, diagnostics re-emitted as engine errors
+engine list-components                   # scene + component JSON Schemas (with range constraints)
+engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
 engine run                               # M0 triangle (stack proof)
 engine info                              # selected GPU adapter as JSON
 ```
@@ -39,12 +41,30 @@ camera; a scene with *zero* light components gets the documented fallback rig
 (`LightRig::resolved` in `engine-core/src/scene.rs`), while any light component means "absent is
 off". Render targets are **sRGB** (`Rgba8UnormSrgb`): scene colors are linear reflectance, the
 hardware encodes on write, and pixel tests compute expectations via the `srgb_encode` helper in
-`engine-render/tests/lighting.rs` — never eyeball byte values. Numeric ranges (`albedo`,
-`roughness`, intensities, …) are validated as `value_out_of_range`, an error rather than a
-silent clamp. Line numbers on semantic errors come from
-`engine-core/src/lineindex.rs` (path → line lookup; serde_json discards spans). The checked-in
-`schemas/component-schema.json` is enforced by `engine-core/tests/repo_contracts.rs` — regenerate
-with `engine list-components > schemas/component-schema.json` after touching any component.
+`engine-render/tests/lighting.rs` — never eyeball byte values. Line numbers on semantic errors
+come from `engine-core/src/lineindex.rs` (path → line lookup; serde_json discards spans).
+
+Validation & the CLI contract (M5): the wire contract lives in `docs/cli-contract.md` — stdout
+is one JSON object on success and empty on failure, stderr is NDJSON, exit codes split 1 ("your
+files are at fault") from 2 ("your invocation/environment is"). Every error code is a const in
+`engine-core/src/codes.rs` with its exit class; `docs/error-codes.md` mirrors it and a
+repo-contract test keeps them in lockstep — **codes are API**, never rename one casually.
+Per-component field checking is **schema-driven**: the walk in `validate.rs` reads the same
+schemars-generated schema `engine list-components` publishes (unknown/missing fields, JSON
+types, `minimum`/`exclusiveMinimum`-style ranges authored as `#[schemars(...)]` attributes on
+the component structs), then serde parses the clean component as a final gate —
+`scene_parse_desync` firing means the walk and the parser drifted, and the corpus tests in
+`engine-core/tests/validation_corpus.rs` (agreement, robustness, golden kitchen-sink snapshot)
+exist to catch that before an agent does. Errors carry `path` (a JSON Pointer for `jq`) next to
+`line`; warnings (`unused_material`, `zero_scale`) ride the same stream with
+`"severity": "warning"` and exit 0 unless `--strict`. Cross-field checks (`Camera.far > near`)
+and `duplicate_component` are semantic checks beyond the schema. `Scene::from_source` errors
+with `Vec<EngineError>` — screenshot/run-scene report byte-identical diagnostics to `validate`.
+A panic hook keeps even a crash inside the NDJSON protocol (`internal_panic`, exit 2), and clap
+failures are re-rendered as `invalid_invocation` JSON with clap's own `did_you_mean`. The
+checked-in `schemas/component-schema.json` is enforced by `engine-core/tests/repo_contracts.rs`
+— regenerate with `engine list-components > schemas/component-schema.json` after touching any
+component, including its range attributes.
 
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).
@@ -149,9 +169,8 @@ Standard Cargo commands: `cargo build`, `cargo test --workspace`, and
 
 Follow the milestones in design doc §8: ~~M0 window+triangle~~ → ~~M1 CLI skeleton + JSON
 error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ → ~~M4 materials +
-lighting~~ (all done) → M5 validation hardening → M6 diff-render. M5 is deliberately *not*
-last-priority work; structured validation is as load-bearing as rendering features here. Each
-milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
+lighting~~ → ~~M5 validation hardening~~ (all done) → M6 diff-render. Each milestone from M4 on
+ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any
 `TextureView`, `Gpu::new` takes an optional surface, and the readback path (texture → buffer →

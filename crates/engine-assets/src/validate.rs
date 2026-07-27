@@ -54,7 +54,7 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                 if let Some(line) = index.line_of_or_parent(&json_path) {
                     error = error.line(line);
                 }
-                errors.push(error);
+                errors.push(error.path(json_path));
             }
         }
     }

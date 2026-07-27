@@ -93,9 +93,15 @@ pub struct Mesh {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Camera {
-    /// Vertical field of view, in degrees.
+    /// Vertical field of view, in degrees. Strictly between 0 and 180.
+    #[schemars(extend("exclusiveMinimum" = 0.0, "exclusiveMaximum" = 180.0))]
     pub fov: f32,
+    /// Near clip distance. Strictly positive.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub near: f32,
+    /// Far clip distance. Strictly positive, and must exceed `near`
+    /// (checked cross-field by `engine validate`).
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub far: f32,
 
     /// Marks the camera used when none is named explicitly.
@@ -127,18 +133,20 @@ impl Default for Camera {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Material {
-    #[schemars(with = "[f32; 3]")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub albedo: Vec3,
     /// `0` = dielectric, `1` = metal. Metals have no diffuse; their specular
     /// is tinted by `albedo`. Range `[0, 1]`.
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub metallic: f32,
     /// Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.
     /// Range `[0, 1]`.
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub roughness: f32,
     /// Added after lighting, unaffected by any light — "make this visible
     /// regardless of lighting" is a debugging move worth having. Range
     /// `[0, 1]` per component.
-    #[schemars(with = "[f32; 3]")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub emissive: Vec3,
 }
 
@@ -169,11 +177,12 @@ impl Default for Material {
 pub struct DirectionalLight {
     /// Linear RGB chromaticity, each component in `[0, 1]`. Magnitude lives
     /// in `intensity`.
-    #[schemars(with = "[f32; 3]")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub color: Vec3,
     /// Unitless multiplier, `>= 0`, unbounded above: intensity 2 is twice as
     /// bright, and a white light at 1.0 on a white surface head-on reads
     /// white.
+    #[schemars(range(min = 0.0))]
     pub intensity: f32,
 }
 
@@ -195,9 +204,10 @@ impl Default for DirectionalLight {
 #[serde(default, deny_unknown_fields)]
 pub struct AmbientLight {
     /// Linear RGB, each component in `[0, 1]`.
-    #[schemars(with = "[f32; 3]")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub color: Vec3,
     /// `>= 0`.
+    #[schemars(range(min = 0.0))]
     pub intensity: f32,
 }
 

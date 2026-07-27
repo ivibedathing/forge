@@ -33,7 +33,7 @@ impl Gpu {
             .await
             .map_err(|e| {
                 EngineError::new(
-                    "no_gpu_adapter",
+                    engine_core::codes::NO_GPU_ADAPTER,
                     format!("no compatible GPU adapter found: {e}"),
                 )
             })?;
@@ -52,7 +52,7 @@ impl Gpu {
             .await
             .map_err(|e| {
                 EngineError::new(
-                    "device_request_failed",
+                    engine_core::codes::DEVICE_REQUEST_FAILED,
                     format!("could not open GPU device: {e}"),
                 )
             })?;

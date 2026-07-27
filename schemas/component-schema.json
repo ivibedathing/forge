@@ -89,17 +89,23 @@
           },
           "far": {
             "default": 1000.0,
+            "description": "Far clip distance. Strictly positive, and must exceed `near`\n(checked cross-field by `engine validate`).",
+            "exclusiveMinimum": 0.0,
             "format": "float",
             "type": "number"
           },
           "fov": {
             "default": 60.0,
-            "description": "Vertical field of view, in degrees.",
+            "description": "Vertical field of view, in degrees. Strictly between 0 and 180.",
+            "exclusiveMaximum": 180.0,
+            "exclusiveMinimum": 0.0,
             "format": "float",
             "type": "number"
           },
           "near": {
             "default": 0.10000000149011612,
+            "description": "Near clip distance. Strictly positive.",
+            "exclusiveMinimum": 0.0,
             "format": "float",
             "type": "number"
           },
@@ -125,6 +131,8 @@
             ],
             "items": {
               "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
               "type": "number"
             },
             "maxItems": 3,
@@ -140,6 +148,8 @@
             "description": "Added after lighting, unaffected by any light — \"make this visible\nregardless of lighting\" is a debugging move worth having. Range\n`[0, 1]` per component.",
             "items": {
               "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
               "type": "number"
             },
             "maxItems": 3,
@@ -150,12 +160,16 @@
             "default": 0.0,
             "description": "`0` = dielectric, `1` = metal. Metals have no diffuse; their specular\nis tinted by `albedo`. Range `[0, 1]`.",
             "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
             "type": "number"
           },
           "roughness": {
             "default": 0.8999999761581421,
             "description": "Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.\nRange `[0, 1]`.",
             "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
             "type": "number"
           },
           "type": {
@@ -181,6 +195,8 @@
             "description": "Linear RGB chromaticity, each component in `[0, 1]`. Magnitude lives\nin `intensity`.",
             "items": {
               "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
               "type": "number"
             },
             "maxItems": 3,
@@ -191,6 +207,7 @@
             "default": 1.0,
             "description": "Unitless multiplier, `>= 0`, unbounded above: intensity 2 is twice as\nbright, and a white light at 1.0 on a white surface head-on reads\nwhite.",
             "format": "float",
+            "minimum": 0.0,
             "type": "number"
           },
           "type": {
@@ -216,6 +233,8 @@
             "description": "Linear RGB, each component in `[0, 1]`.",
             "items": {
               "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
               "type": "number"
             },
             "maxItems": 3,
@@ -226,6 +245,7 @@
             "default": 0.05000000074505806,
             "description": "`>= 0`.",
             "format": "float",
+            "minimum": 0.0,
             "type": "number"
           },
           "type": {
@@ -340,17 +360,23 @@
               },
               "far": {
                 "default": 1000.0,
+                "description": "Far clip distance. Strictly positive, and must exceed `near`\n(checked cross-field by `engine validate`).",
+                "exclusiveMinimum": 0.0,
                 "format": "float",
                 "type": "number"
               },
               "fov": {
                 "default": 60.0,
-                "description": "Vertical field of view, in degrees.",
+                "description": "Vertical field of view, in degrees. Strictly between 0 and 180.",
+                "exclusiveMaximum": 180.0,
+                "exclusiveMinimum": 0.0,
                 "format": "float",
                 "type": "number"
               },
               "near": {
                 "default": 0.10000000149011612,
+                "description": "Near clip distance. Strictly positive.",
+                "exclusiveMinimum": 0.0,
                 "format": "float",
                 "type": "number"
               },
@@ -376,6 +402,8 @@
                 ],
                 "items": {
                   "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
                   "type": "number"
                 },
                 "maxItems": 3,
@@ -391,6 +419,8 @@
                 "description": "Added after lighting, unaffected by any light — \"make this visible\nregardless of lighting\" is a debugging move worth having. Range\n`[0, 1]` per component.",
                 "items": {
                   "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
                   "type": "number"
                 },
                 "maxItems": 3,
@@ -401,12 +431,16 @@
                 "default": 0.0,
                 "description": "`0` = dielectric, `1` = metal. Metals have no diffuse; their specular\nis tinted by `albedo`. Range `[0, 1]`.",
                 "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
                 "type": "number"
               },
               "roughness": {
                 "default": 0.8999999761581421,
                 "description": "Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.\nRange `[0, 1]`.",
                 "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
                 "type": "number"
               },
               "type": {
@@ -432,6 +466,8 @@
                 "description": "Linear RGB chromaticity, each component in `[0, 1]`. Magnitude lives\nin `intensity`.",
                 "items": {
                   "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
                   "type": "number"
                 },
                 "maxItems": 3,
@@ -442,6 +478,7 @@
                 "default": 1.0,
                 "description": "Unitless multiplier, `>= 0`, unbounded above: intensity 2 is twice as\nbright, and a white light at 1.0 on a white surface head-on reads\nwhite.",
                 "format": "float",
+                "minimum": 0.0,
                 "type": "number"
               },
               "type": {
@@ -467,6 +504,8 @@
                 "description": "Linear RGB, each component in `[0, 1]`.",
                 "items": {
                   "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
                   "type": "number"
                 },
                 "maxItems": 3,
@@ -477,6 +516,7 @@
                 "default": 0.05000000074505806,
                 "description": "`>= 0`.",
                 "format": "float",
+                "minimum": 0.0,
                 "type": "number"
               },
               "type": {

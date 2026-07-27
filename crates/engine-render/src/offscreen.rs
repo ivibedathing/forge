@@ -143,12 +143,12 @@ fn read_back(gpu: &Gpu, texture: &wgpu::Texture, width: u32, height: u32) -> Res
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .map_err(|e| {
-            EngineError::new("gpu_poll_failed", format!("waiting on the GPU failed: {e}"))
+            EngineError::new(engine_core::codes::GPU_POLL_FAILED, format!("waiting on the GPU failed: {e}"))
         })?;
 
     let mapped = slice.get_mapped_range().map_err(|e| {
         EngineError::new(
-            "readback_failed",
+            engine_core::codes::READBACK_FAILED,
             format!("could not map the readback buffer: {e}"),
         )
     })?;

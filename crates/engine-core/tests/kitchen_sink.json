@@ -1,0 +1,53 @@
+{
+  "name": "kitchen_sink",
+  "versoin": 2,
+  "entities": [
+    42,
+    { "components": [] },
+    { "name": "" },
+    { "name": ["NotAString"] },
+    { "name": "Twin" },
+    { "name": "Twin" },
+    { "name": "ExtraField", "tag": "player" },
+    { "name": "BadComponents", "components": [
+      "not-an-object",
+      { "albedo": [1.0, 0.0, 0.0] },
+      { "type": "Meterial" },
+      { "type": "Transform", "postion": [0.0, 1.0, 0.0] },
+      { "type": "Mesh" }
+    ] },
+    { "name": "BadValues", "components": [
+      { "type": "Mesh", "asset": 42 },
+      { "type": "Transform", "position": [0.0, 1.0], "rotation": [0.0, "up", 0.0] },
+      { "type": "Material", "albedo": [1.5, 0.0, 0.0], "metallic": -0.5 },
+      { "type": "Camera", "fov": 200.0, "active": true }
+    ] },
+    { "name": "BadCamera", "components": [
+      { "type": "Camera", "fov": 0.0, "near": 0.1, "far": 0.05, "active": true }
+    ] },
+    { "name": "Doubled", "components": [
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Mesh", "asset": "builtin:sphere" }
+    ] },
+    { "name": "BadAssets", "components": [
+      { "type": "Mesh", "asset": "meshes/missing.glb" }
+    ] },
+    { "name": "WrongFormat", "components": [
+      { "type": "Mesh", "asset": "meshes/model.obj" }
+    ] },
+    { "name": "Absolute", "components": [
+      { "type": "Mesh", "asset": "/etc/meshes/cube.glb" }
+    ] },
+    { "name": "SunA", "components": [ { "type": "DirectionalLight" } ] },
+    { "name": "SunB", "components": [ { "type": "DirectionalLight" } ] },
+    { "name": "FillA", "components": [ { "type": "AmbientLight" } ] },
+    { "name": "FillB", "components": [ { "type": "AmbientLight" } ] },
+    { "name": "DeadMaterial", "components": [
+      { "type": "Material", "albedo": [0.5, 0.5, 0.5] }
+    ] },
+    { "name": "Squashed", "components": [
+      { "type": "Transform", "scale": [1.0, 0.0, 1.0] },
+      { "type": "Mesh", "asset": "builtin:cube" }
+    ] }
+  ]
+}

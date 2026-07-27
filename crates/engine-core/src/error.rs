@@ -30,6 +30,13 @@ pub struct ErrorContext {
     pub line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<u32>,
+
+    /// A JSON Pointer (`/entities/3/components/0/asset`) into the offending
+    /// file. `line` is for humans and editors; `path` is for `jq` and
+    /// programmatic edits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,10 +48,21 @@ pub struct ErrorContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub did_you_mean: Option<String>,
 
+    /// Concrete replacement *text* (e.g. a rustc machine-applicable fix), as
+    /// opposed to `did_you_mean`, which is a known *name*: `did_you_mean`
+    /// corrects an identifier, `suggestion` is splice-ready source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
+
     /// The entities or values an ambiguous choice was between, so an agent can
     /// resolve the ambiguity without re-reading the scene.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<String>>,
+
+    /// Present only as `"warning"`; absence means error. Warnings ride the
+    /// same stderr stream and never affect the exit code unless promoted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<&'static str>,
 }
 
 /// A structured engine error.
@@ -96,6 +114,36 @@ impl EngineError {
     pub fn column(mut self, column: u32) -> Self {
         self.context_mut().column = Some(column);
         self
+    }
+
+    /// Attach the JSON Pointer of the offending value.
+    pub fn path(mut self, path: impl Into<String>) -> Self {
+        self.context_mut().path = Some(path.into());
+        self
+    }
+
+    /// Attach splice-ready replacement text (see [`ErrorContext::suggestion`]).
+    pub fn suggestion(mut self, suggestion: impl Into<String>) -> Self {
+        self.context_mut().suggestion = Some(suggestion.into());
+        self
+    }
+
+    /// Mark this diagnostic as a warning: reported on the same stream with
+    /// `"severity": "warning"`, but not counted against validity.
+    pub fn warning(mut self) -> Self {
+        self.context_mut().severity = Some("warning");
+        self
+    }
+
+    /// Whether this diagnostic is a warning rather than an error.
+    pub fn is_warning(&self) -> bool {
+        self.context().is_some_and(|c| c.severity == Some("warning"))
+    }
+
+    /// The process exit code this error's registered class dictates
+    /// (see [`crate::codes`]).
+    pub fn exit_code(&self) -> i32 {
+        crate::codes::exit_code(self.error)
     }
 
     pub fn entity(mut self, entity: impl Into<String>) -> Self {

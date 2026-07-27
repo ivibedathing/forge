@@ -5,7 +5,6 @@
 //! memory from a previous session.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use hecs::{Entity, EntityBuilder, World};
 use schemars::JsonSchema;
@@ -118,37 +117,29 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// Read, validate, and instantiate a scene file.
-    ///
-    /// Returns the first validation error. `engine validate` reports all of
-    /// them at once — use [`validate::validate_source`] for that.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let display = path.display().to_string();
-
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            EngineError::new("scene_unreadable", format!("could not read scene: {e}"))
-                .file(&display)
-        })?;
-
-        Self::from_source(&source, &display)
-    }
-
     /// Validate and instantiate a scene already in memory.
-    pub fn from_source(source: &str, path: &str) -> Result<Self> {
-        let errors = validate::validate_source(source, path);
-        if let Some(first) = errors.into_iter().next() {
-            return Err(first);
+    ///
+    /// The error side is *every* validation error, never just the first —
+    /// which command you ran must never change what you learn about a broken
+    /// scene (M5 §7). Warnings are not errors and do not appear here; run
+    /// [`validate::validate_source`] directly to see them.
+    pub fn from_source(source: &str, path: &str) -> std::result::Result<Self, Vec<EngineError>> {
+        let errors: Vec<EngineError> = validate::validate_source(source, path)
+            .into_iter()
+            .filter(|e| !e.is_warning())
+            .collect();
+        if !errors.is_empty() {
+            return Err(errors);
         }
 
         // Validation already proved this parses; a failure here is a bug in
         // validation rather than in the scene, so it gets its own error code.
         let file: SceneFile = serde_json::from_str(source).map_err(|e| {
-            EngineError::new(
-                "scene_parse_desync",
+            vec![EngineError::new(
+                crate::codes::SCENE_PARSE_DESYNC,
                 format!("scene passed validation but failed to parse: {e}"),
             )
-            .file(path)
+            .file(path)]
         })?;
 
         Ok(Self::instantiate(file))
@@ -205,14 +196,14 @@ impl Scene {
         match requested {
             Some(name) => {
                 let entity = self.entity(name).ok_or_else(|| {
-                    EngineError::new("entity_not_found", format!("no entity named {name:?}"))
+                    EngineError::new(crate::codes::ENTITY_NOT_FOUND, format!("no entity named {name:?}"))
                         .entity(name)
                         .suggest_from(name, self.names())
                 })?;
 
                 let camera = self.world.get::<&Camera>(entity).map(|c| *c).map_err(|_| {
                     EngineError::new(
-                        "missing_component",
+                        crate::codes::MISSING_COMPONENT,
                         format!("entity {name:?} exists but has no Camera component"),
                     )
                     .entity(name)
@@ -233,7 +224,7 @@ impl Scene {
                     .map(|(entity, camera)| (entity, *camera))
                     .ok_or_else(|| {
                         EngineError::new(
-                            "no_active_camera",
+                            crate::codes::NO_ACTIVE_CAMERA,
                             "scene has no Camera with \"active\": true; \
                              pass --camera <entity> to choose one explicitly",
                         )
