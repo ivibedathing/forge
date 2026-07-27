@@ -10,6 +10,7 @@
 
 mod app;
 mod build;
+mod simulate;
 
 use std::path::PathBuf;
 
@@ -59,6 +60,9 @@ enum Command {
         scene: PathBuf,
         #[arg(long)]
         out: PathBuf,
+        /// Simulate this many physics steps first — edit, simulate, LOOK.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
         /// Render from this entity's camera instead of the active one.
         #[arg(long)]
         camera: Option<String>,
@@ -77,6 +81,10 @@ enum Command {
     DiffRender {
         scene: PathBuf,
         baseline: PathBuf,
+        /// Simulate this many physics steps before rendering — how baked
+        /// moments of simulation get visual regression coverage.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
         /// Write the visual diff here (red: violation, yellow: within
         /// threshold, faded gray: identical). Written on pass and fail.
         #[arg(long)]
@@ -105,6 +113,36 @@ enum Command {
         /// Delay before the self-screenshot, in milliseconds.
         #[arg(long, hide = true, default_value_t = 1500)]
         self_screenshot_after_ms: u64,
+    },
+
+    /// Step physics headlessly: build the world, advance N fixed steps.
+    ///
+    /// --bake writes the settled state back out as a valid scene file with
+    /// every untouched byte preserved; --trace writes JSONL (one line per
+    /// dynamic body per step, plus contact events) — the greppable,
+    /// committable record of what happened.
+    Simulate {
+        scene: PathBuf,
+        #[arg(long)]
+        steps: u32,
+        #[arg(long)]
+        bake: Option<PathBuf>,
+        #[arg(long)]
+        trace: Option<PathBuf>,
+    },
+
+    /// Cast a ray into the (optionally pre-simulated) scene; JSON result.
+    Raycast {
+        scene: PathBuf,
+        /// Ray origin as x,y,z
+        #[arg(long)]
+        from: String,
+        /// Ray direction as x,y,z (need not be normalized)
+        #[arg(long)]
+        dir: String,
+        /// Simulate this many steps before casting.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
     },
 
     /// Check scenes against the component schemas; report every error.
@@ -155,13 +193,15 @@ fn main() {
         Command::Screenshot {
             scene,
             out,
+            steps,
             camera,
             width,
             height,
-        } => screenshot(scene, out, camera.as_deref(), width, height),
+        } => screenshot(scene, out, steps, camera.as_deref(), width, height),
         Command::DiffRender {
             scene,
             baseline,
+            steps,
             out,
             camera,
             threshold,
@@ -169,6 +209,7 @@ fn main() {
         } => diff_render(
             scene,
             baseline,
+            steps,
             out,
             camera.as_deref(),
             threshold,
@@ -185,6 +226,18 @@ fn main() {
             screenshot: self_screenshot,
             screenshot_after_ms: self_screenshot_after_ms,
         }),
+        Command::Simulate {
+            scene,
+            steps,
+            bake,
+            trace,
+        } => simulate::simulate_command(scene, steps, bake, trace),
+        Command::Raycast {
+            scene,
+            from,
+            dir,
+            steps,
+        } => simulate::raycast_command(scene, from, dir, steps),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::ListComponents => {
             print!("{}", engine_core::schema::canonical_json());
@@ -288,17 +341,17 @@ fn exit_with_clap_error(error: clap::Error) -> ! {
 
 /// One scene's full validation report: every structural, semantic, and asset
 /// diagnostic, emitted to stderr in file order.
-struct SceneReport {
-    source: Option<String>,
-    errors: usize,
-    warnings: usize,
+pub(crate) struct SceneReport {
+    pub(crate) source: Option<String>,
+    pub(crate) errors: usize,
+    pub(crate) warnings: usize,
 }
 
 /// Run the whole validation pipeline on one file and emit every diagnostic.
 /// Every scene-consuming command calls this, so which command you ran never
 /// changes what you learn about a broken scene — the diagnostics are
 /// byte-identical to `engine validate`'s.
-fn report_scene_diagnostics(path: &PathBuf) -> SceneReport {
+pub(crate) fn report_scene_diagnostics(path: &PathBuf) -> SceneReport {
     let display = path.display().to_string();
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
@@ -416,6 +469,7 @@ fn load_scene(path: &PathBuf) -> Result<Scene> {
 fn diff_render(
     scene_path: PathBuf,
     baseline_path: PathBuf,
+    steps: u32,
     out: Option<PathBuf>,
     camera_name: Option<&str>,
     threshold: u8,
@@ -424,7 +478,10 @@ fn diff_render(
     // Baseline first: it is cheap, needs no GPU, and defines the render size.
     let baseline = load_baseline(&baseline_path)?;
 
-    let scene = load_scene(&scene_path)?;
+    let mut scene = load_scene(&scene_path)?;
+    if steps > 0 {
+        simulate::run(&mut scene, steps, None)?;
+    }
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
@@ -537,11 +594,15 @@ fn load_baseline(path: &std::path::Path) -> Result<engine_render::Image> {
 fn screenshot(
     scene_path: PathBuf,
     out: PathBuf,
+    steps: u32,
     camera_name: Option<&str>,
     width: u32,
     height: u32,
 ) -> Result<()> {
-    let scene = load_scene(&scene_path)?;
+    let mut scene = load_scene(&scene_path)?;
+    if steps > 0 {
+        simulate::run(&mut scene, steps, None)?;
+    }
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
@@ -586,7 +647,22 @@ fn run_scene(
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
+    let lights = scene.lights().resolved();
     let title = format!("engine — {}", scene.name);
+
+    // Physics scenes come alive in the viewer; static scenes stay static.
+    let simulation = if engine_physics::PhysicsWorld::scene_has_physics(&scene.world) {
+        let physics = engine_physics::PhysicsWorld::build(&scene.world, &scene.physics)?;
+        Some(crate::app::Simulation {
+            scene,
+            physics,
+            assets,
+            accumulator: 0.0,
+            last: None,
+        })
+    } else {
+        None
+    };
 
     run_app(ViewerApp::new(
         title,
@@ -596,7 +672,8 @@ fn run_scene(
             items,
             camera,
             camera_model: camera_transform.matrix(),
-            lights: scene.lights().resolved(),
+            lights,
+            simulation,
         },
     ))
 }

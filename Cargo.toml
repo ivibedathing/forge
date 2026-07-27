@@ -6,6 +6,7 @@ members = [
     "crates/engine-assets",
     "crates/engine-cli",
     "crates/engine-editor",
+    "crates/engine-physics",
 ]
 
 [workspace.package]
@@ -19,12 +20,17 @@ engine-core = { path = "crates/engine-core" }
 engine-render = { path = "crates/engine-render" }
 engine-assets = { path = "crates/engine-assets" }
 engine-editor = { path = "crates/engine-editor" }
+engine-physics = { path = "crates/engine-physics" }
 
 wgpu = "30"
 # 0.31 is still beta; stay on the stable line for the foundation.
 winit = "0.30"
 glam = { version = "0.33", features = ["serde"] }
 hecs = "0.11"
+# Pinned exactly (physics-design.md §3): rapier upgrades can change
+# trajectories without API breaks; a golden-trace diff on upgrade is a
+# breaking change to review, never noise to regenerate blindly.
+rapier3d = { version = "=0.34.0", features = ["enhanced-determinism"] }
 gltf = { version = "1.4", default-features = false, features = ["import", "utils"] }
 schemars = "1.2"
 pollster = "1.0"

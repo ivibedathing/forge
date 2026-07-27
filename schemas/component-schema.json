@@ -1,5 +1,36 @@
 {
   "component": {
+    "$defs": {
+      "BodyKind": {
+        "description": "How a rigid body participates in simulation.",
+        "oneOf": [
+          {
+            "const": "dynamic",
+            "description": "Fully simulated: forces, gravity, collisions.",
+            "type": "string"
+          },
+          {
+            "const": "kinematic",
+            "description": "Moved by writes to its `Transform`; pushes dynamics, is not pushed.",
+            "type": "string"
+          },
+          {
+            "const": "fixed",
+            "description": "Never moves. For platforms that also want a `RigidBody`; bare\n`Collider`s without a `RigidBody` are static geometry too.",
+            "type": "string"
+          }
+        ]
+      },
+      "ColliderShapeKind": {
+        "description": "The collision shape kinds `Collider.shape` may name.",
+        "enum": [
+          "cuboid",
+          "sphere",
+          "capsule"
+        ],
+        "type": "string"
+      }
+    },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "One component as it appears in a scene file.\n\nInternally tagged on `\"type\"`, so each component is a flat object\nrather than a single-key wrapper — the shape `jq` is pleasant\nagainst and the shape an LLM is least likely to get wrong.",
     "oneOf": [
@@ -257,6 +288,173 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A simulated rigid body (M8). Requires a `Transform`; a **dynamic** body\nalso requires a `Collider` (`missing_collider` — it would fall forever\nthrough everything).\n\nSimulation state is derived, never authoritative: this component is the\ninitial conditions, and `engine simulate --bake` writes the evolved values\nback as ordinary scene text.",
+        "properties": {
+          "angular_damping": {
+            "default": 0.0,
+            "description": "`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "angular_velocity": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "**Degrees per second**, `[x, y, z]` — the same units and axis order as\n`Transform.rotation`, for the same reason: the agent that writes\n`\"rotation\": [0, 45, 0]` writes `[0, 90, 0]` for a half-turn per\nsecond. Converted to rad/s only at the physics-backend boundary.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "body": {
+            "$ref": "#/$defs/BodyKind"
+          },
+          "can_sleep": {
+            "default": true,
+            "description": "Allow the solver to put this body to sleep once it settles.",
+            "type": "boolean"
+          },
+          "ccd": {
+            "default": false,
+            "description": "Continuous collision detection, for small fast bodies that would\notherwise tunnel.",
+            "type": "boolean"
+          },
+          "gravity_scale": {
+            "default": 1.0,
+            "description": "Multiplier on scene gravity. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "linear_damping": {
+            "default": 0.0,
+            "description": "`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "linear_velocity": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": {
+            "const": "RigidBody",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "body"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on\nthe entity, this is static collision geometry — the common case for\nground planes and walls.\n\nOne flat object discriminated by `shape` (the shape `jq` and an LLM\nhandle best): `cuboid` uses `half_extents`, `sphere` uses `radius`,\n`capsule` (Y-axis) uses `half_height` + `radius`. Validation enforces\nwhich fields each shape requires and forbids — the file format is the\ncontract, the flat Rust struct is how it stays walkable by the\nschema-driven validator and the editor's generated inspector.\n\n`Transform.scale` scales the shape when the physics world is built — a\ncube scaled 2x collides 2x big, which is what the screenshot shows.\nNonuniform scale on a round shape has no physics representation and is a\nvalidation error, never a silent approximation.",
+        "properties": {
+          "density": {
+            "default": 1.0,
+            "description": "Mass comes from `density` x shape volume. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "friction": {
+            "default": 0.5,
+            "description": "`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "half_extents": {
+            "description": "`cuboid` only. Each component `> 0`.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "half_height": {
+            "description": "`capsule` only: half the cylindrical section's height. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Local offset of the shape from the entity's transform origin.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "radius": {
+            "description": "`sphere` and `capsule`. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "restitution": {
+            "default": 0.0,
+            "description": "Bounciness, `[0, 1]`. When two colliders touch, the **larger** of\nthe two restitutions applies (max-combine), so a bouncy ball bounces\non a plain floor exactly as its own value says.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "sensor": {
+            "default": false,
+            "description": "Sensors detect overlaps (trace events) but exert no forces.",
+            "type": "boolean"
+          },
+          "shape": {
+            "$ref": "#/$defs/ColliderShapeKind"
+          },
+          "type": {
+            "const": "Collider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "shape"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -267,10 +465,41 @@
     "Camera",
     "Material",
     "DirectionalLight",
-    "AmbientLight"
+    "AmbientLight",
+    "RigidBody",
+    "Collider"
   ],
   "scene": {
     "$defs": {
+      "BodyKind": {
+        "description": "How a rigid body participates in simulation.",
+        "oneOf": [
+          {
+            "const": "dynamic",
+            "description": "Fully simulated: forces, gravity, collisions.",
+            "type": "string"
+          },
+          {
+            "const": "kinematic",
+            "description": "Moved by writes to its `Transform`; pushes dynamics, is not pushed.",
+            "type": "string"
+          },
+          {
+            "const": "fixed",
+            "description": "Never moves. For platforms that also want a `RigidBody`; bare\n`Collider`s without a `RigidBody` are static geometry too.",
+            "type": "string"
+          }
+        ]
+      },
+      "ColliderShapeKind": {
+        "description": "The collision shape kinds `Collider.shape` may name.",
+        "enum": [
+          "cuboid",
+          "sphere",
+          "capsule"
+        ],
+        "type": "string"
+      },
       "ComponentData": {
         "description": "One component as it appears in a scene file.\n\nInternally tagged on `\"type\"`, so each component is a flat object\nrather than a single-key wrapper — the shape `jq` is pleasant\nagainst and the shape an LLM is least likely to get wrong.",
         "oneOf": [
@@ -528,6 +757,173 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A simulated rigid body (M8). Requires a `Transform`; a **dynamic** body\nalso requires a `Collider` (`missing_collider` — it would fall forever\nthrough everything).\n\nSimulation state is derived, never authoritative: this component is the\ninitial conditions, and `engine simulate --bake` writes the evolved values\nback as ordinary scene text.",
+            "properties": {
+              "angular_damping": {
+                "default": 0.0,
+                "description": "`>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "angular_velocity": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "**Degrees per second**, `[x, y, z]` — the same units and axis order as\n`Transform.rotation`, for the same reason: the agent that writes\n`\"rotation\": [0, 45, 0]` writes `[0, 90, 0]` for a half-turn per\nsecond. Converted to rad/s only at the physics-backend boundary.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "body": {
+                "$ref": "#/$defs/BodyKind"
+              },
+              "can_sleep": {
+                "default": true,
+                "description": "Allow the solver to put this body to sleep once it settles.",
+                "type": "boolean"
+              },
+              "ccd": {
+                "default": false,
+                "description": "Continuous collision detection, for small fast bodies that would\notherwise tunnel.",
+                "type": "boolean"
+              },
+              "gravity_scale": {
+                "default": 1.0,
+                "description": "Multiplier on scene gravity. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "linear_damping": {
+                "default": 0.0,
+                "description": "`>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "linear_velocity": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": {
+                "const": "RigidBody",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on\nthe entity, this is static collision geometry — the common case for\nground planes and walls.\n\nOne flat object discriminated by `shape` (the shape `jq` and an LLM\nhandle best): `cuboid` uses `half_extents`, `sphere` uses `radius`,\n`capsule` (Y-axis) uses `half_height` + `radius`. Validation enforces\nwhich fields each shape requires and forbids — the file format is the\ncontract, the flat Rust struct is how it stays walkable by the\nschema-driven validator and the editor's generated inspector.\n\n`Transform.scale` scales the shape when the physics world is built — a\ncube scaled 2x collides 2x big, which is what the screenshot shows.\nNonuniform scale on a round shape has no physics representation and is a\nvalidation error, never a silent approximation.",
+            "properties": {
+              "density": {
+                "default": 1.0,
+                "description": "Mass comes from `density` x shape volume. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "friction": {
+                "default": 0.5,
+                "description": "`>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "half_extents": {
+                "description": "`cuboid` only. Each component `> 0`.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "half_height": {
+                "description": "`capsule` only: half the cylindrical section's height. `> 0`.",
+                "format": "float",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "offset": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "Local offset of the shape from the entity's transform origin.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "radius": {
+                "description": "`sphere` and `capsule`. `> 0`.",
+                "format": "float",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "restitution": {
+                "default": 0.0,
+                "description": "Bounciness, `[0, 1]`. When two colliders touch, the **larger** of\nthe two restitutions applies (max-combine), so a bouncy ball bounces\non a plain floor exactly as its own value says.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "sensor": {
+                "default": false,
+                "description": "Sensors detect overlaps (trace events) but exert no forces.",
+                "type": "boolean"
+              },
+              "shape": {
+                "$ref": "#/$defs/ColliderShapeKind"
+              },
+              "type": {
+                "const": "Collider",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "shape"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -551,6 +947,34 @@
           "name"
         ],
         "type": "object"
+      },
+      "PhysicsSettings": {
+        "additionalProperties": false,
+        "description": "The scene-level `physics` block (M8).",
+        "properties": {
+          "gravity": {
+            "default": [
+              0.0,
+              -9.8100004196167,
+              0.0
+            ],
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "timestep_hz": {
+            "default": 60,
+            "description": "Fixed steps per simulated second. An **integer** deliberately: `1/60`\nhas no exact JSON representation, and an integer keeps scene files\nfree of float-precision noise. `dt = 1.0 / hz`, computed once,\nidentically everywhere. `>= 1`.",
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -565,6 +989,17 @@
       },
       "name": {
         "type": "string"
+      },
+      "physics": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PhysicsSettings"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Scene-level physics settings; absent means the defaults, so scenes\nwithout physics don't change (M8)."
       }
     },
     "required": [

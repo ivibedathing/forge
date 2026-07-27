@@ -23,7 +23,37 @@ use crate::validate;
 #[serde(deny_unknown_fields)]
 pub struct SceneFile {
     pub name: String,
+
+    /// Scene-level physics settings; absent means the defaults, so scenes
+    /// without physics don't change (M8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physics: Option<PhysicsSettings>,
+
     pub entities: Vec<EntityDef>,
+}
+
+/// The scene-level `physics` block (M8).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct PhysicsSettings {
+    #[schemars(with = "[f32; 3]")]
+    pub gravity: Vec3,
+
+    /// Fixed steps per simulated second. An **integer** deliberately: `1/60`
+    /// has no exact JSON representation, and an integer keeps scene files
+    /// free of float-precision noise. `dt = 1.0 / hz`, computed once,
+    /// identically everywhere. `>= 1`.
+    #[schemars(range(min = 1))]
+    pub timestep_hz: u32,
+}
+
+impl Default for PhysicsSettings {
+    fn default() -> Self {
+        Self {
+            gravity: Vec3::new(0.0, -9.81, 0.0),
+            timestep_hz: 60,
+        }
+    }
 }
 
 /// One entity in a scene file.
@@ -114,6 +144,10 @@ pub struct Scene {
     pub name: String,
     pub world: World,
 
+    /// Scene-level physics settings (defaults when the file has no
+    /// `physics` block) — carried so simulation commands need no re-parse.
+    pub physics: PhysicsSettings,
+
     /// Name lookup, mirroring the [`Name`] component so targeting an entity by
     /// name does not require scanning the world.
     by_name: HashMap<String, Entity>,
@@ -150,6 +184,7 @@ impl Scene {
 
     /// Spawn a parsed scene file into a fresh world.
     pub fn instantiate(file: SceneFile) -> Self {
+        let physics = file.physics.unwrap_or_default();
         let mut world = World::new();
         let mut by_name = HashMap::with_capacity(file.entities.len());
 
@@ -167,6 +202,7 @@ impl Scene {
 
         Self {
             name: file.name,
+            physics,
             world,
             by_name,
         }

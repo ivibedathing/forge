@@ -220,6 +220,149 @@ impl Default for AmbientLight {
     }
 }
 
+/// How a rigid body participates in simulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BodyKind {
+    /// Fully simulated: forces, gravity, collisions.
+    Dynamic,
+    /// Moved by writes to its `Transform`; pushes dynamics, is not pushed.
+    Kinematic,
+    /// Never moves. For platforms that also want a `RigidBody`; bare
+    /// `Collider`s without a `RigidBody` are static geometry too.
+    Fixed,
+}
+
+/// A simulated rigid body (M8). Requires a `Transform`; a **dynamic** body
+/// also requires a `Collider` (`missing_collider` — it would fall forever
+/// through everything).
+///
+/// Simulation state is derived, never authoritative: this component is the
+/// initial conditions, and `engine simulate --bake` writes the evolved values
+/// back as ordinary scene text.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RigidBody {
+    pub body: BodyKind,
+
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub linear_velocity: Vec3,
+
+    /// **Degrees per second**, `[x, y, z]` — the same units and axis order as
+    /// `Transform.rotation`, for the same reason: the agent that writes
+    /// `"rotation": [0, 45, 0]` writes `[0, 90, 0]` for a half-turn per
+    /// second. Converted to rad/s only at the physics-backend boundary.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub angular_velocity: Vec3,
+
+    /// Multiplier on scene gravity. `>= 0`.
+    #[serde(default = "one")]
+    #[schemars(range(min = 0.0))]
+    pub gravity_scale: f32,
+
+    /// `>= 0`.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub linear_damping: f32,
+
+    /// `>= 0`.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub angular_damping: f32,
+
+    /// Continuous collision detection, for small fast bodies that would
+    /// otherwise tunnel.
+    #[serde(default)]
+    pub ccd: bool,
+
+    /// Allow the solver to put this body to sleep once it settles.
+    #[serde(default = "yes")]
+    pub can_sleep: bool,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// The collision shape kinds `Collider.shape` may name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ColliderShapeKind {
+    Cuboid,
+    Sphere,
+    Capsule,
+}
+
+/// Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on
+/// the entity, this is static collision geometry — the common case for
+/// ground planes and walls.
+///
+/// One flat object discriminated by `shape` (the shape `jq` and an LLM
+/// handle best): `cuboid` uses `half_extents`, `sphere` uses `radius`,
+/// `capsule` (Y-axis) uses `half_height` + `radius`. Validation enforces
+/// which fields each shape requires and forbids — the file format is the
+/// contract, the flat Rust struct is how it stays walkable by the
+/// schema-driven validator and the editor's generated inspector.
+///
+/// `Transform.scale` scales the shape when the physics world is built — a
+/// cube scaled 2x collides 2x big, which is what the screenshot shows.
+/// Nonuniform scale on a round shape has no physics representation and is a
+/// validation error, never a silent approximation.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Collider {
+    pub shape: ColliderShapeKind,
+
+    /// `cuboid` only. Each component `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<[f32; 3]>")]
+    pub half_extents: Option<Vec3>,
+
+    /// `sphere` and `capsule`. `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
+
+    /// `capsule` only: half the cylindrical section's height. `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub half_height: Option<f32>,
+
+    /// `>= 0`.
+    #[serde(default = "half")]
+    #[schemars(range(min = 0.0))]
+    pub friction: f32,
+
+    /// Bounciness, `[0, 1]`. When two colliders touch, the **larger** of
+    /// the two restitutions applies (max-combine), so a bouncy ball bounces
+    /// on a plain floor exactly as its own value says.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub restitution: f32,
+
+    /// Mass comes from `density` x shape volume. `> 0`.
+    #[serde(default = "one")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub density: f32,
+
+    /// Sensors detect overlaps (trace events) but exert no forces.
+    #[serde(default)]
+    pub sensor: bool,
+
+    /// Local offset of the shape from the entity's transform origin.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub offset: Vec3,
+}
+
+fn half() -> f32 {
+    0.5
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -267,6 +410,8 @@ components!(
     Material,
     DirectionalLight,
     AmbientLight,
+    RigidBody,
+    Collider,
 );
 
 #[cfg(test)]
@@ -348,7 +493,9 @@ mod tests {
                 "Camera",
                 "Material",
                 "DirectionalLight",
-                "AmbientLight"
+                "AmbientLight",
+                "RigidBody",
+                "Collider"
             ]
         );
     }

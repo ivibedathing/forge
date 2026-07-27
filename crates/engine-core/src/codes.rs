@@ -95,6 +95,24 @@ registry! {
     VALIDATION_FAILED = "validation_failed", Input,
         "summary error after per-diagnostic reports; see the preceding lines";
 
+    // ── Physics (M8) ───────────────────────────────────────────────────
+    UNKNOWN_SHAPE = "unknown_shape", Input,
+        "a Collider names no known shape kind";
+    UNKNOWN_BODY_KIND = "unknown_body_kind", Input,
+        "a RigidBody names no known body kind";
+    INVALID_SHAPE_DIMENSION = "invalid_shape_dimension", Input,
+        "a collider dimension must be strictly positive";
+    SHAPE_FIELD_MISMATCH = "shape_field_mismatch", Input,
+        "a Collider field does not apply to its shape";
+    NONUNIFORM_SCALE_ON_ROUND_COLLIDER = "nonuniform_scale_on_round_collider", Input,
+        "sphere and capsule colliders cannot take a nonuniform Transform.scale";
+    INVALID_PHYSICS_VALUE = "invalid_physics_value", Input,
+        "a physics setting is outside its meaningful range";
+    MISSING_COLLIDER = "missing_collider", Input,
+        "a dynamic RigidBody has no Collider and would fall through everything";
+    MISSING_TRANSFORM = "missing_transform", Input,
+        "a RigidBody or Collider needs a Transform on the same entity";
+
     // ── Warnings (severity: "warning"; do not affect the exit code
     //    unless promoted by --strict) ────────────────────────────────────
     UNUSED_MATERIAL = "unused_material", Input,

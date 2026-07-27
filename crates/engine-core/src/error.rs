@@ -239,25 +239,39 @@ fn closest_match<'a>(
     (distance <= budget).then(|| best.to_string())
 }
 
+/// Optimal-string-alignment distance: Levenshtein plus adjacent
+/// transposition as a single edit. Transposing two letters ("cubiod",
+/// "dynmaic") is the most common typo there is; charging it two edits pushed
+/// real mistakes over the suggestion budget. Full matrix rather than rolling
+/// rows — suggestion strings are short, and the transposition case needs
+/// `d[i-2][j-2]` anyway.
 fn levenshtein(a: &str, b: &str) -> usize {
-    let b_chars: Vec<char> = b.chars().collect();
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (m, n) = (a.len(), b.len());
 
-    // Single-row DP: `prev[j]` is the distance for the previous `a` prefix.
-    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
-    let mut curr = vec![0usize; b_chars.len() + 1];
-
-    for (i, ca) in a.chars().enumerate() {
-        curr[0] = i + 1;
-        for (j, &cb) in b_chars.iter().enumerate() {
-            let substitution = prev[j] + usize::from(ca != cb);
-            let deletion = prev[j + 1] + 1;
-            let insertion = curr[j] + 1;
-            curr[j + 1] = substitution.min(deletion).min(insertion);
-        }
-        std::mem::swap(&mut prev, &mut curr);
+    let mut d = vec![vec![0usize; n + 1]; m + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for j in 0..=n {
+        d[0][j] = j;
     }
 
-    prev[b_chars.len()]
+    for i in 1..=m {
+        for j in 1..=n {
+            let substitution = d[i - 1][j - 1] + usize::from(a[i - 1] != b[j - 1]);
+            let deletion = d[i - 1][j] + 1;
+            let insertion = d[i][j - 1] + 1;
+            let mut best = substitution.min(deletion).min(insertion);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                best = best.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = best;
+        }
+    }
+
+    d[m][n]
 }
 
 #[cfg(test)]
@@ -272,6 +286,10 @@ mod tests {
         assert_eq!(levenshtein("abc", "abc"), 0);
         assert_eq!(levenshtein("meterial", "material"), 1);
         assert_eq!(levenshtein("kitten", "sitting"), 3);
+        // Adjacent transpositions are one edit (OSA), not two — the typo
+        // class the physics enums surfaced.
+        assert_eq!(levenshtein("cubiod", "cuboid"), 1);
+        assert_eq!(levenshtein("dynmaic", "dynamic"), 1);
     }
 
     #[test]
