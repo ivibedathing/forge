@@ -164,7 +164,8 @@ can run in CI.
    light, basic Phong or simplified PBR shader.
 6. **M5 — Validation + structured errors everywhere.** Make `engine validate`
    and `engine build` genuinely agent-friendly (this is as important as
-   rendering features — don't leave it to the end).
+   rendering features — don't leave it to the end). Full design in
+   `validation-design.md`.
 7. **M6 — Diff-render / visual regression tooling.**
 8. **M7+ — Physics, animation, scripting, editor UI (optional, later).**
 
