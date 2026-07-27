@@ -217,3 +217,36 @@ fn demo_scene_loads_and_draws_everything() {
         "Ground, Cube1, Cube2, Sphere1 — lights and camera draw nothing"
     );
 }
+
+/// The M7 write-through contract on the real M4 fixture: an inspector-style
+/// edit of one field produces exactly one changed line — no reordering, no
+/// reformatting, no churn (editor principle #5). This is the scriptable
+/// analog of milestone-verification-scenes.md step 2.
+#[test]
+fn formatter_edit_of_m4_fixture_changes_exactly_one_line() {
+    let source = repo_file("examples/scenes/verify/m4_lighting.json");
+    let edit = engine_core::formatter::SetComponentField {
+        entity: "SphereSmooth".into(),
+        component: "Material".into(),
+        field: "roughness".into(),
+        value: serde_json::json!(0.3),
+    };
+    let edited = engine_core::formatter::apply_set_component_field(&source, &edit).unwrap();
+
+    let changed: Vec<(&str, &str)> = source
+        .lines()
+        .zip(edited.lines())
+        .filter(|(a, b)| a != b)
+        .collect();
+    assert_eq!(source.lines().count(), edited.lines().count());
+    assert_eq!(changed.len(), 1, "one hunk, one line: {changed:?}");
+    assert!(changed[0].1.contains("0.3"), "{}", changed[0].1);
+
+    // And the edited scene still validates — the editor can never write a
+    // scene the engine rejects, for a value the schema allows.
+    let errors = engine_core::validate::validate_source(&edited, "edited.json");
+    assert!(
+        errors.iter().all(|e| e.is_warning() || e.error == "asset_not_found"),
+        "unexpected: {errors:?}"
+    );
+}

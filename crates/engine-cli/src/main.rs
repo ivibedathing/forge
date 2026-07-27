@@ -92,6 +92,21 @@ enum Command {
         max_diff_percent: f64,
     },
 
+    /// Open the GUI editor: a live, writable view onto the scene file.
+    Edit {
+        scene: PathBuf,
+        /// Read-only supervision mode: full viewport and inspection, writes
+        /// disabled.
+        #[arg(long)]
+        watch: bool,
+        /// Write one screenshot of the editor and exit (agent verification).
+        #[arg(long, hide = true)]
+        self_screenshot: Option<PathBuf>,
+        /// Delay before the self-screenshot, in milliseconds.
+        #[arg(long, hide = true, default_value_t = 1500)]
+        self_screenshot_after_ms: u64,
+    },
+
     /// Check scenes against the component schemas; report every error.
     Validate {
         #[arg(required = true, num_args = 1..)]
@@ -159,6 +174,17 @@ fn main() {
             threshold,
             max_diff_percent,
         ),
+        Command::Edit {
+            scene,
+            watch,
+            self_screenshot,
+            self_screenshot_after_ms,
+        } => engine_editor::run(engine_editor::EditorOptions {
+            scene,
+            watch_only: watch,
+            screenshot: self_screenshot,
+            screenshot_after_ms: self_screenshot_after_ms,
+        }),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::ListComponents => {
             print!("{}", engine_core::schema::canonical_json());

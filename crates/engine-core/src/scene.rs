@@ -40,6 +40,9 @@ pub struct EntityDef {
 /// One thing to draw, with its geometry resolved and its transform flattened.
 #[derive(Debug, Clone)]
 pub struct RenderItem {
+    /// The source entity's stable name (invariant 4) — how the editor's
+    /// picking and selection resolve a drawn thing back to the file.
+    pub entity: String,
     pub mesh: crate::mesh::MeshData,
     pub model: glam::Mat4,
     pub material: crate::components::Material,
@@ -266,7 +269,14 @@ impl Scene {
                 .map(|m| *m)
                 .unwrap_or_default();
 
+            let name = self
+                .world
+                .get::<&Name>(entity)
+                .map(|n| n.0.clone())
+                .unwrap_or_default();
+
             items.push(RenderItem {
+                entity: name,
                 mesh: data,
                 model: transform.matrix(),
                 material,

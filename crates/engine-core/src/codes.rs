@@ -114,6 +114,16 @@ registry! {
     NO_ACTIVE_CAMERA = "no_active_camera", Input,
         "no camera is marked active and none was named";
 
+    // ── Editing (engine edit, formatter) ──────────────────────────────
+    EDIT_TARGET_MISSING = "edit_target_missing", Input,
+        "the entity, component, or field an edit targets is not in the file";
+    SCENE_WRITE_FAILED = "scene_write_failed", Environment,
+        "the scene file could not be written";
+    FORMATTER_DESYNC = "formatter_desync", Environment,
+        "internal bug: a formatted edit produced invalid JSON; nothing was written";
+    EDITOR_FAILED = "editor_failed", Environment,
+        "the editor window could not start or run";
+
     // ── Assets ─────────────────────────────────────────────────────────
     ASSET_NOT_FOUND = "asset_not_found", Input,
         "an asset reference names no builtin and no existing file";
