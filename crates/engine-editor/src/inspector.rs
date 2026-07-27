@@ -14,6 +14,16 @@ use serde_json::Value;
 
 use crate::gizmo::AXES;
 
+/// One committed inspector action. Field edits carry their value; structure
+/// edits (add/remove component) carry the component type — the doc resolves
+/// both against fresh file contents.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InspectorEdit {
+    Set(SetComponentField),
+    AddComponent(String),
+    RemoveComponent(String),
+}
+
 /// A number that came from an f32 widget, serialized shortest ("0.3", not
 /// "0.30000001192092896").
 pub fn number_from_f32(v: f32) -> Value {
@@ -64,7 +74,7 @@ pub fn ui(
     raw: &Value,
     entity: &str,
     read_only: bool,
-) -> Vec<SetComponentField> {
+) -> Vec<InspectorEdit> {
     let mut commits = Vec::new();
 
     let Some(entity_value) = raw["entities"]
@@ -75,13 +85,12 @@ pub fn ui(
         return commits;
     };
 
-    let components = entity_value["components"].as_array();
-    let Some(components) = components else {
-        ui.label("no components");
-        return commits;
-    };
+    let components = entity_value["components"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
-    for component in components {
+    for component in &components {
         let Some(type_name) = component["type"].as_str() else {
             ui.label("component without a \"type\"");
             continue;
@@ -94,7 +103,19 @@ pub fn ui(
         });
 
         ui.separator();
-        ui.strong(type_name);
+        ui.horizontal(|ui| {
+            ui.strong(type_name);
+            if !read_only {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let remove = ui
+                        .small_button("❌")
+                        .on_hover_text(format!("remove {type_name}"));
+                    if remove.clicked() {
+                        commits.push(InspectorEdit::RemoveComponent(type_name.to_string()));
+                    }
+                });
+            }
+        });
 
         let Some(variant) = variant else {
             ui.colored_label(
@@ -128,14 +149,36 @@ pub fn ui(
                 read_only,
             );
             if let Some(value) = commit {
-                commits.push(SetComponentField {
+                commits.push(InspectorEdit::Set(SetComponentField {
                     entity: entity.to_string(),
                     component: type_name.to_string(),
                     field: field.clone(),
                     value,
-                });
+                }));
             }
         }
+    }
+
+    if !read_only {
+        ui.separator();
+        let present: Vec<&str> = components
+            .iter()
+            .filter_map(|c| c["type"].as_str())
+            .collect();
+        ui.menu_button("+ add component", |ui| {
+            for variant in schema["oneOf"].as_array().into_iter().flatten() {
+                let Some(name) = variant["properties"]["type"]["const"].as_str() else {
+                    continue;
+                };
+                if present.contains(&name) {
+                    continue;
+                }
+                if ui.button(name).clicked() {
+                    commits.push(InspectorEdit::AddComponent(name.to_string()));
+                    ui.close();
+                }
+            }
+        });
     }
 
     commits
@@ -166,6 +209,13 @@ fn vec3_style(field: &str) -> (f64, usize, &'static str) {
         "angular_velocity" => (0.5, 1, "°/s"),
         _ => (0.01, 3, ""),
     }
+}
+
+/// A `[f32; 3]` whose components live in `[0, 1]` is a color — that range
+/// on a triple means linear RGB everywhere in the schema (`albedo`,
+/// `emissive`, light `color`), and nothing else uses it.
+fn is_color(property: &Value) -> bool {
+    bounds_of(&property["items"]) == (0.0, 1.0)
 }
 
 /// One field's widget row. Returns the committed value when this frame ended
@@ -273,9 +323,27 @@ fn vec3_widget(
     let (min, max) = bounds_of(&property["items"]);
     let (speed, decimals, suffix) = vec3_style(field);
 
-    ui.label(field);
     let mut changed = false;
     let mut gesture_ended = false;
+    let mut mid_gesture = false;
+
+    ui.horizontal(|ui| {
+        ui.label(field);
+        if is_color(property) {
+            // Color values are linear RGB — exactly what the egui picker
+            // edits — so no conversion on either side.
+            let mut rgb = [values[0] as f32, values[1] as f32, values[2] as f32];
+            let response = ui.color_edit_button_rgb(&mut rgb);
+            if response.changed() {
+                values = rgb.iter().map(|&v| f64::from(v)).collect();
+                changed = true;
+            }
+            // The picker lives in a popup with no gesture-end signal of its
+            // own; the write happens when the popup closes.
+            mid_gesture |= egui::Popup::is_any_open(ui.ctx());
+        }
+    });
+
     let row_height = ui.spacing().interact_size.y;
     for (value, (letter, color)) in values.iter_mut().zip(axis_labels(field)) {
         ui.horizontal(|ui| {
@@ -293,6 +361,7 @@ fn vec3_widget(
             );
             changed |= response.changed();
             gesture_ended |= response.drag_stopped() || response.lost_focus();
+            mid_gesture |= response.dragged() || response.has_focus();
         });
     }
 
@@ -300,7 +369,7 @@ fn vec3_widget(
         let array: Vec<Value> = values.iter().map(|v| number_from_f32(*v as f32)).collect();
         state.staged.insert(key.to_string(), Value::Array(array));
     }
-    if gesture_ended {
+    if gesture_ended || (state.staged.contains_key(key) && !mid_gesture && !changed) {
         if let Some(staged) = state.staged.remove(key) {
             if &staged != current {
                 return Some(staged);
@@ -347,7 +416,7 @@ mod tests {
         });
         let mut state = InspectorState::default();
         let mut harness = egui_kittest::Harness::builder()
-            .with_size(egui::Vec2::new(320.0, 480.0))
+            .with_size(egui::Vec2::new(320.0, 720.0))
             .build_ui(|ui| {
                 ui.heading("inspector");
                 ui.strong("Cube1");
@@ -378,6 +447,72 @@ mod tests {
         assert_eq!(vec3_style("rotation"), (0.5, 1, "°"));
         assert_eq!(vec3_style("angular_velocity"), (0.5, 1, "°/s"));
         assert_eq!(vec3_style("position"), (0.01, 3, ""));
+    }
+
+    /// Drives the real widgets: opening "+ add component" and choosing an
+    /// absent type emits `AddComponent`; the header ❌ emits
+    /// `RemoveComponent`. The formatter tests own what the splices do to
+    /// the file; this pins that the UI actually asks for them.
+    #[test]
+    fn add_menu_and_remove_button_emit_structure_edits() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use egui_kittest::kittest::Queryable;
+
+        let schema = engine_core::schema::component_schema();
+        let raw = serde_json::json!({
+            "entities": [{ "name": "Cube1", "components": [ { "type": "Material" } ] }]
+        });
+        let commits: Rc<RefCell<Vec<InspectorEdit>>> = Rc::default();
+        let sink = commits.clone();
+        let state = Rc::new(RefCell::new(InspectorState::default()));
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::Vec2::new(320.0, 720.0))
+            .build_ui(move |ui| {
+                let mut state = state.borrow_mut();
+                let edits = super::ui(ui, &mut state, &schema, &raw, "Cube1", false);
+                sink.borrow_mut().extend(edits);
+            });
+        harness.run();
+
+        harness.get_by_label("+ add component").click();
+        harness.run();
+        harness.get_by_label("Mesh").click();
+        harness.run();
+        harness.get_by_label("❌").click();
+        harness.run();
+
+        let commits = commits.borrow();
+        assert!(
+            commits.contains(&InspectorEdit::AddComponent("Mesh".into())),
+            "{commits:?}"
+        );
+        assert!(
+            commits.contains(&InspectorEdit::RemoveComponent("Material".into())),
+            "{commits:?}"
+        );
+    }
+
+    #[test]
+    fn color_detection_is_exactly_the_unit_range_triples() {
+        let schema = engine_core::schema::component_schema();
+        let property_of = |component: &str, field: &str| {
+            schema["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["properties"]["type"]["const"] == component)
+                .unwrap()["properties"][field]
+                .clone()
+        };
+        assert!(is_color(&property_of("Material", "albedo")));
+        assert!(is_color(&property_of("Material", "emissive")));
+        assert!(is_color(&property_of("DirectionalLight", "color")));
+        assert!(is_color(&property_of("AmbientLight", "color")));
+        assert!(!is_color(&property_of("Transform", "position")));
+        assert!(!is_color(&property_of("Transform", "scale")));
+        assert!(!is_color(&property_of("Collider", "offset")));
     }
 
     #[test]

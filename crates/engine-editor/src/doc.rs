@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use engine_core::formatter::{self, AddEntity, SetComponentField};
+use engine_core::formatter::{self, AddComponent, AddEntity, RemoveComponent, SetComponentField};
 use engine_core::scene::{RenderItem, ResolvedLights};
 use engine_core::{EngineError, Scene, SceneFile};
 
@@ -167,6 +167,60 @@ impl SceneDoc {
             Err(e) => {
                 self.notice = Some(format!("edit dropped — {}", e.message));
             }
+        }
+    }
+
+    /// Add a component (all fields at their documented defaults) to an
+    /// entity — same commit shape as [`apply`](Self::apply): fresh read,
+    /// rebase by name, atomic write, reload.
+    pub fn add_component(&mut self, entity: &str, component: &str) {
+        let fresh = match std::fs::read_to_string(&self.path) {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                self.notice = Some(format!("edit dropped — cannot read file: {e}"));
+                return;
+            }
+        };
+        let edit = AddComponent {
+            entity: entity.to_string(),
+            component: component.to_string(),
+            fields: vec![],
+        };
+        match formatter::apply_add_component(&fresh, &edit) {
+            Ok(edited) => match formatter::write_atomic(&self.path, &edited) {
+                Ok(()) => {
+                    self.notice = Some(format!("added {component} to {entity}"));
+                    self.reload_from(edited);
+                }
+                Err(e) => self.notice = Some(format!("write failed: {}", e.message)),
+            },
+            Err(e) => self.notice = Some(format!("edit dropped — {}", e.message)),
+        }
+    }
+
+    /// Remove a component from an entity; a target that vanished under a
+    /// concurrent writer drops the edit with a notice, never guesses.
+    pub fn remove_component(&mut self, entity: &str, component: &str) {
+        let fresh = match std::fs::read_to_string(&self.path) {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                self.notice = Some(format!("edit dropped — cannot read file: {e}"));
+                return;
+            }
+        };
+        let edit = RemoveComponent {
+            entity: entity.to_string(),
+            component: component.to_string(),
+        };
+        match formatter::apply_remove_component(&fresh, &edit) {
+            Ok(edited) => match formatter::write_atomic(&self.path, &edited) {
+                Ok(()) => {
+                    self.notice = Some(format!("removed {component} from {entity}"));
+                    self.reload_from(edited);
+                }
+                Err(e) => self.notice = Some(format!("write failed: {}", e.message)),
+            },
+            Err(e) => self.notice = Some(format!("edit dropped — {}", e.message)),
         }
     }
 

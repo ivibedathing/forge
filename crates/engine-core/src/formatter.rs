@@ -422,15 +422,39 @@ pub fn apply_add_entity(source: &str, edit: &AddEntity) -> Result<String> {
         .entity(&edit.name));
     }
 
+    append_array_item(
+        source,
+        "/entities",
+        entities.len(),
+        &entity_text_inline(edit),
+        &|indent| entity_text(edit, indent),
+    )
+}
+
+/// Append an item to the array at `array_pointer`, matching the array's own
+/// layout: multi-line arrays gain an indented block (via `block_text`, which
+/// receives the indentation of the array's items), inline arrays gain
+/// `, inline_text`. The bytes before and after the insertion point stay
+/// untouched.
+fn append_array_item(
+    source: &str,
+    array_pointer: &str,
+    item_count: usize,
+    inline_text: &str,
+    block_text: &dyn Fn(&str) -> String,
+) -> Result<String> {
     let index = SpanIndex::new(source);
-    let span = index.span_of("/entities").ok_or_else(|| {
-        EngineError::new(codes::EDIT_TARGET_MISSING, "no entities array to append to")
-            .path("/entities")
+    let span = index.span_of(array_pointer).ok_or_else(|| {
+        EngineError::new(
+            codes::EDIT_TARGET_MISSING,
+            format!("no array at {array_pointer:?} to append to"),
+        )
+        .path(array_pointer)
     })?;
     let inner = &source[span.start + 1..span.end - 1];
 
-    // Directly after the last entity's closing brace (or after `[` when
-    // empty), so the bytes before and after the insertion stay untouched.
+    // Directly after the last item's end (or after `[` when empty), so the
+    // bytes before and after the insertion stay untouched.
     let insert_at = span.start
         + 1
         + inner
@@ -438,33 +462,209 @@ pub fn apply_add_entity(source: &str, edit: &AddEntity) -> Result<String> {
             .map_or(0, |i| i + inner[i..].chars().next().map_or(1, char::len_utf8));
 
     let insertion = if inner.contains('\n') {
-        // Multi-line array: match the first entity's indentation, or step
+        // Multi-line array: match the first item's indentation, or step
         // once in from the array's own line when it is empty.
-        let indent = match index.span_of("/entities/0") {
+        let indent = match index.span_of(&format!("{array_pointer}/0")) {
             Some(first) => line_indent(source, first.start),
             None => format!("{}  ", line_indent(source, span.start)),
         };
-        let text = entity_text(edit, &indent);
-        if entities.is_empty() {
+        let text = block_text(&indent);
+        if item_count == 0 {
             format!("\n{text}")
         } else {
             format!(",\n{text}")
         }
-    } else if entities.is_empty() {
+    } else if item_count == 0 {
         if inner.is_empty() {
-            format!(" {} ", entity_text_inline(edit))
+            format!(" {inline_text} ")
         } else {
-            entity_text_inline(edit)
+            inline_text.to_string()
         }
     } else {
-        format!(", {}", entity_text_inline(edit))
+        format!(", {inline_text}")
     };
 
     let mut edited = String::with_capacity(source.len() + insertion.len());
     edited.push_str(&source[..insert_at]);
     edited.push_str(&insertion);
     edited.push_str(&source[insert_at..]);
-    check_still_parses(&edited, "/entities")?;
+    check_still_parses(&edited, array_pointer)?;
+    Ok(edited)
+}
+
+/// Add a component to an existing entity — the inspector's "+ add
+/// component". Addressed by entity `name`, like every other mutation, so it
+/// rebases onto fresh file contents. A type the entity already has is
+/// `duplicate_component` (the same code the validator would raise); the
+/// usual authoring shape is an empty `fields` — absent fields *are* the
+/// documented defaults, and the inspector shows them editable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddComponent {
+    pub entity: String,
+    pub component: String,
+    /// Fields in authoring order, usually empty.
+    pub fields: Vec<(String, Value)>,
+}
+
+/// Apply an [`AddComponent`]: splice `{ "type": ..., ... }` into the
+/// entity's `components` array, matching its layout. An entity with no
+/// `components` key at all gains one holding just the new component.
+pub fn apply_add_component(source: &str, edit: &AddComponent) -> Result<String> {
+    let root: Value = serde_json::from_str(source).map_err(|e| {
+        EngineError::new(
+            codes::EDIT_TARGET_MISSING,
+            format!("cannot edit a file that no longer parses: {e}"),
+        )
+    })?;
+    let entities = root["entities"].as_array().ok_or_else(|| {
+        EngineError::new(codes::EDIT_TARGET_MISSING, "the file has no entities array")
+    })?;
+    let entity_index = entities
+        .iter()
+        .position(|e| e["name"] == edit.entity.as_str())
+        .ok_or_else(|| {
+            EngineError::new(
+                codes::EDIT_TARGET_MISSING,
+                format!("entity {:?} is no longer in the file", edit.entity),
+            )
+            .entity(&edit.entity)
+        })?;
+
+    let components = entities[entity_index]["components"].as_array();
+    if components.is_some_and(|cs| cs.iter().any(|c| c["type"] == edit.component.as_str())) {
+        return Err(EngineError::new(
+            codes::DUPLICATE_COMPONENT,
+            format!(
+                "entity {:?} already has a {} component",
+                edit.entity, edit.component
+            ),
+        )
+        .entity(&edit.entity)
+        .component(&edit.component));
+    }
+
+    let text = component_text(&edit.component, &edit.fields);
+    match components {
+        Some(existing) => append_array_item(
+            source,
+            &format!("/entities/{entity_index}/components"),
+            existing.len(),
+            &text,
+            &|indent| format!("{indent}{text}"),
+        ),
+        None => {
+            // No components array at all: the new key's value is authored as
+            // text (via a placeholder splice) so it lands in scene style, not
+            // serde's compact form.
+            let edited = insert_key(
+                source,
+                &format!("/entities/{entity_index}"),
+                "components",
+                &Value::Array(vec![]),
+            )?;
+            append_array_item(
+                &edited,
+                &format!("/entities/{entity_index}/components"),
+                0,
+                &text,
+                &|indent| format!("{indent}{text}"),
+            )
+        }
+    }
+}
+
+/// Remove one component from an entity — the inspector's per-component "✕".
+/// Addressed by entity `name` and component `type`; a vanished target is
+/// `edit_target_missing`, and the caller drops the edit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveComponent {
+    pub entity: String,
+    pub component: String,
+}
+
+/// Apply a [`RemoveComponent`]: delete exactly the component's bytes plus
+/// the one separating comma, leaving every other byte in place. Removing the
+/// only component leaves `[]`.
+pub fn apply_remove_component(source: &str, edit: &RemoveComponent) -> Result<String> {
+    let root: Value = serde_json::from_str(source).map_err(|e| {
+        EngineError::new(
+            codes::EDIT_TARGET_MISSING,
+            format!("cannot edit a file that no longer parses: {e}"),
+        )
+    })?;
+    let entities = root["entities"].as_array().ok_or_else(|| {
+        EngineError::new(codes::EDIT_TARGET_MISSING, "the file has no entities array")
+    })?;
+    let entity_index = entities
+        .iter()
+        .position(|e| e["name"] == edit.entity.as_str())
+        .ok_or_else(|| {
+            EngineError::new(
+                codes::EDIT_TARGET_MISSING,
+                format!("entity {:?} is no longer in the file", edit.entity),
+            )
+            .entity(&edit.entity)
+        })?;
+    let components = entities[entity_index]["components"]
+        .as_array()
+        .ok_or_else(|| {
+            EngineError::new(
+                codes::EDIT_TARGET_MISSING,
+                format!("entity {:?} has no components array", edit.entity),
+            )
+            .entity(&edit.entity)
+        })?;
+    let component_index = components
+        .iter()
+        .position(|c| c["type"] == edit.component.as_str())
+        .ok_or_else(|| {
+            EngineError::new(
+                codes::EDIT_TARGET_MISSING,
+                format!(
+                    "entity {:?} no longer has a {} component",
+                    edit.entity, edit.component
+                ),
+            )
+            .entity(&edit.entity)
+            .component(&edit.component)
+        })?;
+
+    let base = format!("/entities/{entity_index}/components");
+    let index = SpanIndex::new(source);
+    let span_of = |pointer: &str| {
+        index.span_of(pointer).ok_or_else(|| {
+            EngineError::new(
+                codes::EDIT_TARGET_MISSING,
+                format!("nothing at {pointer:?} to edit"),
+            )
+            .path(pointer)
+        })
+    };
+
+    let (cut_start, cut_end, replacement) = if components.len() == 1 {
+        // The only component: the array collapses to `[]`.
+        let array = span_of(&base)?;
+        (array.start, array.end, "[]")
+    } else if component_index + 1 < components.len() {
+        // Not the last: cut from this component's start to the next one's,
+        // which eats the separating comma and keeps this one's indentation
+        // bytes for its successor.
+        let this = span_of(&format!("{base}/{component_index}"))?;
+        let next = span_of(&format!("{base}/{}", component_index + 1))?;
+        (this.start, next.start, "")
+    } else {
+        // The last: cut from the previous component's end through this one's,
+        // eating the comma and the line break before it.
+        let previous = span_of(&format!("{base}/{}", component_index - 1))?;
+        let this = span_of(&format!("{base}/{component_index}"))?;
+        (previous.end, this.end, "")
+    };
+
+    let mut edited = String::with_capacity(source.len());
+    edited.push_str(&source[..cut_start]);
+    edited.push_str(replacement);
+    edited.push_str(&source[cut_end..]);
+    check_still_parses(&edited, &base)?;
     Ok(edited)
 }
 
@@ -801,6 +1001,152 @@ mod tests {
         let err = apply_add_entity(SCENE, &edit).unwrap_err();
         assert_eq!(err.error, "duplicate_entity_name");
         assert_eq!(err.context().unwrap().entity.as_deref(), Some("Sphere"));
+    }
+
+    #[test]
+    fn add_component_appends_in_array_style_and_touches_nothing_else() {
+        let edit = AddComponent {
+            entity: "Camera1".into(),
+            component: "Transform".into(),
+            fields: vec![],
+        };
+        let edited = apply_add_component(SCENE, &edit).unwrap();
+        // Camera1's components array is inline; the new component joins it
+        // inline, and only that line changes.
+        assert!(
+            edited.contains(
+                "[ { \"type\": \"Camera\", \"active\": true }, { \"type\": \"Transform\" } ]"
+            ),
+            "{edited}"
+        );
+        let changed = SCENE
+            .lines()
+            .zip(edited.lines())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(changed, 1);
+
+        // The Sphere's components array is multi-line; a new component gets
+        // its own correctly indented line.
+        let edit = AddComponent {
+            entity: "Sphere".into(),
+            component: "RigidBody".into(),
+            fields: vec![("body".into(), json!("dynamic"))],
+        };
+        let edited = apply_add_component(SCENE, &edit).unwrap();
+        assert!(
+            edited.contains(
+                "{ \"type\": \"Material\", \"albedo\": [0.9, 0.1, 0.1], \"roughness\": 0.4 },\n        \
+                 { \"type\": \"RigidBody\", \"body\": \"dynamic\" }\n"
+            ),
+            "{edited}"
+        );
+        let root: Value = serde_json::from_str(&edited).unwrap();
+        assert_eq!(root["entities"][0]["components"][3]["body"], json!("dynamic"));
+    }
+
+    #[test]
+    fn add_component_creates_a_missing_components_array() {
+        let source = r#"{"name":"s","entities":[{"name":"A"}]}"#;
+        let edit = AddComponent {
+            entity: "A".into(),
+            component: "Transform".into(),
+            fields: vec![],
+        };
+        let edited = apply_add_component(source, &edit).unwrap();
+        let root: Value = serde_json::from_str(&edited).unwrap();
+        assert_eq!(root["entities"][0]["components"][0]["type"], json!("Transform"));
+    }
+
+    #[test]
+    fn add_component_refuses_a_duplicate_type() {
+        let edit = AddComponent {
+            entity: "Sphere".into(),
+            component: "Material".into(),
+            fields: vec![],
+        };
+        let err = apply_add_component(SCENE, &edit).unwrap_err();
+        assert_eq!(err.error, "duplicate_component");
+        assert_eq!(err.context().unwrap().component.as_deref(), Some("Material"));
+    }
+
+    #[test]
+    fn add_component_against_a_vanished_entity_reports_not_corrupts() {
+        let edit = AddComponent {
+            entity: "Gone".into(),
+            component: "Material".into(),
+            fields: vec![],
+        };
+        let err = apply_add_component(SCENE, &edit).unwrap_err();
+        assert_eq!(err.error, "edit_target_missing");
+    }
+
+    #[test]
+    fn remove_component_cuts_exactly_one_line_from_a_multiline_array() {
+        // Middle component.
+        let edit = RemoveComponent {
+            entity: "Sphere".into(),
+            component: "Mesh".into(),
+        };
+        let edited = apply_remove_component(SCENE, &edit).unwrap();
+        assert!(!edited.contains("\"type\": \"Mesh\""), "{edited}");
+        assert_eq!(SCENE.lines().count(), edited.lines().count() + 1);
+        let root: Value = serde_json::from_str(&edited).unwrap();
+        assert_eq!(root["entities"][0]["components"].as_array().unwrap().len(), 2);
+        assert_eq!(root["entities"][0]["components"][1]["type"], json!("Material"));
+
+        // Last component: the predecessor keeps its bytes, loses its comma.
+        let edit = RemoveComponent {
+            entity: "Sphere".into(),
+            component: "Material".into(),
+        };
+        let edited = apply_remove_component(SCENE, &edit).unwrap();
+        assert!(
+            edited.contains("{ \"type\": \"Mesh\", \"asset\": \"builtin:sphere\" }\n      ]"),
+            "{edited}"
+        );
+        assert_eq!(SCENE.lines().count(), edited.lines().count() + 1);
+    }
+
+    #[test]
+    fn remove_only_component_leaves_an_empty_array() {
+        let edit = RemoveComponent {
+            entity: "Camera1".into(),
+            component: "Camera".into(),
+        };
+        let edited = apply_remove_component(SCENE, &edit).unwrap();
+        assert!(
+            edited.contains("{ \"name\": \"Camera1\", \"components\": [] }"),
+            "{edited}"
+        );
+        serde_json::from_str::<Value>(&edited).unwrap();
+    }
+
+    #[test]
+    fn remove_component_addresses_by_name_and_type_not_index() {
+        let reordered = {
+            let mut root: Value = serde_json::from_str(SCENE).unwrap();
+            root["entities"].as_array_mut().unwrap().reverse();
+            serde_json::to_string_pretty(&root).unwrap()
+        };
+        let edit = RemoveComponent {
+            entity: "Sphere".into(),
+            component: "Material".into(),
+        };
+        let edited = apply_remove_component(&reordered, &edit).unwrap();
+        let root: Value = serde_json::from_str(&edited).unwrap();
+        assert_eq!(root["entities"][1]["components"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn remove_component_against_a_vanished_target_reports_not_corrupts() {
+        let edit = RemoveComponent {
+            entity: "Sphere".into(),
+            component: "Camera".into(),
+        };
+        let err = apply_remove_component(SCENE, &edit).unwrap_err();
+        assert_eq!(err.error, "edit_target_missing");
+        assert_eq!(err.context().unwrap().component.as_deref(), Some("Camera"));
     }
 
     #[test]
