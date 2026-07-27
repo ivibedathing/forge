@@ -1,0 +1,57 @@
+{
+  "name": "mesh_import",
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform",
+          "position": [0.0, 0.0, 0.0],
+          "rotation": [0.0, 0.0, 0.0],
+          "scale":    [8.0, 1.0, 8.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material",
+          "albedo": [0.35, 0.4, 0.32],
+          "metallic": 0.0,
+          "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "Pyramid",
+      "components": [
+        { "type": "Transform",
+          "position": [0.0, 0.0, 0.0],
+          "rotation": [0.0, 30.0, 0.0],
+          "scale":    [1.6, 1.6, 1.6] },
+        { "type": "Mesh", "asset": "../meshes/pyramid.gltf" },
+        { "type": "Material",
+          "albedo": [0.9, 0.6, 0.15],
+          "metallic": 0.0,
+          "roughness": 0.7 }
+      ]
+    },
+    {
+      "name": "Cube1",
+      "components": [
+        { "type": "Transform",
+          "position": [-2.1, 0.35, -0.8],
+          "rotation": [0.0, 15.0, 0.0],
+          "scale":    [0.7, 0.7, 0.7] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material",
+          "albedo": [0.2, 0.35, 0.9],
+          "metallic": 0.0,
+          "roughness": 0.6 }
+      ]
+    },
+    {
+      "name": "Player",
+      "components": [
+        { "type": "Transform",
+          "position": [0.0, 2.2, 6.0],
+          "rotation": [-14.0, 0.0, 0.0],
+          "scale":    [1.0, 1.0, 1.0] },
+        { "type": "Camera", "fov": 50.0, "near": 0.1, "far": 100.0, "active": true }
+      ]
+    }
+  ]
+}

@@ -11,12 +11,14 @@
 //! source supplies the line numbers that `serde_json::Value` discards
 //! (invariant 6: every error names its file and line).
 
+use std::path::Path;
+
 use serde_json::Value;
 
 use crate::components::ComponentData;
 use crate::error::EngineError;
 use crate::lineindex::LineIndex;
-use crate::mesh::BuiltinMesh;
+use crate::mesh::MeshAsset;
 
 /// Validate a scene file's contents. An empty result means the scene is valid.
 pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
@@ -328,10 +330,13 @@ fn check_component(
 
     match parsed {
         // An unresolvable mesh asset is a validation error, never a silent
-        // fallback (design doc §5). BuiltinMesh::from_asset is the resolver
-        // seam that M3's file loading will widen.
+        // fallback (design doc §5). Resolution is against the scene file's own
+        // directory, because that is what relative asset paths mean. This
+        // checks the reference (existence, extension); whether the file
+        // *parses* is checked by `engine validate` through engine-assets.
         ComponentData::Mesh(mesh) => {
-            if let Err(resolve) = BuiltinMesh::from_asset(&mesh.asset) {
+            let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+            if let Err(resolve) = MeshAsset::resolve(&mesh.asset, base_dir) {
                 let mut error = cx
                     .err(
                         resolve.error,
@@ -552,8 +557,8 @@ mod tests {
 
     #[test]
     fn rejects_an_unresolvable_mesh_asset_at_validation_time() {
-        // Design doc §5: never a silent fallback. File paths are the M3
-        // feature, so today they fail validation with a pointer to what works.
+        // Design doc §5: never a silent fallback. This mesh file does not
+        // exist next to the scene, so validation must say so.
         let source = r#"{"name":"s","entities":[
             {"name":"Cube1","components":[{"type":"Mesh","asset":"meshes/cube.glb"}]}
         ]}"#;
@@ -564,6 +569,33 @@ mod tests {
         let context = errors[0].context().unwrap();
         assert_eq!(context.entity.as_deref(), Some("Cube1"));
         assert_eq!(context.field.as_deref(), Some("asset"));
+    }
+
+    #[test]
+    fn accepts_a_mesh_file_that_exists_next_to_the_scene() {
+        // Asset paths resolve relative to the scene file, so validation of the
+        // same source succeeds or fails with the scene's location.
+        let dir = std::env::temp_dir().join(format!("engine-validate-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        std::fs::write(dir.join("meshes/thing.gltf"), b"{}").unwrap();
+
+        let source = r#"{"name":"s","entities":[
+            {"name":"Thing","components":[{"type":"Mesh","asset":"meshes/thing.gltf"}]}
+        ]}"#;
+        let scene_path = dir.join("scene.json").display().to_string();
+        let errors = validate_source(source, &scene_path);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(errors.is_empty(), "{:?}", errors);
+    }
+
+    #[test]
+    fn rejects_a_mesh_format_the_loader_does_not_read() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Cube1","components":[{"type":"Mesh","asset":"meshes/cube.obj"}]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].error, "asset_unsupported");
     }
 
     #[test]

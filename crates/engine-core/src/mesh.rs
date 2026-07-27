@@ -1,14 +1,13 @@
-//! Geometry, and the built-in primitives available before the asset pipeline
-//! exists.
+//! Geometry: built-in primitives, and the resolution of `Mesh.asset` strings.
 //!
 //! Mesh data lives here rather than in `engine-render` so it stays testable
 //! without a GPU and so `engine validate` can resolve asset references without
-//! linking wgpu.
-//!
-//! M3 replaces `from_asset`'s error arm with real glTF loading. Until then a
-//! scene that references a file gets a structured "not yet" rather than a
-//! silently empty render — an agent should never have to wonder whether a
-//! missing object means a bad transform or an unimplemented loader.
+//! linking wgpu. Reading actual glTF files needs the `gltf` crate and lives in
+//! `engine-assets`; this module owns everything about an asset *reference* that
+//! can be decided without parsing the file — is it a builtin, is the path
+//! relative, does the file exist, is the extension one the engine reads.
+
+use std::path::{Path, PathBuf};
 
 use glam::Vec3;
 
@@ -16,12 +15,14 @@ use crate::error::{EngineError, Result};
 
 /// CPU-side geometry, ready to upload.
 ///
-/// Positions and normals are parallel arrays of the same length; `indices`
-/// refers into them.
+/// Positions, normals, and uvs are parallel arrays of the same length;
+/// `indices` refers into them. UVs are carried from M3 so glTF files load them
+/// once; nothing samples a texture until M4.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeshData {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
 
@@ -51,28 +52,12 @@ impl BuiltinMesh {
     pub const ASSETS: &'static [&'static str] =
         &["builtin:cube", "builtin:plane", "builtin:triangle"];
 
-    /// Resolve a `Mesh { asset }` reference.
-    ///
-    /// Every failure is `asset_not_found` (design doc §5) — one code for an
-    /// agent to match on, with the message and `did_you_mean` carrying the
-    /// specifics. `engine validate` calls this, so a bad reference fails
-    /// validation rather than rendering an incomplete frame; render-time
-    /// callers keep it as a backstop.
-    pub fn from_asset(asset: &str) -> Result<Self> {
-        let Some(name) = asset.strip_prefix(Self::PREFIX) else {
-            return Err(EngineError::new(
-                "asset_not_found",
-                format!(
-                    "cannot load {asset:?}: mesh files are not loaded until M3 \
-                     (glTF asset pipeline). Use one of {} for now.",
-                    Self::ASSETS.join(", ")
-                ),
-            )
-            .field("asset")
-            .suggest_from(asset, Self::ASSETS.iter().copied()));
-        };
-
-        match name {
+    /// Parse a `builtin:` reference. `None` means the string is not a builtin
+    /// reference at all (it is a file path); `Some(Err)` means it claims to be
+    /// one but names no known primitive.
+    pub fn parse(asset: &str) -> Option<Result<Self>> {
+        let name = asset.strip_prefix(Self::PREFIX)?;
+        Some(match name {
             "cube" => Ok(Self::Cube),
             "plane" => Ok(Self::Plane),
             "triangle" => Ok(Self::Triangle),
@@ -82,7 +67,7 @@ impl BuiltinMesh {
             )
             .field("asset")
             .suggest_from(asset, Self::ASSETS.iter().copied())),
-        }
+        })
     }
 
     pub fn data(self) -> MeshData {
@@ -90,6 +75,141 @@ impl BuiltinMesh {
             Self::Cube => cube(),
             Self::Plane => plane(),
             Self::Triangle => triangle(),
+        }
+    }
+}
+
+/// File extensions the mesh loader reads, lowercase.
+pub const MESH_EXTENSIONS: &[&str] = &["gltf", "glb"];
+
+/// A `Mesh.asset` reference, resolved as far as it can be without opening the
+/// file.
+///
+/// This is the single seam between "what a scene says" and "what is on disk":
+/// `engine validate` calls [`MeshAsset::resolve`] to reject bad references
+/// before render time, and `engine-assets` calls it to decide what to load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MeshAsset {
+    Builtin(BuiltinMesh),
+    /// A mesh file, as `base_dir` + the reference's relative path.
+    File(PathBuf),
+}
+
+impl MeshAsset {
+    /// Resolve an asset reference against the directory of the scene file that
+    /// contains it (invariant 3: assets are referenced by relative path).
+    ///
+    /// Rejects, in order of usefulness to an agent: unknown builtins, absolute
+    /// paths, extensions the loader does not read, and files that do not
+    /// exist. A missing file suggests near-miss names from the directory it
+    /// should have been in, alongside the builtins.
+    pub fn resolve(asset: &str, base_dir: &Path) -> Result<Self> {
+        if let Some(builtin) = BuiltinMesh::parse(asset) {
+            return Ok(Self::Builtin(builtin?));
+        }
+
+        if Path::new(asset).is_absolute() {
+            return Err(EngineError::new(
+                "asset_path_not_relative",
+                format!(
+                    "mesh asset {asset:?} is an absolute path; assets are referenced \
+                     by path relative to the scene file, so scenes stay portable"
+                ),
+            )
+            .field("asset"));
+        }
+
+        let resolved = base_dir.join(asset);
+
+        match resolved.extension().and_then(|e| e.to_str()) {
+            Some(ext) if MESH_EXTENSIONS.contains(&ext.to_lowercase().as_str()) => {}
+            _ => {
+                return Err(EngineError::new(
+                    "asset_unsupported",
+                    format!(
+                        "mesh asset {asset:?} is not a format the engine reads; \
+                         use a .gltf or .glb file, or one of {}",
+                        BuiltinMesh::ASSETS.join(", ")
+                    ),
+                )
+                .field("asset"));
+            }
+        }
+
+        if !resolved.is_file() {
+            let candidates = sibling_candidates(asset, &resolved);
+            return Err(EngineError::new(
+                "asset_not_found",
+                format!(
+                    "no mesh file at {} (asset paths resolve relative to the scene file)",
+                    resolved.display()
+                ),
+            )
+            .field("asset")
+            .suggest_from(asset, candidates.iter().map(String::as_str)));
+        }
+
+        Ok(Self::File(resolved))
+    }
+}
+
+/// Things a missing asset reference could plausibly have meant: every builtin,
+/// plus every file actually present in the directory the reference points
+/// into, spelled the way the scene would spell it.
+fn sibling_candidates(asset: &str, resolved: &Path) -> Vec<String> {
+    let mut candidates: Vec<String> = BuiltinMesh::ASSETS.iter().map(|s| s.to_string()).collect();
+
+    let Some(dir) = resolved.parent() else {
+        return candidates;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return candidates;
+    };
+
+    let prefix = Path::new(asset).parent().filter(|p| !p.as_os_str().is_empty());
+    for entry in entries.flatten() {
+        if !entry.path().is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        candidates.push(match prefix {
+            Some(prefix) => format!("{}/{name}", prefix.display()),
+            None => name.to_string(),
+        });
+    }
+
+    candidates
+}
+
+/// Anything that can turn a `Mesh.asset` string into geometry.
+///
+/// `Scene::render_items` takes one of these, which is what keeps `engine-core`
+/// free of glTF parsing: the real file-reading implementation lives in
+/// `engine-assets`, and GPU-less contexts (unit tests, validation) use
+/// [`BuiltinAssets`].
+pub trait MeshSource {
+    fn load_mesh(&self, asset: &str) -> Result<MeshData>;
+}
+
+/// A [`MeshSource`] that resolves only `builtin:` primitives — for tests and
+/// other contexts with no asset directory to load from.
+pub struct BuiltinAssets;
+
+impl MeshSource for BuiltinAssets {
+    fn load_mesh(&self, asset: &str) -> Result<MeshData> {
+        match BuiltinMesh::parse(asset) {
+            Some(builtin) => Ok(builtin?.data()),
+            None => Err(EngineError::new(
+                "asset_not_found",
+                format!(
+                    "cannot load {asset:?}: only {} are available in this context \
+                     (mesh files load through engine-assets)",
+                    BuiltinMesh::ASSETS.join(", ")
+                ),
+            )
+            .field("asset")
+            .suggest_from(asset, BuiltinMesh::ASSETS.iter().copied())),
         }
     }
 }
@@ -109,14 +229,15 @@ fn quad(normal: Vec3, u: Vec3, v: Vec3, mesh: &mut MeshData) {
     let (u, v) = (u * 0.5, v * 0.5);
     let base = mesh.positions.len() as u32;
 
-    for corner in [
-        center - u - v,
-        center + u - v,
-        center + u + v,
-        center - u + v,
+    for (corner, uv) in [
+        (center - u - v, [0.0, 0.0]),
+        (center + u - v, [1.0, 0.0]),
+        (center + u + v, [1.0, 1.0]),
+        (center - u + v, [0.0, 1.0]),
     ] {
         mesh.positions.push(corner.to_array());
         mesh.normals.push(normal.to_array());
+        mesh.uvs.push(uv);
     }
 
     mesh.indices
@@ -128,6 +249,7 @@ fn cube() -> MeshData {
     let mut mesh = MeshData {
         positions: Vec::with_capacity(24),
         normals: Vec::with_capacity(24),
+        uvs: Vec::with_capacity(24),
         indices: Vec::with_capacity(36),
     };
 
@@ -147,6 +269,7 @@ fn plane() -> MeshData {
     let mut mesh = MeshData {
         positions: Vec::with_capacity(4),
         normals: Vec::with_capacity(4),
+        uvs: Vec::with_capacity(4),
         indices: Vec::with_capacity(6),
     };
     // Offset back to the origin: `quad` pushes the face out along its normal.
@@ -163,6 +286,7 @@ fn triangle() -> MeshData {
     MeshData {
         positions: vec![[-0.8, -0.6, 0.0], [0.8, -0.6, 0.0], [0.0, 0.8, 0.0]],
         normals: vec![[0.0, 0.0, 1.0]; 3],
+        uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
         indices: vec![0, 1, 2],
     }
 }
@@ -229,31 +353,88 @@ mod tests {
     }
 
     #[test]
-    fn resolves_builtin_assets() {
-        assert_eq!(
-            BuiltinMesh::from_asset("builtin:cube").unwrap(),
-            BuiltinMesh::Cube
-        );
+    fn every_primitive_keeps_its_arrays_parallel() {
+        for builtin in [BuiltinMesh::Cube, BuiltinMesh::Plane, BuiltinMesh::Triangle] {
+            let mesh = builtin.data();
+            assert_eq!(mesh.normals.len(), mesh.positions.len(), "{builtin:?}");
+            assert_eq!(mesh.uvs.len(), mesh.positions.len(), "{builtin:?}");
+        }
     }
 
     #[test]
-    fn explains_that_file_assets_arrive_at_m3() {
-        let err = BuiltinMesh::from_asset("meshes/cube.glb").unwrap_err();
-        assert_eq!(err.error, "asset_not_found");
-        assert!(
-            err.message.contains("M3"),
-            "the error should say when this will work: {}",
-            err.message
+    fn resolves_builtin_assets() {
+        assert_eq!(
+            MeshAsset::resolve("builtin:cube", Path::new("")).unwrap(),
+            MeshAsset::Builtin(BuiltinMesh::Cube)
         );
     }
 
     #[test]
     fn suggests_a_near_miss_builtin() {
-        let err = BuiltinMesh::from_asset("builtin:cuve").unwrap_err();
+        let err = MeshAsset::resolve("builtin:cuve", Path::new("")).unwrap_err();
         assert_eq!(err.error, "asset_not_found");
         assert_eq!(
             err.context().unwrap().did_you_mean.as_deref(),
             Some("builtin:cube")
         );
+    }
+
+    /// A directory containing one mesh file, torn down on drop.
+    struct AssetDir(PathBuf);
+
+    impl AssetDir {
+        fn with_file(test: &str, file: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("engine-mesh-{test}-{}", std::process::id()));
+            std::fs::create_dir_all(dir.join("meshes")).unwrap();
+            std::fs::write(dir.join(file), b"{}").unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for AssetDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn resolves_an_existing_mesh_file() {
+        let dir = AssetDir::with_file("exists", "meshes/pyramid.gltf");
+        let resolved = MeshAsset::resolve("meshes/pyramid.gltf", &dir.0).unwrap();
+        assert_eq!(resolved, MeshAsset::File(dir.0.join("meshes/pyramid.gltf")));
+    }
+
+    #[test]
+    fn rejects_an_absolute_asset_path() {
+        let err = MeshAsset::resolve("/etc/meshes/cube.glb", Path::new("")).unwrap_err();
+        assert_eq!(err.error, "asset_path_not_relative");
+    }
+
+    #[test]
+    fn rejects_an_extension_the_loader_does_not_read() {
+        let err = MeshAsset::resolve("meshes/cube.obj", Path::new("")).unwrap_err();
+        assert_eq!(err.error, "asset_unsupported");
+        assert!(err.message.contains(".gltf"), "{}", err.message);
+    }
+
+    #[test]
+    fn missing_file_suggests_a_sibling_from_its_directory() {
+        let dir = AssetDir::with_file("suggest", "meshes/pyramid.gltf");
+        let err = MeshAsset::resolve("meshes/pyramod.gltf", &dir.0).unwrap_err();
+        assert_eq!(err.error, "asset_not_found");
+        assert_eq!(
+            err.context().unwrap().did_you_mean.as_deref(),
+            Some("meshes/pyramid.gltf")
+        );
+    }
+
+    #[test]
+    fn builtin_source_loads_builtins_and_refuses_files() {
+        assert_eq!(
+            BuiltinAssets.load_mesh("builtin:plane").unwrap(),
+            BuiltinMesh::Plane.data()
+        );
+        let err = BuiltinAssets.load_mesh("meshes/cube.glb").unwrap_err();
+        assert_eq!(err.error, "asset_not_found");
     }
 }

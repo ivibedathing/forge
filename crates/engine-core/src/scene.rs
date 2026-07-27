@@ -179,13 +179,15 @@ impl Scene {
         }
     }
 
-    /// Flatten the world into a draw list.
+    /// Flatten the world into a draw list, resolving mesh assets via `assets`.
     ///
     /// Plain data with no GPU types, so the extraction is testable headlessly
-    /// and `engine-render` stays free of ECS queries. Entities without a `Mesh`
-    /// contribute nothing; a `Mesh` whose asset cannot be resolved is an error
+    /// and `engine-render` stays free of ECS queries. Callers with files to
+    /// load pass `engine-assets`' `AssetServer`; builtin-only contexts pass
+    /// [`BuiltinAssets`](crate::mesh::BuiltinAssets). Entities without a `Mesh`
+    /// contribute nothing; a `Mesh` whose asset cannot be loaded is an error
     /// rather than a silent omission.
-    pub fn render_items(&self) -> Result<Vec<RenderItem>> {
+    pub fn render_items(&self, assets: &dyn crate::mesh::MeshSource) -> Result<Vec<RenderItem>> {
         let mut items = Vec::new();
 
         for (entity, mesh) in self
@@ -193,7 +195,7 @@ impl Scene {
             .query::<(Entity, &crate::components::Mesh)>()
             .iter()
         {
-            let builtin = crate::mesh::BuiltinMesh::from_asset(&mesh.asset).map_err(|e| {
+            let data = assets.load_mesh(&mesh.asset).map_err(|e| {
                 // Name the entity so the agent knows which one to fix.
                 match self.world.get::<&Name>(entity) {
                     Ok(name) => e.entity(name.0.clone()),
@@ -209,7 +211,7 @@ impl Scene {
                 .unwrap_or_default();
 
             items.push(RenderItem {
-                mesh: builtin.data(),
+                mesh: data,
                 model: transform.matrix(),
                 albedo: material.albedo,
             });
@@ -267,6 +269,42 @@ mod tests {
 
         let mesh = scene.world.get::<&Mesh>(cube).unwrap();
         assert_eq!(mesh.asset, "builtin:cube");
+    }
+
+    #[test]
+    fn render_items_resolve_through_the_given_source() {
+        let scene = demo();
+        let items = scene
+            .render_items(&crate::mesh::BuiltinAssets)
+            .expect("demo scene is builtin-only");
+        assert_eq!(items.len(), 1, "one Mesh entity");
+        assert_eq!(items[0].mesh, crate::mesh::BuiltinMesh::Cube.data());
+    }
+
+    #[test]
+    fn render_items_name_the_entity_whose_asset_failed() {
+        let source = r#"{"name": "s", "entities": [
+            {"name": "Broken", "components": [{"type": "Mesh", "asset": "builtin:cube"}]}
+        ]}"#;
+        let mut scene = Scene::from_source(source, "s.json").unwrap();
+        // Corrupt the asset reference after load, so instantiation succeeds
+        // but resolution fails — the render-time backstop path.
+        let entity = scene.entity("Broken").unwrap();
+        scene
+            .world
+            .insert_one(
+                entity,
+                Mesh {
+                    asset: "builtin:nope".into(),
+                },
+            )
+            .unwrap();
+
+        let err = scene
+            .render_items(&crate::mesh::BuiltinAssets)
+            .unwrap_err();
+        assert_eq!(err.error, "asset_not_found");
+        assert_eq!(err.context().unwrap().entity.as_deref(), Some("Broken"));
     }
 
     #[test]

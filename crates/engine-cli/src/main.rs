@@ -119,7 +119,13 @@ fn validate(path: PathBuf) -> Result<()> {
         EngineError::new("scene_unreadable", format!("could not read scene: {e}")).file(&display)
     })?;
 
-    let errors = engine_core::validate::validate_source(&source, &display);
+    // Structural pass first; the asset pass assumes a well-formed scene, and
+    // mixing "your JSON is wrong" with "your glTF is corrupt" in one report
+    // would double-report every reference the structural pass rejected.
+    let mut errors = engine_core::validate::validate_source(&source, &display);
+    if errors.is_empty() {
+        errors = engine_assets::validate_scene_assets(&source, &display);
+    }
     if !errors.is_empty() {
         let count = errors.len();
         for error in errors {
@@ -154,7 +160,8 @@ fn screenshot(
 ) -> Result<()> {
     let scene = Scene::load(&scene_path)?;
     let (camera, camera_transform) = scene.camera(camera_name)?;
-    let items = scene.render_items()?;
+    let assets = engine_assets::AssetServer::for_scene(&scene_path);
+    let items = scene.render_items(&assets)?;
     let drawn = items.len();
 
     let image = engine_render::offscreen::render(
@@ -193,7 +200,8 @@ fn run_scene(
 ) -> Result<()> {
     let scene = Scene::load(&scene_path)?;
     let (camera, camera_transform) = scene.camera(camera_name)?;
-    let items = scene.render_items()?;
+    let assets = engine_assets::AssetServer::for_scene(&scene_path);
+    let items = scene.render_items(&assets)?;
     let title = format!("engine — {}", scene.name);
 
     run_app(ViewerApp::new(
