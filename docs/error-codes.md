@@ -47,6 +47,10 @@ build fails.
 | `asset_unsupported` | 1 | the asset's format or feature is not one the engine reads |
 | `asset_path_not_relative` | 1 | asset paths must be relative to the scene file |
 | `asset_load_failed` | 1 | the asset file exists but could not be parsed |
+| `render_mismatch` | 1 | the rendered scene differs from its baseline beyond tolerance |
+| `baseline_not_found` | 1 | the baseline PNG path does not exist |
+| `baseline_invalid` | 1 | the baseline file is not a decodable, non-empty PNG |
+| `dimension_mismatch` | 1 | the two images being compared have different dimensions |
 | `compile_error` | 1 | a rustc error, re-emitted with its file/line |
 | `compile_warning` | 1 | warning: a rustc warning, re-emitted with its file/line |
 | `build_failed` | 1 | summary error when cargo reports compile errors |

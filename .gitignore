@@ -5,6 +5,6 @@
 # Render output from `engine screenshot` / `engine diff-render`
 /out
 *.png
-!examples/**/baseline*.png
+!examples/**/baselines/*.png
 
 .DS_Store

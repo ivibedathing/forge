@@ -5,6 +5,7 @@
 //! `renderer`, `scene_renderer`, and `offscreen` know nothing about windows, so
 //! `engine screenshot` uses them directly.
 
+pub mod diff;
 pub mod gpu;
 pub mod offscreen;
 pub mod renderer;

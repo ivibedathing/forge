@@ -68,6 +68,30 @@ enum Command {
         height: u32,
     },
 
+    /// Render a scene and compare it against a baseline PNG.
+    ///
+    /// The scene renders at exactly the baseline's dimensions. Defaults are
+    /// bit-exact — right for same-machine regression checks; cross-adapter
+    /// comparisons start at --threshold 3 --max-diff-percent 0.1 and tighten
+    /// using the report's numbers. Bless baselines with `engine screenshot`.
+    DiffRender {
+        scene: PathBuf,
+        baseline: PathBuf,
+        /// Write the visual diff here (red: violation, yellow: within
+        /// threshold, faded gray: identical). Written on pass and fail.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Render from this entity's camera instead of the active one.
+        #[arg(long)]
+        camera: Option<String>,
+        /// Per-channel byte tolerance before a pixel counts as differing.
+        #[arg(long, default_value_t = 0)]
+        threshold: u8,
+        /// Allowed percentage of differing pixels.
+        #[arg(long, default_value_t = 0.0)]
+        max_diff_percent: f64,
+    },
+
     /// Check scenes against the component schemas; report every error.
     Validate {
         #[arg(required = true, num_args = 1..)]
@@ -120,6 +144,21 @@ fn main() {
             width,
             height,
         } => screenshot(scene, out, camera.as_deref(), width, height),
+        Command::DiffRender {
+            scene,
+            baseline,
+            out,
+            camera,
+            threshold,
+            max_diff_percent,
+        } => diff_render(
+            scene,
+            baseline,
+            out,
+            camera.as_deref(),
+            threshold,
+            max_diff_percent,
+        ),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::ListComponents => {
             print!("{}", engine_core::schema::canonical_json());
@@ -340,6 +379,132 @@ fn load_scene(path: &PathBuf) -> Result<Scene> {
             error.emit();
         }
         last
+    })
+}
+
+/// `engine diff-render` — render the scene at the baseline's dimensions and
+/// compare. The report goes to stdout on *both* pass and fail (a documented
+/// exception to "nothing on stdout on failure": a failing run still tells
+/// the agent exactly how much differs and where); on mismatch, additionally
+/// `render_mismatch` on stderr and exit 1.
+fn diff_render(
+    scene_path: PathBuf,
+    baseline_path: PathBuf,
+    out: Option<PathBuf>,
+    camera_name: Option<&str>,
+    threshold: u8,
+    max_diff_percent: f64,
+) -> Result<()> {
+    // Baseline first: it is cheap, needs no GPU, and defines the render size.
+    let baseline = load_baseline(&baseline_path)?;
+
+    let scene = load_scene(&scene_path)?;
+    let (camera, camera_transform) = scene.camera(camera_name)?;
+    let assets = engine_assets::AssetServer::for_scene(&scene_path);
+    let items = scene.render_items(&assets)?;
+
+    let (actual, adapter) = engine_render::offscreen::render_with_adapter(
+        &items,
+        &camera,
+        camera_transform.matrix(),
+        scene.lights().resolved(),
+        baseline.width,
+        baseline.height,
+    )?;
+
+    let (stats, diff_image) = engine_render::diff::diff(&actual, &baseline, threshold)?;
+
+    if let Some(out) = &out {
+        // Written on pass too: an all-faded image is itself legible
+        // confirmation that nothing moved.
+        let png =
+            image::RgbaImage::from_raw(diff_image.width, diff_image.height, diff_image.pixels)
+                .expect("diff() returns exactly width*height*4 bytes");
+        png.save(out).map_err(|e| {
+            EngineError::new(codes::PNG_WRITE_FAILED, format!("could not write PNG: {e}"))
+                .file(out.display().to_string())
+        })?;
+    }
+
+    let pass = stats.passes(max_diff_percent);
+    let mut report = serde_json::json!({
+        "pass": pass,
+        "width": actual.width,
+        "height": actual.height,
+        "diff_pixels": stats.diff_pixels,
+        "diff_percent": stats.diff_percent(),
+        "max_channel_delta": stats.max_channel_delta,
+        "threshold": threshold,
+        "max_diff_percent": max_diff_percent,
+        "adapter": adapter,
+    });
+    if let Some(bounds) = stats.bounds {
+        report["diff_bounds"] = serde_json::json!({
+            "min_x": bounds.min_x,
+            "min_y": bounds.min_y,
+            "max_x": bounds.max_x,
+            "max_y": bounds.max_y,
+        });
+    }
+    if let Some(out) = &out {
+        report["diff_image"] = serde_json::json!(out.display().to_string());
+    }
+    println!("{report}");
+
+    if pass {
+        Ok(())
+    } else {
+        Err(EngineError::new(
+            codes::RENDER_MISMATCH,
+            format!(
+                "{} of {} pixels ({:.3}%) differ from {} (threshold {threshold}, max allowed {max_diff_percent}%)",
+                stats.diff_pixels,
+                stats.total_pixels,
+                stats.diff_percent(),
+                baseline_path.display(),
+            ),
+        )
+        .file(baseline_path.display().to_string()))
+    }
+}
+
+/// Decode a baseline PNG into the comparison image format.
+fn load_baseline(path: &std::path::Path) -> Result<engine_render::Image> {
+    let display = path.display().to_string();
+
+    let bytes = std::fs::read(path).map_err(|e| {
+        // Not `asset_not_found`: baselines are not scene assets, and
+        // overloading that code would muddy what it means to validation.
+        let code = if e.kind() == std::io::ErrorKind::NotFound {
+            codes::BASELINE_NOT_FOUND
+        } else {
+            codes::BASELINE_INVALID
+        };
+        EngineError::new(code, format!("could not read baseline {display}: {e}")).file(&display)
+    })?;
+
+    let decoded = image::load_from_memory(&bytes).map_err(|e| {
+        EngineError::new(
+            codes::BASELINE_INVALID,
+            format!("could not decode baseline {display} as an image: {e}"),
+        )
+        .file(&display)
+    })?;
+
+    let rgba = decoded.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    if width == 0 || height == 0 {
+        return Err(EngineError::new(
+            codes::BASELINE_INVALID,
+            format!("baseline {display} has zero dimensions"),
+        )
+        .file(&display));
+    }
+
+    Ok(engine_render::Image {
+        width,
+        height,
+        pixels: rgba.into_raw(),
     })
 }
 

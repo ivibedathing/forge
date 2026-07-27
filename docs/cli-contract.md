@@ -77,6 +77,8 @@ command ever reports only the first error.
 engine validate <scene.json>... [--strict]   # one or more files; aggregate verdict
 engine screenshot <scene.json> --out x.png [--camera N] [--width W --height H]
 engine run-scene <scene.json> [--camera N]
+engine diff-render <scene.json> <baseline.png> [--out diff.png] [--camera N]
+                   [--threshold N] [--max-diff-percent P]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine list-components                       # scene + component JSON Schemas
 engine info                                  # selected GPU adapter
@@ -95,6 +97,34 @@ and — when cargo fails without any compiler diagnostic (broken manifest,
 resolution failure) — reports `cargo_error` with the tail of cargo's stderr
 as the message. If the workspace is too broken for `engine` itself to run,
 plain `cargo build` is the documented fallback.
+
+## diff-render
+
+`engine diff-render` renders the scene at exactly the baseline PNG's
+dimensions and compares byte-for-byte in the encoded (sRGB) space the PNG is
+in. Two knobs: a pixel *differs* when any RGBA channel deviates by more than
+`--threshold` (default 0); the comparison *passes* when the percentage of
+differing pixels is at most `--max-diff-percent` (default 0 — bit-exact).
+Bit-exactness is promised on the same machine/adapter/binary only; baselines
+are per-adapter artifacts, and the report's `adapter` field is the first
+thing to check when a diff fails on one machine only.
+
+**Stream exception**: the JSON report prints to stdout on *both* pass and
+fail — a failing run still tells the agent how much differs
+(`diff_pixels`, `max_channel_delta`) and where (`diff_bounds`). On mismatch,
+additionally one `render_mismatch` on stderr and exit 1. `max_channel_delta`
+makes near-misses self-diagnosing: `1` says "precision noise, raise the
+threshold"; `200` says "something actually moved."
+
+`--out diff.png` (written on pass and fail) classifies every pixel: **red**
+= violation, **yellow** = nonzero but within threshold, **faded grayscale**
+= identical. The formulas are pinned by tests, so diff images compare across
+runs.
+
+There is no bless flag: a baseline *is* a screenshot
+(`engine screenshot scene.json --out baseline.png`) — both commands drive
+the identical offscreen path. Committed baselines live in
+`examples/scenes/verify/baselines/`, per-adapter.
 
 ## Validation against the published schema
 
