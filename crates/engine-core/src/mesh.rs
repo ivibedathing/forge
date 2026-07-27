@@ -40,6 +40,7 @@ impl MeshData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinMesh {
     Cube,
+    Cylinder,
     Plane,
     Sphere,
     Triangle,
@@ -52,6 +53,7 @@ impl BuiltinMesh {
     /// Every built-in's full asset string, for errors and suggestions.
     pub const ASSETS: &'static [&'static str] = &[
         "builtin:cube",
+        "builtin:cylinder",
         "builtin:plane",
         "builtin:sphere",
         "builtin:triangle",
@@ -64,6 +66,7 @@ impl BuiltinMesh {
         let name = asset.strip_prefix(Self::PREFIX)?;
         Some(match name {
             "cube" => Ok(Self::Cube),
+            "cylinder" => Ok(Self::Cylinder),
             "plane" => Ok(Self::Plane),
             "sphere" => Ok(Self::Sphere),
             "triangle" => Ok(Self::Triangle),
@@ -79,6 +82,7 @@ impl BuiltinMesh {
     pub fn data(self) -> MeshData {
         match self {
             Self::Cube => cube(),
+            Self::Cylinder => cylinder(),
             Self::Plane => plane(),
             Self::Sphere => sphere(),
             Self::Triangle => triangle(),
@@ -349,6 +353,76 @@ fn sphere() -> MeshData {
     mesh
 }
 
+/// Cylinder along Y, radius 0.5 and height 1, so like the cube it fits the
+/// unit extent and `Transform.scale` means the same thing on both.
+///
+/// The side is smooth-shaded (radial normals, seam column duplicated for UV
+/// wrap, like the sphere); the caps are flat-shaded triangle fans with their
+/// own vertices so the silhouette edge stays sharp.
+fn cylinder() -> MeshData {
+    const SEGMENTS: u32 = 32;
+    const RADIUS: f32 = 0.5;
+    const HALF_HEIGHT: f32 = 0.5;
+
+    let vertex_count = (2 * (SEGMENTS + 1) + 2 * (SEGMENTS + 1)) as usize;
+    let mut mesh = MeshData {
+        positions: Vec::with_capacity(vertex_count),
+        normals: Vec::with_capacity(vertex_count),
+        uvs: Vec::with_capacity(vertex_count),
+        indices: Vec::with_capacity((SEGMENTS * 6 + SEGMENTS * 6) as usize),
+    };
+
+    let rim = |segment: u32| {
+        let phi = std::f32::consts::TAU * segment as f32 / SEGMENTS as f32;
+        (phi.cos(), phi.sin())
+    };
+
+    // Side: two rings of shared vertices, top row first so v runs 0 at the
+    // top like the sphere's.
+    for segment in 0..=SEGMENTS {
+        let (cos, sin) = rim(segment);
+        let u = segment as f32 / SEGMENTS as f32;
+        for (y, v) in [(HALF_HEIGHT, 0.0), (-HALF_HEIGHT, 1.0)] {
+            mesh.positions.push([RADIUS * cos, y, RADIUS * sin]);
+            mesh.normals.push([cos, 0.0, sin]);
+            mesh.uvs.push([u, v]);
+        }
+    }
+    for segment in 0..SEGMENTS {
+        let top = segment * 2;
+        let (bottom, next_top, next_bottom) = (top + 1, top + 2, top + 3);
+        // Counter-clockwise seen from outside (radially outward).
+        mesh.indices
+            .extend_from_slice(&[bottom, top, next_bottom, next_bottom, top, next_top]);
+    }
+
+    // Caps: a center vertex and its own rim ring per cap, flat ±Y normals.
+    for (y, normal_y) in [(HALF_HEIGHT, 1.0), (-HALF_HEIGHT, -1.0)] {
+        let center = mesh.positions.len() as u32;
+        mesh.positions.push([0.0, y, 0.0]);
+        mesh.normals.push([0.0, normal_y, 0.0]);
+        mesh.uvs.push([0.5, 0.5]);
+        for segment in 0..=SEGMENTS {
+            let (cos, sin) = rim(segment);
+            mesh.positions.push([RADIUS * cos, y, RADIUS * sin]);
+            mesh.normals.push([0.0, normal_y, 0.0]);
+            mesh.uvs.push([0.5 + cos * 0.5, 0.5 + sin * 0.5]);
+        }
+        for segment in 0..SEGMENTS {
+            let (a, b) = (center + 1 + segment, center + 2 + segment);
+            // The top cap winds (center, next, current) seen from +Y; the
+            // bottom cap mirrors.
+            if normal_y > 0.0 {
+                mesh.indices.extend_from_slice(&[center, b, a]);
+            } else {
+                mesh.indices.extend_from_slice(&[center, a, b]);
+            }
+        }
+    }
+
+    mesh
+}
+
 /// The M0 triangle, kept as a primitive so the oldest render path stays
 /// reachable from a scene file.
 fn triangle() -> MeshData {
@@ -425,6 +499,7 @@ mod tests {
     fn every_primitive_keeps_its_arrays_parallel() {
         for builtin in [
             BuiltinMesh::Cube,
+            BuiltinMesh::Cylinder,
             BuiltinMesh::Plane,
             BuiltinMesh::Sphere,
             BuiltinMesh::Triangle,
@@ -475,6 +550,60 @@ mod tests {
             assert!(
                 geometric.dot(outward) > 0.0,
                 "a sphere face winds inward: {a:?} {b:?} {c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cylinder_fits_the_unit_extent() {
+        let cylinder = BuiltinMesh::Cylinder.data();
+        for position in &cylinder.positions {
+            let radial = (position[0] * position[0] + position[2] * position[2]).sqrt();
+            assert!(radial <= 0.5 + 1e-5, "radius stays 0.5, got {radial}");
+            assert!(
+                position[1] == 0.5 || position[1] == -0.5,
+                "every vertex sits on a cap plane, got y={}",
+                position[1]
+            );
+        }
+    }
+
+    #[test]
+    fn cylinder_side_normals_are_radial_and_caps_flat() {
+        let cylinder = BuiltinMesh::Cylinder.data();
+        for (position, normal) in cylinder.positions.iter().zip(&cylinder.normals) {
+            let n = Vec3::from_array(*normal);
+            assert!((n.length() - 1.0).abs() < 1e-5, "unit normal, got {n:?}");
+            if normal[1] == 0.0 {
+                // Side: the normal is the position's radial direction.
+                let radial = Vec3::new(position[0], 0.0, position[2]).normalize();
+                assert!((n - radial).length() < 1e-5, "{n:?} vs {radial:?}");
+            } else {
+                assert_eq!(n.abs(), Vec3::Y, "caps are flat ±Y");
+            }
+        }
+    }
+
+    #[test]
+    fn cylinder_triangles_wind_outward() {
+        // Same stakes as the cube and sphere checks: an inward winding is
+        // culled into an invisible hole, not an error.
+        let cylinder = BuiltinMesh::Cylinder.data();
+        for triangle in cylinder.indices.chunks(3) {
+            let [a, b, c] = [
+                Vec3::from_array(cylinder.positions[triangle[0] as usize]),
+                Vec3::from_array(cylinder.positions[triangle[1] as usize]),
+                Vec3::from_array(cylinder.positions[triangle[2] as usize]),
+            ];
+            let geometric = (b - a).cross(c - a);
+            assert!(
+                geometric.length() > 1e-7,
+                "degenerate triangle: {a:?} {b:?} {c:?}"
+            );
+            let outward = (a + b + c) / 3.0;
+            assert!(
+                geometric.dot(outward) > 0.0,
+                "a cylinder face winds inward: {a:?} {b:?} {c:?}"
             );
         }
     }

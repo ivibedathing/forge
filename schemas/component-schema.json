@@ -93,7 +93,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Renderable geometry.\n\n`asset` is either a `builtin:` primitive (`builtin:cube`, `builtin:plane`,\n`builtin:triangle`) or a `.gltf`/`.glb` file's relative path, resolved\nagainst the directory of the scene file that references it (invariant 3).\n`engine validate` checks the reference resolves; a file that exists but\nfails to parse is reported by validation's asset pass and again at render\ntime.",
+        "description": "Renderable geometry.\n\n`asset` is either a `builtin:` primitive (`builtin:cube`, `builtin:cylinder`,\n`builtin:plane`, `builtin:sphere`, `builtin:triangle`) or a `.gltf`/`.glb`\nfile's relative path, resolved\nagainst the directory of the scene file that references it (invariant 3).\n`engine validate` checks the reference resolves; a file that exists but\nfails to parse is reported by validation's asset pass and again at render\ntime.",
         "properties": {
           "asset": {
             "type": "string"
@@ -616,7 +616,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Renderable geometry.\n\n`asset` is either a `builtin:` primitive (`builtin:cube`, `builtin:plane`,\n`builtin:triangle`) or a `.gltf`/`.glb` file's relative path, resolved\nagainst the directory of the scene file that references it (invariant 3).\n`engine validate` checks the reference resolves; a file that exists but\nfails to parse is reported by validation's asset pass and again at render\ntime.",
+            "description": "Renderable geometry.\n\n`asset` is either a `builtin:` primitive (`builtin:cube`, `builtin:cylinder`,\n`builtin:plane`, `builtin:sphere`, `builtin:triangle`) or a `.gltf`/`.glb`\nfile's relative path, resolved\nagainst the directory of the scene file that references it (invariant 3).\n`engine validate` checks the reference resolves; a file that exists but\nfails to parse is reported by validation's asset pass and again at render\ntime.",
             "properties": {
               "asset": {
                 "type": "string"

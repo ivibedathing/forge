@@ -228,3 +228,44 @@ impl SceneDoc {
         self.last_reload.map(|t| t.elapsed().as_secs_f32())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The "+ add" menu's commit, minus the click: a primitive entity splices
+    /// into the file, renders, and a second add of the same primitive dedupes.
+    #[test]
+    fn adding_a_builtin_primitive_writes_and_dedupes() {
+        let dir = std::env::temp_dir().join(format!("engine-doc-add-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scene.json");
+        std::fs::write(&path, "{\n  \"name\": \"t\",\n  \"entities\": []\n}").unwrap();
+
+        let mut doc = SceneDoc::open(path);
+        let components = || {
+            vec![
+                (
+                    "Transform".to_string(),
+                    vec![("position".to_string(), serde_json::json!([0.0, 0.0, 0.0]))],
+                ),
+                (
+                    "Mesh".to_string(),
+                    vec![(
+                        "asset".to_string(),
+                        serde_json::Value::String("builtin:cylinder".into()),
+                    )],
+                ),
+            ]
+        };
+
+        assert_eq!(doc.add_entity("cylinder", components()).as_deref(), Some("cylinder"));
+        assert_eq!(doc.add_entity("cylinder", components()).as_deref(), Some("cylinder-2"));
+
+        assert!(doc.is_valid(), "{:?}", doc.diagnostics);
+        assert_eq!(doc.items.len(), 2, "both primitives produce draw items");
+        assert!(doc.source.contains("\"builtin:cylinder\""));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

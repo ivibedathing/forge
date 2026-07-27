@@ -77,8 +77,9 @@ impl Transform {
 
 /// Renderable geometry.
 ///
-/// `asset` is either a `builtin:` primitive (`builtin:cube`, `builtin:plane`,
-/// `builtin:triangle`) or a `.gltf`/`.glb` file's relative path, resolved
+/// `asset` is either a `builtin:` primitive (`builtin:cube`, `builtin:cylinder`,
+/// `builtin:plane`, `builtin:sphere`, `builtin:triangle`) or a `.gltf`/`.glb`
+/// file's relative path, resolved
 /// against the directory of the scene file that references it (invariant 3).
 /// `engine validate` checks the reference resolves; a file that exists but
 /// fails to parse is reported by validation's asset pass and again at render

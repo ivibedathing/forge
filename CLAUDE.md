@@ -57,7 +57,10 @@ converted to `.glb` by running Blender headlessly (`$BLENDER` → `PATH` → mac
 absent Blender = `blender_not_found`), then one entity (`Transform` + `Mesh`, name deduped
 from the file stem) is spliced in via `formatter::apply_add_entity` — the first structure
 edit, E3's opening move. Conversion runs on a worker thread; the Blender-gated end-to-end
-test skips cleanly when Blender is missing. Hidden flag `--self-screenshot <png>
+test skips cleanly when Blender is missing. A "+ add" menu beside the entities heading
+splices a `builtin:` primitive the same way (Transform at origin + Mesh, name deduped from
+the primitive) — its entries are generated from `BuiltinMesh::ASSETS`, so a new builtin
+appears in the menu for free. Hidden flag `--self-screenshot <png>
 [--self-screenshot-after-ms N]` renders the editor and exits — the agent's way to *look at* the
 editor. `RenderItem` gained an `entity: String` field for picking/selection.
 
@@ -71,8 +74,8 @@ faded-gray identical) are pinned formulas — see `docs/cli-contract.md`. Blessi
 `engine screenshot` — no separate bless flag, deliberately. The report prints on both pass and
 fail (a documented stdout exception).
 
-`Mesh.asset` is `builtin:cube` / `builtin:plane` / `builtin:sphere` / `builtin:triangle`, or a
-`.gltf`/`.glb` path relative to the scene file. Reference checks (existence, extension,
+`Mesh.asset` is `builtin:cube` / `builtin:cylinder` / `builtin:plane` / `builtin:sphere` /
+`builtin:triangle`, or a `.gltf`/`.glb` path relative to the scene file. Reference checks (existence, extension,
 absolute-path rejection) live in `engine-core/src/mesh.rs` (`MeshAsset::resolve`); actual file
 parsing lives in `engine-assets` (the only crate that opens asset files — glTF meshes plus
 PNG→RGBA8 textures, the latter awaiting texture-mapped materials). `engine validate` runs both

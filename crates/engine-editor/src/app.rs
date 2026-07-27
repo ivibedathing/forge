@@ -105,6 +105,31 @@ impl EditorApp {
         self.inspector_state.clear();
     }
 
+    /// Splice a new entity carrying a `builtin:` primitive at the origin —
+    /// the same Transform + Mesh shape a drag-and-drop import writes, named
+    /// after the primitive and deduplicated by the document.
+    fn add_primitive(&mut self, primitive: &str) {
+        let added = self.doc.add_entity(
+            primitive,
+            vec![
+                (
+                    "Transform".into(),
+                    vec![("position".into(), json!([0.0, 0.0, 0.0]))],
+                ),
+                (
+                    "Mesh".into(),
+                    vec![(
+                        "asset".into(),
+                        Value::String(format!("builtin:{primitive}")),
+                    )],
+                ),
+            ],
+        );
+        if added.is_some() {
+            self.selected = added;
+        }
+    }
+
     /// Route dropped files into import workers and harvest finished ones
     /// into entity splices. Conversion (a Blender run for `.blend`) happens
     /// off-thread; the file write stays on the UI thread with the other
@@ -699,7 +724,28 @@ impl eframe::App for EditorApp {
         egui::Panel::left("hierarchy")
             .default_size(200.0)
             .show(ui, |ui| {
-                ui.heading("entities");
+                ui.horizontal(|ui| {
+                    ui.heading("entities");
+                    // The menu is generated from the builtin list, so a new
+                    // primitive in engine-core appears here for free.
+                    if !self.read_only() {
+                        let mut chosen = None;
+                        ui.menu_button("+ add", |ui| {
+                            for asset in engine_core::mesh::BuiltinMesh::ASSETS {
+                                let name = asset
+                                    .strip_prefix(engine_core::mesh::BuiltinMesh::PREFIX)
+                                    .expect("ASSETS entries carry the prefix");
+                                if ui.button(name).clicked() {
+                                    chosen = Some(name.to_string());
+                                    ui.close();
+                                }
+                            }
+                        });
+                        if let Some(primitive) = chosen {
+                            self.add_primitive(&primitive);
+                        }
+                    }
+                });
                 self.hierarchy_ui(ui);
             });
 
