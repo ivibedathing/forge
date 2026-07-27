@@ -38,12 +38,15 @@ pub enum Content {
     },
 }
 
-/// Live physics for the windowed viewer.
+/// Live playback for the windowed viewer: animation sampling and/or
+/// fixed-step physics over one owned scene.
 pub struct Simulation {
     pub scene: engine_core::Scene,
-    pub physics: engine_physics::PhysicsWorld,
+    pub physics: Option<engine_physics::PhysicsWorld>,
+    pub players: Vec<engine_core::animation::LoadedPlayer>,
     pub assets: engine_assets::AssetServer,
     pub accumulator: f32,
+    pub t: f32,
     pub last: Option<Instant>,
 }
 
@@ -137,10 +140,22 @@ impl ViewerApp {
                         .unwrap_or(dt)
                         .min(0.25);
                     sim.last = Some(now);
-                    sim.accumulator += elapsed;
-                    while sim.accumulator >= dt {
-                        sim.physics.step(&mut sim.scene.world);
-                        sim.accumulator -= dt;
+                    sim.t += elapsed;
+
+                    // System order: sample animations → physics → render.
+                    if !sim.players.is_empty() {
+                        engine_core::animation::apply_all(
+                            &mut sim.scene,
+                            &sim.players,
+                            sim.t,
+                        );
+                    }
+                    if let Some(physics) = &mut sim.physics {
+                        sim.accumulator += elapsed;
+                        while sim.accumulator >= dt {
+                            physics.step(&mut sim.scene.world);
+                            sim.accumulator -= dt;
+                        }
                     }
                     if let Ok(fresh) = sim.scene.render_items(&sim.assets) {
                         *items = fresh;

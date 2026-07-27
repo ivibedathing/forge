@@ -26,6 +26,25 @@ fn checked_in_schema_matches_the_code() {
 }
 
 #[test]
+fn checked_in_animation_schema_matches_the_code() {
+    let checked_in = repo_file("schemas/animation-schema.json");
+    let generated = engine_core::schema::canonical_animation_json();
+    assert_eq!(
+        checked_in, generated,
+        "schemas/animation-schema.json is stale — regenerate it:\n\
+         cargo run -p engine-cli -- list-animations --schema > schemas/animation-schema.json"
+    );
+}
+
+#[test]
+fn m9_spin_verify_scene_and_clip_are_valid() {
+    assert_scene_validates("examples/scenes/verify/m9_spin.json");
+    let source = repo_file("examples/scenes/verify/animations/spin.anim.json");
+    let errors = engine_core::animation::validate_clip_source(&source, "spin.anim.json");
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
 fn demo_scene_is_valid() {
     let source = repo_file("examples/scenes/demo_scene.json");
     let errors = engine_core::validate::validate_source(&source, "examples/scenes/demo_scene.json");

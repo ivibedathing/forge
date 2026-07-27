@@ -1,0 +1,818 @@
+//! Property-clip animation (M9): the time axis as text.
+//!
+//! A clip is a JSON file animating schema'd component fields on entities
+//! addressed by name. Pose is a pure function of (files, time) — sampling
+//! never reads a clock or accumulates state, so `screenshot --time 1.5` is
+//! reproducible and diff-render works on animated scenes. Sampled state is
+//! written into the ECS world only, never back to disk: the scene file holds
+//! the *rest* values.
+//!
+//! Rotation interpolates **component-wise on Euler degrees**, matching the
+//! `Transform.rotation` file format. Deliberate and load-bearing: a
+//! 0°→360° key pair actually spins a full turn, where quaternion slerp
+//! would treat it as the identity and silently do nothing — the classic
+//! failure this engine exists to avoid.
+
+use std::path::Path;
+
+use glam::Vec3;
+use hecs::World;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::codes;
+use crate::components::AnimationPlayer;
+use crate::error::{EngineError, Result};
+use crate::lineindex::LineIndex;
+
+/// A property clip file, exactly as it appears on disk.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClipFile {
+    pub name: String,
+    pub tracks: Vec<Track>,
+}
+
+/// One animated property of one entity.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Track {
+    /// The target entity's stable name (invariant 4).
+    pub entity: String,
+
+    /// `Component.field`, resolved against the same schema
+    /// `engine list-components` publishes — a new component's fields are
+    /// animatable the day the component exists.
+    pub property: String,
+
+    #[serde(default)]
+    pub interpolation: Interpolation,
+
+    /// Key times must be strictly increasing. Clip duration is the last key
+    /// time — there is no separate duration field to drift out of sync.
+    pub keys: Vec<Key>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Interpolation {
+    /// Hold each key's value until the next key.
+    Step,
+    #[default]
+    Linear,
+    /// Catmull-Rom through the key values; no hand-authored tangents —
+    /// tangent arrays are hostile to text editing.
+    Cubic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Key {
+    pub time: f32,
+    pub value: KeyValue,
+}
+
+/// A key's value: a scalar for scalar fields, three components for vector
+/// fields. The shape must match the animated field (`type_mismatch`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum KeyValue {
+    Scalar(f32),
+    Vec3([f32; 3]),
+}
+
+impl KeyValue {
+    fn as_vec3(self) -> Vec3 {
+        match self {
+            KeyValue::Scalar(v) => Vec3::splat(v),
+            KeyValue::Vec3(v) => Vec3::from_array(v),
+        }
+    }
+
+    fn is_vec3(self) -> bool {
+        matches!(self, KeyValue::Vec3(_))
+    }
+}
+
+/// The clip duration: the largest last-key time across tracks.
+pub fn duration(clip: &ClipFile) -> f32 {
+    clip.tracks
+        .iter()
+        .filter_map(|t| t.keys.last())
+        .map(|k| k.time)
+        .fold(0.0, f32::max)
+}
+
+/// A player's local clip time for scene time `t`: scaled, offset, wrapped
+/// when looping, clamped to the final pose when not.
+pub fn local_time(player: &AnimationPlayer, clip_duration: f32, t: f32) -> f32 {
+    let local = t * player.speed + player.start_offset;
+    if clip_duration <= 0.0 {
+        return 0.0;
+    }
+    if player.looping {
+        local.rem_euclid(clip_duration)
+    } else {
+        local.clamp(0.0, clip_duration)
+    }
+}
+
+/// Sample one track at (already localized) time `t`. Pure; component-wise
+/// on the raw numbers.
+pub fn sample_track(track: &Track, t: f32) -> Option<KeyValue> {
+    let keys = &track.keys;
+    let first = keys.first()?;
+    if keys.len() == 1 || t <= first.time {
+        return Some(first.value);
+    }
+    let last = keys.last()?;
+    if t >= last.time {
+        return Some(last.value);
+    }
+
+    // The segment [i, i+1] containing t.
+    let i = keys.iter().rposition(|k| k.time <= t)?;
+    let (a, b) = (&keys[i], &keys[i + 1]);
+    let u = (t - a.time) / (b.time - a.time);
+
+    let value = match track.interpolation {
+        Interpolation::Step => a.value,
+        Interpolation::Linear => {
+            let v = a.value.as_vec3().lerp(b.value.as_vec3(), u);
+            pack(v, a.value)
+        }
+        Interpolation::Cubic => {
+            // Catmull-Rom with clamped end tangents (endpoints doubled).
+            let p0 = keys[i.saturating_sub(1)].value.as_vec3();
+            let p1 = a.value.as_vec3();
+            let p2 = b.value.as_vec3();
+            let p3 = keys[(i + 2).min(keys.len() - 1)].value.as_vec3();
+            let u2 = u * u;
+            let u3 = u2 * u;
+            let v = ((p1 * 2.0)
+                + (p2 - p0) * u
+                + (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * u2
+                + (p3 - p0 + (p1 - p2) * 3.0) * u3)
+                * 0.5;
+            pack(v, a.value)
+        }
+    };
+    Some(value)
+}
+
+fn pack(v: Vec3, like: KeyValue) -> KeyValue {
+    match like {
+        KeyValue::Scalar(_) => KeyValue::Scalar(v.x),
+        KeyValue::Vec3(_) => KeyValue::Vec3(v.to_array()),
+    }
+}
+
+/// Apply the pose at scene time `t` for one player+clip pair into the world.
+/// Values land on components only (principle 2: derived, ephemeral).
+/// Unresolvable targets are skipped — validation already rejected them for
+/// scenes that reach this point.
+pub fn apply(
+    world: &mut World,
+    by_name: &dyn Fn(&str) -> Option<hecs::Entity>,
+    player: &AnimationPlayer,
+    clip: &ClipFile,
+    t: f32,
+) {
+    let local = local_time(player, duration(clip), t);
+    for track in &clip.tracks {
+        let Some(value) = sample_track(track, local) else {
+            continue;
+        };
+        let Some((component, field)) = track.property.split_once('.') else {
+            continue;
+        };
+        let Some(entity) = by_name(&track.entity) else {
+            continue;
+        };
+        set_field(world, entity, component, field, value);
+    }
+}
+
+/// Write one sampled value onto a component field. Returns false when no
+/// such animatable field exists — the coverage test below walks the schema
+/// to prove every numeric field has an arm here, so validation ("that
+/// property exists") and application ("we can set it") cannot drift.
+pub fn set_field(
+    world: &mut World,
+    entity: hecs::Entity,
+    component: &str,
+    field: &str,
+    value: KeyValue,
+) -> bool {
+    use crate::components::*;
+
+    let v3 = value.as_vec3();
+    let scalar = v3.x;
+
+    match component {
+        "Transform" => {
+            let Ok(mut c) = world.get::<&mut Transform>(entity) else {
+                return false;
+            };
+            match field {
+                "position" => c.position = v3,
+                "rotation" => c.rotation = v3,
+                "scale" => c.scale = v3,
+                _ => return false,
+            }
+        }
+        "Material" => {
+            let Ok(mut c) = world.get::<&mut Material>(entity) else {
+                return false;
+            };
+            match field {
+                "albedo" => c.albedo = v3,
+                "metallic" => c.metallic = scalar,
+                "roughness" => c.roughness = scalar,
+                "emissive" => c.emissive = v3,
+                _ => return false,
+            }
+        }
+        "Camera" => {
+            let Ok(mut c) = world.get::<&mut Camera>(entity) else {
+                return false;
+            };
+            match field {
+                "fov" => c.fov = scalar,
+                "near" => c.near = scalar,
+                "far" => c.far = scalar,
+                _ => return false,
+            }
+        }
+        "DirectionalLight" => {
+            let Ok(mut c) = world.get::<&mut DirectionalLight>(entity) else {
+                return false;
+            };
+            match field {
+                "color" => c.color = v3,
+                "intensity" => c.intensity = scalar,
+                _ => return false,
+            }
+        }
+        "AmbientLight" => {
+            let Ok(mut c) = world.get::<&mut AmbientLight>(entity) else {
+                return false;
+            };
+            match field {
+                "color" => c.color = v3,
+                "intensity" => c.intensity = scalar,
+                _ => return false,
+            }
+        }
+        "RigidBody" => {
+            let Ok(mut c) = world.get::<&mut RigidBody>(entity) else {
+                return false;
+            };
+            match field {
+                "linear_velocity" => c.linear_velocity = v3,
+                "angular_velocity" => c.angular_velocity = v3,
+                "gravity_scale" => c.gravity_scale = scalar,
+                "linear_damping" => c.linear_damping = scalar,
+                "angular_damping" => c.angular_damping = scalar,
+                _ => return false,
+            }
+        }
+        "Collider" => {
+            let Ok(mut c) = world.get::<&mut Collider>(entity) else {
+                return false;
+            };
+            match field {
+                "friction" => c.friction = scalar,
+                "restitution" => c.restitution = scalar,
+                "density" => c.density = scalar,
+                "offset" => c.offset = v3,
+                "radius" => c.radius = Some(scalar),
+                "half_height" => c.half_height = Some(scalar),
+                "half_extents" => c.half_extents = Some(v3),
+                _ => return false,
+            }
+        }
+        "AnimationPlayer" => {
+            let Ok(mut c) = world.get::<&mut AnimationPlayer>(entity) else {
+                return false;
+            };
+            match field {
+                "speed" => c.speed = scalar,
+                "start_offset" => c.start_offset = scalar,
+                _ => return false,
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Whether a field is vector-shaped in the published schema (3-element
+/// array). Used by clip validation for `type_mismatch`.
+fn field_shape(schema: &serde_json::Value, component: &str, field: &str) -> Option<bool> {
+    let variant = schema["oneOf"]
+        .as_array()?
+        .iter()
+        .find(|v| v["properties"]["type"]["const"] == component)?;
+    let property = &variant["properties"][field];
+    let property = match property["$ref"].as_str().and_then(|r| r.strip_prefix("#/$defs/")) {
+        Some(name) => &schema["$defs"][name],
+        None => property,
+    };
+    let is_array = property["type"] == "array"
+        || property["type"]
+            .as_array()
+            .is_some_and(|t| t.iter().any(|x| x == "array"));
+    let is_number = property["type"] == "number"
+        || property["type"]
+            .as_array()
+            .is_some_and(|t| t.iter().any(|x| x == "number"));
+    if is_array || is_number {
+        Some(is_array)
+    } else {
+        None // Not a numeric/vector field: not animatable.
+    }
+}
+
+/// Validate a clip file's contents, all errors at once, with file/line.
+/// Structural checks only; entity-name resolution needs a scene and lives
+/// in scene validation.
+pub fn validate_clip_source(source: &str, path: &str) -> Vec<EngineError> {
+    let mut errors = Vec::new();
+
+    let root: serde_json::Value = match serde_json::from_str(source) {
+        Ok(value) => value,
+        Err(e) => {
+            return vec![EngineError::new(codes::INVALID_JSON, e.to_string())
+                .file(path)
+                .line(e.line() as u32)
+                .column(e.column() as u32)];
+        }
+    };
+    let index = LineIndex::new(source);
+    let schema = crate::schema::component_schema();
+
+    let located = |mut error: EngineError, json_path: &str| -> EngineError {
+        error = error.file(path).path(json_path);
+        match index.line_of_or_parent(json_path) {
+            Some(line) => error.line(line),
+            None => error,
+        }
+    };
+
+    // Structure first, through serde on the typed ClipFile — but collect
+    // per-track errors ourselves so one bad track doesn't hide the rest.
+    let Some(tracks) = root["tracks"].as_array() else {
+        errors.push(located(
+            EngineError::new(codes::MISSING_FIELD, "a clip requires a \"tracks\" array")
+                .field("tracks"),
+            "",
+        ));
+        return errors;
+    };
+    if root["name"].as_str().is_none() {
+        errors.push(located(
+            EngineError::new(codes::MISSING_FIELD, "a clip requires a \"name\" field")
+                .field("name"),
+            "",
+        ));
+    }
+
+    for (track_index, track_value) in tracks.iter().enumerate() {
+        let track_path = format!("/tracks/{track_index}");
+        let track: Track = match serde_json::from_value(track_value.clone()) {
+            Ok(track) => track,
+            Err(e) => {
+                errors.push(located(
+                    EngineError::new(
+                        codes::INVALID_FIELD_TYPE,
+                        format!("track {track_index} is malformed: {e}"),
+                    ),
+                    &track_path,
+                ));
+                continue;
+            }
+        };
+
+        // Property path against the schema.
+        let shape = track.property.split_once('.').and_then(|(component, field)| {
+            field_shape(&schema, component, field)
+        });
+        match (track.property.split_once('.'), shape) {
+            (None, _) => {
+                errors.push(located(
+                    EngineError::new(
+                        codes::UNKNOWN_PROPERTY,
+                        format!(
+                            "property {:?} is not \"Component.field\"",
+                            track.property
+                        ),
+                    )
+                    .field("property"),
+                    &format!("{track_path}/property"),
+                ));
+            }
+            (Some((component, field)), None) => {
+                let suggestions = animatable_properties(&schema);
+                errors.push(located(
+                    EngineError::new(
+                        codes::UNKNOWN_PROPERTY,
+                        format!(
+                            "{component:?} has no animatable field {field:?}"
+                        ),
+                    )
+                    .field("property")
+                    .suggest_from(
+                        &track.property,
+                        suggestions.iter().map(String::as_str),
+                    ),
+                    &format!("{track_path}/property"),
+                ));
+            }
+            (Some(_), Some(wants_vec3)) => {
+                for (key_index, key) in track.keys.iter().enumerate() {
+                    if key.value.is_vec3() != wants_vec3 {
+                        let (want, got) = if wants_vec3 {
+                            ("a [x, y, z] array", "a scalar")
+                        } else {
+                            ("a scalar", "a [x, y, z] array")
+                        };
+                        errors.push(located(
+                            EngineError::new(
+                                codes::TYPE_MISMATCH,
+                                format!(
+                                    "key {key_index} of {:?} needs {want}, found {got}",
+                                    track.property
+                                ),
+                            )
+                            .field("value"),
+                            &format!("{track_path}/keys/{key_index}/value"),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Strictly increasing key times, naming the offending index.
+        for (key_index, pair) in track.keys.windows(2).enumerate() {
+            if pair[1].time <= pair[0].time {
+                errors.push(located(
+                    EngineError::new(
+                        codes::UNSORTED_KEYS,
+                        format!(
+                            "key {} (time {}) does not come after key {} (time {}); \
+                             key times must be strictly increasing",
+                            key_index + 1,
+                            pair[1].time,
+                            key_index,
+                            pair[0].time
+                        ),
+                    )
+                    .field("time"),
+                    &format!("{track_path}/keys/{}/time", key_index + 1),
+                ));
+            }
+        }
+
+        if track.keys.is_empty() {
+            errors.push(located(
+                EngineError::new(
+                    codes::MISSING_FIELD,
+                    format!("track {track_index} has no keys"),
+                )
+                .field("keys"),
+                &track_path,
+            ));
+        }
+    }
+
+    errors
+}
+
+/// Every `Component.field` the schema exposes as numeric — the suggestion
+/// pool for `unknown_property`.
+pub fn animatable_properties(schema: &serde_json::Value) -> Vec<String> {
+    let mut properties = Vec::new();
+    let Some(variants) = schema["oneOf"].as_array() else {
+        return properties;
+    };
+    for variant in variants {
+        let Some(component) = variant["properties"]["type"]["const"].as_str() else {
+            continue;
+        };
+        let Some(fields) = variant["properties"].as_object() else {
+            continue;
+        };
+        for field in fields.keys() {
+            if field == "type" {
+                continue;
+            }
+            if field_shape(schema, component, field).is_some() {
+                properties.push(format!("{component}.{field}"));
+            }
+        }
+    }
+    properties
+}
+
+/// A player paired with its loaded clip, ready to sample.
+pub struct LoadedPlayer {
+    pub player: AnimationPlayer,
+    pub clip: ClipFile,
+}
+
+/// Load every `AnimationPlayer`'s clip, resolved relative to the scene file.
+pub fn load_players(scene: &crate::Scene, scene_path: &Path) -> Result<Vec<LoadedPlayer>> {
+    let base_dir = scene_path.parent().unwrap_or(Path::new(""));
+    let mut players = Vec::new();
+    for player in scene.world.query::<&AnimationPlayer>().iter() {
+        let clip = load_clip(&base_dir.join(&player.clip))?;
+        players.push(LoadedPlayer {
+            player: player.clone(),
+            clip,
+        });
+    }
+    Ok(players)
+}
+
+/// The longest clip duration among loaded players — `filmstrip`'s default
+/// time range.
+pub fn longest_duration(players: &[LoadedPlayer]) -> f32 {
+    players
+        .iter()
+        .map(|p| duration(&p.clip))
+        .fold(0.0, f32::max)
+}
+
+/// Apply every player's pose at scene time `t`. The system-ordering slot is
+/// "sample animations" — callers run physics after, render last.
+pub fn apply_all(scene: &mut crate::Scene, players: &[LoadedPlayer], t: f32) {
+    let lookup: std::collections::HashMap<String, hecs::Entity> = scene
+        .names()
+        .map(str::to_string)
+        .filter_map(|n| scene.entity(&n).map(|e| (n, e)))
+        .collect();
+    let by_name = move |name: &str| lookup.get(name).copied();
+    for loaded in players {
+        apply(&mut scene.world, &by_name, &loaded.player, &loaded.clip, t);
+    }
+}
+
+/// Read and structurally validate a clip file from disk.
+pub fn load_clip(path: &Path) -> Result<ClipFile> {
+    let display = path.display().to_string();
+    let source = std::fs::read_to_string(path).map_err(|e| {
+        EngineError::new(
+            codes::ASSET_NOT_FOUND,
+            format!("could not read clip {display}: {e}"),
+        )
+        .file(&display)
+    })?;
+    serde_json::from_str(&source).map_err(|e| {
+        EngineError::new(
+            codes::ASSET_LOAD_FAILED,
+            format!("clip {display} does not parse: {e}"),
+        )
+        .file(&display)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Scene;
+
+    fn spin_track(interpolation: Interpolation) -> Track {
+        Track {
+            entity: "Cube".into(),
+            property: "Transform.rotation".into(),
+            interpolation,
+            keys: vec![
+                Key {
+                    time: 0.0,
+                    value: KeyValue::Vec3([0.0, 0.0, 0.0]),
+                },
+                Key {
+                    time: 2.0,
+                    value: KeyValue::Vec3([0.0, 360.0, 0.0]),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn linear_interpolation_hits_the_midpoint() {
+        let track = spin_track(Interpolation::Linear);
+        assert_eq!(
+            sample_track(&track, 1.0),
+            Some(KeyValue::Vec3([0.0, 180.0, 0.0]))
+        );
+        assert_eq!(
+            sample_track(&track, 0.5),
+            Some(KeyValue::Vec3([0.0, 90.0, 0.0]))
+        );
+    }
+
+    #[test]
+    fn the_zero_to_360_spin_actually_spins() {
+        // The design's load-bearing case: quaternion slerp would no-op this.
+        let track = spin_track(Interpolation::Linear);
+        let quarter = sample_track(&track, 0.5).unwrap();
+        assert_eq!(quarter, KeyValue::Vec3([0.0, 90.0, 0.0]));
+        let full = sample_track(&track, 2.0).unwrap();
+        assert_eq!(full, KeyValue::Vec3([0.0, 360.0, 0.0]));
+    }
+
+    #[test]
+    fn step_holds_until_the_next_key() {
+        let track = spin_track(Interpolation::Step);
+        assert_eq!(
+            sample_track(&track, 1.999),
+            Some(KeyValue::Vec3([0.0, 0.0, 0.0]))
+        );
+        assert_eq!(
+            sample_track(&track, 2.0),
+            Some(KeyValue::Vec3([0.0, 360.0, 0.0]))
+        );
+    }
+
+    #[test]
+    fn cubic_passes_through_the_keys_and_stays_smooth() {
+        let track = Track {
+            entity: "X".into(),
+            property: "Transform.position".into(),
+            interpolation: Interpolation::Cubic,
+            keys: vec![
+                Key { time: 0.0, value: KeyValue::Vec3([0.0, 0.0, 0.0]) },
+                Key { time: 1.0, value: KeyValue::Vec3([1.0, 2.0, 0.0]) },
+                Key { time: 2.0, value: KeyValue::Vec3([2.0, 0.0, 0.0]) },
+            ],
+        };
+        // Passes exactly through keys…
+        assert_eq!(sample_track(&track, 1.0), Some(KeyValue::Vec3([1.0, 2.0, 0.0])));
+        // …and overshoots nowhere near the ends (clamped tangents).
+        let KeyValue::Vec3(v) = sample_track(&track, 0.5).unwrap() else {
+            panic!()
+        };
+        assert!(v[1] > 0.0 && v[1] < 2.0, "{v:?}");
+    }
+
+    #[test]
+    fn sampling_clamps_outside_the_key_range() {
+        let track = spin_track(Interpolation::Linear);
+        assert_eq!(sample_track(&track, -1.0), Some(KeyValue::Vec3([0.0, 0.0, 0.0])));
+        assert_eq!(sample_track(&track, 99.0), Some(KeyValue::Vec3([0.0, 360.0, 0.0])));
+    }
+
+    #[test]
+    fn looping_wraps_and_non_looping_clamps() {
+        let player = AnimationPlayer {
+            clip: "x".into(),
+            speed: 1.0,
+            looping: true,
+            start_offset: 0.0,
+        };
+        assert_eq!(local_time(&player, 2.0, 2.0), 0.0, "loop period lands on 0");
+        assert_eq!(local_time(&player, 2.0, 2.5), 0.5);
+
+        let once = AnimationPlayer {
+            looping: false,
+            ..player.clone()
+        };
+        assert_eq!(local_time(&once, 2.0, 5.0), 2.0, "clamped to the final pose");
+    }
+
+    #[test]
+    fn speed_and_offset_shape_local_time() {
+        let player = AnimationPlayer {
+            clip: "x".into(),
+            speed: 2.0,
+            looping: true,
+            start_offset: 0.5,
+        };
+        assert_eq!(local_time(&player, 10.0, 1.0), 2.5);
+    }
+
+    #[test]
+    fn apply_writes_the_pose_into_the_world() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Cube","components":[
+                {"type":"Transform","position":[0.0,0.5,0.0]},
+                {"type":"Mesh","asset":"builtin:cube"}
+            ]}
+        ]}"#;
+        let mut scene = Scene::from_source(source, "t.json").unwrap();
+        let player = AnimationPlayer {
+            clip: "spin".into(),
+            speed: 1.0,
+            looping: true,
+            start_offset: 0.0,
+        };
+        let clip = ClipFile {
+            name: "spin".into(),
+            tracks: vec![spin_track(Interpolation::Linear)],
+        };
+
+        let entity = scene.entity("Cube").unwrap();
+        let lookup = {
+            let map: std::collections::HashMap<String, hecs::Entity> =
+                [("Cube".to_string(), entity)].into();
+            move |name: &str| map.get(name).copied()
+        };
+        apply(&mut scene.world, &lookup, &player, &clip, 0.5);
+
+        let transform = scene
+            .world
+            .get::<&crate::components::Transform>(entity)
+            .unwrap();
+        assert_eq!(transform.rotation, Vec3::new(0.0, 90.0, 0.0));
+        assert_eq!(
+            transform.position,
+            Vec3::new(0.0, 0.5, 0.0),
+            "untargeted fields keep their rest values"
+        );
+    }
+
+    #[test]
+    fn every_numeric_schema_field_has_a_setter_arm() {
+        // The drift test: validation says "that property exists" from the
+        // schema; application must be able to set every one of them, or a
+        // validated clip could silently do nothing.
+        let source = r#"{"name":"s","entities":[
+            {"name":"E","components":[
+                {"type":"Transform"},
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Material"},
+                {"type":"Camera"},
+                {"type":"DirectionalLight"},
+                {"type":"AmbientLight"},
+                {"type":"RigidBody","body":"kinematic"},
+                {"type":"Collider","shape":"sphere","radius":0.5},
+                {"type":"AnimationPlayer","clip":"x"}
+            ]}
+        ]}"#;
+        // Not a *valid* scene (missing collider transform rules etc. are
+        // irrelevant here); spawn directly through the parsed file.
+        let file: crate::SceneFile = serde_json::from_str(source).unwrap();
+        let mut scene = Scene::instantiate(file);
+        let entity = scene.entity("E").unwrap();
+
+        let schema = crate::schema::component_schema();
+        for property in animatable_properties(&schema) {
+            let (component, field) = property.split_once('.').unwrap();
+            let ok = set_field(
+                &mut scene.world,
+                entity,
+                component,
+                field,
+                KeyValue::Vec3([0.1, 0.2, 0.3]),
+            );
+            assert!(ok, "schema exposes {property} but set_field cannot set it");
+        }
+    }
+
+    #[test]
+    fn clip_validation_reports_everything_at_once() {
+        let source = r#"{
+  "name": "broken",
+  "tracks": [
+    { "entity": "Cube", "property": "Transform.rotaton",
+      "keys": [ { "time": 0.0, "value": [0.0, 0.0, 0.0] } ] },
+    { "entity": "Cube", "property": "Transform.rotation",
+      "keys": [ { "time": 1.0, "value": [0.0, 0.0, 0.0] },
+                { "time": 0.5, "value": 3.0 } ] }
+  ]
+}"#;
+        let errors = validate_clip_source(source, "broken.anim.json");
+        let codes: Vec<&str> = errors.iter().map(|e| e.error).collect();
+        assert!(codes.contains(&"unknown_property"), "{codes:?}");
+        assert!(codes.contains(&"unsorted_keys"), "{codes:?}");
+        assert!(codes.contains(&"type_mismatch"), "{codes:?}");
+
+        let property = errors.iter().find(|e| e.error == "unknown_property").unwrap();
+        assert_eq!(
+            property.context().unwrap().did_you_mean.as_deref(),
+            Some("Transform.rotation")
+        );
+        for error in &errors {
+            let context = error.context().unwrap();
+            assert!(context.line.is_some(), "{}", error.to_json());
+            assert_eq!(context.file.as_deref(), Some("broken.anim.json"));
+        }
+    }
+
+    #[test]
+    fn a_valid_clip_validates_clean() {
+        let source = r#"{
+  "name": "spin",
+  "tracks": [
+    { "entity": "SpinCube", "property": "Transform.rotation",
+      "interpolation": "linear",
+      "keys": [ { "time": 0.0, "value": [0.0, 0.0, 0.0] },
+                { "time": 2.0, "value": [0.0, 360.0, 0.0] } ] }
+  ]
+}"#;
+        let errors = validate_clip_source(source, "spin.anim.json");
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+}

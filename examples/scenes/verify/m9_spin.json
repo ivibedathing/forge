@@ -1,0 +1,48 @@
+{
+  "name": "m9_spin",
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "scale": [10.0, 1.0, 10.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.35, 0.4, 0.32], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "SpinCube",
+      "components": [
+        { "type": "Transform", "position": [-1.2, 0.5, 0.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.9, 0.15, 0.15], "roughness": 0.8 },
+        { "type": "AnimationPlayer", "clip": "animations/spin.anim.json" }
+      ]
+    },
+    {
+      "name": "AnchorCube",
+      "components": [
+        { "type": "Transform", "position": [1.2, 0.5, 0.0], "rotation": [0.0, 45.0, 0.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.2, 0.35, 0.9], "roughness": 0.6 }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-50.0, 30.0, 0.0] },
+        { "type": "DirectionalLight" }
+      ]
+    },
+    {
+      "name": "Ambient",
+      "components": [ { "type": "AmbientLight", "intensity": 0.05 } ]
+    },
+    {
+      "name": "Player",
+      "components": [
+        { "type": "Transform", "position": [0.0, 2.4, 7.0], "rotation": [-14.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 50.0, "active": true }
+      ]
+    }
+  ]
+}

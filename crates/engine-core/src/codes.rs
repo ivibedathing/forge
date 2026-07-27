@@ -113,6 +113,20 @@ registry! {
     MISSING_TRANSFORM = "missing_transform", Input,
         "a RigidBody or Collider needs a Transform on the same entity";
 
+    // ── Animation (M9) ─────────────────────────────────────────────────
+    UNKNOWN_ENTITY = "unknown_entity", Input,
+        "an animation track targets an entity name not in the scene";
+    UNKNOWN_PROPERTY = "unknown_property", Input,
+        "an animation track targets no known Component.field";
+    TYPE_MISMATCH = "type_mismatch", Input,
+        "a key value's shape does not match the animated field";
+    UNSORTED_KEYS = "unsorted_keys", Input,
+        "key times must be strictly increasing";
+    CONFLICTING_TRACKS = "conflicting_tracks", Input,
+        "two active clips animate the same property of the same entity";
+    ANIMATION_ON_DYNAMIC_BODY = "animation_on_dynamic_body", Input,
+        "a clip animates the Transform of a dynamic RigidBody; make it kinematic";
+
     // ── Warnings (severity: "warning"; do not affect the exit code
     //    unless promoted by --strict) ────────────────────────────────────
     UNUSED_MATERIAL = "unused_material", Input,

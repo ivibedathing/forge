@@ -101,6 +101,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     };
 
     let mut seen_names: Vec<&str> = Vec::with_capacity(entities.len());
+    // Animation pass inputs, collected across all entities (M9).
+    let mut players: Vec<(String, crate::components::AnimationPlayer, String)> = Vec::new();
+    let mut body_kinds: std::collections::HashMap<String, crate::components::BodyKind> =
+        std::collections::HashMap::new();
     // (entity name, component path) per at-most-one component, so each
     // surplus error can point at a concrete line and list candidates.
     let mut active_cameras: Vec<(String, String)> = Vec::new();
@@ -264,7 +268,11 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     scale = t.scale;
                 }
                 Some(ComponentData::RigidBody(rb)) => {
+                    body_kinds.insert(name.to_string(), rb.body);
                     rigid_body = Some((rb.body, component_path));
+                }
+                Some(ComponentData::AnimationPlayer(player)) => {
+                    players.push((name.to_string(), player, component_path));
                 }
                 Some(ComponentData::Collider(c)) => {
                     collider = Some((c.shape, component_path));
@@ -406,6 +414,102 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 .component(component)
                 .candidates(names),
             );
+        }
+    }
+
+    // ── Animation pass (M9): clip contents, target entities, conflicts ─
+    // Runs against the same scene the players sit in; clip-content errors
+    // carry the *clip's* file/line via its own LineIndex.
+    let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+    let mut claimed: std::collections::HashMap<(String, String), String> =
+        std::collections::HashMap::new();
+    for (player_entity, player, player_path) in &players {
+        if player.clip.contains('#')
+            || Path::new(&player.clip).is_absolute()
+        {
+            continue; // Already reported by the component check.
+        }
+        let clip_path = base_dir.join(&player.clip);
+        let Ok(clip_source) = std::fs::read_to_string(&clip_path) else {
+            continue; // asset_not_found already reported.
+        };
+        let clip_display = clip_path.display().to_string();
+
+        let clip_errors = crate::animation::validate_clip_source(&clip_source, &clip_display);
+        if !clip_errors.is_empty() {
+            errors.extend(clip_errors);
+            continue;
+        }
+        let Ok(clip) = serde_json::from_str::<crate::animation::ClipFile>(&clip_source) else {
+            continue;
+        };
+        let clip_index = LineIndex::new(&clip_source);
+
+        for (track_index, track) in clip.tracks.iter().enumerate() {
+            let entity_pointer = format!("/tracks/{track_index}/entity");
+            if !seen_names.contains(&track.entity.as_str()) {
+                let mut error = EngineError::new(
+                    codes::UNKNOWN_ENTITY,
+                    format!(
+                        "track {track_index} of clip {:?} targets {:?}, which is                          not an entity in this scene",
+                        clip.name, track.entity
+                    ),
+                )
+                .file(&clip_display)
+                .path(&entity_pointer)
+                .entity(&track.entity)
+                .suggest_from(&track.entity, seen_names.iter().copied());
+                if let Some(line) = clip_index.line_of_or_parent(&entity_pointer) {
+                    error = error.line(line);
+                }
+                errors.push(error);
+                continue;
+            }
+
+            // Two active clips on one entity.property: deterministic failure
+            // over silent last-writer-wins (the active-camera rationale).
+            let key = (track.entity.clone(), track.property.clone());
+            match claimed.get(&key) {
+                Some(other_player) if other_player != player_entity => {
+                    errors.push(
+                        cx.err(
+                            codes::CONFLICTING_TRACKS,
+                            format!(
+                                "players on {other_player:?} and {player_entity:?} both                                  animate {}.{}; at most one clip may drive a property",
+                                track.entity, track.property
+                            ),
+                            player_path,
+                        )
+                        .component("AnimationPlayer")
+                        .candidates([other_player.as_str(), player_entity.as_str()]),
+                    );
+                }
+                Some(_) => {}
+                None => {
+                    claimed.insert(key, player_entity.clone());
+                }
+            }
+
+            // M8 ownership rule, settled here: an animated Transform on a
+            // dynamic body is a contradiction (who wins?); kinematic bodies
+            // are exactly the "animation drives, physics follows" case.
+            if track.property.starts_with("Transform.")
+                && body_kinds.get(&track.entity)
+                    == Some(&crate::components::BodyKind::Dynamic)
+            {
+                errors.push(
+                    cx.err(
+                        codes::ANIMATION_ON_DYNAMIC_BODY,
+                        format!(
+                            "clip {:?} animates {}.{} but {:?} has a dynamic                              RigidBody; make the body kinematic if animation                              should drive it",
+                            clip.name, track.entity, track.property, track.entity
+                        ),
+                        player_path,
+                    )
+                    .entity(&track.entity)
+                    .component("AnimationPlayer"),
+                );
+            }
         }
     }
 
@@ -773,6 +877,60 @@ fn check_component(
         // RigidBody's numeric ranges live in the published schema; the
         // cross-component requirements (Transform, Collider) are entity-level.
         ComponentData::RigidBody(_) => {}
+
+        // Clip references resolve like mesh assets: relative to the scene
+        // file, existence checked here; clip *content* is validated by the
+        // scene-level animation pass so its errors carry the clip's own
+        // file/line.
+        ComponentData::AnimationPlayer(player) => {
+            let path = &format!("{component_path}/clip");
+            if player.clip.contains('#') {
+                errors.push(
+                    cx.err(
+                        codes::ASSET_UNSUPPORTED,
+                        format!(
+                            "clip {:?} is a glTF fragment reference; skeletal                              clips are not yet supported — use a .anim.json                              property clip",
+                            player.clip
+                        ),
+                        path,
+                    )
+                    .entity(entity)
+                    .component("AnimationPlayer")
+                    .field("clip"),
+                );
+            } else if Path::new(&player.clip).is_absolute() {
+                errors.push(
+                    cx.err(
+                        codes::ASSET_PATH_NOT_RELATIVE,
+                        format!(
+                            "clip {:?} is an absolute path; clips are referenced                              relative to the scene file",
+                            player.clip
+                        ),
+                        path,
+                    )
+                    .entity(entity)
+                    .component("AnimationPlayer")
+                    .field("clip"),
+                );
+            } else {
+                let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+                if !base_dir.join(&player.clip).is_file() {
+                    errors.push(
+                        cx.err(
+                            codes::ASSET_NOT_FOUND,
+                            format!(
+                                "no clip file at {:?} (clip paths resolve relative                                  to the scene file)",
+                                player.clip
+                            ),
+                            path,
+                        )
+                        .entity(entity)
+                        .component("AnimationPlayer")
+                        .field("clip"),
+                    );
+                }
+            }
+        }
     }
 
     checked

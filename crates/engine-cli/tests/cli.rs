@@ -652,3 +652,128 @@ fn physics_validation_errors_surface_end_to_end() {
     let body = lines.iter().find(|l| l["error"] == "unknown_body_kind").unwrap();
     assert_eq!(body["did_you_mean"], "dynamic");
 }
+
+// ── animation (M9) ─────────────────────────────────────────────────────
+
+/// The strictest determinism check in the verification doc: the same scene
+/// at the same --time renders byte-identical PNGs, and the loop period
+/// lands exactly back on the t=0 pose.
+#[test]
+fn animated_screenshots_are_time_deterministic() {
+    let scene = repo_path("examples/scenes/verify/m9_spin.json");
+    let dir = std::env::temp_dir().join(format!("engine-m9-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let shot = |name: &str, time: &str| -> Option<Vec<u8>> {
+        let out = dir.join(format!("{name}.png"));
+        let output = engine()
+            .arg("screenshot")
+            .arg(&scene)
+            .arg("--time")
+            .arg(time)
+            .arg("--out")
+            .arg(&out)
+            .arg("--width")
+            .arg("128")
+            .arg("--height")
+            .arg("72")
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "screenshot failed for a non-GPU reason: {stderr}"
+            );
+            return None;
+        }
+        Some(std::fs::read(&out).unwrap())
+    };
+
+    let Some(t0) = shot("t0", "0.0") else {
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    };
+    let quarter = shot("t025", "0.25").unwrap();
+    let period = shot("t2", "2.0").unwrap();
+
+    assert_ne!(t0, quarter, "the cube must visibly move by t=0.25");
+    assert_eq!(t0, period, "t=2.0 is the loop period; pose and pixels must match t=0");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn list_animations_reports_the_spin_clip() {
+    let output = engine()
+        .arg("list-animations")
+        .arg(repo_path("examples/scenes/verify/m9_spin.json"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    assert_eq!(report["clips"][0]["name"], "spin");
+    assert_eq!(report["clips"][0]["duration"], 2.0);
+    assert_eq!(report["clips"][0]["tracks"][0]["entity"], "SpinCube");
+    assert_eq!(report["clips"][0]["tracks"][0]["property"], "Transform.rotation");
+}
+
+#[test]
+fn clip_files_validate_directly() {
+    let output = engine()
+        .arg("validate")
+        .arg(repo_path("examples/scenes/verify/animations/spin.anim.json"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}
+
+/// Scene-context animation errors, end to end: a typo'd target entity, two
+/// clips fighting over one property, and a clip driving a dynamic body.
+#[test]
+fn animation_scene_errors_fire_with_suggestions() {
+    let dir = std::env::temp_dir().join(format!("engine-m9-errors-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("animations")).unwrap();
+    std::fs::write(
+        dir.join("animations/spin.anim.json"),
+        r#"{"name":"spin","tracks":[{"entity":"SpinCube","property":"Transform.rotation",
+            "keys":[{"time":0.0,"value":[0,0,0]},{"time":2.0,"value":[0,360,0]}]}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("animations/typo.anim.json"),
+        r#"{"name":"typo","tracks":[{"entity":"SpinCub","property":"Transform.rotation",
+            "keys":[{"time":0.0,"value":[0,0,0]},{"time":1.0,"value":[0,90,0]}]}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.json"),
+        r#"{"name":"err","entities":[
+            {"name":"SpinCube","components":[
+                {"type":"Transform"},{"type":"Mesh","asset":"builtin:cube"},
+                {"type":"RigidBody","body":"dynamic"},
+                {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5]},
+                {"type":"AnimationPlayer","clip":"animations/spin.anim.json"}]},
+            {"name":"Rival","components":[
+                {"type":"AnimationPlayer","clip":"animations/spin.anim.json"}]},
+            {"name":"Typo","components":[
+                {"type":"AnimationPlayer","clip":"animations/typo.anim.json"}]},
+            {"name":"Cam","components":[{"type":"Camera","active":true}]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine().arg("validate").arg(dir.join("scene.json")).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stderr_lines(&output);
+    let codes = codes_of(&lines);
+    for expected in ["unknown_entity", "conflicting_tracks", "animation_on_dynamic_body"] {
+        assert!(codes.contains(&expected.to_string()), "missing {expected}: {codes:?}");
+    }
+    let typo = lines.iter().find(|l| l["error"] == "unknown_entity").unwrap();
+    assert_eq!(typo["did_you_mean"], "SpinCube", "{typo}");
+    assert!(
+        typo["file"].as_str().unwrap().contains("typo.anim.json"),
+        "unknown_entity points at the clip file: {typo}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
