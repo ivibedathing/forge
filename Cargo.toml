@@ -5,6 +5,7 @@ members = [
     "crates/engine-render",
     "crates/engine-assets",
     "crates/engine-cli",
+    "crates/engine-editor",
 ]
 
 [workspace.package]
@@ -17,6 +18,7 @@ publish = false
 engine-core = { path = "crates/engine-core" }
 engine-render = { path = "crates/engine-render" }
 engine-assets = { path = "crates/engine-assets" }
+engine-editor = { path = "crates/engine-editor" }
 
 wgpu = "30"
 # 0.31 is still beta; stay on the stable line for the foundation.
@@ -26,6 +28,12 @@ hecs = "0.11"
 gltf = { version = "1.4", default-features = false, features = ["import", "utils"] }
 schemars = "1.2"
 pollster = "1.0"
+# Pinned to an egui master commit: the released 0.35 line pairs with wgpu 29,
+# while this workspace is on wgpu 30; master supports wgpu 30 + winit 0.30.
+# Swap to the 0.36 release when it ships. Settled with the user for M7.
+eframe = { git = "https://github.com/emilk/egui", rev = "e6eb00a31c7089d4458c55fcbe5f1253311a7176", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = { git = "https://github.com/emilk/egui", rev = "e6eb00a31c7089d4458c55fcbe5f1253311a7176" }
+egui-wgpu = { git = "https://github.com/emilk/egui", rev = "e6eb00a31c7089d4458c55fcbe5f1253311a7176" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }

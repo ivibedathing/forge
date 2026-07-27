@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M6 are done** (plus most of M1's CLI). JSON scenes load into hecs, render headlessly to PNG
-with PBR lighting, validate with all-errors-at-once reporting under a formalized CLI contract,
-reference glTF mesh files, and pin their renders against committed baselines with
-`engine diff-render`. Verified by 151 tests including offscreen pixel readback and an end-to-end
-CLI suite, and by the verification fixtures from `milestone-verification-scenes.md`
-(`verify/m4_lighting.json` diff-renders bit-exactly against
+**M0–M7 are done** (plus most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
+all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
+their renders against committed baselines with `engine diff-render`, and open in a GUI editor
+that is a live writable *view* onto the file. Verified by 170+ tests including offscreen pixel
+readback and an end-to-end CLI suite, and by the verification fixtures from
+`milestone-verification-scenes.md` (`verify/m4_lighting.json` diff-renders bit-exactly against
 `verify/baselines/m4_lighting.png`; `verify/m5_broken.json` is committed **broken** and must
 never validate — its failing with all seven planted errors is the pass condition, pinned by
 `repo_contracts.rs`). **From M6 on, the standard check's "look at the PNGs" step is
@@ -22,12 +23,29 @@ What works today:
 engine validate <scene.json>... [--strict]  # every error at once; multi-file; --strict promotes warnings
 engine screenshot <scene.json> --out x.png [--camera N] [--width W --height H]
 engine diff-render <scene.json> <baseline.png> [--out diff.png] [--threshold N] [--max-diff-percent P]
+engine edit <scene.json> [--watch]       # GUI editor; --watch = read-only supervision mode
 engine run-scene <scene.json>            # windowed scene viewer
 engine list-components                   # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
 engine run                               # M0 triangle (stack proof)
 engine info                              # selected GPU adapter as JSON
 ```
+
+Editor (M7, `crates/engine-editor`): egui **git-pinned to a master commit** (see the workspace
+Cargo.toml comment — released egui pairs with wgpu 29; swap to the 0.36 release when it ships).
+The scene file stays the single source of truth: the editor polls the file (250ms) and reloads
+on any external change; every editor action commits through
+`engine-core/src/formatter.rs` — a *splice*, not a serialize, so a one-field edit is one hunk on
+one line and untouched content is byte-identical by construction (`cargo test -p engine-core
+formatter` pins this). Commits rebase onto a fresh read by entity `name` + component `type`
+(never index); a vanished target drops the edit with a status-bar notice. Inspector widgets are
+generated from the component schema (a new component is editable the day it exists); the
+validation panel shows the same `EngineError`s the CLI emits, click-to-select. Viewport =
+`SceneRenderer` into an offscreen texture (same pipeline as `engine screenshot`), orbit camera
+(right-drag; shift/middle = pan, scroll = zoom), CPU ray picking, hand-rolled translate gizmo
+(preview in memory, one write on release). Hidden flag `--self-screenshot <png>
+[--self-screenshot-after-ms N]` renders the editor and exits — the agent's way to *look at* the
+editor. `RenderItem` gained an `entity: String` field for picking/selection.
 
 Diff-render (M6): the pure comparison lives in `engine-render/src/diff.rs` (no GPU — unit-tests
 everywhere); the CLI decodes the baseline, renders at the baseline's dimensions (no
@@ -184,7 +202,8 @@ Standard Cargo commands: `cargo build`, `cargo test --workspace`, and
 
 Follow the milestones in design doc §8: ~~M0 window+triangle~~ → ~~M1 CLI skeleton + JSON
 error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ → ~~M4 materials +
-lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ (all done; next per roadmap: M7).
+lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ (all
+done; editor E3 structure edits and E4 undo/redo remain as follow-ups; next per roadmap: M8).
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

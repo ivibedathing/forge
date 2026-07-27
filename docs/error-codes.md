@@ -43,6 +43,10 @@ build fails.
 | `entity_not_found` | 1 | no entity has the requested name |
 | `missing_component` | 1 | the entity exists but lacks the required component |
 | `no_active_camera` | 1 | no camera is marked active and none was named |
+| `edit_target_missing` | 1 | the entity, component, or field an edit targets is not in the file |
+| `scene_write_failed` | 2 | the scene file could not be written |
+| `formatter_desync` | 2 | internal bug: a formatted edit produced invalid JSON; nothing was written |
+| `editor_failed` | 2 | the editor window could not start or run |
 | `asset_not_found` | 1 | an asset reference names no builtin and no existing file |
 | `asset_unsupported` | 1 | the asset's format or feature is not one the engine reads |
 | `asset_path_not_relative` | 1 | asset paths must be relative to the scene file |

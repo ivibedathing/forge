@@ -79,10 +79,19 @@ engine screenshot <scene.json> --out x.png [--camera N] [--width W --height H]
 engine run-scene <scene.json> [--camera N]
 engine diff-render <scene.json> <baseline.png> [--out diff.png] [--camera N]
                    [--threshold N] [--max-diff-percent P]
+engine edit <scene.json> [--watch]           # GUI editor; --watch = read-only
 engine build [--check]                       # --check: type-check only, ~half the time
 engine list-components                       # scene + component JSON Schemas
 engine info                                  # selected GPU adapter
 ```
+
+`engine edit` is a windowed command and exempt from the streams contract
+while its window is open; on a fatal failure it still exits with one
+`EngineError` line (`editor_failed`, exit 2). Its *writes* are the contract:
+every editor action is one formatter splice — one field, one hunk, atomic
+rename — and external edits to the open file win within ~250ms. The editor
+runs the same validation as `engine validate` and shows the same error
+objects.
 
 `engine validate examples/scenes/*.json --strict` is the whole CI story:
 diagnostics interleave with per-file `file` fields, and the stdout summary

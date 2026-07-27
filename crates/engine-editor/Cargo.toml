@@ -1,23 +1,19 @@
 [package]
-name = "engine-cli"
+name = "engine-editor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[[bin]]
-name = "engine"
-path = "src/main.rs"
-
 [dependencies]
 engine-core.workspace = true
 engine-render.workspace = true
 engine-assets.workspace = true
-engine-editor.workspace = true
-winit.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
 wgpu.workspace = true
-pollster.workspace = true
-image.workspace = true
-clap.workspace = true
-serde.workspace = true
+glam.workspace = true
 serde_json.workspace = true
+image.workspace = true
+log = "0.4"
