@@ -90,6 +90,12 @@ pub struct PhysicsWorld {
 
     /// hecs entity → rapier body, for entities with a `RigidBody` component.
     body_of: HashMap<Entity, RigidBodyHandle>,
+    /// The `(linear, angular-degrees)` velocities this world last wrote into
+    /// each dynamic body's component (build values initially). A component
+    /// that differs was written by a script and gets pushed into rapier
+    /// before the next step. Push-only-on-change keeps the deg↔rad float
+    /// round-trip out of untouched runs, so golden traces stay golden.
+    written_velocities: HashMap<Entity, (Vec3, Vec3)>,
     /// Any collider → the entity it came from (bodies and static geometry).
     entity_of_collider: HashMap<ColliderHandle, Entity>,
     /// Entity → stable name, resolved once at build.
@@ -125,6 +131,7 @@ impl PhysicsWorld {
             body_of: HashMap::new(),
             entity_of_collider: HashMap::new(),
             name_of: HashMap::new(),
+            written_velocities: HashMap::new(),
         };
 
         // Deterministic build order: hecs iteration order is stable for a
@@ -152,6 +159,19 @@ impl PhysicsWorld {
                     BodyKind::Kinematic => RigidBodyBuilder::kinematic_position_based(),
                     BodyKind::Fixed => RigidBodyBuilder::fixed(),
                 };
+                let mut locked = LockedAxes::empty();
+                for (axis, flag) in [
+                    LockedAxes::ROTATION_LOCKED_X,
+                    LockedAxes::ROTATION_LOCKED_Y,
+                    LockedAxes::ROTATION_LOCKED_Z,
+                ]
+                .into_iter()
+                .zip(body.locked_rotations)
+                {
+                    if flag {
+                        locked |= axis;
+                    }
+                }
                 let built = builder
                     .pose(position)
                     .linvel(body.linear_velocity)
@@ -161,9 +181,13 @@ impl PhysicsWorld {
                     .angular_damping(body.angular_damping)
                     .ccd_enabled(body.ccd)
                     .can_sleep(body.can_sleep)
+                    .locked_axes(locked)
                     .build();
                 let handle = physics.bodies.insert(built);
                 physics.body_of.insert(entity, handle);
+                physics
+                    .written_velocities
+                    .insert(entity, (body.linear_velocity, body.angular_velocity));
                 handle
             });
 
@@ -194,7 +218,9 @@ impl PhysicsWorld {
     /// the contact events the step produced, in deterministic order.
     pub fn step(&mut self, world: &mut World) -> Vec<ContactEvent> {
         // 1. Kinematic bodies follow whatever the world says their
-        //    Transform is now.
+        //    Transform is now; dynamic bodies pick up script-written
+        //    velocities (M11): a component velocity differing from the value
+        //    this world last wrote back means a script changed it.
         for (&entity, &handle) in &self.body_of {
             let Some(body) = self.bodies.get_mut(handle) else {
                 continue;
@@ -202,6 +228,15 @@ impl PhysicsWorld {
             if body.is_kinematic() {
                 if let Ok(transform) = world.get::<&Transform>(entity) {
                     body.set_next_kinematic_position(pose_of(&transform));
+                }
+            } else if body.is_dynamic() {
+                if let Ok(component) = world.get::<&RigidBodyData>(entity) {
+                    let current = (component.linear_velocity, component.angular_velocity);
+                    if self.written_velocities.get(&entity) != Some(&current) {
+                        body.set_linvel(current.0, true);
+                        body.set_angvel(degrees_to_radians(current.1), true);
+                        self.written_velocities.insert(entity, current);
+                    }
                 }
             }
         }
@@ -239,6 +274,10 @@ impl PhysicsWorld {
             if let Ok(mut rigid_body) = world.get::<&mut RigidBodyData>(entity) {
                 rigid_body.linear_velocity = body.linvel();
                 rigid_body.angular_velocity = body.angvel() * (180.0 / std::f32::consts::PI);
+                self.written_velocities.insert(
+                    entity,
+                    (rigid_body.linear_velocity, rigid_body.angular_velocity),
+                );
             }
         }
 
@@ -610,4 +649,100 @@ mod tests {
         // Scaled cube has half-extent 1.0 → rests at 0.05 + 1.0.
         assert!((y - 1.05).abs() < 0.02, "scaled cube should rest at ≈1.05, is at {y}");
     }
+
+    /// A script writing `RigidBody.linear_velocity` between steps must reach
+    /// rapier (the M11 vehicle contract), and a *reverted* write must too —
+    /// the cache compares against what physics wrote, not history.
+    #[test]
+    fn script_written_velocities_reach_the_solver() {
+        let source = r#"{
+          "name": "push",
+          "entities": [
+            {"name": "Ground", "components": [
+              {"type": "Transform"},
+              {"type": "Collider", "shape": "cuboid", "half_extents": [50.0, 0.05, 50.0]}
+            ]},
+            {"name": "Car", "components": [
+              {"type": "Transform", "position": [0.0, 0.55, 0.0]},
+              {"type": "RigidBody", "body": "dynamic", "locked_rotations": [true, false, true]},
+              {"type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5], "friction": 0.0}
+            ]}
+          ]
+        }"#;
+        let mut scene = Scene::from_source(source, "test.json").unwrap();
+        let settings = PhysicsSettings::default();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        let entity = scene.entity("Car").unwrap();
+
+        // Settle, then "throttle": write a forward velocity like a script.
+        for _ in 0..30 {
+            physics.step(&mut scene.world);
+        }
+        let x_before = position_of(&scene, "Car").x;
+        scene
+            .world
+            .get::<&mut RigidBodyData>(entity)
+            .unwrap()
+            .linear_velocity = Vec3::new(5.0, 0.0, 0.0);
+        for _ in 0..60 {
+            physics.step(&mut scene.world);
+        }
+        let moved = position_of(&scene, "Car").x - x_before;
+        assert!(
+            moved > 3.0,
+            "a script-written velocity must move the body (moved {moved})"
+        );
+    }
+
+    /// Untouched components must NOT be pushed back into rapier: the write
+    /// path stays silent unless a script actually wrote, or the deg↔rad
+    /// round-trip would perturb every trace.
+    #[test]
+    fn untouched_velocities_do_not_perturb_the_golden_path() {
+        let (scene_a, _, _) = simulate(DROP, 200);
+        let (scene_b, _, _) = simulate(DROP, 200);
+        assert_eq!(
+            position_of(&scene_a, "Cube"),
+            position_of(&scene_b, "Cube"),
+            "byte-identical runs"
+        );
+    }
+
+    /// `locked_rotations` holds the axis fixed even under off-center impact.
+    #[test]
+    fn locked_rotations_pin_pitch_and_roll() {
+        let source = r#"{
+          "name": "locked",
+          "entities": [
+            {"name": "Ground", "components": [
+              {"type": "Transform"},
+              {"type": "Collider", "shape": "cuboid", "half_extents": [50.0, 0.05, 50.0]}
+            ]},
+            {"name": "Wall", "components": [
+              {"type": "Transform", "position": [3.0, 0.6, 0.0]},
+              {"type": "Collider", "shape": "cuboid", "half_extents": [0.2, 0.5, 2.0]}
+            ]},
+            {"name": "Car", "components": [
+              {"type": "Transform", "position": [0.0, 0.75, 0.0]},
+              {"type": "RigidBody", "body": "dynamic",
+               "linear_velocity": [8.0, 0.0, 0.0],
+               "locked_rotations": [true, false, true]},
+              {"type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.7, 0.5]}
+            ]}
+          ]
+        }"#;
+        let mut scene = Scene::from_source(source, "test.json").unwrap();
+        let settings = PhysicsSettings::default();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        for _ in 0..120 {
+            physics.step(&mut scene.world);
+        }
+        let entity = scene.entity("Car").unwrap();
+        let rotation = scene.world.get::<&Transform>(entity).unwrap().rotation;
+        assert!(
+            rotation.x.abs() < 1e-3 && rotation.z.abs() < 1e-3,
+            "pitch/roll must stay locked through a wall hit: {rotation}"
+        );
+    }
 }
+

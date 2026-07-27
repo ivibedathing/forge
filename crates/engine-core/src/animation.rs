@@ -323,11 +323,17 @@ fn field_shape(schema: &serde_json::Value, component: &str, field: &str) -> Opti
         || property["type"]
             .as_array()
             .is_some_and(|t| t.iter().any(|x| x == "array"));
+    // Only arrays *of numbers* animate: a `[bool; 3]` like
+    // `RigidBody.locked_rotations` is configuration, not a pose.
+    let items_numeric = property["items"]["type"] == "number"
+        || property["items"]["type"]
+            .as_array()
+            .is_some_and(|t| t.iter().any(|x| x == "number"));
     let is_number = property["type"] == "number"
         || property["type"]
             .as_array()
             .is_some_and(|t| t.iter().any(|x| x == "number"));
-    if is_array || is_number {
+    if (is_array && items_numeric) || is_number {
         Some(is_array)
     } else {
         None // Not a numeric/vector field: not animatable.

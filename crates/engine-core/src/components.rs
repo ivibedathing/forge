@@ -281,6 +281,12 @@ pub struct RigidBody {
     /// Allow the solver to put this body to sleep once it settles.
     #[serde(default = "yes")]
     pub can_sleep: bool,
+
+    /// Lock rotation around the `[x, y, z]` world axes. A vehicle locks
+    /// `[true, false, true]`: yaw stays free for steering while contacts can
+    /// no longer pitch or roll it over.
+    #[serde(default)]
+    pub locked_rotations: [bool; 3],
 }
 
 fn one() -> f32 {

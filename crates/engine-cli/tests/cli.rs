@@ -1056,9 +1056,11 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// The committed demo: replaying the recorded lap drives the car around the
-/// track and back to the start line. This is the M11 verification fixture —
-/// interactive gameplay, verified headlessly from text files alone.
+/// The committed demo: replaying the recorded session drives the physical
+/// car (dynamic RigidBody; the script is engine/brakes/tires) three laps
+/// around the track and parks it on the start line. This is the M11
+/// verification fixture — interactive gameplay, verified headlessly from
+/// text files alone.
 #[test]
 fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     let scene = repo_path("examples/scenes/car_track.json");
@@ -1084,14 +1086,14 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
         path
     };
 
-    // Mid-lap: far side of the circuit (the north straight, z ≈ -9).
-    let mid = baked_position(&bake_at("300", "mid.json"), "Car");
-    assert!(mid[2] < -5.0, "mid-lap the car is on the far straight: {mid:?}");
+    // Mid-drive: far side of the circuit (the north straight, z ≈ -9).
+    let mid = baked_position(&bake_at("1260", "mid.json"), "Car");
+    assert!(mid[2] < -5.0, "mid-drive the car is on the far straight: {mid:?}");
 
-    // Full lap: back on the start line, within half a car length.
-    let end = baked_position(&bake_at("600", "end.json"), "Car");
+    // After three laps and the braking phase: parked on the start line.
+    let end = baked_position(&bake_at("2520", "end.json"), "Car");
     let (dx, dz) = (end[0], end[2] - 9.0);
     let distance = (dx * dx + dz * dz).sqrt();
-    assert!(distance < 0.5, "lap must close on the start line: {end:?}");
+    assert!(distance < 1.5, "the drive must park on the start line: {end:?}");
     std::fs::remove_dir_all(&dir).ok();
 }

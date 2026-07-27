@@ -177,11 +177,27 @@ session once, regression-test it forever. Key names are the curated W3C-code all
 `engine_core::input::KNOWN_KEYS`. `world.look_at(name, x, y, z)` aims an entity's local −Z
 with a level horizon (pitch+yaw through the XYZ Euler order would roll — that's why it
 exists); the viewer re-resolves the camera transform every frame so scripts can drive a chase
-camera, and the headless commands already resolved it after stepping. Demo:
-`examples/scenes/car_track.json` + `scripts/car.rhai` (arrow-key truck, chase cam, `TopCam`
-overhead debug camera) + `car_track_lap.input.jsonl` (a committed 587-step lap that returns
-the car to the start line, pinned by CLI test and by
-`verify/baselines/m11_lap.png`).
+camera, and the headless commands already resolved it after stepping.
+
+Vehicle dynamics (M11.5): scripts read/write `RigidBody` velocities — `world.linear_velocity`
+/ `set_linear_velocity` (m/s) and `angular_velocity` pair (deg/s) — and `PhysicsWorld::step`
+pushes a dynamic body's component velocity into rapier **only when it differs from what
+physics last wrote back** (cache in `written_velocities`), so the deg↔rad round-trip never
+touches untouched runs and the M8 golden trace stays byte-identical. `RigidBody.
+locked_rotations: [bool; 3]` maps to rapier `LockedAxes` (a vehicle locks `[true, false,
+true]`). `world.forward(name)` returns the entity's world -Z — **required** for heading math:
+XYZ Euler clamps the middle angle to ±90°, so physics-integrated yaws past that come back as
+the `(±180, θ, ±180)` twin and `rotation[1]` stops being "the yaw" (this bug cost a debugging
+session; the twin is also why `animation.rs::field_shape` only treats arrays *of numbers* as
+animatable). Demo: `examples/scenes/car_track.json` + `scripts/car.rhai` — the truck is a
+dynamic body (≈1.5 t via collider density; collider box measured from the glb, `offset`
+centers it); the script is drivetrain+tires: accel/brake/drag/grip/speed-scaled steering
+against the body's velocity, physics owns gravity and barrier collisions. Contact friction on
+car+ground is near zero *on purpose* (the script models rolling resistance; rapier friction
+would double-brake the drive force). `car_track_lap.input.jsonl` is a 2 442-step recording
+(authored by a closed-loop autopilot: simulate a 10-step chunk → bake → read state → next
+keys) driving three clockwise laps and parking on the start line — pinned by CLI test and
+`verify/baselines/m11_lap.png`.
 
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).

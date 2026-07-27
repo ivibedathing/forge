@@ -35,6 +35,21 @@
           ],
           "metallic": 0.0,
           "roughness": 0.95
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            -0.5,
+            0.0
+          ],
+          "friction": 0.05
         }
       ]
     },
@@ -257,6 +272,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -294,6 +320,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -331,6 +368,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -368,6 +416,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -405,6 +464,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -442,6 +512,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -479,6 +560,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -516,6 +608,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -553,6 +656,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -590,6 +704,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -627,6 +752,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -664,6 +800,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -701,6 +848,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -738,6 +896,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -775,6 +944,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -812,6 +992,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -849,6 +1040,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -886,6 +1088,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -923,6 +1136,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -960,6 +1184,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -997,6 +1232,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1034,6 +1280,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1071,6 +1328,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1108,6 +1376,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1145,6 +1424,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1182,6 +1472,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1219,6 +1520,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1256,6 +1568,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1293,6 +1616,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1330,6 +1664,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1367,6 +1712,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1404,6 +1760,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1441,6 +1808,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1478,6 +1856,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1515,6 +1904,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1552,6 +1952,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1589,6 +2000,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1626,6 +2048,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1663,6 +2096,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1700,6 +2144,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1737,6 +2192,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1774,6 +2240,17 @@
           ],
           "metallic": 0.0,
           "roughness": 0.7
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.4,
+          "restitution": 0.4
         }
       ]
     },
@@ -1797,6 +2274,33 @@
             0.45,
             0.45
           ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "locked_rotations": [
+            true,
+            false,
+            true
+          ],
+          "ccd": true
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            1.458,
+            1.799,
+            3.046
+          ],
+          "offset": [
+            0.0,
+            0.842,
+            0.676
+          ],
+          "density": 250.0,
+          "friction": 0.05,
+          "restitution": 0.1
         },
         {
           "type": "Mesh",
@@ -1924,5 +2428,13 @@
         }
       ]
     }
-  ]
+  ],
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.81,
+      0.0
+    ],
+    "timestep_hz": 60
+  }
 }

@@ -711,21 +711,24 @@ structured errors in one run.
 ## M11 — Input (keyboard, replayable)
 
 **Scene:** `examples/scenes/car_track.json` — the drivable-car demo itself: a barrier-lined
-rectangular circuit, a truck with `scripts/car.rhai` (arrow keys: up/down throttle, left/right
-steer), and a scripted chase camera (`world.look_at`). **Timeline:**
-`examples/scenes/car_track_lap.input.jsonl` — a committed 587-step recording that laps the
-circuit clockwise.
+rectangular circuit with real colliders, a truck that is a **dynamic RigidBody** (≈1.5 t from
+collider density, pitch/roll locked) whose `scripts/car.rhai` is the drivetrain — engine
+force, braking, drag, tire grip, speed-scaled steering — applied through the M11 velocity
+API, plus a spring chase camera (`world.look_at`). **Timeline:**
+`examples/scenes/car_track_lap.input.jsonl` — a committed 2 442-step recording (authored by a
+closed-loop autopilot driving the real engine chunk-by-chunk) that laps the circuit three
+times clockwise, brakes, and parks on the start line.
 
 The pass condition is the M11 thesis — *interactive never means unverifiable*:
 
 ```bash
 engine validate examples/scenes/car_track.json
 # Replay the lap headlessly; the car must return to the start line:
-engine simulate examples/scenes/car_track.json --steps 600 \
+engine simulate examples/scenes/car_track.json --steps 2520 \
     --input examples/scenes/car_track_lap.input.jsonl --bake /tmp/lap.json
-# → Car back within 0.5 of [0, 0.47, 9] (pinned by the CLI test suite)
+# → Car parked within 1.5 of the start line [0, 0.43, 9], speed ~0 (CLI test)
 engine diff-render examples/scenes/car_track.json \
-    examples/scenes/verify/baselines/m11_lap.png --steps 600 \
+    examples/scenes/verify/baselines/m11_lap.png --steps 2520 \
     --input examples/scenes/car_track_lap.input.jsonl
 # → bit-exact; a recorded drive is a pinnable render like any other pose
 engine run-scene examples/scenes/car_track.json   # the playable version
