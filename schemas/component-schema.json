@@ -356,6 +356,20 @@
             "minItems": 3,
             "type": "array"
           },
+          "locked_rotations": {
+            "default": [
+              false,
+              false,
+              false
+            ],
+            "description": "Lock rotation around the `[x, y, z]` world axes. A vehicle locks\n`[true, false, true]`: yaw stays free for steering while contacts can\nno longer pitch or roll it over.",
+            "items": {
+              "type": "boolean"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
           "type": {
             "const": "RigidBody",
             "type": "string"
@@ -874,6 +888,20 @@
                 "items": {
                   "format": "float",
                   "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "locked_rotations": {
+                "default": [
+                  false,
+                  false,
+                  false
+                ],
+                "description": "Lock rotation around the `[x, y, z]` world axes. A vehicle locks\n`[true, false, true]`: yaw stays free for steering while contacts can\nno longer pitch or roll it over.",
+                "items": {
+                  "type": "boolean"
                 },
                 "maxItems": 3,
                 "minItems": 3,

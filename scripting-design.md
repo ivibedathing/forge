@@ -82,11 +82,14 @@ fn step(world, step) {
 | `world.rotation(name)` / `world.set_rotation(name, x, y, z)` | `Transform.rotation`, Euler degrees |
 | `world.scale(name)` / `world.set_scale(name, x, y, z)` | `Transform.scale` |
 | `world.key(name)` | (M11) `true` if the key is held during this step; unknown key names are runtime errors with a `did you mean` |
+| `world.forward(name)` | (M11) the entity's world-space forward (local −Z) as `[x, y, z]` — use this, never yaw math on `rotation[1]`: XYZ Euler clamps the middle angle to ±90°, so physics-integrated yaws past that come back as the `(±180, θ, ±180)` twin |
+| `world.linear_velocity(name)` / `world.set_linear_velocity(name, x, y, z)` | (M11) `RigidBody.linear_velocity`, m/s; a write to a dynamic body reaches the solver before the next step — the vehicle primitive |
+| `world.angular_velocity(name)` / `world.set_angular_velocity(name, x, y, z)` | (M11) `RigidBody.angular_velocity`, **degrees/sec** (file convention) |
 | `world.look_at(name, x, y, z)` | (M11) aim the entity's local −Z at a point with a level horizon — the chase-camera primitive (composing pitch and yaw through the XYZ Euler order rolls the horizon; this computes the decomposition correctly) |
 
 Getters return `[x, y, z]` arrays. A name that resolves to no entity, or an entity without a
 `Transform`, raises a script runtime error naming the entity — deterministic failure over
-silent no-op. Velocity access, material access, spawning, and events are deferred (§7).
+silent no-op. Material access, spawning, and events are deferred (§7); velocity access arrived with M11's car.
 Input semantics (key names, the timeline file `--input` replays) live in `input-design.md`.
 
 ## 5. Workspace

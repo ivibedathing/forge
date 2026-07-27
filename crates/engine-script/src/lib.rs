@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use engine_core::components::{Name, Script, Transform};
+use engine_core::components::{Name, RigidBody, Script, Transform};
 use engine_core::input::{self, InputState};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
@@ -57,17 +57,21 @@ struct WorldApi {
 }
 
 impl WorldApi {
+    fn entity(&self, name: &str) -> std::result::Result<hecs::Entity, Box<EvalAltResult>> {
+        self.names.get(name).copied().ok_or_else(|| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                format!("no entity named {name:?}").into(),
+                Position::NONE,
+            ))
+        })
+    }
+
     fn with_transform<T>(
         &mut self,
         name: &str,
         f: impl FnOnce(&mut Transform) -> T,
     ) -> std::result::Result<T, Box<EvalAltResult>> {
-        let entity = *self.names.get(name).ok_or_else(|| {
-            Box::new(EvalAltResult::ErrorRuntime(
-                format!("no entity named {name:?}").into(),
-                Position::NONE,
-            ))
-        })?;
+        let entity = self.entity(name)?;
         let world = self.world.borrow_mut();
         let mut transform = world.get::<&mut Transform>(entity).map_err(|_| {
             Box::new(EvalAltResult::ErrorRuntime(
@@ -76,6 +80,25 @@ impl WorldApi {
             ))
         })?;
         Ok(f(&mut transform))
+    }
+
+    /// The vehicle path: velocity access needs a `RigidBody`; what a write
+    /// means is the physics step's business (dynamic bodies pick it up
+    /// before integrating — see `PhysicsWorld::step`).
+    fn with_rigid_body<T>(
+        &mut self,
+        name: &str,
+        f: impl FnOnce(&mut RigidBody) -> T,
+    ) -> std::result::Result<T, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow_mut();
+        let mut body = world.get::<&mut RigidBody>(entity).map_err(|_| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                format!("entity {name:?} has no RigidBody").into(),
+                Position::NONE,
+            ))
+        })?;
+        Ok(f(&mut body))
     }
 }
 
@@ -152,6 +175,63 @@ fn curated_engine() -> rhai::Engine {
          -> std::result::Result<(), Box<EvalAltResult>> {
             w.with_transform(name, |t| {
                 t.rotation = glam::Vec3::new(x as f32, y as f32, z as f32);
+            })
+        },
+    );
+    engine.register_fn(
+        "forward",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.with_transform(name, |t| {
+                // The entity's world-space -Z. Scripts must use this rather
+                // than treating rotation[1] as "the yaw": XYZ Euler restricts
+                // the middle angle to ±90°, so a physics-integrated yaw past
+                // that comes back as the twin (±180, θ, ±180) and naive yaw
+                // math silently goes wrong.
+                let rotation = glam::Quat::from_euler(
+                    glam::EulerRot::XYZ,
+                    t.rotation.x.to_radians(),
+                    t.rotation.y.to_radians(),
+                    t.rotation.z.to_radians(),
+                );
+                vec3_array(rotation * -glam::Vec3::Z)
+            })
+        },
+    );
+    engine.register_fn(
+        "linear_velocity",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.with_rigid_body(name, |b| vec3_array(b.linear_velocity))
+        },
+    );
+    engine.register_fn(
+        "set_linear_velocity",
+        |w: &mut WorldApi,
+         name: &str,
+         x: f64,
+         y: f64,
+         z: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_rigid_body(name, |b| {
+                b.linear_velocity = glam::Vec3::new(x as f32, y as f32, z as f32);
+            })
+        },
+    );
+    engine.register_fn(
+        "angular_velocity",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.with_rigid_body(name, |b| vec3_array(b.angular_velocity))
+        },
+    );
+    engine.register_fn(
+        "set_angular_velocity",
+        |w: &mut WorldApi,
+         name: &str,
+         x: f64,
+         y: f64,
+         z: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_rigid_body(name, |b| {
+                b.angular_velocity = glam::Vec3::new(x as f32, y as f32, z as f32);
             })
         },
     );
@@ -573,6 +653,94 @@ mod tests {
             "{}",
             error.message
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn forward_is_representation_independent() {
+        let dir = temp_dir("fwd");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                let f = world.forward("Mover");
+                world.set_position("Mover", f[0], f[1], f[2]);
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let entity = scene.entity("Mover").unwrap();
+
+        // Physics writes yaws past ±90° as the gimbal twin (±180, θ, ±180),
+        // where (−180, θ, −180) ≡ plain yaw 180−θ. `forward` must read both
+        // representations correctly — this is the reason it exists.
+        let yaw150 = glam::Vec3::new(
+            -(150f32.to_radians().sin()),
+            0.0,
+            -(150f32.to_radians().cos()),
+        );
+        for (rotation, expected) in [
+            (glam::Vec3::new(0.0, 90.0, 0.0), glam::Vec3::new(-1.0, 0.0, 0.0)),
+            (glam::Vec3::new(0.0, 150.0, 0.0), yaw150),
+            (glam::Vec3::new(-180.0, 30.0, -180.0), yaw150), // twin of yaw 150
+        ] {
+            scene.world.get::<&mut Transform>(entity).unwrap().rotation = rotation;
+            host.step(&mut scene.world, 0, &InputState::default()).unwrap();
+            let p = scene.world.get::<&Transform>(entity).unwrap().position;
+            assert!(
+                (p - expected).length() < 1e-4,
+                "rotation {rotation} gave forward {p}, expected {expected}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn velocity_access_reads_and_writes_the_rigid_body() {
+        let dir = temp_dir("vel");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                let v = world.linear_velocity("Car");
+                world.set_linear_velocity("Car", v[0] + 2.0, v[1], v[2]);
+                world.set_angular_velocity("Car", 0.0, 45.0, 0.0);
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Car","components":[
+                {"type":"Transform"},
+                {"type":"RigidBody","body":"dynamic","linear_velocity":[1.0,0.0,0.0]},
+                {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5]},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene =
+            Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        host.step(&mut scene.world, 0, &InputState::default()).unwrap();
+
+        let entity = scene.entity("Car").unwrap();
+        let body = *scene.world.get::<&engine_core::components::RigidBody>(entity).unwrap();
+        assert_eq!(body.linear_velocity, glam::Vec3::new(3.0, 0.0, 0.0));
+        assert_eq!(body.angular_velocity, glam::Vec3::new(0.0, 45.0, 0.0));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn velocity_access_without_a_rigid_body_is_a_structured_error() {
+        let dir = temp_dir("novel");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.linear_velocity("Mover"); }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host
+            .step(&mut scene.world, 0, &InputState::default())
+            .unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(error.message.contains("no RigidBody"), "{}", error.message);
         std::fs::remove_dir_all(&dir).ok();
     }
 
