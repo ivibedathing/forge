@@ -35,6 +35,7 @@ fn render(source: &str) -> Image {
         scene.lights().resolved(),
         SIZE,
         SIZE,
+        &[],
     )
     .expect("offscreen render failed")
 }

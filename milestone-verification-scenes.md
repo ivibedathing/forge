@@ -730,7 +730,11 @@ engine simulate examples/scenes/car_track.json --steps 2520 \
 engine diff-render examples/scenes/car_track.json \
     examples/scenes/verify/baselines/m11_lap.png --steps 2520 \
     --input examples/scenes/car_track_lap.input.jsonl
-# → bit-exact; a recorded drive is a pinnable render like any other pose
+# → bit-exact; a recorded drive is a pinnable render like any other pose.
+#   The baseline includes the script's HUD overlay (speedometer + lap
+#   timer, M11.6): the parked car reads SPEED 0 KM/H, LAP 3,
+#   LAST 13.42 / BEST 13.42 — the simulate report carries the same lines
+#   as "hud", so the timing is also asserted without a GPU
 engine run-scene examples/scenes/car_track.json   # the playable version
 ```
 

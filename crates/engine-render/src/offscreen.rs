@@ -47,8 +47,10 @@ pub fn render(
     lights: ResolvedLights,
     width: u32,
     height: u32,
+    hud: &[String],
 ) -> Result<Image> {
-    render_with_adapter(items, camera, camera_model, lights, width, height).map(|(image, _)| image)
+    render_with_adapter(items, camera, camera_model, lights, width, height, hud)
+        .map(|(image, _)| image)
 }
 
 /// [`render`], also reporting which adapter drew the image.
@@ -63,6 +65,7 @@ pub fn render_with_adapter(
     lights: ResolvedLights,
     width: u32,
     height: u32,
+    hud: &[String],
 ) -> Result<(Image, String)> {
     let (width, height) = (width.max(1), height.max(1));
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -105,6 +108,19 @@ pub fn render_with_adapter(
             clear: scene_renderer::DEFAULT_CLEAR,
         },
     );
+
+    // The HUD composites over the finished frame; scenes with nothing to say
+    // pay nothing and render byte-identically to the pre-HUD engine.
+    if !hud.is_empty() {
+        crate::hud::HudRenderer::new(&gpu.device, FORMAT).draw(
+            &gpu.device,
+            &gpu.queue,
+            &view,
+            width,
+            height,
+            hud,
+        );
+    }
 
     read_back(&gpu, &texture, width, height).map(|image| (image, adapter))
 }

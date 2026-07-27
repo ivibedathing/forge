@@ -597,9 +597,11 @@ fn diff_render(
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    if steps > 0 {
-        simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
-    }
+    let hud = if steps > 0 {
+        simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?.hud
+    } else {
+        Vec::new()
+    };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
@@ -611,6 +613,7 @@ fn diff_render(
         scene.lights().resolved(),
         baseline.width,
         baseline.height,
+        &hud,
     )?;
 
     let (stats, diff_image) = engine_render::diff::diff(&actual, &baseline, threshold)?;
@@ -750,6 +753,7 @@ fn filmstrip(
             scene.lights().resolved(),
             tile_width,
             tile_height,
+            &[],
         )?;
         let tile =
             image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
@@ -856,9 +860,11 @@ fn screenshot(
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    if steps > 0 {
-        simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
-    }
+    let hud = if steps > 0 {
+        simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?.hud
+    } else {
+        Vec::new()
+    };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
@@ -871,6 +877,7 @@ fn screenshot(
         scene.lights().resolved(),
         width,
         height,
+        &hud,
     )?;
 
     let png = image::RgbaImage::from_raw(image.width, image.height, image.pixels)
@@ -880,16 +887,17 @@ fn screenshot(
             .file(out.display().to_string())
     })?;
 
-    println!(
-        "{}",
-        serde_json::json!({
-            "written": out.display().to_string(),
-            "width": image.width,
-            "height": image.height,
-            "scene": scene.name,
-            "entities_drawn": drawn,
-        })
-    );
+    let mut report = serde_json::json!({
+        "written": out.display().to_string(),
+        "width": image.width,
+        "height": image.height,
+        "scene": scene.name,
+        "entities_drawn": drawn,
+    });
+    if !hud.is_empty() {
+        report["hud"] = serde_json::json!(hud);
+    }
+    println!("{report}");
     Ok(())
 }
 
@@ -941,6 +949,7 @@ fn run_scene(
             t: 0.0,
             step_index: 0,
             last: None,
+            hud_lines: Vec::new(),
         })
     } else {
         None
