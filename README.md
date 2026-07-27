@@ -85,7 +85,8 @@ JSON file on disk stays authoritative:
   cleanly onto concurrent external edits.
 
 In the viewport: right-drag orbits, shift- or middle-drag pans, scroll zooms, left-click picks an
-entity. A translate gizmo previews in memory and commits one write on release. The inspector is
+entity. Transform gizmos — `W` move, `R` rotate, `S` scale — preview in memory and commit one
+write on release, each editing its `Transform` field component-wise. The inspector is
 generated from the component schema, so a new component is editable the day it exists, and the
 validation panel shows the same structured errors the CLI emits, click-to-select.
 
