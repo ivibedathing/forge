@@ -43,7 +43,7 @@ impl WindowTarget {
         // A zero-sized surface is not configurable; clamp rather than fail.
         let (width, height) = (width.max(1), height.max(1));
 
-        let config = surface
+        let mut config = surface
             .get_default_config(&gpu.adapter, width, height)
             .ok_or_else(|| {
                 EngineError::new(
@@ -51,6 +51,17 @@ impl WindowTarget {
                     "the selected adapter cannot present to this window's surface",
                 )
             })?;
+
+        // Prefer an sRGB swapchain so the window and `engine screenshot` agree
+        // (M4 renders in linear space and lets the target encode). If the
+        // surface offers no sRGB format, the default stands — a slightly dark
+        // viewer beats no viewer.
+        if !config.format.is_srgb() {
+            let capabilities = surface.get_capabilities(&gpu.adapter);
+            if let Some(srgb) = capabilities.formats.iter().copied().find(|f| f.is_srgb()) {
+                config.format = srgb;
+            }
+        }
 
         surface.configure(&gpu.device, &config);
 

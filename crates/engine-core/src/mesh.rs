@@ -41,6 +41,7 @@ impl MeshData {
 pub enum BuiltinMesh {
     Cube,
     Plane,
+    Sphere,
     Triangle,
 }
 
@@ -49,8 +50,12 @@ impl BuiltinMesh {
     pub const PREFIX: &'static str = "builtin:";
 
     /// Every built-in's full asset string, for errors and suggestions.
-    pub const ASSETS: &'static [&'static str] =
-        &["builtin:cube", "builtin:plane", "builtin:triangle"];
+    pub const ASSETS: &'static [&'static str] = &[
+        "builtin:cube",
+        "builtin:plane",
+        "builtin:sphere",
+        "builtin:triangle",
+    ];
 
     /// Parse a `builtin:` reference. `None` means the string is not a builtin
     /// reference at all (it is a file path); `Some(Err)` means it claims to be
@@ -60,6 +65,7 @@ impl BuiltinMesh {
         Some(match name {
             "cube" => Ok(Self::Cube),
             "plane" => Ok(Self::Plane),
+            "sphere" => Ok(Self::Sphere),
             "triangle" => Ok(Self::Triangle),
             _ => Err(EngineError::new(
                 "asset_not_found",
@@ -74,6 +80,7 @@ impl BuiltinMesh {
         match self {
             Self::Cube => cube(),
             Self::Plane => plane(),
+            Self::Sphere => sphere(),
             Self::Triangle => triangle(),
         }
     }
@@ -280,6 +287,68 @@ fn plane() -> MeshData {
     mesh
 }
 
+/// UV sphere, unit radius, centered on the origin: the lighting probe.
+///
+/// Smooth normals equal to the normalized positions — the property that makes
+/// a sphere ideal for judging specular response in a screenshot, and the
+/// reason this primitive exists (roughness and Fresnel are invisible on flat
+/// faces). 32 segments × 16 rings is plenty at screenshot resolutions.
+fn sphere() -> MeshData {
+    const SEGMENTS: u32 = 32;
+    const RINGS: u32 = 16;
+
+    let vertex_count = ((RINGS + 1) * (SEGMENTS + 1)) as usize;
+    let mut mesh = MeshData {
+        positions: Vec::with_capacity(vertex_count),
+        normals: Vec::with_capacity(vertex_count),
+        uvs: Vec::with_capacity(vertex_count),
+        indices: Vec::with_capacity((RINGS * SEGMENTS * 6) as usize),
+    };
+
+    // The seam column is duplicated (segment 0 == segment SEGMENTS) so UVs can
+    // wrap without interpolating backwards across the seam.
+    for ring in 0..=RINGS {
+        // Polar angle from the +Y pole.
+        let theta = std::f32::consts::PI * ring as f32 / RINGS as f32;
+        for segment in 0..=SEGMENTS {
+            let phi = std::f32::consts::TAU * segment as f32 / SEGMENTS as f32;
+            let position = Vec3::new(
+                theta.sin() * phi.cos(),
+                theta.cos(),
+                theta.sin() * phi.sin(),
+            );
+            mesh.positions.push(position.to_array());
+            mesh.normals.push(position.to_array());
+            mesh.uvs.push([
+                segment as f32 / SEGMENTS as f32,
+                ring as f32 / RINGS as f32,
+            ]);
+        }
+    }
+
+    let columns = SEGMENTS + 1;
+    for ring in 0..RINGS {
+        for segment in 0..SEGMENTS {
+            let a = ring * columns + segment;
+            let b = a + 1;
+            let c = a + columns;
+            let d = c + 1;
+
+            // Two triangles per quad, wound counter-clockwise seen from
+            // outside; the pole rows each collapse one triangle to a line, so
+            // skip those rather than emit degenerates.
+            if ring != 0 {
+                mesh.indices.extend_from_slice(&[a, b, c]);
+            }
+            if ring != RINGS - 1 {
+                mesh.indices.extend_from_slice(&[b, d, c]);
+            }
+        }
+    }
+
+    mesh
+}
+
 /// The M0 triangle, kept as a primitive so the oldest render path stays
 /// reachable from a scene file.
 fn triangle() -> MeshData {
@@ -354,10 +423,59 @@ mod tests {
 
     #[test]
     fn every_primitive_keeps_its_arrays_parallel() {
-        for builtin in [BuiltinMesh::Cube, BuiltinMesh::Plane, BuiltinMesh::Triangle] {
+        for builtin in [
+            BuiltinMesh::Cube,
+            BuiltinMesh::Plane,
+            BuiltinMesh::Sphere,
+            BuiltinMesh::Triangle,
+        ] {
             let mesh = builtin.data();
             assert_eq!(mesh.normals.len(), mesh.positions.len(), "{builtin:?}");
             assert_eq!(mesh.uvs.len(), mesh.positions.len(), "{builtin:?}");
+        }
+    }
+
+    #[test]
+    fn sphere_is_unit_radius_with_normals_matching_positions() {
+        let sphere = BuiltinMesh::Sphere.data();
+        assert_eq!(sphere.vertex_count(), 17 * 33, "(rings+1) x (segments+1)");
+        assert_eq!(
+            sphere.triangle_count(),
+            2 * 32 * 16 - 2 * 32,
+            "two per quad minus one per pole quad"
+        );
+
+        for (position, normal) in sphere.positions.iter().zip(&sphere.normals) {
+            let p = Vec3::from_array(*position);
+            assert!(
+                (p.length() - 1.0).abs() < 1e-5,
+                "every vertex sits on the unit sphere, got {p:?}"
+            );
+            assert_eq!(position, normal, "smooth normals = normalized positions");
+        }
+    }
+
+    #[test]
+    fn sphere_triangles_wind_outward() {
+        // Same check as the cube: an inward-wound triangle would be culled,
+        // leaving a hole that renders as background — invisible, not loud.
+        let sphere = BuiltinMesh::Sphere.data();
+        for triangle in sphere.indices.chunks(3) {
+            let [a, b, c] = [
+                Vec3::from_array(sphere.positions[triangle[0] as usize]),
+                Vec3::from_array(sphere.positions[triangle[1] as usize]),
+                Vec3::from_array(sphere.positions[triangle[2] as usize]),
+            ];
+            let geometric = (b - a).cross(c - a);
+            assert!(
+                geometric.length() > 1e-7,
+                "degenerate triangle survived pole skipping: {a:?} {b:?} {c:?}"
+            );
+            let outward = (a + b + c) / 3.0;
+            assert!(
+                geometric.dot(outward) > 0.0,
+                "a sphere face winds inward: {a:?} {b:?} {c:?}"
+            );
         }
     }
 

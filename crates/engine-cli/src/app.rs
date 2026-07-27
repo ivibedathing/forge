@@ -29,6 +29,7 @@ pub enum Content {
         items: Vec<RenderItem>,
         camera: Camera,
         camera_model: Mat4,
+        lights: engine_core::scene::ResolvedLights,
     },
 }
 
@@ -109,6 +110,7 @@ impl ViewerApp {
                     items,
                     camera,
                     camera_model,
+                    lights,
                 },
             ) => {
                 let (width, height) = target.size();
@@ -126,6 +128,8 @@ impl ViewerApp {
                             depth,
                             items,
                             view_projection,
+                            camera_position: camera_model.w_axis.truncate(),
+                            lights: *lights,
                             clear: scene_renderer::DEFAULT_CLEAR,
                         },
                     );

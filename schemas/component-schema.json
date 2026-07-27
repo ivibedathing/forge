@@ -115,7 +115,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Surface appearance. Consumed properly at M4; at M2 only `albedo` is used,\nas a flat unlit color.",
+        "description": "Surface appearance, in the metallic/roughness parameterization every\nmainstream engine and glTF file uses.\n\nAll color fields are **linear** RGB in `[0, 1]` — physical reflectance, not\nsRGB-encoded screen values. The engine never silently decodes an authored\ncolor; the PNG pixel is the lit, sRGB-encoded result, so `albedo: [0.5,\n0.5, 0.5]` under full light reads back ≈188, not 128.",
         "properties": {
           "albedo": {
             "default": [
@@ -131,18 +131,105 @@
             "minItems": 3,
             "type": "array"
           },
+          "emissive": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Added after lighting, unaffected by any light — \"make this visible\nregardless of lighting\" is a debugging move worth having. Range\n`[0, 1]` per component.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
           "metallic": {
             "default": 0.0,
+            "description": "`0` = dielectric, `1` = metal. Metals have no diffuse; their specular\nis tinted by `albedo`. Range `[0, 1]`.",
             "format": "float",
             "type": "number"
           },
           "roughness": {
             "default": 0.8999999761581421,
+            "description": "Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.\nRange `[0, 1]`.",
             "format": "float",
             "type": "number"
           },
           "type": {
             "const": "Material",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A sun: parallel light with no falloff.\n\nThe light shines down the entity's local **−Z**, taken from its\n`Transform` — the same convention the camera uses, so aiming a light is\naiming a camera. With no `Transform` the light travels toward −Z\n(horizontally); a noon sun is `\"rotation\": [-90, 0, 0]`.\n\nAt most one per scene (`multiple_directional_lights`). A scene with **no**\nlight components at all gets a documented fallback rig (sun + ambient); a\nscene with any light component gets exactly what it wrote — absent means\noff.",
+        "properties": {
+          "color": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Linear RGB chromaticity, each component in `[0, 1]`. Magnitude lives\nin `intensity`.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "intensity": {
+            "default": 1.0,
+            "description": "Unitless multiplier, `>= 0`, unbounded above: intensity 2 is twice as\nbright, and a white light at 1.0 on a white surface head-on reads\nwhite.",
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "DirectionalLight",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A flat, non-directional fill: `albedo * color * intensity`, added to the\nlit result. Exists because a sun-only scene renders back faces pure black,\nand a black region in a screenshot tells an agent nothing.\n\nAt most one per scene (`multiple_ambient_lights`).",
+        "properties": {
+          "color": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Linear RGB, each component in `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "intensity": {
+            "default": 0.05000000074505806,
+            "description": "`>= 0`.",
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "AmbientLight",
             "type": "string"
           }
         },
@@ -158,7 +245,9 @@
     "Transform",
     "Mesh",
     "Camera",
-    "Material"
+    "Material",
+    "DirectionalLight",
+    "AmbientLight"
   ],
   "scene": {
     "$defs": {
@@ -277,7 +366,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Surface appearance. Consumed properly at M4; at M2 only `albedo` is used,\nas a flat unlit color.",
+            "description": "Surface appearance, in the metallic/roughness parameterization every\nmainstream engine and glTF file uses.\n\nAll color fields are **linear** RGB in `[0, 1]` — physical reflectance, not\nsRGB-encoded screen values. The engine never silently decodes an authored\ncolor; the PNG pixel is the lit, sRGB-encoded result, so `albedo: [0.5,\n0.5, 0.5]` under full light reads back ≈188, not 128.",
             "properties": {
               "albedo": {
                 "default": [
@@ -293,18 +382,105 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "emissive": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "Added after lighting, unaffected by any light — \"make this visible\nregardless of lighting\" is a debugging move worth having. Range\n`[0, 1]` per component.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
               "metallic": {
                 "default": 0.0,
+                "description": "`0` = dielectric, `1` = metal. Metals have no diffuse; their specular\nis tinted by `albedo`. Range `[0, 1]`.",
                 "format": "float",
                 "type": "number"
               },
               "roughness": {
                 "default": 0.8999999761581421,
+                "description": "Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.\nRange `[0, 1]`.",
                 "format": "float",
                 "type": "number"
               },
               "type": {
                 "const": "Material",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A sun: parallel light with no falloff.\n\nThe light shines down the entity's local **−Z**, taken from its\n`Transform` — the same convention the camera uses, so aiming a light is\naiming a camera. With no `Transform` the light travels toward −Z\n(horizontally); a noon sun is `\"rotation\": [-90, 0, 0]`.\n\nAt most one per scene (`multiple_directional_lights`). A scene with **no**\nlight components at all gets a documented fallback rig (sun + ambient); a\nscene with any light component gets exactly what it wrote — absent means\noff.",
+            "properties": {
+              "color": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Linear RGB chromaticity, each component in `[0, 1]`. Magnitude lives\nin `intensity`.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "intensity": {
+                "default": 1.0,
+                "description": "Unitless multiplier, `>= 0`, unbounded above: intensity 2 is twice as\nbright, and a white light at 1.0 on a white surface head-on reads\nwhite.",
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "DirectionalLight",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A flat, non-directional fill: `albedo * color * intensity`, added to the\nlit result. Exists because a sun-only scene renders back faces pure black,\nand a black region in a screenshot tells an agent nothing.\n\nAt most one per scene (`multiple_ambient_lights`).",
+            "properties": {
+              "color": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Linear RGB, each component in `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "intensity": {
+                "default": 0.05000000074505806,
+                "description": "`>= 0`.",
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "AmbientLight",
                 "type": "string"
               }
             },

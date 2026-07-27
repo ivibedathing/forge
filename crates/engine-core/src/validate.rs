@@ -83,9 +83,11 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     };
 
     let mut seen_names: Vec<&str> = Vec::with_capacity(entities.len());
-    // (entity name, component path) per active camera, so the surplus-camera
-    // error can point at a concrete line and list candidates.
+    // (entity name, component path) per at-most-one component, so each
+    // surplus error can point at a concrete line and list candidates.
     let mut active_cameras: Vec<(String, String)> = Vec::new();
+    let mut directional_lights: Vec<(String, String)> = Vec::new();
+    let mut ambient_lights: Vec<(String, String)> = Vec::new();
 
     for (entity_index, entity) in entities.iter().enumerate() {
         let entity_path = format!("/entities/{entity_index}");
@@ -189,14 +191,15 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
-            match check_component(&cx, component, name, &component_path) {
-                Ok(Checked {
-                    active_camera: true,
-                }) => {
-                    active_cameras.push((name.to_string(), component_path));
-                }
-                Ok(_) => {}
-                Err(e) => errors.push(e),
+            let checked = check_component(&cx, component, name, &component_path, &mut errors);
+            if checked.active_camera {
+                active_cameras.push((name.to_string(), component_path.clone()));
+            }
+            if checked.directional_light {
+                directional_lights.push((name.to_string(), component_path.clone()));
+            }
+            if checked.ambient_light {
+                ambient_lights.push((name.to_string(), component_path));
             }
         }
     }
@@ -221,12 +224,45 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         );
     }
 
+    // Lights follow the camera precedent: a deterministic failure over a
+    // silent pick of whichever entity the world iterates first.
+    for (list, component, code) in [
+        (
+            &directional_lights,
+            "DirectionalLight",
+            "multiple_directional_lights",
+        ),
+        (&ambient_lights, "AmbientLight", "multiple_ambient_lights"),
+    ] {
+        if list.len() > 1 {
+            let names: Vec<&str> = list.iter().map(|(n, _)| n.as_str()).collect();
+            let (_, surplus_path) = &list[1];
+            errors.push(
+                cx.err(
+                    code,
+                    format!(
+                        "{} {component} components in one scene ({}); at most one is \
+                         allowed, otherwise which applies is arbitrary",
+                        list.len(),
+                        names.join(", ")
+                    ),
+                    surplus_path,
+                )
+                .component(component)
+                .candidates(names),
+            );
+        }
+    }
+
     errors
 }
 
 /// What a valid component tells the caller.
+#[derive(Default)]
 struct Checked {
     active_camera: bool,
+    directional_light: bool,
+    ambient_light: bool,
 }
 
 /// Shared validation context: the file name and the line lookup.
@@ -279,54 +315,80 @@ fn check_component(
     component: &Value,
     entity: &str,
     component_path: &str,
-) -> std::result::Result<Checked, EngineError> {
+    errors: &mut Vec<EngineError>,
+) -> Checked {
     let Some(object) = component.as_object() else {
-        return Err(cx
-            .err(
+        errors.push(
+            cx.err(
                 "component_not_object",
                 format!("components must be objects, found {}", kind_of(component)),
                 component_path,
             )
-            .entity(entity));
+            .entity(entity),
+        );
+        return Checked::default();
     };
 
     let type_name = match object.get("type") {
         Some(Value::String(name)) => name.as_str(),
         Some(other) => {
-            return Err(cx
-                .wrong_type("type", "string", other, &format!("{component_path}/type"))
-                .entity(entity));
+            errors.push(
+                cx.wrong_type("type", "string", other, &format!("{component_path}/type"))
+                    .entity(entity),
+            );
+            return Checked::default();
         }
         None => {
-            return Err(cx
-                .err(
+            errors.push(
+                cx.err(
                     "component_missing_type",
                     "every component needs a \"type\" field naming which component it is"
                         .to_string(),
                     component_path,
                 )
                 .entity(entity)
-                .field("type"));
+                .field("type"),
+            );
+            return Checked::default();
         }
     };
 
     if !ComponentData::NAMES.contains(&type_name) {
-        return Err(cx
-            .err(
+        errors.push(
+            cx.err(
                 "unknown_component",
                 format!("no component named {type_name:?}"),
                 &format!("{component_path}/type"),
             )
             .entity(entity)
             .component(type_name)
-            .suggest_from(type_name, ComponentData::NAMES.iter().copied()));
+            .suggest_from(type_name, ComponentData::NAMES.iter().copied()),
+        );
+        return Checked::default();
     }
 
     // The name is known, so serde can now check the fields against the real
     // type. This is the one place serde's error is better than anything a
     // hand-written walk would produce.
-    let parsed = serde_json::from_value::<ComponentData>(component.clone())
-        .map_err(|e| component_field_error(cx, e, type_name, entity, component_path))?;
+    let parsed = match serde_json::from_value::<ComponentData>(component.clone()) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            errors.push(component_field_error(cx, e, type_name, entity, component_path));
+            return Checked::default();
+        }
+    };
+
+    // Range checking happens on the parsed value rather than the raw JSON, so
+    // it cannot disagree with what the engine will actually load. An error
+    // rather than a silent clamp: a clamp is the failure mode where the agent
+    // edits a value, re-renders, and nothing changes.
+    let mut range = RangeCheck {
+        cx,
+        entity,
+        component: type_name,
+        component_path,
+        errors,
+    };
 
     match parsed {
         // An unresolvable mesh asset is a validation error, never a silent
@@ -349,18 +411,92 @@ fn check_component(
                 if let Some(suggestion) = resolve.context().and_then(|c| c.did_you_mean.clone()) {
                     error = error.did_you_mean(suggestion);
                 }
-                return Err(error);
+                errors.push(error);
             }
-            Ok(Checked {
-                active_camera: false,
-            })
+            Checked::default()
         }
-        ComponentData::Camera(camera) => Ok(Checked {
+
+        ComponentData::Camera(camera) => Checked {
             active_camera: camera.active,
-        }),
-        _ => Ok(Checked {
-            active_camera: false,
-        }),
+            ..Checked::default()
+        },
+
+        ComponentData::Material(material) => {
+            range.unit_vec3("albedo", material.albedo);
+            range.unit_vec3("emissive", material.emissive);
+            range.unit_scalar("metallic", material.metallic);
+            range.unit_scalar("roughness", material.roughness);
+            Checked::default()
+        }
+
+        ComponentData::DirectionalLight(light) => {
+            range.unit_vec3("color", light.color);
+            range.non_negative("intensity", light.intensity);
+            Checked {
+                directional_light: true,
+                ..Checked::default()
+            }
+        }
+
+        ComponentData::AmbientLight(light) => {
+            range.unit_vec3("color", light.color);
+            range.non_negative("intensity", light.intensity);
+            Checked {
+                ambient_light: true,
+                ..Checked::default()
+            }
+        }
+
+        ComponentData::Transform(_) => Checked::default(),
+    }
+}
+
+/// Emits `value_out_of_range` errors for one component's numeric fields.
+///
+/// One error per offending value — an agent fixing `albedo: [1.5, 2.0, 0.5]`
+/// should learn about both bad channels in one run. Comparisons are written so
+/// NaN also fails: NaN is never in range.
+struct RangeCheck<'a, 'b> {
+    cx: &'a Cx<'a>,
+    entity: &'a str,
+    component: &'a str,
+    component_path: &'a str,
+    errors: &'b mut Vec<EngineError>,
+}
+
+impl RangeCheck<'_, '_> {
+    fn violation(&mut self, field: &str, detail: String) {
+        let error = self
+            .cx
+            .err(
+                "value_out_of_range",
+                format!("{}.{detail}", self.component),
+                &format!("{}/{field}", self.component_path),
+            )
+            .entity(self.entity)
+            .component(self.component)
+            .field(field);
+        self.errors.push(error);
+    }
+
+    fn unit_vec3(&mut self, field: &str, value: glam::Vec3) {
+        for (i, v) in value.to_array().into_iter().enumerate() {
+            if !(0.0..=1.0).contains(&v) {
+                self.violation(field, format!("{field}[{i}] is {v}; the allowed range is [0, 1]"));
+            }
+        }
+    }
+
+    fn unit_scalar(&mut self, field: &str, value: f32) {
+        if !(0.0..=1.0).contains(&value) {
+            self.violation(field, format!("{field} is {value}; the allowed range is [0, 1]"));
+        }
+    }
+
+    fn non_negative(&mut self, field: &str, value: f32) {
+        if !(value >= 0.0) {
+            self.violation(field, format!("{field} is {value}; it must be at least 0"));
+        }
     }
 }
 
@@ -608,6 +744,110 @@ mod tests {
         assert_eq!(
             errors[0].context().unwrap().did_you_mean.as_deref(),
             Some("builtin:cube")
+        );
+    }
+
+    #[test]
+    fn rejects_more_than_one_directional_or_ambient_light() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"SunA","components":[{"type":"DirectionalLight"}]},
+            {"name":"SunB","components":[{"type":"DirectionalLight"}]},
+            {"name":"FillA","components":[{"type":"AmbientLight"}]},
+            {"name":"FillB","components":[{"type":"AmbientLight"}]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors.len(), 2, "{errors:?}");
+
+        let sun = errors
+            .iter()
+            .find(|e| e.error == "multiple_directional_lights")
+            .expect("surplus sun should be flagged");
+        assert_eq!(
+            sun.context().unwrap().candidates,
+            Some(vec!["SunA".to_string(), "SunB".to_string()])
+        );
+        assert!(
+            sun.context().unwrap().line.is_some(),
+            "must point at the surplus component"
+        );
+
+        assert!(errors.iter().any(|e| e.error == "multiple_ambient_lights"));
+    }
+
+    #[test]
+    fn accepts_one_sun_and_one_ambient() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Sun","components":[
+                {"type":"Transform","rotation":[-50.0,30.0,0.0]},
+                {"type":"DirectionalLight","color":[1.0,1.0,1.0],"intensity":1.0}
+            ]},
+            {"name":"Fill","components":[{"type":"AmbientLight","intensity":0.05}]}
+        ]}"#;
+        assert!(codes(source).is_empty());
+    }
+
+    #[test]
+    fn rejects_out_of_range_material_and_light_values() {
+        // One run reports every violation: both bad albedo channels, the bad
+        // roughness, and the negative intensity.
+        let source = r#"{"name":"s","entities":[
+            {"name":"Bad","components":[
+                {"type":"Material","albedo":[1.5,-0.25,0.5],"roughness":1.5},
+                {"type":"DirectionalLight","intensity":-2.0}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        let out_of_range: Vec<_> = errors
+            .iter()
+            .filter(|e| e.error == "value_out_of_range")
+            .collect();
+        assert_eq!(out_of_range.len(), 4, "{errors:?}");
+
+        for error in &out_of_range {
+            let context = error.context().unwrap();
+            assert_eq!(context.entity.as_deref(), Some("Bad"));
+            assert!(context.line.is_some(), "{}", error.to_json());
+        }
+
+        let albedo_messages: Vec<&str> = out_of_range
+            .iter()
+            .filter(|e| e.context().unwrap().field.as_deref() == Some("albedo"))
+            .map(|e| e.message.as_str())
+            .collect();
+        assert_eq!(albedo_messages.len(), 2, "both bad channels reported");
+        assert!(albedo_messages.iter().any(|m| m.contains("albedo[0] is 1.5")));
+
+        assert!(out_of_range
+            .iter()
+            .any(|e| e.context().unwrap().field.as_deref() == Some("intensity")
+                && e.message.contains("at least 0")));
+    }
+
+    #[test]
+    fn range_violations_do_not_mask_other_checks() {
+        // A component with a bad value AND a surplus camera both report.
+        let source = r#"{"name":"s","entities":[
+            {"name":"A","components":[{"type":"Material","metallic":2.0}]},
+            {"name":"B","components":[{"type":"Camera","active":true}]},
+            {"name":"C","components":[{"type":"Camera","active":true}]}
+        ]}"#;
+        let codes = codes(source);
+        assert!(codes.contains(&"value_out_of_range"), "{codes:?}");
+        assert!(codes.contains(&"multiple_active_cameras"), "{codes:?}");
+    }
+
+    #[test]
+    fn suggests_the_right_light_component_name() {
+        // The m4 verification scene's error path: a misspelled light.
+        let source = r#"{"name":"s","entities":[
+            {"name":"Sun","components":[{"type":"DirectionelLight"}]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].error, "unknown_component");
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("DirectionalLight")
         );
     }
 

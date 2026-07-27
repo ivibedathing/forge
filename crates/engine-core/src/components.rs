@@ -117,15 +117,29 @@ impl Default for Camera {
     }
 }
 
-/// Surface appearance. Consumed properly at M4; at M2 only `albedo` is used,
-/// as a flat unlit color.
+/// Surface appearance, in the metallic/roughness parameterization every
+/// mainstream engine and glTF file uses.
+///
+/// All color fields are **linear** RGB in `[0, 1]` — physical reflectance, not
+/// sRGB-encoded screen values. The engine never silently decodes an authored
+/// color; the PNG pixel is the lit, sRGB-encoded result, so `albedo: [0.5,
+/// 0.5, 0.5]` under full light reads back ≈188, not 128.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Material {
     #[schemars(with = "[f32; 3]")]
     pub albedo: Vec3,
+    /// `0` = dielectric, `1` = metal. Metals have no diffuse; their specular
+    /// is tinted by `albedo`. Range `[0, 1]`.
     pub metallic: f32,
+    /// Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.
+    /// Range `[0, 1]`.
     pub roughness: f32,
+    /// Added after lighting, unaffected by any light — "make this visible
+    /// regardless of lighting" is a debugging move worth having. Range
+    /// `[0, 1]` per component.
+    #[schemars(with = "[f32; 3]")]
+    pub emissive: Vec3,
 }
 
 impl Default for Material {
@@ -134,6 +148,64 @@ impl Default for Material {
             albedo: Vec3::splat(0.8),
             metallic: 0.0,
             roughness: 0.9,
+            emissive: Vec3::ZERO,
+        }
+    }
+}
+
+/// A sun: parallel light with no falloff.
+///
+/// The light shines down the entity's local **−Z**, taken from its
+/// `Transform` — the same convention the camera uses, so aiming a light is
+/// aiming a camera. With no `Transform` the light travels toward −Z
+/// (horizontally); a noon sun is `"rotation": [-90, 0, 0]`.
+///
+/// At most one per scene (`multiple_directional_lights`). A scene with **no**
+/// light components at all gets a documented fallback rig (sun + ambient); a
+/// scene with any light component gets exactly what it wrote — absent means
+/// off.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct DirectionalLight {
+    /// Linear RGB chromaticity, each component in `[0, 1]`. Magnitude lives
+    /// in `intensity`.
+    #[schemars(with = "[f32; 3]")]
+    pub color: Vec3,
+    /// Unitless multiplier, `>= 0`, unbounded above: intensity 2 is twice as
+    /// bright, and a white light at 1.0 on a white surface head-on reads
+    /// white.
+    pub intensity: f32,
+}
+
+impl Default for DirectionalLight {
+    fn default() -> Self {
+        Self {
+            color: Vec3::ONE,
+            intensity: 1.0,
+        }
+    }
+}
+
+/// A flat, non-directional fill: `albedo * color * intensity`, added to the
+/// lit result. Exists because a sun-only scene renders back faces pure black,
+/// and a black region in a screenshot tells an agent nothing.
+///
+/// At most one per scene (`multiple_ambient_lights`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct AmbientLight {
+    /// Linear RGB, each component in `[0, 1]`.
+    #[schemars(with = "[f32; 3]")]
+    pub color: Vec3,
+    /// `>= 0`.
+    pub intensity: f32,
+}
+
+impl Default for AmbientLight {
+    fn default() -> Self {
+        Self {
+            color: Vec3::ONE,
+            intensity: 0.05,
         }
     }
 }
@@ -178,7 +250,14 @@ macro_rules! components {
     };
 }
 
-components!(Transform, Mesh, Camera, Material);
+components!(
+    Transform,
+    Mesh,
+    Camera,
+    Material,
+    DirectionalLight,
+    AmbientLight,
+);
 
 #[cfg(test)]
 mod tests {
@@ -253,7 +332,41 @@ mod tests {
         // hand-written list — it catches a variant added without a name.
         assert_eq!(
             ComponentData::NAMES,
-            &["Transform", "Mesh", "Camera", "Material"]
+            &[
+                "Transform",
+                "Mesh",
+                "Camera",
+                "Material",
+                "DirectionalLight",
+                "AmbientLight"
+            ]
+        );
+    }
+
+    #[test]
+    fn light_defaults_match_the_design() {
+        let sun: DirectionalLight = serde_json::from_str("{}").unwrap();
+        assert_eq!(sun.color, Vec3::ONE);
+        assert_eq!(sun.intensity, 1.0);
+
+        let ambient: AmbientLight = serde_json::from_str("{}").unwrap();
+        assert_eq!(ambient.color, Vec3::ONE);
+        assert_eq!(ambient.intensity, 0.05);
+
+        let material: Material = serde_json::from_str("{}").unwrap();
+        assert_eq!(material.emissive, Vec3::ZERO, "emissive defaults to off");
+    }
+
+    #[test]
+    fn lights_round_trip_through_json() {
+        let original = ComponentData::DirectionalLight(DirectionalLight {
+            color: Vec3::new(1.0, 0.9, 0.8),
+            intensity: 2.5,
+        });
+        let json = serde_json::to_string(&original).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ComponentData>(&json).unwrap(),
+            original
         );
     }
 }
