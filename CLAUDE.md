@@ -199,6 +199,22 @@ would double-brake the drive force). `car_track_lap.input.jsonl` is a 2 442-step
 keys) driving three clockwise laps and parking on the start line — pinned by CLI test and
 `verify/baselines/m11_lap.png`.
 
+HUD (M11.6): `world.hud(text)` pushes printable-ASCII overlay lines, cleared every step —
+the HUD is a pure function of the step that drew it — and `world.state(key, default)` /
+`world.set_state(key, value)` is numeric per-run memory on the ScriptHost (replay-
+deterministic, reset by a fresh run, deliberately *not* baked — same disposability as
+solver caches). Rendering is `engine-render/src/hud.rs`: a CPU rasterizer over the
+embedded `font8x8` bitmap font (unit-tested without a GPU) composited as one alpha-blended
+quad by both `offscreen::render` and the `run-scene` viewer, so the played game and the
+pinned PNG show the same overlay; an empty HUD draws nothing, keeping every pre-HUD
+baseline byte-identical. The HUD is also observable without pixels: `simulate`/`screenshot`
+report the final step's lines as `"hud"`, and `--trace` logs `{"step", "hud"}` on every
+change (script-free traces unchanged; the curated Rhai engine gained the string packages
+so scripts can build the text). Caps 16 lines × 96 chars, runtime error beyond. Demo:
+`car.rhai` shows a speedometer plus a lap timer (start-line crossing = x going positive →
+non-positive on the south straight, remembered step-to-step via `world.state`) whose final
+parked HUD (`LAP 3`, `LAST 13.42   BEST 13.42`) is pinned by the lap CLI test.
+
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).
 

@@ -60,6 +60,9 @@ pub struct Simulation {
     pub t: f32,
     pub step_index: u64,
     pub last: Option<Instant>,
+    /// What the most recent script step put on screen; empty between HUD
+    /// pushes and for scripts that never call `world.hud`.
+    pub hud_lines: Vec<String>,
 }
 
 /// `--record-input`: writes one timeline line whenever the held set changes,
@@ -110,6 +113,7 @@ enum Paint {
     Scene {
         renderer: SceneRenderer,
         depth: wgpu::TextureView,
+        hud: engine_render::hud::HudRenderer,
     },
 }
 
@@ -176,7 +180,11 @@ impl ViewerApp {
             }),
 
             (
-                Paint::Scene { renderer, depth },
+                Paint::Scene {
+                    renderer,
+                    depth,
+                    hud,
+                },
                 Content::Scene {
                     items,
                     camera,
@@ -217,13 +225,16 @@ impl ViewerApp {
                             if let Some(scripts) = &sim.scripts {
                                 // A failing script ends the session with a
                                 // structured error, like any render failure.
-                                if let Err(e) = scripts.step(
+                                match scripts.step(
                                     &mut sim.scene.world,
                                     sim.step_index,
                                     &sim.held,
                                 ) {
-                                    self.error = Some(e);
-                                    break;
+                                    Ok(lines) => sim.hud_lines = lines,
+                                    Err(e) => {
+                                        self.error = Some(e);
+                                        break;
+                                    }
                                 }
                             }
                             if let Some(physics) = &mut sim.physics {
@@ -251,6 +262,9 @@ impl ViewerApp {
                     *camera_model,
                     width as f32 / height as f32,
                 );
+                let hud_lines: &[String] = simulation
+                    .as_ref()
+                    .map_or(&[], |sim| sim.hud_lines.as_slice());
                 target.render_with(|device, queue, view| {
                     renderer.draw(
                         device,
@@ -265,6 +279,9 @@ impl ViewerApp {
                             clear: scene_renderer::DEFAULT_CLEAR,
                         },
                     );
+                    // The same overlay the screenshot path composites — the
+                    // played game and the pinned PNG say the same thing.
+                    hud.draw(device, queue, view, width, height, hud_lines);
                 })
             }
 
@@ -312,6 +329,10 @@ impl ApplicationHandler for ViewerApp {
                 Paint::Scene {
                     renderer: SceneRenderer::new(&target.gpu.device, target.format()),
                     depth: scene_renderer::depth_texture(&target.gpu.device, width, height),
+                    hud: engine_render::hud::HudRenderer::new(
+                        &target.gpu.device,
+                        target.format(),
+                    ),
                 }
             }
         };

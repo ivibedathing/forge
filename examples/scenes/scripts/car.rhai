@@ -8,6 +8,19 @@
 // Controls: ArrowUp throttle, ArrowDown brake (then reverse), Left/Right
 // steer. Steering is speed-scaled — no turning in place — and flips in
 // reverse. All rates are per-second, scaled by dt.
+//
+// The HUD (speedometer + lap timer) is world.hud lines pushed fresh each
+// step; lap memory — where the lap started, the best time — lives in
+// world.state, the per-run store that replays deterministically.
+
+// Fixed two-decimal seconds: Rhai prints raw floats with a jittering tail,
+// unreadable on a HUD.
+fn fmt_secs(t) {
+    let cents = (t * 100.0).round().to_int();
+    let c = cents % 100;
+    let frac = if c < 10 { "0" + c } else { "" + c };
+    (cents / 100).to_string() + "." + frac
+}
 
 fn step(world, step) {
     let dt = world.dt();
@@ -97,4 +110,37 @@ fn step(world, step) {
         cam[2] + (goal_z - cam[2]) * k,
     );
     world.look_at("ChaseCam", p[0], 1.0, p[2]);
+
+    // Lap timing. The start line is the x=0 plane across the south straight
+    // (z > 6); racing direction there is -X, so a lap completes when x goes
+    // positive → non-positive. The car *starts on* the line, and parking
+    // jitter could re-cross it, so a crossing only counts after 300 steps
+    // (5 s) of lap — a real lap takes ~13 s.
+    let prev_x = world.state("lap_prev_x", 0.0);
+    let lap = world.state("lap", 1);
+    let lap_start = world.state("lap_start", 0);
+    let last_lap = world.state("last_lap", 0.0);
+    let best_lap = world.state("best_lap", 0.0);
+
+    if prev_x > 0.0 && p[0] <= 0.0 && p[2] > 6.0 && step - lap_start.to_int() > 300 {
+        let lap_time = (step - lap_start.to_int()).to_float() * dt;
+        last_lap = lap_time;
+        if best_lap == 0.0 || lap_time < best_lap { best_lap = lap_time; }
+        lap += 1.0;
+        lap_start = step.to_float();
+        world.set_state("last_lap", last_lap);
+        world.set_state("best_lap", best_lap);
+        world.set_state("lap", lap);
+        world.set_state("lap_start", lap_start);
+    }
+    world.set_state("lap_prev_x", p[0]);
+
+    // The speed the tires ended the step with, planar, in km/h.
+    let speed = sqrt(forward_speed * forward_speed + lateral_speed * lateral_speed) * 3.6;
+    let lap_time = (step - lap_start.to_int()).to_float() * dt;
+    world.hud("SPEED " + speed.round().to_int() + " KM/H");
+    world.hud("LAP " + lap.to_int() + "   TIME " + fmt_secs(lap_time));
+    if last_lap > 0.0 {
+        world.hud("LAST " + fmt_secs(last_lap) + "   BEST " + fmt_secs(best_lap));
+    }
 }

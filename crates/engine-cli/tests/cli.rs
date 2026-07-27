@@ -1083,17 +1083,141 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(0), "{output:?}");
-        path
+        let report: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+        (path, report)
     };
 
     // Mid-drive: far side of the circuit (the north straight, z ≈ -9).
-    let mid = baked_position(&bake_at("1260", "mid.json"), "Car");
+    let (mid_bake, _) = bake_at("1260", "mid.json");
+    let mid = baked_position(&mid_bake, "Car");
     assert!(mid[2] < -5.0, "mid-drive the car is on the far straight: {mid:?}");
 
     // After three laps and the braking phase: parked on the start line.
-    let end = baked_position(&bake_at("2520", "end.json"), "Car");
+    let (end_bake, report) = bake_at("2520", "end.json");
+    let end = baked_position(&end_bake, "Car");
     let (dx, dz) = (end[0], end[2] - 9.0);
     let distance = (dx * dx + dz * dz).sqrt();
     assert!(distance < 1.5, "the drive must park on the start line: {end:?}");
+
+    // The script's HUD is part of the pinned record: parked (speed 0), on
+    // lap 3, with two completed laps of 14.02 and 13.42 behind it. These
+    // strings are golden the way traces are — a drivetrain or timing change
+    // shows up here first.
+    assert_eq!(
+        report["hud"],
+        serde_json::json!([
+            "SPEED 0 KM/H",
+            "LAP 3   TIME 14.55",
+            "LAST 13.42   BEST 13.42"
+        ]),
+        "{report}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A scene whose script counts steps through `world.state` and shows the
+/// count through `world.hud` — the smallest HUD-bearing fixture.
+fn hud_fixture(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("engine-hud-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(
+        dir.join("scripts/counter.rhai"),
+        r#"fn step(world, step) {
+            let n = world.state("n", 0);
+            world.set_state("n", n + 1.0);
+            world.hud("COUNT " + n.to_int());
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.json"),
+        r#"{"name":"hud","entities":[
+            {"name":"Mover","components":[
+                {"type":"Transform"},
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Script","source":"scripts/counter.rhai"}
+            ]},
+            {"name":"Cam","components":[{"type":"Camera","active":true}]}
+        ]}"#,
+    )
+    .unwrap();
+    dir
+}
+
+/// `world.hud` + `world.state`: the final step's HUD rides the simulate
+/// report, every change rides the trace, and state persists across steps —
+/// all headless, no GPU required.
+#[test]
+fn the_hud_rides_the_simulate_report_and_the_trace() {
+    let dir = hud_fixture("trace");
+    let trace = dir.join("t.jsonl");
+    let output = engine()
+        .arg("simulate")
+        .arg(dir.join("scene.json"))
+        .args(["--steps", "3"])
+        .arg("--trace")
+        .arg(&trace)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    // The report carries the *final* step's HUD (state made it count).
+    let report: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+    assert_eq!(report["hud"], serde_json::json!(["COUNT 2"]), "{report}");
+
+    // The trace records each change as its own greppable event.
+    let traced: Vec<serde_json::Value> = std::fs::read_to_string(&trace)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .filter(|v: &serde_json::Value| v.get("hud").is_some())
+        .collect();
+    assert_eq!(traced.len(), 3, "{traced:?}");
+    assert_eq!(traced[0], serde_json::json!({"step": 1, "hud": ["COUNT 0"]}));
+    assert_eq!(traced[2], serde_json::json!({"step": 3, "hud": ["COUNT 2"]}));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The HUD is pixels, not just JSON: a stepped screenshot of a HUD-bearing
+/// scene differs from the unstepped one exactly because the overlay drew
+/// (nothing in the fixture scene moves), and it reports the lines it drew.
+#[test]
+fn the_hud_lands_in_screenshot_pixels() {
+    let dir = hud_fixture("pixels");
+    let shot = |steps: &str, out: &str| {
+        let path = dir.join(out);
+        let output = engine()
+            .arg("screenshot")
+            .arg(dir.join("scene.json"))
+            .args(["--steps", steps])
+            .args(["--width", "320", "--height", "180"])
+            .arg("--out")
+            .arg(&path)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "screenshot failed for a non-GPU reason: {stderr}"
+            );
+            return None;
+        }
+        Some((path, serde_json::from_str::<serde_json::Value>(&stdout_of(&output)).unwrap()))
+    };
+
+    let Some((with_hud, report)) = shot("1", "hud.png") else {
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    };
+    let (without_hud, plain_report) = shot("0", "plain.png").expect("GPU worked a moment ago");
+
+    assert_eq!(report["hud"], serde_json::json!(["COUNT 0"]), "{report}");
+    assert!(plain_report.get("hud").is_none(), "no steps, no HUD: {plain_report}");
+    assert_ne!(
+        std::fs::read(&with_hud).unwrap(),
+        std::fs::read(&without_hud).unwrap(),
+        "the overlay must change the pixels"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
