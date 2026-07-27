@@ -1,0 +1,65 @@
+{
+  "name": "m4_lighting",
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "scale": [10.0, 1.0, 10.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.35, 0.4, 0.32], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "SphereRough",
+      "components": [
+        { "type": "Transform", "position": [-1.5, 1.0, 0.0] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.8, 0.1, 0.1], "metallic": 0.0, "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "SphereSmooth",
+      "components": [
+        { "type": "Transform", "position": [1.5, 1.0, 0.0] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.8, 0.1, 0.1], "metallic": 0.0, "roughness": 0.1 }
+      ]
+    },
+    {
+      "name": "Pyramid",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, -2.0], "rotation": [0.0, 30.0, 0.0] },
+        { "type": "Mesh", "asset": "../../meshes/pyramid.gltf" },
+        { "type": "Material", "albedo": [0.85, 0.7, 0.2], "metallic": 0.0, "roughness": 0.5 }
+      ]
+    },
+    {
+      "name": "Beacon",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.25, 2.0], "scale": [0.25, 0.25, 0.25] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.0, 0.0, 0.0], "emissive": [0.0, 1.0, 0.2] }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-50.0, 30.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 1.0, 1.0], "intensity": 1.0 }
+      ]
+    },
+    {
+      "name": "Ambient",
+      "components": [
+        { "type": "AmbientLight", "color": [1.0, 1.0, 1.0], "intensity": 0.05 }
+      ]
+    },
+    {
+      "name": "Player",
+      "components": [
+        { "type": "Transform", "position": [0.0, 2.5, 7.0], "rotation": [-14.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 50.0, "active": true }
+      ]
+    }
+  ]
+}

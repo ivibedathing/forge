@@ -11,7 +11,11 @@ use hecs::{Entity, EntityBuilder, World};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Camera, ComponentData, Name, Transform};
+use glam::Vec3;
+
+use crate::components::{
+    AmbientLight, Camera, ComponentData, DirectionalLight, Name, Transform,
+};
 use crate::error::{EngineError, Result};
 use crate::validate;
 
@@ -39,7 +43,68 @@ pub struct EntityDef {
 pub struct RenderItem {
     pub mesh: crate::mesh::MeshData,
     pub model: glam::Mat4,
-    pub albedo: glam::Vec3,
+    pub material: crate::components::Material,
+}
+
+/// The scene's light entities, extracted as plain data.
+///
+/// Extraction takes what the (already validated) world contains — validation,
+/// not extraction, is what rejects multiple suns. `sun` pairs the component
+/// with the world-space direction the light *travels* (the entity's
+/// `transform.quat() * -Z`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LightRig {
+    pub sun: Option<(DirectionalLight, Vec3)>,
+    pub ambient: Option<AmbientLight>,
+}
+
+/// Concrete lighting values, ready for a uniform buffer: colors are
+/// premultiplied by intensity, the direction is normalized travel direction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedLights {
+    pub sun_direction: Vec3,
+    pub sun_color: Vec3,
+    pub ambient: Vec3,
+}
+
+impl LightRig {
+    /// The travel direction of the fallback sun: arriving from
+    /// `normalize((0.4, 1.0, 0.6))`, the same bearing as M2's hardcoded
+    /// placeholder light, so scenes written before lighting existed keep
+    /// their look.
+    pub fn fallback_sun_direction() -> Vec3 {
+        -Vec3::new(0.4, 1.0, 0.6).normalize()
+    }
+
+    /// Apply the no-lights fallback rule and return concrete values.
+    ///
+    /// The rule is all-or-nothing (design `materials-lighting-design.md` §3):
+    /// zero light components → the documented fallback rig (white sun 1.0 +
+    /// white ambient 0.15); at least one light component → exactly what the
+    /// scene wrote, absent means off.
+    pub fn resolved(&self) -> ResolvedLights {
+        if self.sun.is_none() && self.ambient.is_none() {
+            return ResolvedLights {
+                sun_direction: Self::fallback_sun_direction(),
+                sun_color: Vec3::ONE,
+                ambient: Vec3::splat(0.15),
+            };
+        }
+
+        let (sun_color, sun_direction) = match self.sun {
+            Some((sun, direction)) => (sun.color * sun.intensity, direction),
+            None => (Vec3::ZERO, Vec3::NEG_Z),
+        };
+
+        ResolvedLights {
+            sun_direction,
+            sun_color,
+            ambient: self
+                .ambient
+                .map(|a| a.color * a.intensity)
+                .unwrap_or(Vec3::ZERO),
+        }
+    }
 }
 
 /// A scene loaded into an ECS world.
@@ -213,11 +278,39 @@ impl Scene {
             items.push(RenderItem {
                 mesh: data,
                 model: transform.matrix(),
-                albedo: material.albedo,
+                material,
             });
         }
 
         Ok(items)
+    }
+
+    /// Extract the scene's lights as plain data.
+    ///
+    /// Takes the first of each kind found; validation rejects scenes with more
+    /// than one, so on a valid scene "first" is "only". The sun's direction is
+    /// where its light travels: the entity's local −Z carried to world space,
+    /// identity transform meaning horizontal travel toward −Z — the same
+    /// orientation convention the camera uses.
+    pub fn lights(&self) -> LightRig {
+        let sun = self
+            .world
+            .query::<(Entity, &DirectionalLight)>()
+            .iter()
+            .next()
+            .map(|(entity, light)| {
+                let direction = (self.transform_of(entity).quat() * Vec3::NEG_Z).normalize();
+                (*light, direction)
+            });
+
+        let ambient = self
+            .world
+            .query::<&AmbientLight>()
+            .iter()
+            .next()
+            .map(|ambient| *ambient);
+
+        LightRig { sun, ambient }
     }
 
     fn transform_of(&self, entity: Entity) -> Transform {
@@ -357,6 +450,71 @@ mod tests {
         ]}"#;
         let scene = Scene::from_source(source, "s.json").unwrap();
         assert_eq!(scene.camera(None).unwrap_err().error, "no_active_camera");
+    }
+
+    #[test]
+    fn light_direction_follows_the_camera_convention() {
+        // The direction-convention pin, analogous to the Euler pin test:
+        // rotation [-90, 0, 0] points local -Z straight down, so the light
+        // travels (0, -1, 0) — a noon sun.
+        let source = r#"{"name": "s", "entities": [
+            {"name": "Sun", "components": [
+                {"type": "Transform", "rotation": [-90.0, 0.0, 0.0]},
+                {"type": "DirectionalLight"}
+            ]}
+        ]}"#;
+        let scene = Scene::from_source(source, "s.json").unwrap();
+        let (_, direction) = scene.lights().sun.expect("sun should be extracted");
+        assert!(
+            (direction - Vec3::NEG_Y).length() < 1e-5,
+            "a [-90, 0, 0] sun should travel straight down, got {direction:?}"
+        );
+    }
+
+    #[test]
+    fn zero_light_components_get_the_fallback_rig() {
+        let scene = demo(); // the demo fixture has no light entities
+        let rig = scene.lights();
+        assert_eq!(rig.sun, None);
+        assert_eq!(rig.ambient, None);
+
+        let resolved = rig.resolved();
+        assert_eq!(resolved.sun_color, Vec3::ONE, "fallback sun is white 1.0");
+        assert_eq!(resolved.ambient, Vec3::splat(0.15));
+        assert!(
+            (resolved.sun_direction - LightRig::fallback_sun_direction()).length() < 1e-6,
+            "fallback arrives from the M2 placeholder bearing"
+        );
+    }
+
+    #[test]
+    fn any_light_component_disables_the_fallback() {
+        // The other half of the all-or-nothing rule: writing only an ambient
+        // light means the sun is OFF, not defaulted.
+        let source = r#"{"name": "s", "entities": [
+            {"name": "Fill", "components": [{"type": "AmbientLight", "intensity": 0.5}]}
+        ]}"#;
+        let scene = Scene::from_source(source, "s.json").unwrap();
+        let resolved = scene.lights().resolved();
+        assert_eq!(resolved.sun_color, Vec3::ZERO, "absent means off");
+        assert_eq!(resolved.ambient, Vec3::splat(0.5));
+    }
+
+    #[test]
+    fn resolved_lights_premultiply_intensity() {
+        let source = r#"{"name": "s", "entities": [
+            {"name": "Sun", "components": [
+                {"type": "DirectionalLight", "color": [1.0, 0.5, 0.0], "intensity": 2.0}
+            ]}
+        ]}"#;
+        let scene = Scene::from_source(source, "s.json").unwrap();
+        let resolved = scene.lights().resolved();
+        assert_eq!(resolved.sun_color, Vec3::new(2.0, 1.0, 0.0));
+        assert_eq!(
+            resolved.sun_direction,
+            Vec3::NEG_Z,
+            "no Transform means horizontal travel toward -Z, documented not an error"
+        );
     }
 
     #[test]

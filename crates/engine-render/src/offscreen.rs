@@ -6,7 +6,7 @@
 
 use engine_core::components::Camera;
 use engine_core::math::Mat4;
-use engine_core::scene::RenderItem;
+use engine_core::scene::{RenderItem, ResolvedLights};
 use engine_core::{EngineError, Result};
 
 use crate::gpu::Gpu;
@@ -34,18 +34,21 @@ impl Image {
 
 /// Render a draw list from a camera into an image.
 ///
-/// `Rgba8Unorm` rather than the sRGB variant: the shader already works in the
-/// values the scene file names, so an sRGB target would re-encode them and the
-/// PNG would not match the albedo an agent wrote.
+/// The target is `Rgba8UnormSrgb` (an M4 decision that reversed M2's linear
+/// choice): lighting math runs in linear space, the hardware performs the
+/// sRGB encode, and readback therefore yields sRGB-encoded bytes — which is
+/// what a PNG is conventionally assumed to contain. Scene colors stay linear
+/// in the file; the PNG pixel is the lit, encoded result.
 pub fn render(
     items: &[RenderItem],
     camera: &Camera,
     camera_model: Mat4,
+    lights: ResolvedLights,
     width: u32,
     height: u32,
 ) -> Result<Image> {
     let (width, height) = (width.max(1), height.max(1));
-    const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+    const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
     let instance = Gpu::default_instance();
     let gpu = pollster::block_on(Gpu::new(instance, None))?;
@@ -79,6 +82,8 @@ pub fn render(
             depth: &depth,
             items,
             view_projection,
+            camera_position: camera_model.w_axis.truncate(),
+            lights,
             clear: scene_renderer::DEFAULT_CLEAR,
         },
     );

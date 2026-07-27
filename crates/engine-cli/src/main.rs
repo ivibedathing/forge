@@ -168,6 +168,7 @@ fn screenshot(
         &items,
         &camera,
         camera_transform.matrix(),
+        scene.lights().resolved(),
         width,
         height,
     )?;
@@ -212,6 +213,7 @@ fn run_scene(
             items,
             camera,
             camera_model: camera_transform.matrix(),
+            lights: scene.lights().resolved(),
         },
     ))
 }

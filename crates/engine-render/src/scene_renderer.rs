@@ -6,19 +6,34 @@
 
 use engine_core::components::Camera;
 use engine_core::math::{Mat4, Vec3};
-use engine_core::scene::RenderItem;
+use engine_core::scene::{RenderItem, ResolvedLights};
 use wgpu::util::DeviceExt as _;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Per-draw shader data. `repr(C)` and 16-byte aligned to match the WGSL
-/// `Uniforms` struct field for field.
+/// `ObjectUniform` struct field for field; scalars ride in the `w` lanes of
+/// vec4s so no explicit padding is needed.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ObjectUniform {
     mvp: [[f32; 4]; 4],
+    model: [[f32; 4]; 4],
     normal_matrix: [[f32; 4]; 4],
-    albedo: [f32; 4],
+    albedo_metallic: [f32; 4],
+    emissive_roughness: [f32; 4],
+}
+
+/// Per-pass shader data, matching WGSL `FrameUniform`. Colors arrive already
+/// premultiplied by intensity (`ResolvedLights` does that); `sun_direction` is
+/// the direction the light travels.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct FrameUniform {
+    camera_pos: [f32; 4],
+    sun_direction: [f32; 4],
+    sun_color: [f32; 4],
+    ambient: [f32; 4],
 }
 
 /// One uploaded draw item.
@@ -39,12 +54,16 @@ pub struct ScenePass<'a> {
     pub depth: &'a wgpu::TextureView,
     pub items: &'a [RenderItem],
     pub view_projection: Mat4,
+    /// World-space camera position, for the specular view vector.
+    pub camera_position: Vec3,
+    pub lights: ResolvedLights,
     pub clear: wgpu::Color,
 }
 
 pub struct SceneRenderer {
     pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
+    object_layout: wgpu::BindGroupLayout,
+    frame_layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
 }
 
@@ -55,23 +74,27 @@ impl SceneRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh.wgsl").into()),
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("object-uniforms"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let uniform_layout = |label: &str| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(label),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            })
+        };
+        let object_layout = uniform_layout("object-uniforms");
+        let frame_layout = uniform_layout("frame-uniforms");
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh-pipeline-layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
+            bind_group_layouts: &[Some(&object_layout), Some(&frame_layout)],
             immediate_size: 0,
         });
 
@@ -136,7 +159,8 @@ impl SceneRenderer {
 
         Self {
             pipeline,
-            bind_group_layout,
+            object_layout,
+            frame_layout,
             format,
         }
     }
@@ -156,8 +180,30 @@ impl SceneRenderer {
             depth,
             items,
             view_projection,
+            camera_position,
+            lights,
             clear,
         } = pass;
+
+        let frame = FrameUniform {
+            camera_pos: camera_position.extend(1.0).to_array(),
+            sun_direction: lights.sun_direction.extend(0.0).to_array(),
+            sun_color: lights.sun_color.extend(1.0).to_array(),
+            ambient: lights.ambient.extend(1.0).to_array(),
+        };
+        let frame_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("frame-uniform"),
+            contents: bytemuck::bytes_of(&frame),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("frame-bind-group"),
+            layout: &self.frame_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame_buffer.as_entire_binding(),
+            }],
+        });
 
         let uploaded: Vec<GpuItem> = items
             .iter()
@@ -194,6 +240,7 @@ impl SceneRenderer {
             });
 
             pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(1, &frame_bind_group, &[]);
 
             for item in &uploaded {
                 pass.set_bind_group(0, &item.bind_group, &[]);
@@ -228,10 +275,13 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        let material = &item.material;
         let uniform = ObjectUniform {
             mvp: (view_projection * item.model).to_cols_array_2d(),
+            model: item.model.to_cols_array_2d(),
             normal_matrix: item.model.inverse().transpose().to_cols_array_2d(),
-            albedo: [item.albedo.x, item.albedo.y, item.albedo.z, 1.0],
+            albedo_metallic: material.albedo.extend(material.metallic).to_array(),
+            emissive_roughness: material.emissive.extend(material.roughness).to_array(),
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -242,7 +292,7 @@ impl SceneRenderer {
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("object-bind-group"),
-            layout: &self.bind_group_layout,
+            layout: &self.object_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniform_buffer.as_entire_binding(),

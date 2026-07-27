@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M3 are done** (plus most of M1's CLI). JSON scenes load into hecs, render headlessly to PNG,
-validate with all-errors-at-once reporting, and reference glTF mesh files. Verified by 82 tests
-including offscreen pixel readback, and by rendering `examples/scenes/demo_scene.json` and
-`examples/scenes/mesh_import.json` and looking at them.
+**M0–M4 are done** (plus most of M1's CLI). JSON scenes load into hecs, render headlessly to PNG
+with PBR lighting, validate with all-errors-at-once reporting, and reference glTF mesh files.
+Verified by 101 tests including offscreen pixel readback, and by rendering the example scenes —
+including `examples/scenes/verify/m4_lighting.json`, the M4 fixture from
+`milestone-verification-scenes.md` — and looking at them.
 
 What works today:
 
@@ -21,16 +22,26 @@ engine run                               # M0 triangle (stack proof)
 engine info                              # selected GPU adapter as JSON
 ```
 
-`Mesh.asset` is `builtin:cube` / `builtin:plane` / `builtin:triangle`, or a `.gltf`/`.glb` path
-relative to the scene file. Reference checks (existence, extension, absolute-path rejection) live
-in `engine-core/src/mesh.rs` (`MeshAsset::resolve`); actual file parsing lives in `engine-assets`
-(the only crate that opens asset files — glTF meshes plus PNG→RGBA8 textures, the latter unused
-until M4). `engine validate` runs both passes, so a corrupt glTF fails validation, not just the
-screenshot. `Scene::render_items` takes a `MeshSource`: `AssetServer::for_scene` in the CLI,
-`BuiltinAssets` in GPU-less tests. `MeshData` already carries UVs (zeros for builtins) so M4's
-texturing is shader-side work only. `examples/meshes/pyramid.gltf` is generated text glTF
-(embedded base64 buffer) — flat-shaded, CCW-wound, the file the example scene and asset tests
-load. Line numbers on semantic errors come from
+`Mesh.asset` is `builtin:cube` / `builtin:plane` / `builtin:sphere` / `builtin:triangle`, or a
+`.gltf`/`.glb` path relative to the scene file. Reference checks (existence, extension,
+absolute-path rejection) live in `engine-core/src/mesh.rs` (`MeshAsset::resolve`); actual file
+parsing lives in `engine-assets` (the only crate that opens asset files — glTF meshes plus
+PNG→RGBA8 textures, the latter awaiting texture-mapped materials). `engine validate` runs both
+passes, so a corrupt glTF fails validation, not just the screenshot. `Scene::render_items` takes
+a `MeshSource`: `AssetServer::for_scene` in the CLI, `BuiltinAssets` in GPU-less tests.
+`examples/meshes/pyramid.gltf` is generated text glTF (embedded base64 buffer) — flat-shaded,
+CCW-wound, the file the example scene and asset tests load.
+
+Lighting (M4): `DirectionalLight` + `AmbientLight` components (at most one each per scene,
+validated), `Material.emissive`, and a GGX Cook-Torrance shader in
+`engine-render/src/shaders/mesh.wgsl`. Lights aim down their entity's local **−Z** like the
+camera; a scene with *zero* light components gets the documented fallback rig
+(`LightRig::resolved` in `engine-core/src/scene.rs`), while any light component means "absent is
+off". Render targets are **sRGB** (`Rgba8UnormSrgb`): scene colors are linear reflectance, the
+hardware encodes on write, and pixel tests compute expectations via the `srgb_encode` helper in
+`engine-render/tests/lighting.rs` — never eyeball byte values. Numeric ranges (`albedo`,
+`roughness`, intensities, …) are validated as `value_out_of_range`, an error rather than a
+silent clamp. Line numbers on semantic errors come from
 `engine-core/src/lineindex.rs` (path → line lookup; serde_json discards spans). The checked-in
 `schemas/component-schema.json` is enforced by `engine-core/tests/repo_contracts.rs` — regenerate
 with `engine list-components > schemas/component-schema.json` after touching any component.
@@ -137,9 +148,10 @@ Standard Cargo commands: `cargo build`, `cargo test --workspace`, and
 ## Build order
 
 Follow the milestones in design doc §8: ~~M0 window+triangle~~ → ~~M1 CLI skeleton + JSON
-error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ (all done) → M4
-materials + lighting → M5 validation hardening → M6 diff-render. M5 is deliberately *not*
-last-priority work; structured validation is as load-bearing as rendering features here.
+error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ → ~~M4 materials +
+lighting~~ (all done) → M5 validation hardening → M6 diff-render. M5 is deliberately *not*
+last-priority work; structured validation is as load-bearing as rendering features here. Each
+milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any
 `TextureView`, `Gpu::new` takes an optional surface, and the readback path (texture → buffer →
