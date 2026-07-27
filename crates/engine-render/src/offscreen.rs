@@ -6,10 +6,11 @@
 
 use engine_core::components::Camera;
 use engine_core::math::Mat4;
-use engine_core::scene::{RenderItem, ResolvedLights};
+use engine_core::scene::{HudItems, RenderItem, ResolvedLights};
 use engine_core::{EngineError, Result};
 
 use crate::gpu::Gpu;
+use crate::hud;
 use crate::scene_renderer::{self, SceneRenderer};
 
 /// An RGBA8 image in CPU memory, tightly packed (no row padding).
@@ -45,10 +46,12 @@ pub fn render(
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
+    hud: &HudItems,
     width: u32,
     height: u32,
 ) -> Result<Image> {
-    render_with_adapter(items, camera, camera_model, lights, width, height).map(|(image, _)| image)
+    render_with_adapter(items, camera, camera_model, lights, hud, width, height)
+        .map(|(image, _)| image)
 }
 
 /// [`render`], also reporting which adapter drew the image.
@@ -61,6 +64,7 @@ pub fn render_with_adapter(
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
+    hud: &HudItems,
     width: u32,
     height: u32,
 ) -> Result<(Image, String)> {
@@ -92,6 +96,8 @@ pub fn render_with_adapter(
     let view_projection =
         scene_renderer::view_projection(camera, camera_model, width as f32 / height as f32);
 
+    let canvas = (!hud.is_empty()).then(|| hud::rasterize(hud, width, height));
+
     renderer.draw(
         &gpu.device,
         &gpu.queue,
@@ -103,6 +109,7 @@ pub fn render_with_adapter(
             camera_position: camera_model.w_axis.truncate(),
             lights,
             clear: scene_renderer::DEFAULT_CLEAR,
+            hud: canvas.as_ref(),
         },
     );
 

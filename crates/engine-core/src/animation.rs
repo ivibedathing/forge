@@ -292,6 +292,29 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "HudText" => {
+            let Ok(mut c) = world.get::<&mut HudText>(entity) else {
+                return false;
+            };
+            match field {
+                "offset" => c.offset = v3.truncate(),
+                "size" => c.size = scalar,
+                "color" => c.color = v3,
+                _ => return false,
+            }
+        }
+        "HudRect" => {
+            let Ok(mut c) = world.get::<&mut HudRect>(entity) else {
+                return false;
+            };
+            match field {
+                "offset" => c.offset = v3.truncate(),
+                "size" => c.size = v3.truncate(),
+                "color" => c.color = v3,
+                "opacity" => c.opacity = scalar,
+                _ => return false,
+            }
+        }
         "AnimationPlayer" => {
             let Ok(mut c) = world.get::<&mut AnimationPlayer>(entity) else {
                 return false;
@@ -754,7 +777,9 @@ mod tests {
                 {"type":"AmbientLight"},
                 {"type":"RigidBody","body":"kinematic"},
                 {"type":"Collider","shape":"sphere","radius":0.5},
-                {"type":"AnimationPlayer","clip":"x"}
+                {"type":"AnimationPlayer","clip":"x"},
+            {"type":"HudText","text":"x"},
+            {"type":"HudRect","size":[1.0,1.0]}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

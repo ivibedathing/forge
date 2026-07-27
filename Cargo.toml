@@ -39,6 +39,9 @@ rhai = "=1.25.1"
 gltf = { version = "1.4", default-features = false, features = ["import", "utils"] }
 schemars = "1.2"
 pollster = "1.0"
+# The public-domain 8×8 pixel font as plain Rust arrays — no binary font
+# asset in the repo, no rasterizer dependency. The HUD's built-in only font.
+font8x8 = "0.3"
 # Pinned to an egui master commit: the released 0.35 line pairs with wgpu 29,
 # while this workspace is on wgpu 30; master supports wgpu 30 + winit 0.30.
 # Swap to the 0.36 release when it ships. Settled with the user for M7.

@@ -10,7 +10,7 @@
 //! the bottom. That macro is what keeps the serialized enum, the name list used
 //! for `did_you_mean`, and the spawn logic from drifting apart.
 
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use hecs::EntityBuilder;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -393,6 +393,104 @@ pub struct AnimationPlayer {
     pub start_offset: f32,
 }
 
+/// Where a HUD element attaches on screen (M12).
+///
+/// `offset` is measured **inward** from the anchor: from a right anchor,
+/// `offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;
+/// from `center` it is the usual +x-right / +y-down applied to the element's
+/// center. The anchored point is the element's matching corner (its center
+/// for `center`), so `offset: [0, 0]` puts the element flush against its
+/// corner at any resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HudAnchor {
+    #[default]
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Center,
+}
+
+/// A screen-space text label (M12): one line of the built-in 8×8 pixel font,
+/// drawn over the 3D scene after lighting, independent of any camera.
+///
+/// Needs no `Transform` — placement is `anchor` + `offset` in framebuffer
+/// pixels, which is what the agent sees in the PNG. Text is always opaque
+/// and never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs
+/// outside the font's coverage render as a filled box: visibly wrong in the
+/// screenshot, never a panic. Draw order is file order, and all text draws
+/// over all `HudRect`s.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudText {
+    /// One line; no wrapping. Scripts may rewrite it via
+    /// `world.set_hud_text` — an empty string is a legal rest value for a
+    /// script-driven readout.
+    pub text: String,
+
+    #[serde(default)]
+    pub anchor: HudAnchor,
+
+    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    #[serde(default)]
+    #[schemars(with = "[f32; 2]")]
+    pub offset: Vec2,
+
+    /// Glyph height in pixels, `>= 4`. The 8×8 font renders at integer
+    /// scale `max(1, round(size / 8))`, so `16` means exactly 2× glyphs.
+    #[serde(default = "hud_text_size")]
+    #[schemars(range(min = 4.0))]
+    pub size: f32,
+
+    /// Linear RGB in `[0, 1]`, like every color in the engine; encoded to
+    /// sRGB when the overlay is rasterized.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+}
+
+fn hud_text_size() -> f32 {
+    16.0
+}
+
+fn white() -> Vec3 {
+    Vec3::ONE
+}
+
+/// A screen-space solid rectangle (M12): the primitive behind health bars,
+/// speed bars, and backdrops. Drawn before all `HudText`, file order within
+/// rects.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudRect {
+    #[serde(default)]
+    pub anchor: HudAnchor,
+
+    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    #[serde(default)]
+    #[schemars(with = "[f32; 2]")]
+    pub offset: Vec2,
+
+    /// `[width, height]` in pixels, each `>= 0` — zero is legal so a
+    /// script-driven bar can be empty. Scripts resize via
+    /// `world.set_hud_rect_size`.
+    #[schemars(with = "[f32; 2]", inner(range(min = 0.0)))]
+    pub size: Vec2,
+
+    /// Linear RGB in `[0, 1]`.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// `[0, 1]`; `1` (the default) replaces the pixel exactly, fractions
+    /// alpha-blend on the GPU (deterministic per adapter, like every
+    /// baseline).
+    #[serde(default = "one")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: f32,
+}
+
 /// Gameplay logic as data (M10): a Rhai script run once per fixed step.
 ///
 /// `source` is a relative `.rhai` path defining `fn step(world, step)`.
@@ -456,6 +554,8 @@ components!(
     Collider,
     AnimationPlayer,
     Script,
+    HudText,
+    HudRect,
 );
 
 #[cfg(test)]
@@ -541,7 +641,9 @@ mod tests {
                 "RigidBody",
                 "Collider",
                 "AnimationPlayer",
-                "Script"
+                "Script",
+                "HudText",
+                "HudRect"
             ]
         );
     }

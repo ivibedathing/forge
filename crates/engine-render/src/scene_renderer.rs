@@ -58,12 +58,18 @@ pub struct ScenePass<'a> {
     pub camera_position: Vec3,
     pub lights: ResolvedLights,
     pub clear: wgpu::Color,
+    /// Screen-space overlay, composited after the mesh pass (M12). Must be
+    /// rasterized at the target's dimensions. `None` skips the overlay pass
+    /// entirely, so HUD-less scenes render byte-identically to pre-M12.
+    pub hud: Option<&'a crate::hud::HudCanvas>,
 }
 
 pub struct SceneRenderer {
     pipeline: wgpu::RenderPipeline,
     object_layout: wgpu::BindGroupLayout,
     frame_layout: wgpu::BindGroupLayout,
+    hud_pipeline: wgpu::RenderPipeline,
+    hud_layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
 }
 
@@ -157,12 +163,85 @@ impl SceneRenderer {
             cache: None,
         });
 
+        let (hud_pipeline, hud_layout) = Self::hud_pipeline(device, format);
+
         Self {
             pipeline,
             object_layout,
             frame_layout,
+            hud_pipeline,
+            hud_layout,
             format,
         }
+    }
+
+    /// The HUD overlay blit (M12): fullscreen triangle, no vertex buffers, no
+    /// sampler (`textureLoad` — the canvas is target-sized, so the fetch is
+    /// 1:1 and nothing filters a glyph edge), straight-alpha blend over the
+    /// lit scene.
+    fn hud_pipeline(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hud-shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/hud.wgsl").into()),
+        });
+
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hud-overlay"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("hud-pipeline-layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hud-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    // Straight alpha: the canvas stores unpremultiplied color,
+                    // so alpha 1 replaces the scene byte exactly and alpha 0
+                    // leaves it exactly.
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        (pipeline, layout)
     }
 
     pub fn format(&self) -> wgpu::TextureFormat {
@@ -183,6 +262,7 @@ impl SceneRenderer {
             camera_position,
             lights,
             clear,
+            hud,
         } = pass;
 
         let frame = FrameUniform {
@@ -249,6 +329,71 @@ impl SceneRenderer {
                 pass.set_index_buffer(item.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..item.index_count, 0, 0..1);
             }
+        }
+
+        if let Some(canvas) = hud {
+            // Uploaded per call like every other buffer here (see `draw`'s
+            // doc); the texture is small and a screenshot renders once.
+            let size = wgpu::Extent3d {
+                width: canvas.width,
+                height: canvas.height,
+                depth_or_array_layers: 1,
+            };
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("hud-overlay"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                // sRGB like the render target: `textureLoad` decodes, the
+                // target re-encodes, and the round trip is byte-exact.
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                texture.as_image_copy(),
+                &canvas.pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    // `write_texture` takes tight rows; the 256-byte alignment
+                    // rule is buffer↔texture copies only.
+                    bytes_per_row: Some(canvas.width * 4),
+                    rows_per_image: None,
+                },
+                size,
+            );
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("hud-bind-group"),
+                layout: &self.hud_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        &texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
+                }],
+            });
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("hud-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.hud_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
         }
 
         queue.submit(Some(encoder.finish()));

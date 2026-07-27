@@ -878,6 +878,11 @@ fn check_component(
         // cross-component requirements (Transform, Collider) are entity-level.
         ComponentData::RigidBody(_) => {}
 
+        // HUD elements are fully described by the schema: anchor is a schema
+        // enum, sizes/colors/opacity are schema ranges, and they reference no
+        // files and need no Transform.
+        ComponentData::HudText(_) | ComponentData::HudRect(_) => {}
+
         // Script references: relative, existing, .rhai. Compilation is the
         // script pass's job (engine-script), like glTF parsing is the asset
         // pass's.
