@@ -64,6 +64,8 @@ build fails.
 | `scene_write_failed` | 2 | the scene file could not be written |
 | `formatter_desync` | 2 | internal bug: a formatted edit produced invalid JSON; nothing was written |
 | `editor_failed` | 2 | the editor window could not start or run |
+| `import_failed` | 1 | a dropped file could not be converted or copied into the scene's assets |
+| `blender_not_found` | 2 | no Blender executable found to convert a .blend file; install Blender or set $BLENDER |
 | `asset_not_found` | 1 | an asset reference names no builtin and no existing file |
 | `asset_unsupported` | 1 | the asset's format or feature is not one the engine reads |
 | `asset_path_not_relative` | 1 | asset paths must be relative to the scene file |

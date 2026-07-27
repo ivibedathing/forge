@@ -388,6 +388,133 @@ pub fn apply_set_component_field(source: &str, edit: &SetComponentField) -> Resu
     }
 }
 
+/// A new entity appended to the scene's `entities` array — the first
+/// structure edit (editor drag-and-drop import). Components are ordered
+/// pairs rather than a `Value` object so the authored key order survives
+/// into the file (`"type"` first, then fields as given).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddEntity {
+    pub name: String,
+    /// `(component type, fields in authoring order)`.
+    pub components: Vec<(String, Vec<(String, Value)>)>,
+}
+
+/// Append `edit` to the `entities` array, preserving every existing byte and
+/// matching the file's layout (multi-line arrays gain an indented block,
+/// inline arrays an inline object). A name collision is an error — the
+/// caller picks a free name against fresh file contents; this is the
+/// backstop for the rebase race.
+pub fn apply_add_entity(source: &str, edit: &AddEntity) -> Result<String> {
+    let root: Value = serde_json::from_str(source).map_err(|e| {
+        EngineError::new(
+            codes::EDIT_TARGET_MISSING,
+            format!("cannot edit a file that no longer parses: {e}"),
+        )
+    })?;
+    let entities = root["entities"].as_array().ok_or_else(|| {
+        EngineError::new(codes::EDIT_TARGET_MISSING, "the file has no entities array")
+    })?;
+    if entities.iter().any(|e| e["name"] == edit.name.as_str()) {
+        return Err(EngineError::new(
+            codes::DUPLICATE_ENTITY_NAME,
+            format!("an entity named {:?} already exists", edit.name),
+        )
+        .entity(&edit.name));
+    }
+
+    let index = SpanIndex::new(source);
+    let span = index.span_of("/entities").ok_or_else(|| {
+        EngineError::new(codes::EDIT_TARGET_MISSING, "no entities array to append to")
+            .path("/entities")
+    })?;
+    let inner = &source[span.start + 1..span.end - 1];
+
+    // Directly after the last entity's closing brace (or after `[` when
+    // empty), so the bytes before and after the insertion stay untouched.
+    let insert_at = span.start
+        + 1
+        + inner
+            .rfind(|c: char| !c.is_whitespace())
+            .map_or(0, |i| i + inner[i..].chars().next().map_or(1, char::len_utf8));
+
+    let insertion = if inner.contains('\n') {
+        // Multi-line array: match the first entity's indentation, or step
+        // once in from the array's own line when it is empty.
+        let indent = match index.span_of("/entities/0") {
+            Some(first) => line_indent(source, first.start),
+            None => format!("{}  ", line_indent(source, span.start)),
+        };
+        let text = entity_text(edit, &indent);
+        if entities.is_empty() {
+            format!("\n{text}")
+        } else {
+            format!(",\n{text}")
+        }
+    } else if entities.is_empty() {
+        if inner.is_empty() {
+            format!(" {} ", entity_text_inline(edit))
+        } else {
+            entity_text_inline(edit)
+        }
+    } else {
+        format!(", {}", entity_text_inline(edit))
+    };
+
+    let mut edited = String::with_capacity(source.len() + insertion.len());
+    edited.push_str(&source[..insert_at]);
+    edited.push_str(&insertion);
+    edited.push_str(&source[insert_at..]);
+    check_still_parses(&edited, "/entities")?;
+    Ok(edited)
+}
+
+/// Leading whitespace of the line containing byte `at`.
+fn line_indent(source: &str, at: usize) -> String {
+    let line_start = source[..at].rfind('\n').map_or(0, |i| i + 1);
+    source[line_start..at]
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect()
+}
+
+/// One component in scene style: `{ "type": "Mesh", "asset": "x.glb" }`.
+fn component_text(kind: &str, fields: &[(String, Value)]) -> String {
+    let mut parts = vec![format!("\"type\": {kind:?}")];
+    parts.extend(fields.iter().map(|(k, v)| format!("{k:?}: {}", format_value(v))));
+    format!("{{ {} }}", parts.join(", "))
+}
+
+/// The entity as an indented block, `indent` being its opening brace's
+/// indentation. Two-space steps — the style of every example scene.
+fn entity_text(edit: &AddEntity, indent: &str) -> String {
+    let mut out = format!("{indent}{{\n{indent}  \"name\": {:?},\n", edit.name);
+    if edit.components.is_empty() {
+        out.push_str(&format!("{indent}  \"components\": []\n"));
+    } else {
+        out.push_str(&format!("{indent}  \"components\": [\n"));
+        for (i, (kind, fields)) in edit.components.iter().enumerate() {
+            let comma = if i + 1 < edit.components.len() { "," } else { "" };
+            out.push_str(&format!("{indent}    {}{comma}\n", component_text(kind, fields)));
+        }
+        out.push_str(&format!("{indent}  ]\n"));
+    }
+    out.push_str(&format!("{indent}}}"));
+    out
+}
+
+fn entity_text_inline(edit: &AddEntity) -> String {
+    let components: Vec<String> = edit
+        .components
+        .iter()
+        .map(|(kind, fields)| component_text(kind, fields))
+        .collect();
+    format!(
+        "{{ \"name\": {:?}, \"components\": [ {} ] }}",
+        edit.name,
+        components.join(", ")
+    )
+}
+
 /// Write atomically: temp file in the same directory, then rename, so a
 /// concurrently reading agent never sees a half-written scene.
 pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
@@ -606,6 +733,74 @@ mod tests {
         let err = apply_set_component_field(SCENE, &edit).unwrap_err();
         assert_eq!(err.error, "edit_target_missing");
         assert_eq!(err.context().unwrap().entity.as_deref(), Some("Gone"));
+    }
+
+    fn pyramid() -> AddEntity {
+        AddEntity {
+            name: "pyramid".into(),
+            components: vec![
+                (
+                    "Transform".into(),
+                    vec![("position".into(), json!([0.0, 0.0, 0.0]))],
+                ),
+                (
+                    "Mesh".into(),
+                    vec![("asset".into(), json!("meshes/pyramid.glb"))],
+                ),
+            ],
+        }
+    }
+
+    #[test]
+    fn add_entity_appends_in_scene_style_and_touches_nothing_else() {
+        let edited = apply_add_entity(SCENE, &pyramid()).unwrap();
+
+        // Every original line except the spliced region is byte-identical:
+        // the insertion lands between the last entity and the closing `]`.
+        assert!(edited.starts_with(&SCENE[..SCENE.rfind("\n  ]").unwrap()]));
+        assert!(edited.ends_with("\n  ]\n}"));
+        assert!(
+            edited.contains(
+                "    {\n      \"name\": \"pyramid\",\n      \"components\": [\n        \
+                 { \"type\": \"Transform\", \"position\": [0.0, 0.0, 0.0] },\n        \
+                 { \"type\": \"Mesh\", \"asset\": \"meshes/pyramid.glb\" }\n      ]\n    }"
+            ),
+            "{edited}"
+        );
+
+        let root: Value = serde_json::from_str(&edited).unwrap();
+        assert_eq!(root["entities"].as_array().unwrap().len(), 3);
+        assert_eq!(root["entities"][2]["name"], json!("pyramid"));
+    }
+
+    #[test]
+    fn add_entity_into_empty_and_inline_arrays() {
+        let empty = r#"{"name":"s","entities":[]}"#;
+        let edited = apply_add_entity(empty, &pyramid()).unwrap();
+        assert!(
+            edited.contains(r#""entities":[ { "name": "pyramid","#),
+            "{edited}"
+        );
+        serde_json::from_str::<Value>(&edited).unwrap();
+
+        let inline = r#"{"name":"s","entities":[{"name":"A","components":[]}]}"#;
+        let edited = apply_add_entity(inline, &pyramid()).unwrap();
+        assert!(
+            edited.contains(r#"]}, { "name": "pyramid","#),
+            "{edited}"
+        );
+        serde_json::from_str::<Value>(&edited).unwrap();
+    }
+
+    #[test]
+    fn add_entity_refuses_a_taken_name() {
+        let edit = AddEntity {
+            name: "Sphere".into(),
+            components: vec![],
+        };
+        let err = apply_add_entity(SCENE, &edit).unwrap_err();
+        assert_eq!(err.error, "duplicate_entity_name");
+        assert_eq!(err.context().unwrap().entity.as_deref(), Some("Sphere"));
     }
 
     #[test]

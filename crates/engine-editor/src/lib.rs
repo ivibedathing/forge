@@ -10,6 +10,7 @@ mod app;
 mod camera;
 mod doc;
 mod gizmo;
+mod import;
 mod inspector;
 mod pick;
 mod viewport;
