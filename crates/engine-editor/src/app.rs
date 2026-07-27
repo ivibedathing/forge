@@ -4,14 +4,15 @@
 use std::time::{Duration, Instant};
 
 use egui::{Color32, Rect, Sense, Stroke};
+use engine_core::components::Transform;
 use engine_core::formatter::SetComponentField;
 use engine_core::scene::RenderItem;
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Vec2, Vec3};
 use serde_json::Value;
 
 use crate::camera::OrbitCamera;
 use crate::doc::SceneDoc;
-use crate::gizmo::{self, Drag};
+use crate::gizmo::{self, Drag, GizmoMode};
 use crate::inspector::{self, InspectorState};
 use crate::pick;
 use crate::viewport::{grid_items, ViewportRenderer};
@@ -27,6 +28,7 @@ pub struct EditorApp {
     selected: Option<String>,
     filter: String,
     inspector_state: InspectorState,
+    mode: GizmoMode,
     drag: Option<Drag>,
     hot_axis: Option<usize>,
     started: Instant,
@@ -46,6 +48,7 @@ impl EditorApp {
             selected: None,
             filter: String::new(),
             inspector_state: InspectorState::default(),
+            mode: GizmoMode::Translate,
             drag: None,
             hot_axis: None,
             started: Instant::now(),
@@ -57,9 +60,9 @@ impl EditorApp {
         self.options.watch_only
     }
 
-    /// `Transform.position` of an entity as the file states it (absent
-    /// position on a present Transform is the documented [0,0,0]).
-    fn file_position(&self, entity: &str) -> Option<Vec3> {
+    /// The entity's `Transform` as the file states it (fields absent on a
+    /// present Transform take their documented identity defaults).
+    fn file_transform(&self, entity: &str) -> Option<Transform> {
         let raw = self.doc.raw.as_ref()?;
         let components = raw["entities"]
             .as_array()?
@@ -67,14 +70,18 @@ impl EditorApp {
             .find(|e| e["name"] == entity)?["components"]
             .as_array()?;
         let transform = components.iter().find(|c| c["type"] == "Transform")?;
-        let p = &transform["position"];
-        Some(match p.as_array() {
+        let vec3 = |value: &Value, default: Vec3| match value.as_array() {
             Some(a) if a.len() == 3 => Vec3::new(
-                a[0].as_f64().unwrap_or(0.0) as f32,
-                a[1].as_f64().unwrap_or(0.0) as f32,
-                a[2].as_f64().unwrap_or(0.0) as f32,
+                a[0].as_f64().unwrap_or(f64::from(default.x)) as f32,
+                a[1].as_f64().unwrap_or(f64::from(default.y)) as f32,
+                a[2].as_f64().unwrap_or(f64::from(default.z)) as f32,
             ),
-            _ => Vec3::ZERO,
+            _ => default,
+        };
+        Some(Transform {
+            position: vec3(&transform["position"], Vec3::ZERO),
+            rotation: vec3(&transform["rotation"], Vec3::ZERO),
+            scale: vec3(&transform["scale"], Vec3::ONE),
         })
     }
 
@@ -92,8 +99,11 @@ impl EditorApp {
         let mut items: Vec<RenderItem> = self.doc.items.clone();
 
         if let Some(drag) = &self.drag {
+            // Same construction as `Scene::render_items`, so the preview is
+            // exactly what committing the drag would render.
+            let model = drag.preview_transform().matrix();
             for item in items.iter_mut().filter(|i| i.entity == drag.entity) {
-                item.model = Mat4::from_translation(drag.delta) * item.model;
+                item.model = model;
             }
         }
 
@@ -111,6 +121,22 @@ impl EditorApp {
     fn viewport_ui(&mut self, ui: &mut egui::Ui, render_state: &egui_wgpu::RenderState) {
         let size = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+
+        // ── Gizmo mode keys (W move / R rotate / S scale) ────────────
+        // Skipped while a text field owns the keyboard or a drag is live.
+        if !ui.ctx().egui_wants_keyboard_input() && self.drag.is_none() {
+            ui.input(|i| {
+                if i.key_pressed(egui::Key::W) {
+                    self.mode = GizmoMode::Translate;
+                }
+                if i.key_pressed(egui::Key::R) {
+                    self.mode = GizmoMode::Rotate;
+                }
+                if i.key_pressed(egui::Key::S) {
+                    self.mode = GizmoMode::Scale;
+                }
+            });
+        }
 
         // ── Camera input ─────────────────────────────────────────────
         let modifiers = ui.input(|i| i.modifiers);
@@ -148,39 +174,60 @@ impl EditorApp {
             .map(|p| Vec2::new(p.x - rect.min.x, p.y - rect.min.y));
 
         // ── Gizmo interaction (before picking, so a grab wins) ───────
-        let gizmo_origin = self
+        let file_transform = self
             .selected
             .as_ref()
-            .and_then(|s| self.file_position(s))
-            .map(|p| match &self.drag {
-                Some(drag) => drag.preview_position(),
-                None => p,
-            });
+            .and_then(|s| self.file_transform(s));
+        let gizmo_origin = file_transform.map(|t| match &self.drag {
+            Some(drag) => drag.preview_transform().position,
+            None => t.position,
+        });
 
         self.hot_axis = None;
-        if let (Some(origin), Some(pointer), false) =
-            (gizmo_origin, pointer, self.read_only())
+        if let (Some(start), Some(origin), Some(pointer), false) =
+            (file_transform, gizmo_origin, pointer, self.read_only())
         {
             let arm = gizmo::arm_length(origin, self.camera.eye());
 
             if let Some(drag) = &mut self.drag {
                 let axis = gizmo::AXES[drag.axis].0;
-                let base = drag.start_position;
-                let t = gizmo::axis_parameter(view_projection, logical, base, axis, pointer);
-                drag.delta = axis * (t - drag.grab_t);
+                let pivot = drag.start.position;
+                match drag.mode {
+                    GizmoMode::Rotate => {
+                        if let Some(angle) = gizmo::ring_angle(
+                            view_projection,
+                            logical,
+                            pivot,
+                            axis,
+                            pointer,
+                        ) {
+                            drag.delta = gizmo::angle_delta(angle, drag.grab_t);
+                        }
+                    }
+                    GizmoMode::Translate | GizmoMode::Scale => {
+                        let t = gizmo::axis_parameter(
+                            view_projection,
+                            logical,
+                            pivot,
+                            axis,
+                            pointer,
+                        );
+                        drag.delta = t - drag.grab_t;
+                    }
+                }
                 self.hot_axis = Some(drag.axis);
 
                 let released = ui.input(|i| !i.pointer.primary_down());
                 if released {
                     let drag = self.drag.take().expect("checked above");
-                    let position = drag.preview_position();
+                    let value = drag.value();
                     let rounded = |v: f32| (v * 1000.0).round() / 1000.0;
                     self.commit(SetComponentField {
                         entity: drag.entity,
                         component: "Transform".into(),
-                        field: "position".into(),
+                        field: drag.mode.field().into(),
                         value: Value::Array(
-                            [position.x, position.y, position.z]
+                            [value.x, value.y, value.z]
                                 .into_iter()
                                 .map(|v| inspector::number_from_f32(rounded(v)))
                                 .collect(),
@@ -188,25 +235,43 @@ impl EditorApp {
                     });
                 }
             } else {
-                self.hot_axis =
-                    gizmo::hit_axis(view_projection, logical, origin, arm, pointer);
+                self.hot_axis = match self.mode {
+                    GizmoMode::Rotate => {
+                        gizmo::hit_ring(view_projection, logical, origin, arm, pointer)
+                    }
+                    GizmoMode::Translate | GizmoMode::Scale => {
+                        gizmo::hit_axis(view_projection, logical, origin, arm, pointer)
+                    }
+                };
                 let grab = self.hot_axis.is_some()
                     && response.drag_started_by(egui::PointerButton::Primary);
                 if grab {
                     let axis_index = self.hot_axis.expect("checked above");
                     let axis = gizmo::AXES[axis_index].0;
-                    self.drag = Some(Drag {
-                        entity: self.selected.clone().expect("gizmo needs a selection"),
-                        axis: axis_index,
-                        grab_t: gizmo::axis_parameter(
+                    let grab_t = match self.mode {
+                        GizmoMode::Rotate => gizmo::ring_angle(
+                            view_projection,
+                            logical,
+                            origin,
+                            axis,
+                            pointer,
+                        )
+                        .unwrap_or(0.0),
+                        GizmoMode::Translate | GizmoMode::Scale => gizmo::axis_parameter(
                             view_projection,
                             logical,
                             origin,
                             axis,
                             pointer,
                         ),
-                        start_position: origin,
-                        delta: Vec3::ZERO,
+                    };
+                    self.drag = Some(Drag {
+                        entity: self.selected.clone().expect("gizmo needs a selection"),
+                        mode: self.mode,
+                        axis: axis_index,
+                        grab_t,
+                        start,
+                        delta: 0.0,
                     });
                 }
             }
@@ -295,26 +360,97 @@ impl EditorApp {
                 let painter = ui.painter_at(rect);
                 let to_screen =
                     |p: Vec2| egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
-                if let Some(root) = gizmo::project(view_projection, logical, origin) {
-                    for (i, (axis, color)) in gizmo::AXES.iter().enumerate() {
-                        let Some(tip) =
-                            gizmo::project(view_projection, logical, origin + *axis * arm)
-                        else {
-                            continue;
-                        };
-                        let hot = self.hot_axis == Some(i);
-                        let stroke = Stroke::new(
-                            if hot { 4.0 } else { 2.5 },
-                            if hot { Color32::WHITE } else { *color },
-                        );
-                        painter.line_segment([to_screen(root), to_screen(tip)], stroke);
-                        painter.circle_filled(
-                            to_screen(tip),
-                            if hot { 6.0 } else { 4.5 },
-                            stroke.color,
-                        );
+                let stroke_for = |hot: bool, color: Color32| {
+                    Stroke::new(
+                        if hot { 4.0 } else { 2.5 },
+                        if hot { Color32::WHITE } else { color },
+                    )
+                };
+                match self.mode {
+                    GizmoMode::Rotate => {
+                        for (i, (axis, color)) in gizmo::AXES.iter().enumerate() {
+                            let stroke = stroke_for(self.hot_axis == Some(i), *color);
+                            let points: Vec<Option<Vec2>> =
+                                gizmo::ring_points(origin, *axis, arm)
+                                    .into_iter()
+                                    .map(|p| gizmo::project(view_projection, logical, p))
+                                    .collect();
+                            for pair in points.windows(2) {
+                                if let (Some(a), Some(b)) = (pair[0], pair[1]) {
+                                    painter.line_segment(
+                                        [to_screen(a), to_screen(b)],
+                                        stroke,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    GizmoMode::Translate | GizmoMode::Scale => {
+                        if let Some(root) =
+                            gizmo::project(view_projection, logical, origin)
+                        {
+                            for (i, (axis, color)) in gizmo::AXES.iter().enumerate() {
+                                let Some(tip) = gizmo::project(
+                                    view_projection,
+                                    logical,
+                                    origin + *axis * arm,
+                                ) else {
+                                    continue;
+                                };
+                                let hot = self.hot_axis == Some(i);
+                                let stroke = stroke_for(hot, *color);
+                                painter.line_segment(
+                                    [to_screen(root), to_screen(tip)],
+                                    stroke,
+                                );
+                                let tip_size = if hot { 6.0 } else { 4.5 };
+                                if self.mode == GizmoMode::Scale {
+                                    // Square tips: the visual tell that this
+                                    // gizmo scales rather than moves.
+                                    painter.rect_filled(
+                                        Rect::from_center_size(
+                                            to_screen(tip),
+                                            egui::vec2(tip_size * 2.0, tip_size * 2.0),
+                                        ),
+                                        0.0,
+                                        stroke.color,
+                                    );
+                                } else {
+                                    painter.circle_filled(
+                                        to_screen(tip),
+                                        tip_size,
+                                        stroke.color,
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
+            }
+        }
+
+        // ── Mode hint (top-left corner of the viewport) ──────────────
+        if !self.read_only() {
+            let painter = ui.painter_at(rect);
+            let mut cursor = rect.min + egui::vec2(8.0, 8.0);
+            for (key, label, mode) in [
+                ("W", "move", GizmoMode::Translate),
+                ("R", "rotate", GizmoMode::Rotate),
+                ("S", "scale", GizmoMode::Scale),
+            ] {
+                let active = self.mode == mode;
+                let drawn = painter.text(
+                    cursor,
+                    egui::Align2::LEFT_TOP,
+                    format!("{key} {label}"),
+                    egui::FontId::proportional(13.0),
+                    if active {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_gray(120)
+                    },
+                );
+                cursor.x = drawn.max.x + 14.0;
             }
         }
 

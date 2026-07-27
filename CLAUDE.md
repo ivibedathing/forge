@@ -48,8 +48,10 @@ formatter` pins this). Commits rebase onto a fresh read by entity `name` + compo
 generated from the component schema (a new component is editable the day it exists); the
 validation panel shows the same `EngineError`s the CLI emits, click-to-select. Viewport =
 `SceneRenderer` into an offscreen texture (same pipeline as `engine screenshot`), orbit camera
-(right-drag; shift/middle = pan, scroll = zoom), CPU ray picking, hand-rolled translate gizmo
-(preview in memory, one write on release). Hidden flag `--self-screenshot <png>
+(right-drag; shift/middle = pan, scroll = zoom), CPU ray picking, hand-rolled transform gizmos
+— `W` translate / `R` rotate / `S` scale switch modes, world axes mapping straight to
+`Transform` field components (the X ring adds degrees to `rotation[0]`, etc.), preview in
+memory, one write on release. Hidden flag `--self-screenshot <png>
 [--self-screenshot-after-ms N]` renders the editor and exits — the agent's way to *look at* the
 editor. `RenderItem` gained an `entity: String` field for picking/selection.
 
