@@ -439,6 +439,9 @@ pub(crate) fn report_scene_diagnostics(path: &PathBuf) -> SceneReport {
     if diagnostics.iter().all(EngineError::is_warning) {
         diagnostics.extend(engine_assets::validate_scene_assets(&source, &display));
     }
+    if diagnostics.iter().all(EngineError::is_warning) {
+        diagnostics.extend(engine_script::validate_scene_scripts(&source, &display));
+    }
 
     let mut errors = 0;
     let mut warnings = 0;
@@ -568,7 +571,7 @@ fn diff_render(
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
     if steps > 0 {
-        simulate::run(&mut scene, steps, None)?;
+        simulate::run(&mut scene, &scene_path, steps, None)?;
     }
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -824,7 +827,7 @@ fn screenshot(
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
     if steps > 0 {
-        simulate::run(&mut scene, steps, None)?;
+        simulate::run(&mut scene, &scene_path, steps, None)?;
     }
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -876,8 +879,10 @@ fn run_scene(
     // Physics and animated scenes come alive in the viewer; static scenes
     // stay static.
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
+    let scripts =
+        engine_script::ScriptHost::build(&scene.world, &scene_path, scene.physics.timestep_hz)?;
     let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
-    let simulation = if has_physics || !players.is_empty() {
+    let simulation = if has_physics || !players.is_empty() || scripts.is_some() {
         let physics = if has_physics {
             Some(engine_physics::PhysicsWorld::build(&scene.world, &scene.physics)?)
         } else {
@@ -887,9 +892,11 @@ fn run_scene(
             scene,
             physics,
             players,
+            scripts,
             assets,
             accumulator: 0.0,
             t: 0.0,
+            step_index: 0,
             last: None,
         })
     } else {

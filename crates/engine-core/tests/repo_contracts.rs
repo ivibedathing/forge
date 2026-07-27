@@ -45,6 +45,11 @@ fn m9_spin_verify_scene_and_clip_are_valid() {
 }
 
 #[test]
+fn m10_script_verify_scene_is_valid() {
+    assert_scene_validates("examples/scenes/verify/m10_script.json");
+}
+
+#[test]
 fn demo_scene_is_valid() {
     let source = repo_file("examples/scenes/demo_scene.json");
     let errors = engine_core::validate::validate_source(&source, "examples/scenes/demo_scene.json");

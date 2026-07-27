@@ -386,7 +386,13 @@ fn build_collider(
         .density(collider.density)
         .sensor(collider.sensor)
         // Contact begin/end feeds the trace; every collider participates.
+        // Kinematic-vs-fixed pairs are opted in explicitly: rapier skips
+        // them by default, but a scripted kinematic platform crossing a
+        // static sensor is exactly what M10 traces need to see.
         .active_events(ActiveEvents::COLLISION_EVENTS)
+        .active_collision_types(
+            ActiveCollisionTypes::default() | ActiveCollisionTypes::KINEMATIC_FIXED,
+        )
         .build())
 }
 

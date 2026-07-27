@@ -1,0 +1,50 @@
+{
+  "name": "m10_script",
+  "physics": { "timestep_hz": 60 },
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "scale": [10.0, 1.0, 10.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.35, 0.4, 0.32], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "Elevator",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.25, 0.0], "scale": [1.5, 0.25, 1.5] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.8, 0.6, 0.1], "roughness": 0.5 },
+        { "type": "RigidBody", "body": "kinematic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5] },
+        { "type": "Script", "source": "scripts/elevator.rhai" }
+      ]
+    },
+    {
+      "name": "TopSensor",
+      "components": [
+        { "type": "Transform", "position": [0.0, 2.5, 0.0] },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [1.0, 0.25, 1.0], "sensor": true }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-50.0, 30.0, 0.0] },
+        { "type": "DirectionalLight" }
+      ]
+    },
+    {
+      "name": "Ambient",
+      "components": [ { "type": "AmbientLight", "intensity": 0.05 } ]
+    },
+    {
+      "name": "Player",
+      "components": [
+        { "type": "Transform", "position": [0.0, 2.4, 8.0], "rotation": [-12.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 50.0, "active": true }
+      ]
+    }
+  ]
+}

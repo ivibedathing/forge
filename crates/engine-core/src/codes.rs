@@ -127,6 +127,14 @@ registry! {
     ANIMATION_ON_DYNAMIC_BODY = "animation_on_dynamic_body", Input,
         "a clip animates the Transform of a dynamic RigidBody; make it kinematic";
 
+    // ── Scripting (M10) ────────────────────────────────────────────────
+    SCRIPT_PARSE_ERROR = "script_parse_error", Input,
+        "a script file does not compile";
+    SCRIPT_MISSING_STEP_FN = "script_missing_step_fn", Input,
+        "a script defines no `fn step(world, step)`";
+    SCRIPT_RUNTIME_ERROR = "script_runtime_error", Input,
+        "a script failed while running";
+
     // ── Warnings (severity: "warning"; do not affect the exit code
     //    unless promoted by --strict) ────────────────────────────────────
     UNUSED_MATERIAL = "unused_material", Input,

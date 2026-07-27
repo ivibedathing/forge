@@ -168,6 +168,18 @@ files directly (structural checks; entity-name resolution needs a scene and
 happens when validating the scene). Ordering everywhere: sample animations →
 physics (`--steps`) → render.
 
+## Scripting
+
+`Script` components run `fn step(world, step)` from a `.rhai` file once per
+fixed step, before physics. The registered `world` API is the script's
+entire universe (no time, no I/O, no randomness; 1M-op budget), so
+determinism holds with scripts running. Parse failures surface in
+`engine validate` with the script's own file/line (`script_parse_error`,
+`script_missing_step_fn`); runtime failures are `script_runtime_error` with
+file, line, and the owning entity, exit 1. Baking captures script-driven
+state: any Transform/RigidBody field that differs from the file's rest value
+is written back, everything else byte-preserved.
+
 ## Validation against the published schema
 
 `schemas/component-schema.json` (from `engine list-components`) carries the

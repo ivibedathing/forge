@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M9 are done** (plus most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M10 are done — the v1 roadmap is complete** (plus most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -28,6 +28,8 @@ engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
 engine list-animations <scene-or-clip> [--schema]
+# Script component: {"type": "Script", "source": "scripts/x.rhai"} — runs fn step(world, step)
+# once per fixed step (order: animations → scripts → physics → render)
 engine run-scene <scene.json>            # windowed scene viewer
 engine list-components                   # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
@@ -135,6 +137,18 @@ Transform of a **dynamic** body is `animation_on_dynamic_body` (kinematic is the
 "animation drives, physics follows" case). Clip-content errors carry the clip file's own
 file/line; `engine validate` accepts clip files directly (structural checks only).
 
+Scripting (M10, `crates/engine-script`): **Rhai pinned =1.25.1** — the §9 decision is settled
+(see `scripting-design.md` §1; Lua lost on the C dependency and determinism friction,
+compiled-Rust-only lost on rebuild-per-iteration). Scripts define `fn step(world, step)`; the
+curated `world` API (dt / position / rotation / scale get+set) is the entire universe — no
+time, no I/O, no randomness, 1M-operation budget per call, so traces stay byte-identical with
+scripts running. Script parse errors fail `engine validate` with the script's file/line;
+runtime errors are `script_runtime_error`, exit 1, world intact. Bake is change-based: any
+`Transform`/`RigidBody` field differing from the file's rest value is spliced — which is how
+script-driven kinematics land in baked files. Kinematic-vs-fixed contact events are opted in
+via `ActiveCollisionTypes` (rapier skips them by default; a scripted platform crossing a
+static sensor needs them). Bake next to the scene, not /tmp — relative paths.
+
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).
 
@@ -239,9 +253,9 @@ Standard Cargo commands: `cargo build`, `cargo test --workspace`, and
 Follow the milestones in design doc §8: ~~M0 window+triangle~~ → ~~M1 CLI skeleton + JSON
 error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ → ~~M4 materials +
 lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ →
-~~M8 physics~~ → ~~M9 animation (A0–A1)~~ (all done; editor E3/E4 and M9-A2 skeletal glTF
-skinning remain as follow-ups; next per roadmap: M10 scripting — which forces the open §9
-scripting decision; surface it before implementing).
+~~M8 physics~~ → ~~M9 animation (A0–A1)~~ → ~~M10 scripting~~ — **the roadmap is complete.**
+Remaining deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF +
+GPU skinning, and the M5-era deferrals (--fix, watch mode).
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any
@@ -284,7 +298,7 @@ this.
 
 Still unsettled (design doc §9). If a task forces one, surface it rather than picking silently:
 
-- Runtime scripting (Lua/Rhai) vs compiled-Rust systems only
+- ~~Runtime scripting~~ — settled: Rhai (M10, `scripting-design.md`)
 - Whether to support hot reload of scene data without a Rust rebuild
 
 ## Out of scope for v1

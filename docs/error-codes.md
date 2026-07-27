@@ -50,6 +50,9 @@ build fails.
 | `unsorted_keys` | 1 | key times must be strictly increasing |
 | `conflicting_tracks` | 1 | two active clips animate the same property of the same entity |
 | `animation_on_dynamic_body` | 1 | a clip animates the Transform of a dynamic RigidBody; make it kinematic |
+| `script_parse_error` | 1 | a script file does not compile |
+| `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
+| `script_runtime_error` | 1 | a script failed while running |
 | `unused_material` | 1 | warning: a Material on an entity with no Mesh does nothing |
 | `zero_scale` | 1 | warning: a Transform.scale axis of 0 renders invisibly or degenerate |
 | `scene_unreadable` | 1 | the scene file could not be read |

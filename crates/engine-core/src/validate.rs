@@ -878,6 +878,56 @@ fn check_component(
         // cross-component requirements (Transform, Collider) are entity-level.
         ComponentData::RigidBody(_) => {}
 
+        // Script references: relative, existing, .rhai. Compilation is the
+        // script pass's job (engine-script), like glTF parsing is the asset
+        // pass's.
+        ComponentData::Script(script) => {
+            let json_path = &format!("{component_path}/source");
+            if Path::new(&script.source).is_absolute() {
+                errors.push(
+                    cx.err(
+                        codes::ASSET_PATH_NOT_RELATIVE,
+                        format!(
+                            "script {:?} is an absolute path; scripts are referenced                              relative to the scene file",
+                            script.source
+                        ),
+                        json_path,
+                    )
+                    .entity(entity)
+                    .component("Script")
+                    .field("source"),
+                );
+            } else if !script.source.ends_with(".rhai") {
+                errors.push(
+                    cx.err(
+                        codes::ASSET_UNSUPPORTED,
+                        format!("script {:?} is not a .rhai file", script.source),
+                        json_path,
+                    )
+                    .entity(entity)
+                    .component("Script")
+                    .field("source"),
+                );
+            } else {
+                let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+                if !base_dir.join(&script.source).is_file() {
+                    errors.push(
+                        cx.err(
+                            codes::ASSET_NOT_FOUND,
+                            format!(
+                                "no script file at {:?} (script paths resolve relative                                  to the scene file)",
+                                script.source
+                            ),
+                            json_path,
+                        )
+                        .entity(entity)
+                        .component("Script")
+                        .field("source"),
+                    );
+                }
+            }
+        }
+
         // Clip references resolve like mesh assets: relative to the scene
         // file, existence checked here; clip *content* is validated by the
         // scene-level animation pass so its errors carry the clip's own
