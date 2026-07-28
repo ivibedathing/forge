@@ -597,10 +597,11 @@ fn diff_render(
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    let hud = if steps > 0 {
-        simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?.hud
+    let (particles, hud) = if steps > 0 {
+        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
+        (outcome.particles.instances(&scene.world), outcome.hud)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -608,6 +609,7 @@ fn diff_render(
 
     let (actual, adapter) = engine_render::offscreen::render_with_adapter(
         &items,
+        &particles,
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),
@@ -747,8 +749,11 @@ fn filmstrip(
         };
         engine_core::animation::apply_all(&mut scene, &players, t);
         let items = scene.render_items(&assets)?;
+        // Filmstrip samples animation time only; particles advance with
+        // --steps, which filmstrip does not take, so none are drawn.
         let rendered = engine_render::offscreen::render(
             &items,
+            &[],
             &camera,
             camera_transform.matrix(),
             scene.lights().resolved(),
@@ -857,15 +862,16 @@ fn screenshot(
 ) -> Result<()> {
     let input = simulate::load_input(input_path.as_deref())?;
     let mut scene = load_scene(&scene_path)?;
-    // System order: sample animations, then physics, then render.
+    // System order: sample animations, then physics and particles, then render.
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    let hud = if steps > 0 {
-        simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?.hud
+    let (particles, hud) = if steps > 0 {
+        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
+        (outcome.particles.instances(&scene.world), outcome.hud)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -874,6 +880,7 @@ fn screenshot(
 
     let image = engine_render::offscreen::render(
         &items,
+        &particles,
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),
@@ -926,7 +933,10 @@ fn run_scene(
     let scripts =
         engine_script::ScriptHost::build(&scene.world, &scene_path, scene.physics.timestep_hz)?;
     let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
+    let has_emitters =
+        engine_core::particles::ParticleSystem::scene_has_emitters(&scene.world);
     let simulation = if has_physics
+        || has_emitters
         || !players.is_empty()
         || scripts.is_some()
         || record_input.is_some()
@@ -940,9 +950,11 @@ fn run_scene(
             .as_deref()
             .map(crate::app::InputRecorder::create)
             .transpose()?;
+        let particles = engine_core::particles::ParticleSystem::build(&scene.world);
         Some(crate::app::Simulation {
             scene,
             physics,
+            particles,
             players,
             scripts,
             assets,

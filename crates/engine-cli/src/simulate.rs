@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use engine_core::components::{RigidBody, Transform};
 use engine_core::formatter::{self, number_from_f32, SetComponentField};
 use engine_core::input::{InputState, InputTimeline};
+use engine_core::particles::ParticleSystem;
 use engine_core::{codes, EngineError, Result, Scene};
 use engine_physics::PhysicsWorld;
 use glam::Vec3;
@@ -20,10 +21,10 @@ fn vec3_json(v: Vec3) -> Value {
     Value::Array(v.to_array().into_iter().map(number_from_f32).collect())
 }
 
-/// Step a scene `steps` times — scripts then physics, per the fixed system
-/// order — optionally replaying an input timeline and writing a JSONL
-/// trace. No timeline means no keys held, which keeps every pre-input trace
-/// and baseline byte-identical.
+/// Step a scene `steps` times — scripts, physics, then particles, per the
+/// fixed system order — optionally replaying an input timeline and writing a
+/// JSONL trace. No timeline means no keys held, which keeps every pre-input
+/// trace and baseline byte-identical.
 pub fn run(
     scene: &mut Scene,
     scene_path: &Path,
@@ -34,6 +35,8 @@ pub fn run(
     let scripts =
         engine_script::ScriptHost::build(&scene.world, scene_path, scene.physics.timestep_hz)?;
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics)?;
+    let mut particles = ParticleSystem::build(&scene.world);
+    let dt = 1.0 / scene.physics.timestep_hz.max(1) as f32;
     let trace_names = physics.dynamic_entity_names(&scene.world);
     let mut contacts = 0u64;
     let no_keys = InputState::default();
@@ -47,6 +50,9 @@ pub fn run(
             hud = scripts.step(&mut scene.world, step_index, held)?;
         }
         let events = physics.step(&mut scene.world);
+        // Particles read the post-physics world, so an emitter riding a
+        // dynamic body trails where the body actually went this step.
+        particles.step(&scene.world, dt);
 
         if let Some(trace) = trace.as_deref_mut() {
             for name in &trace_names {
@@ -97,15 +103,18 @@ pub fn run(
 
     Ok(StepRun {
         physics,
+        particles,
         contacts,
         hud,
     })
 }
 
 /// What stepping a scene produced: the physics world (for queries), the
-/// total contact count, and the HUD lines the final step's scripts pushed.
+/// particle system (for rendering), the total contact count, and the HUD
+/// lines the final step's scripts pushed.
 pub struct StepRun {
     pub physics: PhysicsWorld,
+    pub particles: ParticleSystem,
     pub contacts: u64,
     pub hud: Vec<String>,
 }

@@ -639,6 +639,107 @@ fn default_friction_slip() -> f32 {
     10.5
 }
 
+/// A deterministic particle emitter (M13): smoke, sparks, dust.
+///
+/// Particles spray from the entity's position into a cone around its local
+/// **−Z** — the same aiming convention the camera and lights use, so a rising
+/// smoke plume is `"rotation": [90, 0, 0]`. Each particle is born with
+/// `start_*` values and reaches its `end_*` values as it dies; the billboard
+/// renders as a soft unlit disc, alpha-blended over the scene.
+///
+/// Particles are simulation state on the fixed step clock, advanced by
+/// `--steps` exactly like physics (`--time` poses animations, it does not
+/// advance particles). The state is derived and disposable — never baked,
+/// never traced — and the `seed` makes it reproducible: same file, same
+/// steps, same particles, so screenshots of smoke diff-render bit-exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ParticleEmitter {
+    /// Particles spawned per second. `>= 0`; 0 stops emission (existing
+    /// particles live out their lifetime).
+    #[schemars(range(min = 0.0))]
+    pub rate: f32,
+
+    /// Seconds each particle lives. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub lifetime: f32,
+
+    /// Initial speed in units/second along the sampled cone direction. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub speed: f32,
+
+    /// Cone half-angle in degrees around local −Z. `[0, 180]`: 0 is a beam,
+    /// 90 a hemisphere, 180 a full sphere.
+    #[schemars(range(min = 0.0, max = 180.0))]
+    pub spread: f32,
+
+    /// World-space acceleration applied to every live particle, units/s².
+    /// Particles ignore physics; this is where buoyancy (`[0, 1, 0]` for
+    /// smoke) or gravity (`[0, -9.81, 0]` for sparks) comes from.
+    #[schemars(with = "[f32; 3]")]
+    pub acceleration: Vec3,
+
+    /// Velocity damping per second. `>= 0`; 0 means none.
+    #[schemars(range(min = 0.0))]
+    pub drag: f32,
+
+    /// Billboard half-size in world units at birth. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub start_size: f32,
+
+    /// Billboard half-size at death. `> 0`; larger than `start_size` grows
+    /// (smoke), smaller shrinks (sparks).
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub end_size: f32,
+
+    /// Linear RGB at birth, each component in `[0, 1]`. Unlit.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub start_color: Vec3,
+
+    /// Linear RGB at death, each component in `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub end_color: Vec3,
+
+    /// Opacity at birth, `[0, 1]`.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub start_alpha: f32,
+
+    /// Opacity at death, `[0, 1]`. The default 0 fades particles out.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub end_alpha: f32,
+
+    /// Cap on live particles; spawns beyond it are dropped (deterministically).
+    /// `[1, 65536]`.
+    #[schemars(range(min = 1, max = 65536))]
+    pub max_particles: u32,
+
+    /// Seed for the emitter's random spray directions. Same seed, same steps →
+    /// identical particles; give two otherwise-identical emitters different
+    /// seeds so they don't emit in lockstep.
+    pub seed: u32,
+}
+
+impl Default for ParticleEmitter {
+    fn default() -> Self {
+        Self {
+            rate: 10.0,
+            lifetime: 2.0,
+            speed: 1.0,
+            spread: 15.0,
+            acceleration: Vec3::ZERO,
+            drag: 0.0,
+            start_size: 0.2,
+            end_size: 0.2,
+            start_color: Vec3::splat(0.7),
+            end_color: Vec3::splat(0.7),
+            start_alpha: 1.0,
+            end_alpha: 0.0,
+            max_particles: 1024,
+            seed: 0,
+        }
+    }
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -693,6 +794,7 @@ components!(
     Wheel,
     HudText,
     HudRect,
+    ParticleEmitter,
 );
 
 #[cfg(test)]
@@ -781,7 +883,8 @@ mod tests {
                 "Script",
                 "Wheel",
                 "HudText",
-                "HudRect"
+                "HudRect",
+                "ParticleEmitter"
             ]
         );
     }

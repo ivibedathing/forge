@@ -346,6 +346,26 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "ParticleEmitter" => {
+            let Ok(mut c) = world.get::<&mut ParticleEmitter>(entity) else {
+                return false;
+            };
+            match field {
+                "rate" => c.rate = scalar,
+                "lifetime" => c.lifetime = scalar,
+                "speed" => c.speed = scalar,
+                "spread" => c.spread = scalar,
+                "acceleration" => c.acceleration = v3,
+                "drag" => c.drag = scalar,
+                "start_size" => c.start_size = scalar,
+                "end_size" => c.end_size = scalar,
+                "start_color" => c.start_color = v3,
+                "end_color" => c.end_color = v3,
+                "start_alpha" => c.start_alpha = scalar,
+                "end_alpha" => c.end_alpha = scalar,
+                _ => return false,
+            }
+        }
         _ => return false,
     }
     true
@@ -801,7 +821,8 @@ mod tests {
                 {"type":"AnimationPlayer","clip":"x"},
                 {"type":"Wheel","vehicle":"E"},
                 {"type":"HudText","text":"x"},
-                {"type":"HudRect","size":[1.0,1.0]}
+                {"type":"HudRect","size":[1.0,1.0]},
+                {"type":"ParticleEmitter"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

@@ -78,6 +78,17 @@ const AGREEMENT_CORPUS: &[&str] = &[
         {"type":"HudText","text":"HI","size":2.0,"color":[2,0,0]}]}]}"#,
     r#"{"name":"s","entities":[{"name":"A","components":[
         {"type":"HudRect","size":[-1,5],"opacity":1.5}]}]}"#,
+    // Particles (M13): the first integer component fields. Valid, then
+    // range-broken (serde parses), then shape-broken (serde rejects a float
+    // or negative where u32 is expected — the walk must agree).
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Transform"},
+        {"type":"ParticleEmitter","rate":20.0,"lifetime":1.5,"spread":30.0,
+         "max_particles":256,"seed":7}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"ParticleEmitter","max_particles":0}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"ParticleEmitter","spread":270.0,"start_alpha":2.0}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"ParticleEmitter","seed":1.5}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"ParticleEmitter","seed":-1}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"ParticleEmitter","max_particles":4294967296}]}]}"#,
     // Shape-broken — serde must reject every one of these.
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"HudText"}]}]}"#,
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"HudText","text":42}]}]}"#,

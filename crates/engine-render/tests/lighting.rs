@@ -30,6 +30,7 @@ fn render(source: &str) -> Image {
         .expect("test scenes use builtins only");
     offscreen::render(
         &items,
+        &[],
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),

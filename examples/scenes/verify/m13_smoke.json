@@ -1,0 +1,62 @@
+{
+  "name": "m13_smoke",
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "scale": [10.0, 1.0, 10.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.3, 0.32, 0.3], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "Ember",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.15, 0.0], "scale": [0.3, 0.15, 0.3] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.05, 0.02, 0.0], "emissive": [1.0, 0.35, 0.05] }
+      ]
+    },
+    {
+      "name": "Smoke",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.35, 0.0], "rotation": [90.0, 0.0, 0.0] },
+        {
+          "type": "ParticleEmitter",
+          "rate": 24.0,
+          "lifetime": 3.0,
+          "speed": 1.2,
+          "spread": 12.0,
+          "acceleration": [0.15, 0.5, 0.0],
+          "drag": 0.4,
+          "start_size": 0.12,
+          "end_size": 0.55,
+          "start_color": [0.55, 0.55, 0.58],
+          "end_color": [0.35, 0.35, 0.38],
+          "start_alpha": 0.85,
+          "end_alpha": 0.0,
+          "max_particles": 256,
+          "seed": 7
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-50.0, 30.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 1.0, 1.0], "intensity": 1.0 }
+      ]
+    },
+    {
+      "name": "Fill",
+      "components": [{ "type": "AmbientLight", "intensity": 0.15 }]
+    },
+    {
+      "name": "Eye",
+      "components": [
+        { "type": "Transform", "position": [0.0, 2.2, 7.0], "rotation": [-8.0, 0.0, 0.0] },
+        { "type": "Camera", "active": true }
+      ]
+    }
+  ]
+}

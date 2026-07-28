@@ -974,6 +974,10 @@ fn check_component(
         // files and need no Transform.
         ComponentData::HudText(_) | ComponentData::HudRect(_) => {}
 
+        // Every emitter constraint is a schema range; the simulation reads
+        // whatever validated, so there is nothing semantic left to check.
+        ComponentData::ParticleEmitter(_) => {}
+
         // Script references: relative, existing, .rhai. Compilation is the
         // script pass's job (engine-script), like glTF parsing is the asset
         // pass's.
@@ -1219,6 +1223,45 @@ fn check_value(
                 );
                 return false;
             };
+            check_bounds(cx, schema, number, component, entity, field, field, json_path, errors);
+            true
+        }
+
+        Some("integer") => {
+            // Integer fields (u32 in the component structs) are stricter than
+            // "number": serde rejects fractions and out-of-format values, so
+            // the walk must too — reporting them as shape errors, or the
+            // final serde gate would fire `scene_parse_desync` on them.
+            let integral = value
+                .as_number()
+                .is_some_and(|n| n.is_u64() || n.is_i64());
+            if !integral {
+                errors.push(
+                    cx.wrong_type(field, "integer", value, json_path)
+                        .entity(entity)
+                        .component(component),
+                );
+                return false;
+            }
+            if schema["format"].as_str() == Some("uint32")
+                && value.as_u64().is_none_or(|n| n > u64::from(u32::MAX))
+            {
+                errors.push(
+                    cx.err(
+                        codes::INVALID_FIELD_TYPE,
+                        format!(
+                            "{field:?} must be an unsigned 32-bit integer, found {}",
+                            value
+                        ),
+                        json_path,
+                    )
+                    .entity(entity)
+                    .component(component)
+                    .field(field),
+                );
+                return false;
+            }
+            let number = value.as_number().expect("checked above");
             check_bounds(cx, schema, number, component, entity, field, field, json_path, errors);
             true
         }
