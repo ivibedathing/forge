@@ -779,6 +779,44 @@ color ranges), the M12 script accessors, and HUD-field bake.
 
 ---
 
+## M13 — Particles
+
+**Scene:** `examples/scenes/verify/m13_smoke.json` — a campfire: gray ground plane, a small
+emissive orange ember cube, and a `ParticleEmitter` on an entity rotated `[90, 0, 0]` so its
+local −Z (the same axis cameras and lights aim down) points up. The emitter is authored as
+smoke: 24 particles/sec, 3 s lifetime, a 12° cone, gentle buoyancy plus a slight crosswind
+(`acceleration: [0.15, 0.5, 0]`), drag, sprites that grow from 0.12 to 0.55 half-size while
+fading from α 0.85 to 0, and a fixed `seed`.
+
+Particles are simulation state, not pose: they exist only after `--steps` (never `--time`),
+they are never baked or traced (disposable, like solver caches), and the seeded per-emitter
+RNG makes every run of the same file + steps byte-identical — which is what lets a
+stochastic-looking effect live under a diff-render baseline.
+
+```bash
+engine validate examples/scenes/verify/m13_smoke.json
+# Bless once (this is also the "look at it" step — the plume must rise from
+# the ember, widen, drift with the wind, and fade out at the top):
+engine screenshot examples/scenes/verify/m13_smoke.json \
+    --out examples/scenes/verify/baselines/m13_smoke.png --steps 180
+# From then on:
+engine diff-render examples/scenes/verify/m13_smoke.json \
+    examples/scenes/verify/baselines/m13_smoke.png --steps 180
+# → bit-exact (same machine/adapter, the standard M6 caveat)
+```
+
+A `--steps 0` screenshot of the same scene shows no particles at all — the emitter at rest
+draws nothing, so adding one to a scene never disturbs that scene's unstepped baseline.
+Integer fields (`seed`, `max_particles`) validate like everything else: `"seed": 1.5` or
+`-1` is `invalid_field_type`, `"max_particles": 0` is `value_out_of_range`, all located.
+
+**What this regresses:** the particle step (spawn credit, cone sampling, integrate,
+age-out), start→end interpolation, billboard rendering (camera-facing quads, soft-disc
+falloff, alpha blending, back-to-front sort), the system order (scripts → physics →
+particles → render), and schema-driven validation of the first integer component fields.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):

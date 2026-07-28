@@ -1298,3 +1298,101 @@ fn the_m12_hud_fixture_pins_the_component_overlay() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ── particles (M13) ────────────────────────────────────────────────────
+
+/// A minimal emitter scene: sprays up from the origin, visible from the
+/// fixture camera after a second of stepping.
+const PARTICLE_SCENE: &str = r#"{"name":"puff","entities":[
+    {"name":"Fountain","components":[
+        {"type":"Transform","rotation":[90.0,0.0,0.0]},
+        {"type":"ParticleEmitter","rate":30.0,"lifetime":2.0,"speed":1.0,
+         "start_size":0.3,"end_size":0.3,"start_alpha":1.0,"end_alpha":0.5,
+         "seed":11}]},
+    {"name":"Cam","components":[
+        {"type":"Transform","position":[0.0,1.0,5.0]},
+        {"type":"Camera","active":true}]}
+]}"#;
+
+/// Particle state is created by `--steps` and by nothing else — and it is
+/// deterministic: the same file and step count produce byte-identical
+/// pixels, seeded RNG included, which is what lets an emitter live under a
+/// committed diff-render baseline like `verify/m13_smoke.json` does.
+#[test]
+fn particles_advance_with_steps_and_render_deterministically() {
+    let scene = scene_file("particles-steps", PARTICLE_SCENE);
+    let shot = |steps: &str, out: &str| {
+        let path = scene.with_file_name(out);
+        let output = engine()
+            .arg("screenshot")
+            .arg(&scene)
+            .args(["--steps", steps])
+            .args(["--width", "128", "--height", "96"])
+            .arg("--out")
+            .arg(&path)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "screenshot failed for a non-GPU reason: {stderr}"
+            );
+            return None;
+        }
+        Some(std::fs::read(&path).unwrap())
+    };
+
+    let Some(stepped) = shot("60", "stepped.png") else {
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    };
+    let unstepped = shot("0", "unstepped.png").expect("GPU worked a moment ago");
+    let again = shot("60", "again.png").expect("GPU worked a moment ago");
+
+    assert_ne!(stepped, unstepped, "60 steps of particles must draw something");
+    assert_eq!(stepped, again, "same file + steps must be byte-identical");
+}
+
+/// The first integer component fields (`seed`, `max_particles`) go through
+/// the same walk as everything else: a float or negative where a u32
+/// belongs is a shape error, a zero below the documented minimum is a range
+/// error — both located, neither a `scene_parse_desync`.
+#[test]
+fn emitter_integer_fields_validate_like_everything_else() {
+    let scene = scene_file(
+        "particles-ints",
+        r#"{"name":"bad","entities":[{"name":"A","components":[
+            {"type":"ParticleEmitter","seed":1.5,"max_particles":0}]}]}"#,
+    );
+    let output = engine().arg("validate").arg(&scene).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout_of(&output).is_empty(), "stdout must be silent on failure");
+    let lines = stderr_lines(&output);
+    let codes = codes_of(&lines);
+    assert!(codes.contains(&"invalid_field_type".to_string()), "{codes:?}");
+    assert!(codes.contains(&"value_out_of_range".to_string()), "{codes:?}");
+    for line in lines.iter().filter(|l| l["error"] != "validation_failed") {
+        assert!(line["line"].is_u64(), "diagnostic without a line: {line}");
+    }
+}
+
+#[test]
+fn m13_smoke_fixture_validates_clean() {
+    // The positive twin from milestone-verification-scenes.md; its pixel
+    // pinning is `engine diff-render` against the committed per-adapter
+    // baseline, not a portable unit test.
+    let output = engine()
+        .arg("validate")
+        .arg(repo_path("examples/scenes/verify/m13_smoke.json"))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        output.stderr.is_empty(),
+        "no errors and no warnings expected: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

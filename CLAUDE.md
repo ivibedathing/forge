@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M12 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, and M12 HUD components** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M13 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, and M13 particles** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -29,9 +29,11 @@ engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
 engine list-animations <scene-or-clip> [--schema]
 # Script component: {"type": "Script", "source": "scripts/x.rhai"} — runs fn step(world, step)
-# once per fixed step (order: animations → scripts → physics → render)
+# once per fixed step (order: animations → scripts → physics → particles → render)
 # Wheel component (M12): raycast-suspension wheel on its own visual entity, chassis by name —
 # physics suspends/drives the chassis and writes the wheel's Transform back (steer/spin/bounce)
+# ParticleEmitter component (M13): seeded deterministic smoke/sparks — cone spray around local
+# -Z, advanced by --steps, rendered as soft alpha-blended billboards; never baked or traced
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode (keyboard reaches scripts)
 engine list-components                   # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
@@ -254,6 +256,29 @@ speedometer plus a lap timer (start-line crossing = x going positive → non-pos
 south straight, remembered step-to-step via `world.state`) whose final parked HUD (`LAP 3`,
 `LAST 13.42   BEST 13.42`) is pinned by the lap CLI test, plus a `SpeedBar` HudRect gauge
 (bottom-left) driven by `set_hud_rect_size`.
+
+Particles (M13): the `ParticleEmitter` component is a seeded deterministic emitter — cone
+spray around the entity's local **−Z** (the camera/light aiming convention: rising smoke is
+`"rotation": [90, 0, 0]`), spawn rate via a credit accumulator, per-particle world-space
+acceleration/drag, and start→end interpolation of half-size, linear-RGB color, and alpha
+over each particle's lifetime. Simulation is GPU-free in `engine-core/src/particles.rs`: a
+private per-emitter xorshift32 RNG (fully specified in-repo so dependency upgrades can't
+change sequences; splitmix-finalizer seeding, RNG *not* consumed on capped spawns), emitters
+stepped in name order — same file + `--steps` → byte-identical pixels, which is what lets
+smoke live under a diff-render baseline (`verify/m13_smoke.json` /
+`baselines/m13_smoke.png`, blessed at `--steps 180`). Particle state is simulation state:
+created only by `--steps` (never `--time`), never baked or traced (disposable like solver
+caches), and a `--steps 0` render draws nothing, so pre-M13 baselines are untouched. System
+order: animations → scripts → physics → **particles** → render (an emitter riding a dynamic
+body trails where the body actually went). Rendering is `shaders/particles.wgsl`:
+camera-facing instanced quads with a `(1−d)²` soft-disc falloff, alpha-blended
+(depth-tested against meshes, depth-write off), CPU-sorted back-to-front by camera distance
+with `total_cmp`. `seed`/`max_particles` are the first **integer** component fields — the
+schema walk gained a first-class `"integer"` arm (a float, negative, or out-of-u32 value
+where a u32 belongs is `invalid_field_type`; a below-minimum integer is
+`value_out_of_range`); without it, walk/serde disagreement on these fields would fire
+`scene_parse_desync`. The editor viewport shows scenes at rest — no particles until the
+fixed clock advances.
 
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).

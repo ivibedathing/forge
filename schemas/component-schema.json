@@ -778,6 +778,150 @@
           "size"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A deterministic particle emitter (M13): smoke, sparks, dust.\n\nParticles spray from the entity's position into a cone around its local\n**−Z** — the same aiming convention the camera and lights use, so a rising\nsmoke plume is `\"rotation\": [90, 0, 0]`. Each particle is born with\n`start_*` values and reaches its `end_*` values as it dies; the billboard\nrenders as a soft unlit disc, alpha-blended over the scene.\n\nParticles are simulation state on the fixed step clock, advanced by\n`--steps` exactly like physics (`--time` poses animations, it does not\nadvance particles). The state is derived and disposable — never baked,\nnever traced — and the `seed` makes it reproducible: same file, same\nsteps, same particles, so screenshots of smoke diff-render bit-exactly.",
+        "properties": {
+          "acceleration": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "World-space acceleration applied to every live particle, units/s².\nParticles ignore physics; this is where buoyancy (`[0, 1, 0]` for\nsmoke) or gravity (`[0, -9.81, 0]` for sparks) comes from.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "drag": {
+            "default": 0.0,
+            "description": "Velocity damping per second. `>= 0`; 0 means none.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "end_alpha": {
+            "default": 0.0,
+            "description": "Opacity at death, `[0, 1]`. The default 0 fades particles out.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "end_color": {
+            "default": [
+              0.699999988079071,
+              0.699999988079071,
+              0.699999988079071
+            ],
+            "description": "Linear RGB at death, each component in `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "end_size": {
+            "default": 0.20000000298023224,
+            "description": "Billboard half-size at death. `> 0`; larger than `start_size` grows\n(smoke), smaller shrinks (sparks).",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "lifetime": {
+            "default": 2.0,
+            "description": "Seconds each particle lives. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "max_particles": {
+            "default": 1024,
+            "description": "Cap on live particles; spawns beyond it are dropped (deterministically).\n`[1, 65536]`.",
+            "format": "uint32",
+            "maximum": 65536,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rate": {
+            "default": 10.0,
+            "description": "Particles spawned per second. `>= 0`; 0 stops emission (existing\nparticles live out their lifetime).",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "default": 0,
+            "description": "Seed for the emitter's random spray directions. Same seed, same steps →\nidentical particles; give two otherwise-identical emitters different\nseeds so they don't emit in lockstep.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "speed": {
+            "default": 1.0,
+            "description": "Initial speed in units/second along the sampled cone direction. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "spread": {
+            "default": 15.0,
+            "description": "Cone half-angle in degrees around local −Z. `[0, 180]`: 0 is a beam,\n90 a hemisphere, 180 a full sphere.",
+            "format": "float",
+            "maximum": 180.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "start_alpha": {
+            "default": 1.0,
+            "description": "Opacity at birth, `[0, 1]`.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "start_color": {
+            "default": [
+              0.699999988079071,
+              0.699999988079071,
+              0.699999988079071
+            ],
+            "description": "Linear RGB at birth, each component in `[0, 1]`. Unlit.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "start_size": {
+            "default": 0.20000000298023224,
+            "description": "Billboard half-size in world units at birth. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "ParticleEmitter",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -795,7 +939,8 @@
     "Script",
     "Wheel",
     "HudText",
-    "HudRect"
+    "HudRect",
+    "ParticleEmitter"
   ],
   "scene": {
     "$defs": {
@@ -1562,6 +1707,150 @@
             "required": [
               "type",
               "size"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A deterministic particle emitter (M13): smoke, sparks, dust.\n\nParticles spray from the entity's position into a cone around its local\n**−Z** — the same aiming convention the camera and lights use, so a rising\nsmoke plume is `\"rotation\": [90, 0, 0]`. Each particle is born with\n`start_*` values and reaches its `end_*` values as it dies; the billboard\nrenders as a soft unlit disc, alpha-blended over the scene.\n\nParticles are simulation state on the fixed step clock, advanced by\n`--steps` exactly like physics (`--time` poses animations, it does not\nadvance particles). The state is derived and disposable — never baked,\nnever traced — and the `seed` makes it reproducible: same file, same\nsteps, same particles, so screenshots of smoke diff-render bit-exactly.",
+            "properties": {
+              "acceleration": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "World-space acceleration applied to every live particle, units/s².\nParticles ignore physics; this is where buoyancy (`[0, 1, 0]` for\nsmoke) or gravity (`[0, -9.81, 0]` for sparks) comes from.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "drag": {
+                "default": 0.0,
+                "description": "Velocity damping per second. `>= 0`; 0 means none.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "end_alpha": {
+                "default": 0.0,
+                "description": "Opacity at death, `[0, 1]`. The default 0 fades particles out.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "end_color": {
+                "default": [
+                  0.699999988079071,
+                  0.699999988079071,
+                  0.699999988079071
+                ],
+                "description": "Linear RGB at death, each component in `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "end_size": {
+                "default": 0.20000000298023224,
+                "description": "Billboard half-size at death. `> 0`; larger than `start_size` grows\n(smoke), smaller shrinks (sparks).",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "lifetime": {
+                "default": 2.0,
+                "description": "Seconds each particle lives. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "max_particles": {
+                "default": 1024,
+                "description": "Cap on live particles; spawns beyond it are dropped (deterministically).\n`[1, 65536]`.",
+                "format": "uint32",
+                "maximum": 65536,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "rate": {
+                "default": 10.0,
+                "description": "Particles spawned per second. `>= 0`; 0 stops emission (existing\nparticles live out their lifetime).",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "seed": {
+                "default": 0,
+                "description": "Seed for the emitter's random spray directions. Same seed, same steps →\nidentical particles; give two otherwise-identical emitters different\nseeds so they don't emit in lockstep.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "speed": {
+                "default": 1.0,
+                "description": "Initial speed in units/second along the sampled cone direction. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "spread": {
+                "default": 15.0,
+                "description": "Cone half-angle in degrees around local −Z. `[0, 180]`: 0 is a beam,\n90 a hemisphere, 180 a full sphere.",
+                "format": "float",
+                "maximum": 180.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "start_alpha": {
+                "default": 1.0,
+                "description": "Opacity at birth, `[0, 1]`.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "start_color": {
+                "default": [
+                  0.699999988079071,
+                  0.699999988079071,
+                  0.699999988079071
+                ],
+                "description": "Linear RGB at birth, each component in `[0, 1]`. Unlit.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "start_size": {
+                "default": 0.20000000298023224,
+                "description": "Billboard half-size in world units at birth. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "ParticleEmitter",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
             ],
             "type": "object"
           }

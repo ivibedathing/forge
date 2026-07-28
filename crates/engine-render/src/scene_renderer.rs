@@ -6,6 +6,7 @@
 
 use engine_core::components::Camera;
 use engine_core::math::{Mat4, Vec3};
+use engine_core::particles::ParticleInstance;
 use engine_core::scene::{RenderItem, ResolvedLights};
 use wgpu::util::DeviceExt as _;
 
@@ -36,6 +37,25 @@ struct FrameUniform {
     ambient: [f32; 4],
 }
 
+/// Per-pass particle data, matching WGSL `ParticleFrame`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ParticleFrameUniform {
+    view_proj: [[f32; 4]; 4],
+    camera_right: [f32; 4],
+    camera_up: [f32; 4],
+}
+
+/// One particle billboard as the instance buffer carries it.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ParticleRaw {
+    /// xyz = world position, w = half-size.
+    pos_size: [f32; 4],
+    /// rgb = linear color, a = opacity.
+    color: [f32; 4],
+}
+
 /// One uploaded draw item.
 ///
 /// Positions and normals share `vertices`; `normals_offset` is where the
@@ -53,9 +73,16 @@ pub struct ScenePass<'a> {
     pub target: &'a wgpu::TextureView,
     pub depth: &'a wgpu::TextureView,
     pub items: &'a [RenderItem],
+    /// Particle billboards, drawn after the meshes (alpha-blended, depth-read
+    /// only). Pass `&[]` when nothing simulates particles.
+    pub particles: &'a [ParticleInstance],
     pub view_projection: Mat4,
     /// World-space camera position, for the specular view vector.
     pub camera_position: Vec3,
+    /// The camera's world-space right and up axes — the billboard basis.
+    /// Only read when `particles` is non-empty.
+    pub camera_right: Vec3,
+    pub camera_up: Vec3,
     pub lights: ResolvedLights,
     pub clear: wgpu::Color,
     /// Screen-space overlay, composited after the mesh pass (M12). Must be
@@ -66,10 +93,12 @@ pub struct ScenePass<'a> {
 
 pub struct SceneRenderer {
     pipeline: wgpu::RenderPipeline,
+    particle_pipeline: wgpu::RenderPipeline,
     object_layout: wgpu::BindGroupLayout,
     frame_layout: wgpu::BindGroupLayout,
     hud_pipeline: wgpu::RenderPipeline,
     hud_layout: wgpu::BindGroupLayout,
+    particle_layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
 }
 
@@ -165,12 +194,85 @@ impl SceneRenderer {
 
         let (hud_pipeline, hud_layout) = Self::hud_pipeline(device, format);
 
+        let particle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("particle-shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/particles.wgsl").into()),
+        });
+        let particle_layout = uniform_layout("particle-uniforms");
+        let particle_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("particle-pipeline-layout"),
+                bind_group_layouts: &[Some(&particle_layout)],
+                immediate_size: 0,
+            });
+
+        // One instance per particle; the quad corners come from vertex_index.
+        let particle_vertex_layouts = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<ParticleRaw>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        })];
+
+        let particle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("particle-pipeline"),
+            layout: Some(&particle_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &particle_shader,
+                entry_point: Some("vs_main"),
+                buffers: &particle_vertex_layouts,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &particle_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            // Billboards always face the camera; culling would be a no-op at
+            // best and a winding trap at worst.
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            // Depth-test against the meshes but never write: translucent
+            // sprites must not occlude each other (they are sorted and
+            // blended instead).
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         Self {
             pipeline,
+            particle_pipeline,
             object_layout,
             frame_layout,
             hud_pipeline,
             hud_layout,
+            particle_layout,
             format,
         }
     }
@@ -258,8 +360,11 @@ impl SceneRenderer {
             target,
             depth,
             items,
+            particles,
             view_projection,
             camera_position,
+            camera_right,
+            camera_up,
             lights,
             clear,
             hud,
@@ -289,6 +394,53 @@ impl SceneRenderer {
             .iter()
             .map(|item| self.upload(device, item, view_projection))
             .collect();
+
+        // Translucent billboards sort back-to-front (blending is order
+        // dependent) and upload as one instance buffer. Distance to the
+        // camera stands in for view depth — correct enough for sprites, and
+        // `total_cmp` plus a stable sort keeps the order deterministic.
+        let particle_draw = (!particles.is_empty()).then(|| {
+            let mut sorted: Vec<&ParticleInstance> = particles.iter().collect();
+            sorted.sort_by(|a, b| {
+                let da = (a.position - camera_position).length_squared();
+                let db = (b.position - camera_position).length_squared();
+                db.total_cmp(&da)
+            });
+            let raw: Vec<ParticleRaw> = sorted
+                .iter()
+                .map(|p| ParticleRaw {
+                    pos_size: p.position.extend(p.size).to_array(),
+                    color: p.color.extend(p.alpha).to_array(),
+                })
+                .collect();
+
+            let instances = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("particle-instances"),
+                contents: bytemuck::cast_slice(&raw),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+            let uniform = ParticleFrameUniform {
+                view_proj: view_projection.to_cols_array_2d(),
+                camera_right: camera_right.normalize_or_zero().extend(0.0).to_array(),
+                camera_up: camera_up.normalize_or_zero().extend(0.0).to_array(),
+            };
+            let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("particle-frame-uniform"),
+                contents: bytemuck::bytes_of(&uniform),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("particle-bind-group"),
+                layout: &self.particle_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }],
+            });
+
+            (instances, bind_group, raw.len() as u32)
+        });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene-encoder"),
@@ -328,6 +480,15 @@ impl SceneRenderer {
                 pass.set_vertex_buffer(1, item.normals_slice());
                 pass.set_index_buffer(item.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..item.index_count, 0, 0..1);
+            }
+
+            // Particles last, over the opaque scene, inside the same pass so
+            // they test against the depth the meshes just wrote.
+            if let Some((instances, bind_group, count)) = &particle_draw {
+                pass.set_pipeline(&self.particle_pipeline);
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.set_vertex_buffer(0, instances.slice(..));
+                pass.draw(0..6, 0..*count);
             }
         }
 
