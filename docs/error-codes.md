@@ -44,6 +44,10 @@ build fails.
 | `invalid_physics_value` | 1 | a physics setting is outside its meaningful range |
 | `missing_collider` | 1 | a dynamic RigidBody has no Collider and would fall through everything |
 | `missing_transform` | 1 | a RigidBody or Collider needs a Transform on the same entity |
+| `trimesh_on_dynamic_body` | 1 | a dynamic RigidBody cannot use a trimesh Collider; use convex_hull |
+| `collider_missing_mesh` | 1 | a mesh-shaped Collider has no asset and its entity has no Mesh |
+| `too_many_collision_layers` | 1 | a scene may name at most 32 distinct collision layers |
+| `empty_collision_layers` | 1 | an empty layers/collides_with array; omit the field to mean everything |
 | `unknown_entity` | 1 | an animation track targets an entity name not in the scene |
 | `unknown_property` | 1 | an animation track targets no known Component.field |
 | `type_mismatch` | 1 | a key value's shape does not match the animated field |
@@ -59,6 +63,7 @@ build fails.
 | `unsorted_input_steps` | 1 | input timeline steps must be strictly increasing |
 | `unused_material` | 1 | warning: a Material on an entity with no Mesh does nothing |
 | `zero_scale` | 1 | warning: a Transform.scale axis of 0 renders invisibly or degenerate |
+| `unknown_collision_layer` | 1 | warning: collides_with names a layer no collider is a member of |
 | `scene_unreadable` | 1 | the scene file could not be read |
 | `scene_parse_desync` | 2 | internal bug: the scene passed validation but failed to parse |
 | `entity_not_found` | 1 | no entity has the requested name |

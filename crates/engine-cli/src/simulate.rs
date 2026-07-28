@@ -34,18 +34,23 @@ pub fn run(
 ) -> Result<(PhysicsWorld, u64)> {
     let scripts =
         engine_script::ScriptHost::build(&scene.world, scene_path, scene.physics.timestep_hz)?;
-    let mut physics = PhysicsWorld::build(&scene.world, &scene.physics)?;
+    let assets = engine_assets::AssetServer::for_scene(scene_path);
+    let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
     let trace_names = physics.dynamic_entity_names(&scene.world);
     let mut contacts = 0u64;
     let no_keys = InputState::default();
+    // What scripts see at step N is the touching-state physics left at step
+    // N-1 — the causal order under animations → scripts → physics.
+    let mut contact_state = engine_core::contact::ContactState::default();
 
     for step in 1..=steps {
         if let Some(scripts) = &scripts {
             let step_index = u64::from(step) - 1;
             let held = input.map_or(&no_keys, |t| t.held_at(step_index));
-            scripts.step(&mut scene.world, step_index, held)?;
+            scripts.step(&mut scene.world, step_index, held, &contact_state)?;
         }
         let events = physics.step(&mut scene.world);
+        contact_state.apply(&events);
 
         if let Some(trace) = trace.as_deref_mut() {
             for name in &trace_names {

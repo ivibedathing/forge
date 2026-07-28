@@ -8,6 +8,7 @@
 pub mod animation;
 pub mod codes;
 pub mod components;
+pub mod contact;
 pub mod error;
 pub mod formatter;
 pub mod input;

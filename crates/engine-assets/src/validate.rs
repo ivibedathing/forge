@@ -35,13 +35,20 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
 
     for (entity_index, entity) in file.entities.iter().enumerate() {
         for (component_index, component) in entity.components.iter().enumerate() {
-            let ComponentData::Mesh(mesh) = component else {
-                continue;
+            // Mesh geometry references: `Mesh.asset`, and `Collider.asset`
+            // on the mesh-collider shapes (M12) — both must parse.
+            let (asset, component_name) = match component {
+                ComponentData::Mesh(mesh) => (mesh.asset.as_str(), "Mesh"),
+                ComponentData::Collider(collider) => match &collider.asset {
+                    Some(asset) => (asset.as_str(), "Collider"),
+                    None => continue,
+                },
+                _ => continue,
             };
 
             let verdict = verdicts
-                .entry(mesh.asset.as_str())
-                .or_insert_with(|| check_asset(&mesh.asset, base_dir));
+                .entry(asset)
+                .or_insert_with(|| check_asset(asset, base_dir));
 
             if let Some(template) = verdict {
                 let json_path = format!("/entities/{entity_index}/components/{component_index}/asset");
@@ -49,7 +56,7 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                     .clone()
                     .file(path)
                     .entity(entity.name.clone())
-                    .component("Mesh")
+                    .component(component_name)
                     .field("asset");
                 if let Some(line) = index.line_of_or_parent(&json_path) {
                     error = error.line(line);

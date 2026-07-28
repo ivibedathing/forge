@@ -113,6 +113,16 @@ registry! {
     MISSING_TRANSFORM = "missing_transform", Input,
         "a RigidBody or Collider needs a Transform on the same entity";
 
+    // ── Collision (M12) ────────────────────────────────────────────────
+    TRIMESH_ON_DYNAMIC_BODY = "trimesh_on_dynamic_body", Input,
+        "a dynamic RigidBody cannot use a trimesh Collider; use convex_hull";
+    COLLIDER_MISSING_MESH = "collider_missing_mesh", Input,
+        "a mesh-shaped Collider has no asset and its entity has no Mesh";
+    TOO_MANY_COLLISION_LAYERS = "too_many_collision_layers", Input,
+        "a scene may name at most 32 distinct collision layers";
+    EMPTY_COLLISION_LAYERS = "empty_collision_layers", Input,
+        "an empty layers/collides_with array; omit the field to mean everything";
+
     // ── Animation (M9) ─────────────────────────────────────────────────
     UNKNOWN_ENTITY = "unknown_entity", Input,
         "an animation track targets an entity name not in the scene";
@@ -151,6 +161,8 @@ registry! {
         "warning: a Material on an entity with no Mesh does nothing";
     ZERO_SCALE = "zero_scale", Input,
         "warning: a Transform.scale axis of 0 renders invisibly or degenerate";
+    UNKNOWN_COLLISION_LAYER = "unknown_collision_layer", Input,
+        "warning: collides_with names a layer no collider is a member of";
 
     // ── Scene semantics at command time ───────────────────────────────
     SCENE_UNREADABLE = "scene_unreadable", Input,

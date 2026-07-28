@@ -86,10 +86,13 @@ fn step(world, step) {
 | `world.linear_velocity(name)` / `world.set_linear_velocity(name, x, y, z)` | (M11) `RigidBody.linear_velocity`, m/s; a write to a dynamic body reaches the solver before the next step — the vehicle primitive |
 | `world.angular_velocity(name)` / `world.set_angular_velocity(name, x, y, z)` | (M11) `RigidBody.angular_velocity`, **degrees/sec** (file convention) |
 | `world.look_at(name, x, y, z)` | (M11) aim the entity's local −Z at a point with a level horizon — the chase-camera primitive (composing pitch and yaw through the XYZ Euler order rolls the horizon; this computes the decomposition correctly) |
+| `world.touching(name)` | (M12) names of entities the entity's collider is in contact with, as an array of strings — the touching-state left by the **previous** physics step (system order is scripts → physics, so a contact at physics step N is script-visible at step N+1) |
+| `world.contacts_started(name)` | (M12) the subset of `touching` that began on the previous physics step — the "on hit" edge trigger; empty again the step after |
 
 Getters return `[x, y, z]` arrays. A name that resolves to no entity, or an entity without a
 `Transform`, raises a script runtime error naming the entity — deterministic failure over
-silent no-op. Material access, spawning, and events are deferred (§7); velocity access arrived with M11's car.
+silent no-op. Material access and spawning are deferred (§7); velocity access arrived with
+M11's car, contact queries with M12's collision work.
 Input semantics (key names, the timeline file `--input` replays) live in `input-design.md`.
 
 ## 5. Workspace

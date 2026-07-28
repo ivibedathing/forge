@@ -16,6 +16,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use engine_core::components::{Name, RigidBody, Script, Transform};
+use engine_core::contact::ContactState;
 use engine_core::input::{self, InputState};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
@@ -54,6 +55,10 @@ struct WorldApi {
     /// has input to offer, so runs without `--input` behave exactly as they
     /// did before input existed.
     input: Rc<InputState>,
+    /// Who touches whom, as of the previous physics step (M12). Scripts run
+    /// before physics, so a hit at physics step N is visible at step N+1 —
+    /// the causal order, documented on `ContactState`.
+    contacts: Rc<ContactState>,
 }
 
 impl WorldApi {
@@ -137,6 +142,32 @@ fn curated_engine() -> rhai::Engine {
                 )));
             }
             Ok(w.input.is_held(name))
+        },
+    );
+
+    // Contact queries (M12): what the previous physics step left touching.
+    // The entity must exist (a typo'd name is an error, not silence), but
+    // needs no particular component — contacts are keyed by name.
+    engine.register_fn(
+        "touching",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.entity(name)?;
+            Ok(w.contacts
+                .touching(name)
+                .into_iter()
+                .map(Dynamic::from)
+                .collect())
+        },
+    );
+    engine.register_fn(
+        "contacts_started",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.entity(name)?;
+            Ok(w.contacts
+                .started_with(name)
+                .into_iter()
+                .map(Dynamic::from)
+                .collect())
         },
     );
 
@@ -375,15 +406,23 @@ impl ScriptHost {
     }
 
     /// Run every script's `step` for step index `step`, with `input` as the
-    /// held-key set for the duration of the step. The world is moved into
-    /// the scripts' reach for the duration and moved back out even on
+    /// held-key set for the duration of the step and `contacts` as the
+    /// touching-state left by the previous physics step. The world is moved
+    /// into the scripts' reach for the duration and moved back out even on
     /// error, so a failing script never swallows the ECS.
-    pub fn step(&self, world: &mut World, step: u64, input: &InputState) -> Result<()> {
+    pub fn step(
+        &self,
+        world: &mut World,
+        step: u64,
+        input: &InputState,
+        contacts: &ContactState,
+    ) -> Result<()> {
         let api = WorldApi {
             world: Rc::new(RefCell::new(std::mem::take(world))),
             names: Rc::clone(&self.names),
             dt: self.dt,
             input: Rc::new(input.clone()),
+            contacts: Rc::new(contacts.clone()),
         };
 
         let mut failure: Option<EngineError> = None;
@@ -512,7 +551,7 @@ mod tests {
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
         for step in 0..150 {
-            host.step(&mut scene.world, step, &InputState::default()).unwrap();
+            host.step(&mut scene.world, step, &InputState::default(), &ContactState::default()).unwrap();
         }
 
         let entity = scene.entity("Mover").unwrap();
@@ -529,7 +568,7 @@ mod tests {
             r#"fn step(world, step) { world.position("Nobody"); }"#,
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
+        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("Nobody"), "{}", error.message);
         assert_eq!(error.context().unwrap().entity.as_deref(), Some("Mover"));
@@ -548,7 +587,7 @@ mod tests {
             r#"fn step(world, step) { let x = 0; loop { x += 1; } }"#,
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
+        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -595,11 +634,11 @@ mod tests {
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
         let entity = scene.entity("Mover").unwrap();
 
-        host.step(&mut scene.world, 0, &InputState::default()).unwrap();
+        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
         let r = scene.world.get::<&Transform>(entity).unwrap().rotation;
         assert!(r.abs_diff_eq(glam::Vec3::ZERO, 1e-4), "straight ahead is identity: {r}");
 
-        host.step(&mut scene.world, 1, &InputState::default()).unwrap();
+        host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap();
         let t = *scene.world.get::<&Transform>(entity).unwrap();
         // Facing +X from the origin: forward (-Z rotated) must be +X, and
         // the entity's up must stay world-up (no roll).
@@ -632,8 +671,8 @@ mod tests {
 
         let mut held = InputState::default();
         held.press("ArrowUp");
-        host.step(&mut scene.world, 0, &held).unwrap();
-        host.step(&mut scene.world, 1, &InputState::default()).unwrap();
+        host.step(&mut scene.world, 0, &held, &ContactState::default()).unwrap();
+        host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap();
 
         let entity = scene.entity("Mover").unwrap();
         let x = scene.world.get::<&Transform>(entity).unwrap().position.x;
@@ -645,7 +684,7 @@ mod tests {
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
         let error = host
-            .step(&mut scene.world, 0, &InputState::default())
+            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
             .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(
@@ -683,7 +722,7 @@ mod tests {
             (glam::Vec3::new(-180.0, 30.0, -180.0), yaw150), // twin of yaw 150
         ] {
             scene.world.get::<&mut Transform>(entity).unwrap().rotation = rotation;
-            host.step(&mut scene.world, 0, &InputState::default()).unwrap();
+            host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
             let p = scene.world.get::<&Transform>(entity).unwrap().position;
             assert!(
                 (p - expected).length() < 1e-4,
@@ -719,7 +758,7 @@ mod tests {
         let mut scene =
             Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
         let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
-        host.step(&mut scene.world, 0, &InputState::default()).unwrap();
+        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
 
         let entity = scene.entity("Car").unwrap();
         let body = *scene.world.get::<&engine_core::components::RigidBody>(entity).unwrap();
@@ -737,10 +776,70 @@ mod tests {
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
         let error = host
-            .step(&mut scene.world, 0, &InputState::default())
+            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
             .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("no RigidBody"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn contact_queries_read_the_previous_steps_state() {
+        use engine_core::contact::ContactEvent;
+
+        let dir = temp_dir("contacts");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                let y = 0.0;
+                if world.touching("Mover").len() > 0 { y += 1.0; }
+                if world.contacts_started("Mover").len() > 0 { y += 2.0; }
+                let names = world.touching("Mover");
+                if names.len() > 0 && names[0] == "Cam" { y += 4.0; }
+                world.set_position("Mover", 0.0, y, 0.0);
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let entity = scene.entity("Mover").unwrap();
+        let y_of = |scene: &Scene| scene.world.get::<&Transform>(entity).unwrap().position.y;
+
+        let mut contacts = ContactState::default();
+        contacts.apply(&[ContactEvent {
+            a: "Cam".into(),
+            b: "Mover".into(),
+            started: true,
+        }]);
+        host.step(&mut scene.world, 0, &InputState::default(), &contacts).unwrap();
+        assert_eq!(y_of(&scene), 7.0, "touching + started + name all visible");
+
+        // Next step: still touching, no longer freshly started.
+        contacts.apply(&[]);
+        host.step(&mut scene.world, 1, &InputState::default(), &contacts).unwrap();
+        assert_eq!(y_of(&scene), 5.0, "started clears, touching persists");
+
+        contacts.apply(&[ContactEvent {
+            a: "Cam".into(),
+            b: "Mover".into(),
+            started: false,
+        }]);
+        host.step(&mut scene.world, 2, &InputState::default(), &contacts).unwrap();
+        assert_eq!(y_of(&scene), 0.0, "an ended contact disappears");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn contact_queries_on_unknown_entities_are_structured_errors() {
+        let dir = temp_dir("contacts-nobody");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.touching("Nobody"); }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host
+            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(error.message.contains("Nobody"), "{}", error.message);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -752,7 +851,7 @@ mod tests {
             r#"fn step(world, step) { timestamp(); }"#,
         );
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
+        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
         assert_eq!(
             error.error, "script_runtime_error",
             "timestamp() must not exist: {error:?}"

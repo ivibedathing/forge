@@ -110,6 +110,13 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     let mut active_cameras: Vec<(String, String)> = Vec::new();
     let mut directional_lights: Vec<(String, String)> = Vec::new();
     let mut ambient_lights: Vec<(String, String)> = Vec::new();
+    // Collision layers (M12): membership names declared anywhere, every
+    // `collides_with` reference (for the unknown-layer warning), and each
+    // distinct name with the path that introduced it (for the 32-bit budget).
+    let mut layer_memberships: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    let mut layer_refs: Vec<(String, String, String)> = Vec::new();
+    let mut distinct_layers: Vec<(String, String)> = Vec::new();
 
     for (entity_index, entity) in entities.iter().enumerate() {
         let entity_path = format!("/entities/{entity_index}");
@@ -217,7 +224,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut has_transform = false;
         let mut scale = glam::Vec3::ONE;
         let mut rigid_body: Option<(crate::components::BodyKind, String)> = None;
-        let mut collider: Option<(crate::components::ColliderShapeKind, String)> = None;
+        let mut collider: Option<(crate::components::Collider, String)> = None;
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
@@ -275,7 +282,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     players.push((name.to_string(), player, component_path));
                 }
                 Some(ComponentData::Collider(c)) => {
-                    collider = Some((c.shape, component_path));
+                    collider = Some((c, component_path));
                 }
                 _ => {}
             }
@@ -311,7 +318,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 );
             }
         }
-        if let Some((shape, path)) = &collider {
+        if let Some((collider_data, path)) = &collider {
             if !has_transform && rigid_body.is_none() {
                 errors.push(
                     cx.err(
@@ -324,7 +331,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 );
             }
             let round = matches!(
-                shape,
+                collider_data.shape,
                 crate::components::ColliderShapeKind::Sphere
                     | crate::components::ColliderShapeKind::Capsule
             );
@@ -343,6 +350,68 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     .component("Collider")
                     .field("shape"),
                 );
+            }
+
+            // Mesh shapes borrow the entity's own Mesh when `asset` is
+            // absent; neither present means there is no geometry to collide.
+            let mesh_shape = matches!(
+                collider_data.shape,
+                crate::components::ColliderShapeKind::Trimesh
+                    | crate::components::ColliderShapeKind::ConvexHull
+            );
+            if mesh_shape && collider_data.asset.is_none() && !has_mesh {
+                errors.push(
+                    cx.err(
+                        codes::COLLIDER_MISSING_MESH,
+                        format!(
+                            "entity {name:?} has a mesh-shaped Collider but no \"asset\" \
+                             field and no Mesh component to borrow geometry from"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Collider")
+                    .field("asset"),
+                );
+            }
+            // A dynamic trimesh has no well-defined interior, so rapier
+            // cannot give it mass — the deterministic answer is an error
+            // naming the working alternative (the animation_on_dynamic_body
+            // precedent).
+            if collider_data.shape == crate::components::ColliderShapeKind::Trimesh
+                && rigid_body
+                    .as_ref()
+                    .is_some_and(|(kind, _)| *kind == crate::components::BodyKind::Dynamic)
+            {
+                errors.push(
+                    cx.err(
+                        codes::TRIMESH_ON_DYNAMIC_BODY,
+                        format!(
+                            "entity {name:?} puts a trimesh Collider on a dynamic \
+                             RigidBody; a trimesh has no mass — use shape \
+                             \"convex_hull\", or make the body fixed or kinematic"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Collider")
+                    .field("shape"),
+                );
+            }
+
+            // Collect layer names for the scene-level checks below.
+            let mut note_distinct = |layer: &str, path: &str| {
+                if !distinct_layers.iter().any(|(l, _)| l == layer) {
+                    distinct_layers.push((layer.to_string(), path.to_string()));
+                }
+            };
+            for layer in collider_data.layers.iter().flatten() {
+                layer_memberships.insert(layer.clone());
+                note_distinct(layer, path);
+            }
+            for layer in collider_data.collides_with.iter().flatten() {
+                layer_refs.push((layer.clone(), name.to_string(), path.clone()));
+                note_distinct(layer, path);
             }
         }
 
@@ -413,6 +482,46 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 )
                 .component(component)
                 .candidates(names),
+            );
+        }
+    }
+
+    // ── Collision layers (M12): 32-bit budget, reference checks ────────
+    if distinct_layers.len() > 32 {
+        let (surplus_name, surplus_path) = &distinct_layers[32];
+        errors.push(
+            cx.err(
+                codes::TOO_MANY_COLLISION_LAYERS,
+                format!(
+                    "this scene names {} distinct collision layers; rapier's \
+                     interaction groups hold 32 bits, so at most 32 names may \
+                     exist ({surplus_name:?} is the 33rd)",
+                    distinct_layers.len()
+                ),
+                surplus_path,
+            )
+            .component("Collider"),
+        );
+    }
+    for (layer, entity, path) in &layer_refs {
+        if !layer_memberships.contains(layer) {
+            // A warning: colliders that declare no `layers` are members of
+            // everything, so the reference still matches them — but naming a
+            // layer nobody declares is almost always a typo.
+            errors.push(
+                cx.err(
+                    codes::UNKNOWN_COLLISION_LAYER,
+                    format!(
+                        "collides_with names layer {layer:?}, but no collider \
+                         in this scene is a member of it"
+                    ),
+                    path,
+                )
+                .entity(entity)
+                .component("Collider")
+                .field("collides_with")
+                .suggest_from(layer, layer_memberships.iter().map(String::as_str))
+                .warning(),
             );
         }
     }
@@ -793,13 +902,17 @@ fn check_component(
 
         // The flat Collider struct keeps the file walkable; which fields each
         // shape requires and forbids is semantic, checked here (design §5).
-        ComponentData::Collider(collider) => {
-            use crate::components::ColliderShapeKind::{Capsule, Cuboid, Sphere};
+        ComponentData::Collider(ref collider) => {
+            use crate::components::ColliderShapeKind::{
+                Capsule, ConvexHull, Cuboid, Sphere, Trimesh,
+            };
 
             let shape_name = match collider.shape {
                 Cuboid => "cuboid",
                 Sphere => "sphere",
                 Capsule => "capsule",
+                Trimesh => "trimesh",
+                ConvexHull => "convex_hull",
             };
             let fields: [(&str, bool, bool); 3] = [
                 // (field, present, wanted-by-this-shape)
@@ -837,6 +950,70 @@ fn check_component(
                         cx.err(
                             codes::SHAPE_FIELD_MISMATCH,
                             format!("{shape_name} colliders have no field {field:?}"),
+                            &format!("{component_path}/{field}"),
+                        )
+                        .entity(entity)
+                        .component("Collider")
+                        .field(field),
+                    );
+                }
+            }
+
+            // `asset` belongs to the mesh shapes only — and unlike the
+            // dimension fields it is optional there (absent means "borrow
+            // the entity's Mesh", checked at entity level).
+            let mesh_shape = matches!(collider.shape, Trimesh | ConvexHull);
+            if let Some(asset) = &collider.asset {
+                if !mesh_shape {
+                    errors.push(
+                        cx.err(
+                            codes::SHAPE_FIELD_MISMATCH,
+                            format!("{shape_name} colliders have no field \"asset\""),
+                            &format!("{component_path}/asset"),
+                        )
+                        .entity(entity)
+                        .component("Collider")
+                        .field("asset"),
+                    );
+                } else {
+                    // Same reference checks as Mesh.asset: existence,
+                    // extension, relative path. Parsing is the asset pass's.
+                    let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+                    if let Err(resolve) = MeshAsset::resolve(asset, base_dir) {
+                        let mut error = cx
+                            .err(
+                                resolve.error,
+                                resolve.message.clone(),
+                                &format!("{component_path}/asset"),
+                            )
+                            .entity(entity)
+                            .component("Collider")
+                            .field("asset");
+                        if let Some(suggestion) =
+                            resolve.context().and_then(|c| c.did_you_mean.clone())
+                        {
+                            error = error.did_you_mean(suggestion);
+                        }
+                        errors.push(error);
+                    }
+                }
+            }
+
+            // An empty layer array reads as "member of/collides with
+            // nothing" — a trap when the author meant "everything". The
+            // field being absent is how "everything" is spelled.
+            for (field, list) in [
+                ("layers", &collider.layers),
+                ("collides_with", &collider.collides_with),
+            ] {
+                if list.as_ref().is_some_and(Vec::is_empty) {
+                    errors.push(
+                        cx.err(
+                            codes::EMPTY_COLLISION_LAYERS,
+                            format!(
+                                "Collider.{field} is an empty array, which would mean \
+                                 \"nothing\"; omit the field to mean \"everything\""
+                            ),
                             &format!("{component_path}/{field}"),
                         )
                         .entity(entity)
@@ -2043,5 +2220,141 @@ mod tests {
     fn requires_entity_names() {
         let source = r#"{"name":"s","entities":[{"components":[]}]}"#;
         assert_eq!(codes_of(source), ["missing_entity_name"]);
+    }
+
+    // ── Collision (M12): mesh shapes and layers ────────────────────────
+
+    #[test]
+    fn mesh_colliders_borrow_the_entity_mesh_or_take_an_asset() {
+        // Trimesh borrowing the entity's Mesh: valid.
+        let borrowing = r#"{"name":"s","entities":[
+            {"name":"Track","components":[
+                {"type":"Transform"},
+                {"type":"Mesh","asset":"builtin:plane"},
+                {"type":"Collider","shape":"trimesh"}
+            ]}
+        ]}"#;
+        assert!(codes_of(borrowing).is_empty(), "{:?}", validate_source(borrowing, "t"));
+
+        // Trimesh with an explicit asset and no Mesh: also valid.
+        let explicit = r#"{"name":"s","entities":[
+            {"name":"Track","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"trimesh","asset":"builtin:plane"}
+            ]}
+        ]}"#;
+        assert!(codes_of(explicit).is_empty(), "{:?}", validate_source(explicit, "t"));
+
+        // Neither: there is no geometry to collide.
+        let neither = r#"{"name":"s","entities":[
+            {"name":"Track","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"trimesh"}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(neither), ["collider_missing_mesh"]);
+    }
+
+    #[test]
+    fn rejects_a_trimesh_on_a_dynamic_body() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Rock","components":[
+                {"type":"Transform"},
+                {"type":"RigidBody","body":"dynamic"},
+                {"type":"Collider","shape":"trimesh","asset":"builtin:cube"}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(source), ["trimesh_on_dynamic_body"]);
+
+        // convex_hull is the supported dynamic mesh shape.
+        let hull = source.replace("trimesh", "convex_hull");
+        assert!(codes_of(&hull).is_empty(), "{:?}", validate_source(&hull, "t"));
+    }
+
+    #[test]
+    fn asset_is_a_mesh_shape_field_and_gets_reference_checks() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"A","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"cuboid","half_extents":[1.0,1.0,1.0],
+                 "asset":"builtin:cube"}
+            ]},
+            {"name":"B","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"trimesh","asset":"builtin:cubee"}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        let codes: Vec<&str> = errors.iter().map(|e| e.error).collect();
+        assert!(codes.contains(&"shape_field_mismatch"), "{errors:?}");
+        let bad_ref = errors.iter().find(|e| e.error == "asset_not_found").unwrap();
+        assert_eq!(
+            bad_ref.context().unwrap().did_you_mean.as_deref(),
+            Some("builtin:cube")
+        );
+    }
+
+    #[test]
+    fn warns_on_a_collides_with_layer_nobody_declares() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"cuboid","half_extents":[5.0,0.1,5.0],
+                 "layers":["ground"]}
+            ]},
+            {"name":"Sensor","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"cuboid","half_extents":[1.0,1.0,1.0],
+                 "sensor":true,"collides_with":["gorund"]}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].error, "unknown_collision_layer");
+        assert!(errors[0].is_warning(), "a typo'd reference still simulates, so: warning");
+        assert_eq!(errors[0].context().unwrap().did_you_mean.as_deref(), Some("ground"));
+    }
+
+    #[test]
+    fn rejects_empty_layer_arrays_and_more_than_32_layers() {
+        let empty = r#"{"name":"s","entities":[
+            {"name":"A","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"cuboid","half_extents":[1.0,1.0,1.0],
+                 "layers":[]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(empty), ["empty_collision_layers"]);
+
+        let names: Vec<String> = (0..33).map(|i| format!("\"layer{i:02}\"")).collect();
+        let crowded = format!(
+            r#"{{"name":"s","entities":[
+                {{"name":"A","components":[
+                    {{"type":"Transform"}},
+                    {{"type":"Collider","shape":"cuboid","half_extents":[1.0,1.0,1.0],
+                     "layers":[{}]}}
+                ]}}
+            ]}}"#,
+            names.join(",")
+        );
+        assert_eq!(codes_of(&crowded), ["too_many_collision_layers"]);
+    }
+
+    #[test]
+    fn matching_layers_validate_clean() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"cuboid","half_extents":[5.0,0.1,5.0],
+                 "layers":["ground"]}
+            ]},
+            {"name":"Player","components":[
+                {"type":"Transform"},
+                {"type":"RigidBody","body":"dynamic"},
+                {"type":"Collider","shape":"sphere","radius":0.5,
+                 "layers":["player"],"collides_with":["ground"]}
+            ]}
+        ]}"#;
+        assert!(codes_of(source).is_empty(), "{:?}", validate_source(source, "t"));
     }
 }
