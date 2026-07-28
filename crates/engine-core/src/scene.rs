@@ -73,7 +73,9 @@ pub struct RenderItem {
     /// The source entity's stable name (invariant 4) — how the editor's
     /// picking and selection resolve a drawn thing back to the file.
     pub entity: String,
-    pub mesh: crate::mesh::MeshData,
+    /// Shared, never copied: a viewer rebuilds this list every frame, and the
+    /// renderer caches uploaded GPU buffers against this `Arc`'s identity.
+    pub mesh: std::sync::Arc<crate::mesh::MeshData>,
     pub model: glam::Mat4,
     pub material: crate::components::Material,
 }
@@ -459,7 +461,7 @@ mod tests {
             .render_items(&crate::mesh::BuiltinAssets)
             .expect("demo scene is builtin-only");
         assert_eq!(items.len(), 1, "one Mesh entity");
-        assert_eq!(items[0].mesh, crate::mesh::BuiltinMesh::Cube.data());
+        assert_eq!(*items[0].mesh, crate::mesh::BuiltinMesh::Cube.data());
     }
 
     #[test]

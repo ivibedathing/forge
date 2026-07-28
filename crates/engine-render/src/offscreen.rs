@@ -113,7 +113,7 @@ pub fn render_with_adapter(
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let depth = scene_renderer::depth_texture(&gpu.device, width, height);
 
-    let renderer = SceneRenderer::new(&gpu.device, FORMAT);
+    let mut renderer = SceneRenderer::new(&gpu.device, FORMAT);
     let view_projection =
         scene_renderer::view_projection(camera, camera_model, width as f32 / height as f32);
 

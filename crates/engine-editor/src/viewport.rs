@@ -199,10 +199,13 @@ pub fn grid_items() -> Vec<RenderItem> {
     let mut items = Vec::new();
     let half = 20i32;
     let length = (half * 2) as f32;
+    // Every grid line is the same cube: share one allocation so the renderer
+    // uploads the geometry once rather than once per line.
+    let cube = std::sync::Arc::new(BuiltinMesh::Cube.data());
     let mut line = |scale: Vec3, position: Vec3, albedo: Vec3| {
         items.push(RenderItem {
             entity: String::new(),
-            mesh: BuiltinMesh::Cube.data(),
+            mesh: std::sync::Arc::clone(&cube),
             model: Mat4::from_scale_rotation_translation(
                 scale,
                 glam::Quat::IDENTITY,

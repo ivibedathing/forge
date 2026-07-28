@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use engine_core::error::Result;
 use engine_core::mesh::{MeshAsset, MeshData, MeshSource};
@@ -11,12 +12,14 @@ use engine_core::mesh::{MeshAsset, MeshData, MeshSource};
 /// the directory of the scene file being rendered.
 ///
 /// Caches by asset string, so a scene with forty entities sharing one `.glb`
-/// parses it once. The cache is per-server and a server is per-scene-load;
-/// nothing here outlives the command that created it (invariant 2: no hidden
-/// state).
+/// parses it once. Hits hand back the *same* `Arc`, per the [`MeshSource`]
+/// contract: a viewer that rebuilds its draw list every frame then copies no
+/// geometry, and the renderer can key its uploaded GPU buffers on that shared
+/// identity. The cache is per-server and a server is per-scene-load; nothing
+/// here outlives the command that created it (invariant 2: no hidden state).
 pub struct AssetServer {
     root: PathBuf,
-    cache: RefCell<HashMap<String, MeshData>>,
+    cache: RefCell<HashMap<String, Arc<MeshData>>>,
 }
 
 impl AssetServer {
@@ -35,19 +38,19 @@ impl AssetServer {
 }
 
 impl MeshSource for AssetServer {
-    fn load_mesh(&self, asset: &str) -> Result<MeshData> {
+    fn load_mesh(&self, asset: &str) -> Result<Arc<MeshData>> {
         if let Some(hit) = self.cache.borrow().get(asset) {
-            return Ok(hit.clone());
+            return Ok(Arc::clone(hit));
         }
 
-        let data = match MeshAsset::resolve(asset, &self.root)? {
+        let data = Arc::new(match MeshAsset::resolve(asset, &self.root)? {
             MeshAsset::Builtin(builtin) => builtin.data(),
             MeshAsset::File(path) => crate::gltf_mesh::load_gltf(&path)?,
-        };
+        });
 
         self.cache
             .borrow_mut()
-            .insert(asset.to_string(), data.clone());
+            .insert(asset.to_string(), Arc::clone(&data));
         Ok(data)
     }
 }

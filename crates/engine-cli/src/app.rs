@@ -114,6 +114,45 @@ impl InputRecorder {
     }
 }
 
+/// The scene's HUD with the frame-rate readout added in the top-right corner:
+/// white text on its own dim plate, sized to the string.
+///
+/// It rides the ordinary HUD components rather than a private drawing path,
+/// so it composites through the same rasterizer as everything else and needs
+/// no rendering code of its own. Appending puts it last within each class,
+/// which draws it over a scene's own HUD; the script debug-line panel is
+/// top-left and never collides with it.
+fn with_fps_readout(hud: &engine_core::scene::HudItems, fps: &str) -> engine_core::scene::HudItems {
+    use engine_core::components::{HudAnchor, HudRect, HudText};
+    use engine_core::math::{Vec2, Vec3};
+
+    /// Font cell at the readout's text size — `HudText.size` snaps to integer
+    /// multiples of the 8×8 font, so 16 is exactly 2×.
+    const SIZE: f32 = 16.0;
+    /// Gap between the plate and the text inside it.
+    const PAD: f32 = 4.0;
+    /// Gap between the plate and the frame's corner.
+    const INSET: f32 = 6.0;
+
+    let mut hud = hud.clone();
+    let text_width = fps.chars().count() as f32 * SIZE;
+    hud.rects.push(HudRect {
+        anchor: HudAnchor::TopRight,
+        offset: Vec2::splat(INSET),
+        size: Vec2::new(text_width + 2.0 * PAD, SIZE + 2.0 * PAD),
+        color: Vec3::new(0.01, 0.015, 0.02),
+        opacity: 0.55,
+    });
+    hud.texts.push(HudText {
+        text: fps.to_string(),
+        anchor: HudAnchor::TopRight,
+        offset: Vec2::splat(INSET + PAD),
+        size: SIZE,
+        color: Vec3::ONE,
+    });
+    hud
+}
+
 /// GPU-side state, created once the window exists.
 enum Paint {
     Triangle(Renderer),
@@ -121,6 +160,55 @@ enum Paint {
         renderer: SceneRenderer,
         depth: wgpu::TextureView,
     },
+}
+
+/// Frames actually presented per second, averaged over a short window.
+///
+/// Wall-clock, and therefore viewer-only: it measures how fast this machine is
+/// drawing right now, which is exactly what a headless render must never
+/// depend on. `engine screenshot` and `engine diff-render` never see it, so
+/// baselines stay reproducible.
+struct FpsMeter {
+    window_start: Option<Instant>,
+    frames: u32,
+    /// The last computed value; held between refreshes so the number on
+    /// screen is readable rather than flickering every frame.
+    shown: Option<f32>,
+}
+
+impl FpsMeter {
+    /// How long to average over. Short enough to react to a stutter, long
+    /// enough that the digits sit still.
+    const WINDOW: f32 = 0.5;
+
+    fn new() -> Self {
+        Self {
+            window_start: None,
+            frames: 0,
+            shown: None,
+        }
+    }
+
+    /// Count a presented frame and return what the readout should say.
+    fn tick(&mut self) -> String {
+        let now = Instant::now();
+        let start = *self.window_start.get_or_insert(now);
+        self.frames += 1;
+
+        let elapsed = (now - start).as_secs_f32();
+        if elapsed >= Self::WINDOW {
+            self.shown = Some(self.frames as f32 / elapsed);
+            self.window_start = Some(now);
+            self.frames = 0;
+        }
+
+        match self.shown {
+            // Right-aligned in three columns so the readout does not jitter
+            // between 99 and 100 fps.
+            Some(fps) => format!("FPS {:>3}", fps.round() as u32),
+            None => "FPS  --".to_string(),
+        }
+    }
 }
 
 pub struct ViewerApp {
@@ -134,6 +222,8 @@ pub struct ViewerApp {
     window: Option<Arc<Window>>,
     target: Option<WindowTarget>,
     paint: Option<Paint>,
+
+    fps: FpsMeter,
 
     /// Set when a frame fails unrecoverably; drained by `into_result` so the
     /// process can exit non-zero with structured JSON.
@@ -150,6 +240,7 @@ impl ViewerApp {
             window: None,
             target: None,
             paint: None,
+            fps: FpsMeter::new(),
             error: None,
         }
     }
@@ -169,6 +260,10 @@ impl ViewerApp {
     }
 
     fn redraw(&mut self) -> Result<()> {
+        // Sampled before the borrows below, and only for scene content: the
+        // triangle viewer is a stack proof, not a game frame.
+        let fps = matches!(self.content, Content::Scene { .. }).then(|| self.fps.tick());
+
         let (Some(target), Some(paint)) = (self.target.as_mut(), self.paint.as_mut()) else {
             return Ok(());
         };
@@ -314,11 +409,14 @@ impl ViewerApp {
                     .as_ref()
                     .map_or(&[], |sim| sim.hud_lines.as_slice());
                 // The same overlay the screenshot path composites — the
-                // played game and the pinned PNG say the same thing.
+                // played game and the pinned PNG say the same thing — plus
+                // the viewer-only frame-rate readout on top.
+                let overlay = fps
+                    .map(|fps| with_fps_readout(hud_items, &fps))
+                    .unwrap_or_else(|| hud_items.clone());
                 let no_lines = hud_lines.iter().all(|l| l.is_empty());
-                let canvas = (!(hud_items.is_empty() && no_lines)).then(|| {
-                    engine_render::hud::rasterize(hud_items, hud_lines, width, height)
-                });
+                let canvas = (!(overlay.is_empty() && no_lines))
+                    .then(|| engine_render::hud::rasterize(&overlay, hud_lines, width, height));
                 target.render_with(|device, queue, view| {
                     renderer.draw(
                         device,
@@ -468,5 +566,61 @@ mod tests {
             assert_eq!(format!("{code:?}"), name);
             assert!(is_known_key(name));
         }
+    }
+
+    /// The readout sits in the top-right corner, on its own plate, clear of
+    /// everything else: nothing is drawn in the other three corners, and a
+    /// scene's own HUD survives underneath it.
+    #[test]
+    fn the_fps_readout_occupies_only_the_top_right_corner() {
+        use engine_core::components::{HudAnchor, HudRect};
+        use engine_core::math::{Vec2, Vec3};
+        use engine_core::scene::HudItems;
+
+        let (width, height) = (400u32, 200u32);
+        let scene_hud = HudItems {
+            rects: vec![HudRect {
+                anchor: HudAnchor::BottomLeft,
+                offset: Vec2::splat(10.0),
+                size: Vec2::new(60.0, 12.0),
+                color: Vec3::ONE,
+                opacity: 1.0,
+            }],
+            texts: vec![],
+        };
+
+        let overlay = super::with_fps_readout(&scene_hud, "FPS  60");
+        let canvas = engine_render::hud::rasterize(&overlay, &[], width, height);
+
+        let lit: Vec<(u32, u32)> = (0..height)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .filter(|&(x, y)| canvas.pixel(x, y)[3] > 0)
+            .collect();
+        assert!(!lit.is_empty());
+
+        // The scene's own bar is still there, bottom-left.
+        assert!(lit.contains(&(10, height - 11)), "scene HUD survives");
+
+        // Everything else is in the top-right corner: 7 glyphs at 2× plus
+        // padding, 6px in from the corner.
+        let readout: Vec<(u32, u32)> = lit
+            .iter()
+            .copied()
+            .filter(|&(_, y)| y < height / 2)
+            .collect();
+        assert!(readout.iter().all(|&(x, y)| {
+            x >= width - (6 + 7 * 16 + 8) && x < width - 6 && (6..6 + 24).contains(&y)
+        }));
+        // Flush against the plate's right edge, and nothing in the left half.
+        assert!(readout.iter().any(|&(x, _)| x == width - 7));
+        assert!(!readout.iter().any(|&(x, _)| x < width / 2));
+
+        // The readout is its own canvas: it does not drag the bottom-left bar
+        // into one screen-sized rasterization.
+        assert!(
+            canvas.covered_pixels() < (width * height / 4) as usize,
+            "corner elements must not merge into one big canvas: {} px",
+            canvas.covered_pixels()
+        );
     }
 }

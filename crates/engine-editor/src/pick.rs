@@ -92,7 +92,7 @@ mod tests {
     fn cube_at(name: &str, position: Vec3) -> RenderItem {
         RenderItem {
             entity: name.to_string(),
-            mesh: BuiltinMesh::Cube.data(),
+            mesh: std::sync::Arc::new(BuiltinMesh::Cube.data()),
             model: Mat4::from_translation(position),
             material: Material::default(),
         }

@@ -7,7 +7,10 @@
 //! can be decided without parsing the file — is it a builtin, is the path
 //! relative, does the file exist, is the extension one the engine reads.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use glam::Vec3;
 
@@ -37,7 +40,7 @@ impl MeshData {
 }
 
 /// A primitive the engine can produce without loading anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuiltinMesh {
     Cube,
     Cylinder,
@@ -199,18 +202,45 @@ fn sibling_candidates(asset: &str, resolved: &Path) -> Vec<String> {
 /// free of glTF parsing: the real file-reading implementation lives in
 /// `engine-assets`, and GPU-less contexts (unit tests, validation) use
 /// [`BuiltinAssets`].
+///
+/// Geometry comes back **shared** (`Arc`), never copied. A viewer rebuilds its
+/// draw list every frame, so a per-frame deep copy of every mesh is pure
+/// waste; sharing also gives the renderer a stable identity to cache uploaded
+/// GPU buffers against (`engine-render`'s `SceneRenderer`), which is what
+/// keeps unchanged geometry uploaded once instead of once per frame.
+/// Implementations must hand out the *same* `Arc` for repeated loads of one
+/// asset, and a fresh one when the underlying file is reloaded.
 pub trait MeshSource {
-    fn load_mesh(&self, asset: &str) -> Result<MeshData>;
+    fn load_mesh(&self, asset: &str) -> Result<Arc<MeshData>>;
 }
 
 /// A [`MeshSource`] that resolves only `builtin:` primitives — for tests and
 /// other contexts with no asset directory to load from.
 pub struct BuiltinAssets;
 
+thread_local! {
+    /// Builtin geometry is a compile-time constant, so one `Arc` per primitive
+    /// per thread serves every caller. That is what lets the unit struct honor
+    /// the trait's "same asset, same `Arc`" rule without becoming something
+    /// callers have to own and thread around.
+    static BUILTIN_CACHE: RefCell<HashMap<BuiltinMesh, Arc<MeshData>>> =
+        RefCell::new(HashMap::new());
+}
+
 impl MeshSource for BuiltinAssets {
-    fn load_mesh(&self, asset: &str) -> Result<MeshData> {
+    fn load_mesh(&self, asset: &str) -> Result<Arc<MeshData>> {
         match BuiltinMesh::parse(asset) {
-            Some(builtin) => Ok(builtin?.data()),
+            Some(builtin) => {
+                let builtin = builtin?;
+                Ok(BUILTIN_CACHE.with(|cache| {
+                    Arc::clone(
+                        cache
+                            .borrow_mut()
+                            .entry(builtin)
+                            .or_insert_with(|| Arc::new(builtin.data())),
+                    )
+                }))
+            }
             None => Err(EngineError::new(
                 crate::codes::ASSET_NOT_FOUND,
                 format!(
@@ -678,9 +708,14 @@ mod tests {
     #[test]
     fn builtin_source_loads_builtins_and_refuses_files() {
         assert_eq!(
-            BuiltinAssets.load_mesh("builtin:plane").unwrap(),
+            *BuiltinAssets.load_mesh("builtin:plane").unwrap(),
             BuiltinMesh::Plane.data()
         );
+        // Repeated loads share one allocation, per the `MeshSource` contract.
+        assert!(Arc::ptr_eq(
+            &BuiltinAssets.load_mesh("builtin:plane").unwrap(),
+            &BuiltinAssets.load_mesh("builtin:plane").unwrap()
+        ));
         let err = BuiltinAssets.load_mesh("meshes/cube.glb").unwrap_err();
         assert_eq!(err.error, "asset_not_found");
     }
