@@ -49,6 +49,7 @@ pub enum Content {
 pub struct Simulation {
     pub scene: engine_core::Scene,
     pub physics: Option<engine_physics::PhysicsWorld>,
+    pub particles: engine_core::particles::ParticleSystem,
     pub players: Vec<engine_core::animation::LoadedPlayer>,
     pub scripts: Option<engine_script::ScriptHost>,
     pub assets: engine_assets::AssetServer,
@@ -214,7 +215,10 @@ impl ViewerApp {
                             sim.t,
                         );
                     }
-                    if sim.physics.is_some() || sim.scripts.is_some() || sim.recorder.is_some()
+                    if sim.physics.is_some()
+                        || sim.scripts.is_some()
+                        || sim.recorder.is_some()
+                        || !sim.particles.is_empty()
                     {
                         sim.accumulator += elapsed;
                         while sim.accumulator >= dt {
@@ -244,6 +248,7 @@ impl ViewerApp {
                                 let events = physics.step(&mut sim.scene.world);
                                 sim.contacts.apply(&events);
                             }
+                            sim.particles.step(&sim.scene.world, dt);
                             sim.step_index += 1;
                             sim.accumulator -= dt;
                         }
@@ -261,6 +266,10 @@ impl ViewerApp {
                         *camera_model = fresh_transform.matrix();
                     }
                 }
+                let particles = simulation
+                    .as_ref()
+                    .map(|sim| sim.particles.instances(&sim.scene.world))
+                    .unwrap_or_default();
                 let (width, height) = target.size();
                 let view_projection = scene_renderer::view_projection(
                     camera,
@@ -284,8 +293,11 @@ impl ViewerApp {
                             target: view,
                             depth,
                             items,
+                            particles: &particles,
                             view_projection,
                             camera_position: camera_model.w_axis.truncate(),
+                            camera_right: camera_model.x_axis.truncate(),
+                            camera_up: camera_model.y_axis.truncate(),
                             lights: *lights,
                             clear: scene_renderer::DEFAULT_CLEAR,
                             hud: canvas.as_ref(),

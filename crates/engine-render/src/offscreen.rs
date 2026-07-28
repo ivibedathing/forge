@@ -6,6 +6,7 @@
 
 use engine_core::components::Camera;
 use engine_core::math::Mat4;
+use engine_core::particles::ParticleInstance;
 use engine_core::scene::{HudItems, RenderItem, ResolvedLights};
 use engine_core::{EngineError, Result};
 
@@ -48,6 +49,7 @@ impl Image {
 /// byte-identically to the pre-HUD engine.
 pub fn render(
     items: &[RenderItem],
+    particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
@@ -56,8 +58,18 @@ pub fn render(
     hud: &HudItems,
     lines: &[String],
 ) -> Result<Image> {
-    render_with_adapter(items, camera, camera_model, lights, width, height, hud, lines)
-        .map(|(image, _)| image)
+    render_with_adapter(
+        items,
+        particles,
+        camera,
+        camera_model,
+        lights,
+        width,
+        height,
+        hud,
+        lines,
+    )
+    .map(|(image, _)| image)
 }
 
 /// [`render`], also reporting which adapter drew the image.
@@ -68,6 +80,7 @@ pub fn render(
 #[allow(clippy::too_many_arguments)]
 pub fn render_with_adapter(
     items: &[RenderItem],
+    particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
@@ -115,8 +128,11 @@ pub fn render_with_adapter(
             target: &view,
             depth: &depth,
             items,
+            particles,
             view_projection,
             camera_position: camera_model.w_axis.truncate(),
+            camera_right: camera_model.x_axis.truncate(),
+            camera_up: camera_model.y_axis.truncate(),
             lights,
             clear: scene_renderer::DEFAULT_CLEAR,
             hud: canvas.as_ref(),

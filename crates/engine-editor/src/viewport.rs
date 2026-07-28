@@ -99,8 +99,13 @@ impl ViewportRenderer {
                 target: &target.view,
                 depth: &target.depth,
                 items,
+                // The editor shows the scene at rest; particles only exist
+                // once the fixed clock advances, so there are none to draw.
+                particles: &[],
                 view_projection,
                 camera_position,
+                camera_right: Vec3::X,
+                camera_up: Vec3::Y,
                 lights,
                 clear: scene_renderer::DEFAULT_CLEAR,
                 // The orbit-camera viewport is not the game camera's frame;
