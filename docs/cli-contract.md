@@ -146,8 +146,12 @@ the identical offscreen path. Committed baselines live in
 an explicit number of steps and never reads a clock: same scene + same steps
 = byte-identical results, pinned by committed golden traces. `--trace`
 writes JSONL — one line per dynamic body per step plus contact events
-(`{"step": 30, "contact": ["A", "B"], "started": true}`) — the greppable
-record agents assert on. `--bake` writes a *valid scene file* with
+(`{"step": 30, "contact": ["A", "B"], "started": true}`), plus one
+`{"step": N, "hud": [...]}` line whenever the scripts' HUD text changes
+(a lap crossing is a greppable trace event; script-free traces are
+unchanged) — the greppable record agents assert on. The `simulate` success
+object carries the final step's HUD as `"hud": [...]` when non-empty, as
+does `screenshot`'s. `--bake` writes a *valid scene file* with
 `Transform`/`RigidBody` velocities updated and every untouched byte
 preserved (the M7 formatter). A bake is a representation checkpoint, not a
 solver snapshot: resuming from a bake agrees with the straight-through run
@@ -180,6 +184,15 @@ determinism holds with scripts running. Parse failures surface in
 file, line, and the owning entity, exit 1. Baking captures script-driven
 state: any Transform/RigidBody field that differs from the file's rest value
 is written back, everything else byte-preserved.
+
+Two script facilities live on the host rather than in the world:
+`world.state(key, default)` / `world.set_state(key, value)` is a numeric
+per-run store (replay-deterministic; reset by a fresh run; *not* captured by
+bake, exactly like solver caches), and `world.hud(text)` pushes printable-
+ASCII overlay lines — cleared every step, so the HUD is a pure function of
+the step that drew it, composited identically onto `screenshot`/
+`diff-render` output and the `run-scene` window (caps: 16 lines × 96 chars,
+exceeding either is a runtime error).
 
 ## Input
 

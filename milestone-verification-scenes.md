@@ -711,26 +711,32 @@ structured errors in one run.
 ## M11 — Input (keyboard, replayable)
 
 **Scene:** `examples/scenes/car_track.json` — the drivable-car demo itself: a barrier-lined
-rectangular circuit with real colliders, a truck that is a **dynamic RigidBody** (≈1.5 t from
-collider density, pitch/roll locked) whose `scripts/car.rhai` is the drivetrain — engine
-force, braking, drag, tire grip, speed-scaled steering — applied through the M11 velocity
-API, plus a spring chase camera (`world.look_at`). **Timeline:**
-`examples/scenes/car_track_lap.input.jsonl` — a committed 2 442-step recording (authored by a
-closed-loop autopilot driving the real engine chunk-by-chunk) that laps the circuit three
-times clockwise, brakes, and parks on the start line.
+rectangular circuit with real colliders, a box-chassis car that is a **dynamic RigidBody**
+(≈1.5 t from collider density) riding on four `Wheel` components (M12 raycast suspension:
+spring/damper per wheel, tire grip, drive and braking at the contact point, wheel visuals
+that steer, spin, and compress). `scripts/car.rhai` is only the *driver* — pedals and a
+speed-scaled steering wheel via `world.set_engine_force` / `set_brake` / `set_steering` —
+plus a spring chase camera (`world.look_at`). **Timeline:**
+`examples/scenes/car_track_lap.input.jsonl` — a committed 2 770-step recording (authored by
+a closed-loop autopilot driving the real engine chunk-by-chunk) that laps the circuit three
+times clockwise on real suspension, brakes, and parks on the start line.
 
 The pass condition is the M11 thesis — *interactive never means unverifiable*:
 
 ```bash
 engine validate examples/scenes/car_track.json
 # Replay the lap headlessly; the car must return to the start line:
-engine simulate examples/scenes/car_track.json --steps 2520 \
+engine simulate examples/scenes/car_track.json --steps 2880 \
     --input examples/scenes/car_track_lap.input.jsonl --bake /tmp/lap.json
-# → Car parked within 1.5 of the start line [0, 0.43, 9], speed ~0 (CLI test)
+# → Car parked within 1.5 of the start line [0, 0.82, 9], speed ~0 (CLI test)
 engine diff-render examples/scenes/car_track.json \
-    examples/scenes/verify/baselines/m11_lap.png --steps 2520 \
+    examples/scenes/verify/baselines/m11_lap.png --steps 2880 \
     --input examples/scenes/car_track_lap.input.jsonl
-# → bit-exact; a recorded drive is a pinnable render like any other pose
+# → bit-exact; a recorded drive is a pinnable render like any other pose.
+#   The baseline includes the script's HUD overlay (speedometer + lap
+#   timer, M11.6): the parked car reads SPEED 0 KM/H, LAP 3,
+#   LAST 13.42 / BEST 13.42 — the simulate report carries the same lines
+#   as "hud", so the timing is also asserted without a GPU
 engine run-scene examples/scenes/car_track.json   # the playable version
 ```
 
@@ -740,6 +746,36 @@ M8 golden trace must still match: no `--input` means no keys held, byte-for-byte
 
 **What this regresses:** the whole input path (timeline parse → `world.key` → script → bake /
 render), `world.look_at`, and the determinism promise extended over recorded input.
+
+---
+
+## M12 — HUD components: `verify/m12_hud.json`
+
+Screen-anchored `HudText` + `HudRect` components (hud-design.md), rendered by the same
+rasterizer/overlay pass as the M11.6 `world.hud` lines. The fixture covers every anchor, a
+glyph-coverage line, rect-under-text draw order, a fractional-opacity panel, and a script
+(`verify/scripts/m12_hud.rhai`) that writes the step counter into a `HudText` and stretches a
+`HudRect` one pixel per step.
+
+```bash
+engine validate examples/scenes/verify/m12_hud.json
+engine diff-render examples/scenes/verify/m12_hud.json     examples/scenes/verify/baselines/m12_hud.png --steps 60
+# → bit-exact: "M12 HUD" top-left on its translucent panel, coverage line
+#   top-right, BL/BR corner labels, "+" dead center, STEP 60, and the green
+#   bar at 100 of 160 px (40 rest + 60 steps)
+engine simulate examples/scenes/verify/m12_hud.json --steps 60 --bake /tmp/m12.json
+# → the baked file reads "STEP 60" and "size": [100.0, 10.0] — script-driven
+#   HUD state bakes under the change-based rule (CLI test)
+```
+
+The car demo carries the applied version: a `SpeedBar` HudRect gauge (bottom-left) driven by
+`world.set_hud_rect_size` from the same speed the `world.hud` readout shows —
+`verify/baselines/m11_lap.png` includes it (re-blessed with M12; timeline and physics
+untouched, the parked bar is empty over its backdrop).
+
+**What this regresses:** the component overlay (anchor math, draw order, opacity, glyph
+rendering), the schema validation of HUD components (anchor enum with `did_you_mean`, size and
+color ranges), the M12 script accessors, and HUD-field bake.
 
 ---
 

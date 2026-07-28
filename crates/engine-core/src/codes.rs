@@ -145,6 +145,14 @@ registry! {
     SCRIPT_RUNTIME_ERROR = "script_runtime_error", Input,
         "a script failed while running";
 
+    // ── Vehicles (M12) ─────────────────────────────────────────────────
+    WHEEL_VEHICLE_NOT_FOUND = "wheel_vehicle_not_found", Input,
+        "a Wheel's \"vehicle\" names no entity in the scene";
+    WHEEL_VEHICLE_INVALID = "wheel_vehicle_invalid", Input,
+        "a Wheel's \"vehicle\" must be a different entity with a dynamic RigidBody";
+    WHEEL_WITH_PHYSICS = "wheel_with_physics", Input,
+        "a Wheel entity may not have its own RigidBody or Collider; the chassis owns all collision";
+
     // ── Input (M11) ────────────────────────────────────────────────────
     INPUT_UNREADABLE = "input_unreadable", Input,
         "the input timeline file could not be read";

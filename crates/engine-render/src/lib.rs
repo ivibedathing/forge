@@ -7,6 +7,7 @@
 
 pub mod diff;
 pub mod gpu;
+pub mod hud;
 pub mod offscreen;
 pub mod renderer;
 pub mod scene_renderer;

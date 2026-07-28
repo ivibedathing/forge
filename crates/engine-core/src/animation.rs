@@ -292,6 +292,29 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "HudText" => {
+            let Ok(mut c) = world.get::<&mut HudText>(entity) else {
+                return false;
+            };
+            match field {
+                "offset" => c.offset = v3.truncate(),
+                "size" => c.size = scalar,
+                "color" => c.color = v3,
+                _ => return false,
+            }
+        }
+        "HudRect" => {
+            let Ok(mut c) = world.get::<&mut HudRect>(entity) else {
+                return false;
+            };
+            match field {
+                "offset" => c.offset = v3.truncate(),
+                "size" => c.size = v3.truncate(),
+                "color" => c.color = v3,
+                "opacity" => c.opacity = scalar,
+                _ => return false,
+            }
+        }
         "AnimationPlayer" => {
             let Ok(mut c) = world.get::<&mut AnimationPlayer>(entity) else {
                 return false;
@@ -299,6 +322,27 @@ pub fn set_field(
             match field {
                 "speed" => c.speed = scalar,
                 "start_offset" => c.start_offset = scalar,
+                _ => return false,
+            }
+        }
+        "Wheel" => {
+            let Ok(mut c) = world.get::<&mut Wheel>(entity) else {
+                return false;
+            };
+            match field {
+                "offset" => c.offset = v3,
+                "radius" => c.radius = scalar,
+                "suspension_rest_length" => c.suspension_rest_length = scalar,
+                "suspension_stiffness" => c.suspension_stiffness = scalar,
+                "suspension_compression" => c.suspension_compression = scalar,
+                "suspension_damping" => c.suspension_damping = scalar,
+                "suspension_travel" => c.suspension_travel = scalar,
+                "max_suspension_force" => c.max_suspension_force = scalar,
+                "friction_slip" => c.friction_slip = scalar,
+                "side_friction_stiffness" => c.side_friction_stiffness = scalar,
+                "engine_force" => c.engine_force = scalar,
+                "brake" => c.brake = scalar,
+                "steering" => c.steering = scalar,
                 _ => return false,
             }
         }
@@ -754,7 +798,10 @@ mod tests {
                 {"type":"AmbientLight"},
                 {"type":"RigidBody","body":"kinematic"},
                 {"type":"Collider","shape":"sphere","radius":0.5},
-                {"type":"AnimationPlayer","clip":"x"}
+                {"type":"AnimationPlayer","clip":"x"},
+                {"type":"Wheel","vehicle":"E"},
+                {"type":"HudText","text":"x"},
+                {"type":"HudRect","size":[1.0,1.0]}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

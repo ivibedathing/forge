@@ -34,6 +34,9 @@ pub enum Content {
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
+        /// The scene's HUD components; refreshed per frame when a simulation
+        /// runs (clips and scripts can drive them), static otherwise.
+        hud_items: engine_core::scene::HudItems,
         /// Present when the scene has physics components: the viewer drives
         /// the same fixed step through a wall-clock accumulator (the
         /// headless path stays canonical; frame pacing may vary here).
@@ -63,6 +66,9 @@ pub struct Simulation {
     pub t: f32,
     pub step_index: u64,
     pub last: Option<Instant>,
+    /// What the most recent script step put on screen; empty between HUD
+    /// pushes and for scripts that never call `world.hud`.
+    pub hud_lines: Vec<String>,
 }
 
 /// `--record-input`: writes one timeline line whenever the held set changes,
@@ -185,6 +191,7 @@ impl ViewerApp {
                     camera,
                     camera_model,
                     lights,
+                    hud_items,
                     simulation,
                 },
             ) => {
@@ -220,14 +227,17 @@ impl ViewerApp {
                             if let Some(scripts) = &sim.scripts {
                                 // A failing script ends the session with a
                                 // structured error, like any render failure.
-                                if let Err(e) = scripts.step(
+                                match scripts.step(
                                     &mut sim.scene.world,
                                     sim.step_index,
                                     &sim.held,
                                     &sim.contacts,
                                 ) {
-                                    self.error = Some(e);
-                                    break;
+                                    Ok(lines) => sim.hud_lines = lines,
+                                    Err(e) => {
+                                        self.error = Some(e);
+                                        break;
+                                    }
                                 }
                             }
                             if let Some(physics) = &mut sim.physics {
@@ -241,6 +251,7 @@ impl ViewerApp {
                     if let Ok(fresh) = sim.scene.render_items(&sim.assets) {
                         *items = fresh;
                     }
+                    *hud_items = sim.scene.hud_items();
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
                     if let Ok((fresh_camera, fresh_transform)) =
@@ -256,6 +267,15 @@ impl ViewerApp {
                     *camera_model,
                     width as f32 / height as f32,
                 );
+                let hud_lines: &[String] = simulation
+                    .as_ref()
+                    .map_or(&[], |sim| sim.hud_lines.as_slice());
+                // The same overlay the screenshot path composites — the
+                // played game and the pinned PNG say the same thing.
+                let no_lines = hud_lines.iter().all(|l| l.is_empty());
+                let canvas = (!(hud_items.is_empty() && no_lines)).then(|| {
+                    engine_render::hud::rasterize(hud_items, hud_lines, width, height)
+                });
                 target.render_with(|device, queue, view| {
                     renderer.draw(
                         device,
@@ -268,6 +288,7 @@ impl ViewerApp {
                             camera_position: camera_model.w_axis.truncate(),
                             lights: *lights,
                             clear: scene_renderer::DEFAULT_CLEAR,
+                            hud: canvas.as_ref(),
                         },
                     );
                 })

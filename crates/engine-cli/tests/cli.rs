@@ -1057,10 +1057,10 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
 }
 
 /// The committed demo: replaying the recorded session drives the physical
-/// car (dynamic RigidBody; the script is engine/brakes/tires) three laps
-/// around the track and parks it on the start line. This is the M11
-/// verification fixture — interactive gameplay, verified headlessly from
-/// text files alone.
+/// car (dynamic box chassis on four raycast-suspension Wheels; the script
+/// is only the driver) three laps around the track and parks it on the
+/// start line. This is the M11/M12 verification fixture — interactive
+/// gameplay, verified headlessly from text files alone.
 #[test]
 fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     let scene = repo_path("examples/scenes/car_track.json");
@@ -1083,18 +1083,219 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(0), "{output:?}");
-        path
+        let report: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+        (path, report)
     };
 
     // Mid-drive: far side of the circuit (the north straight, z ≈ -9).
-    let mid = baked_position(&bake_at("1260", "mid.json"), "Car");
+    let (mid_bake, _) = bake_at("480", "mid.json");
+    let mid = baked_position(&mid_bake, "Car");
     assert!(mid[2] < -5.0, "mid-drive the car is on the far straight: {mid:?}");
 
     // After three laps and the braking phase: parked on the start line.
-    let end = baked_position(&bake_at("2520", "end.json"), "Car");
+    let (end_bake, report) = bake_at("2880", "end.json");
+    let end = baked_position(&end_bake, "Car");
     let (dx, dz) = (end[0], end[2] - 9.0);
     let distance = (dx * dx + dz * dz).sqrt();
     assert!(distance < 1.5, "the drive must park on the start line: {end:?}");
+
+    // The script's HUD is part of the pinned record: parked (speed 0),
+    // just across the line onto lap 4, with three completed timed laps
+    // behind it (last 15.45 s, best 15.00 s). These strings are golden the
+    // way traces are — a drivetrain or timing change shows up here first.
+    assert_eq!(
+        report["hud"],
+        serde_json::json!([
+            "SPEED 0 KM/H",
+            "LAP 4   TIME 2.03",
+            "LAST 15.45   BEST 15.00"
+        ]),
+        "{report}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A scene whose script counts steps through `world.state` and shows the
+/// count through `world.hud` — the smallest HUD-bearing fixture.
+fn hud_fixture(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("engine-hud-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(
+        dir.join("scripts/counter.rhai"),
+        r#"fn step(world, step) {
+            let n = world.state("n", 0);
+            world.set_state("n", n + 1.0);
+            world.hud("COUNT " + n.to_int());
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.json"),
+        r#"{"name":"hud","entities":[
+            {"name":"Mover","components":[
+                {"type":"Transform"},
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Script","source":"scripts/counter.rhai"}
+            ]},
+            {"name":"Cam","components":[{"type":"Camera","active":true}]}
+        ]}"#,
+    )
+    .unwrap();
+    dir
+}
+
+/// `world.hud` + `world.state`: the final step's HUD rides the simulate
+/// report, every change rides the trace, and state persists across steps —
+/// all headless, no GPU required.
+#[test]
+fn the_hud_rides_the_simulate_report_and_the_trace() {
+    let dir = hud_fixture("trace");
+    let trace = dir.join("t.jsonl");
+    let output = engine()
+        .arg("simulate")
+        .arg(dir.join("scene.json"))
+        .args(["--steps", "3"])
+        .arg("--trace")
+        .arg(&trace)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    // The report carries the *final* step's HUD (state made it count).
+    let report: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+    assert_eq!(report["hud"], serde_json::json!(["COUNT 2"]), "{report}");
+
+    // The trace records each change as its own greppable event.
+    let traced: Vec<serde_json::Value> = std::fs::read_to_string(&trace)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .filter(|v: &serde_json::Value| v.get("hud").is_some())
+        .collect();
+    assert_eq!(traced.len(), 3, "{traced:?}");
+    assert_eq!(traced[0], serde_json::json!({"step": 1, "hud": ["COUNT 0"]}));
+    assert_eq!(traced[2], serde_json::json!({"step": 3, "hud": ["COUNT 2"]}));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The HUD is pixels, not just JSON: a stepped screenshot of a HUD-bearing
+/// scene differs from the unstepped one exactly because the overlay drew
+/// (nothing in the fixture scene moves), and it reports the lines it drew.
+#[test]
+fn the_hud_lands_in_screenshot_pixels() {
+    let dir = hud_fixture("pixels");
+    let shot = |steps: &str, out: &str| {
+        let path = dir.join(out);
+        let output = engine()
+            .arg("screenshot")
+            .arg(dir.join("scene.json"))
+            .args(["--steps", steps])
+            .args(["--width", "320", "--height", "180"])
+            .arg("--out")
+            .arg(&path)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "screenshot failed for a non-GPU reason: {stderr}"
+            );
+            return None;
+        }
+        Some((path, serde_json::from_str::<serde_json::Value>(&stdout_of(&output)).unwrap()))
+    };
+
+    let Some((with_hud, report)) = shot("1", "hud.png") else {
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    };
+    let (without_hud, plain_report) = shot("0", "plain.png").expect("GPU worked a moment ago");
+
+    assert_eq!(report["hud"], serde_json::json!(["COUNT 0"]), "{report}");
+    assert!(plain_report.get("hud").is_none(), "no steps, no HUD: {plain_report}");
+    assert_ne!(
+        std::fs::read(&with_hud).unwrap(),
+        std::fs::read(&without_hud).unwrap(),
+        "the overlay must change the pixels"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// ── HUD components (M12) ───────────────────────────────────────────────
+
+/// The M12 fixture end to end: the component overlay (all five anchors,
+/// draw order, opacity, glyph coverage) plus the script-driven HudText and
+/// HudRect render bit-exactly against the committed baseline, and the
+/// script's HUD writes land in the baked scene under the change-based rule.
+#[test]
+fn the_m12_hud_fixture_pins_the_component_overlay() {
+    let scene = repo_path("examples/scenes/verify/m12_hud.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m12_hud.png");
+    let dir = std::env::temp_dir().join(format!("engine-m12-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "60"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+    } else {
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+    }
+
+    // The bake half needs no GPU: after 60 steps the script has written
+    // "STEP 60" and stretched the bar to 40 + 60 = 100 px.
+    let baked_path = dir.join("baked.json");
+    let bake = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "60"])
+        .arg("--bake")
+        .arg(&baked_path)
+        .output()
+        .unwrap();
+    assert_eq!(bake.status.code(), Some(0), "{bake:?}");
+
+    let baked: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&baked_path).unwrap()).unwrap();
+    let component = |entity: &str, kind: &str| -> serde_json::Value {
+        baked["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == entity)
+            .and_then(|e| {
+                e["components"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|c| c["type"] == kind)
+            })
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(component("StepCounter", "HudText")["text"], "STEP 60");
+    assert_eq!(
+        component("GrowBar", "HudRect")["size"],
+        serde_json::json!([100.0, 10.0])
+    );
+    // The backdrop bar was never written; its bytes are untouched.
+    assert_eq!(
+        component("GrowBarBack", "HudRect")["size"],
+        serde_json::json!([160.0, 10.0])
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

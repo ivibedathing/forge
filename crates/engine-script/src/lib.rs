@@ -8,24 +8,39 @@
 //!
 //! Scripts mutate component fields and never invent state: whatever they
 //! compute beyond their writes dies at the end of the step, and baked output
-//! is an ordinary valid scene file.
+//! is an ordinary valid scene file. Two deliberate exceptions ride on the
+//! host rather than the world: the numeric key/value store behind
+//! `world.state`/`world.set_state` (per-run memory — a lap timer's start
+//! step — deterministic under replay, reset by a fresh run, and *not*
+//! captured by bake, exactly like physics solver caches), and the HUD line
+//! list behind `world.hud` (cleared every step, so what is on screen is a
+//! pure function of the step that drew it).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use engine_core::components::{Name, RigidBody, Script, Transform};
+use engine_core::components::{HudRect, HudText, Name, RigidBody, Script, Transform, Wheel};
 use engine_core::contact::ContactState;
 use engine_core::input::{self, InputState};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
-use rhai::packages::{BasicArrayPackage, BasicMathPackage, CorePackage, Package};
+use rhai::packages::{
+    BasicArrayPackage, BasicMathPackage, BasicStringPackage, CorePackage, MoreStringPackage,
+    Package,
+};
 use rhai::{Dynamic, EvalAltResult, Position, Scope, AST};
 
 /// Per-call operation budget: a runaway loop becomes a structured error,
 /// which is the deterministic answer to a hang.
 const MAX_OPERATIONS: u64 = 1_000_000;
+
+/// HUD caps: enough for a readable overlay, small enough that a runaway
+/// loop cannot render the frame unreadable. Exceeding either is a runtime
+/// error, not a truncation — deterministic and loud.
+const MAX_HUD_LINES: usize = 16;
+const MAX_HUD_CHARS: usize = 96;
 
 struct CompiledScript {
     /// The entity the `Script` component sits on — error context.
@@ -41,6 +56,9 @@ pub struct ScriptHost {
     scripts: Vec<CompiledScript>,
     names: Rc<HashMap<String, hecs::Entity>>,
     dt: f32,
+    /// The `world.state` store: per-run, shared by every script (script
+    /// order is deterministic, so cross-script reads are too).
+    state: Rc<RefCell<HashMap<String, f64>>>,
 }
 
 /// What scripts see: the world, entity names, and the fixed timestep.
@@ -59,6 +77,10 @@ struct WorldApi {
     /// before physics, so a hit at physics step N is visible at step N+1 —
     /// the causal order, documented on `ContactState`.
     contacts: Rc<ContactState>,
+    /// `world.state` / `world.set_state`: numeric per-run memory.
+    state: Rc<RefCell<HashMap<String, f64>>>,
+    /// `world.hud`: the lines pushed during this step, in push order.
+    hud: Rc<RefCell<Vec<String>>>,
 }
 
 impl WorldApi {
@@ -71,20 +93,31 @@ impl WorldApi {
         })
     }
 
+    /// Borrow one component mutably for the duration of a closure; `what`
+    /// names the component type in the missing-component error.
+    fn with_component<C: hecs::Component, T>(
+        &mut self,
+        name: &str,
+        what: &str,
+        f: impl FnOnce(&mut C) -> T,
+    ) -> std::result::Result<T, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow_mut();
+        let mut component = world.get::<&mut C>(entity).map_err(|_| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                format!("entity {name:?} has no {what}").into(),
+                Position::NONE,
+            ))
+        })?;
+        Ok(f(&mut component))
+    }
+
     fn with_transform<T>(
         &mut self,
         name: &str,
         f: impl FnOnce(&mut Transform) -> T,
     ) -> std::result::Result<T, Box<EvalAltResult>> {
-        let entity = self.entity(name)?;
-        let world = self.world.borrow_mut();
-        let mut transform = world.get::<&mut Transform>(entity).map_err(|_| {
-            Box::new(EvalAltResult::ErrorRuntime(
-                format!("entity {name:?} has no Transform").into(),
-                Position::NONE,
-            ))
-        })?;
-        Ok(f(&mut transform))
+        self.with_component(name, "Transform", f)
     }
 
     /// The vehicle path: velocity access needs a `RigidBody`; what a write
@@ -95,15 +128,25 @@ impl WorldApi {
         name: &str,
         f: impl FnOnce(&mut RigidBody) -> T,
     ) -> std::result::Result<T, Box<EvalAltResult>> {
+        self.with_component(name, "RigidBody", f)
+    }
+
+    /// The wheel path (M12): drive/brake/steer access needs a `Wheel`;
+    /// physics reads the fields into its vehicle controller each step.
+    fn with_wheel<T>(
+        &mut self,
+        name: &str,
+        f: impl FnOnce(&mut Wheel) -> T,
+    ) -> std::result::Result<T, Box<EvalAltResult>> {
         let entity = self.entity(name)?;
         let world = self.world.borrow_mut();
-        let mut body = world.get::<&mut RigidBody>(entity).map_err(|_| {
+        let mut wheel = world.get::<&mut Wheel>(entity).map_err(|_| {
             Box::new(EvalAltResult::ErrorRuntime(
-                format!("entity {name:?} has no RigidBody").into(),
+                format!("entity {name:?} has no Wheel").into(),
                 Position::NONE,
             ))
         })?;
-        Ok(f(&mut body))
+        Ok(f(&mut wheel))
     }
 }
 
@@ -122,6 +165,10 @@ fn curated_engine() -> rhai::Engine {
     engine.register_global_module(CorePackage::new().as_shared_module());
     engine.register_global_module(BasicArrayPackage::new().as_shared_module());
     engine.register_global_module(BasicMathPackage::new().as_shared_module());
+    // String building (concat, to_string, pad) so scripts can compose HUD
+    // text. Pure functions only — still no time, no I/O, no randomness.
+    engine.register_global_module(BasicStringPackage::new().as_shared_module());
+    engine.register_global_module(MoreStringPackage::new().as_shared_module());
     engine.set_max_operations(MAX_OPERATIONS);
 
     engine.register_type_with_name::<WorldApi>("World");
@@ -170,6 +217,45 @@ fn curated_engine() -> rhai::Engine {
                 .collect())
         },
     );
+
+    engine.register_fn(
+        "hud",
+        |w: &mut WorldApi, text: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            let mut hud = w.hud.borrow_mut();
+            if hud.len() >= MAX_HUD_LINES {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("the HUD holds at most {MAX_HUD_LINES} lines per step").into(),
+                    Position::NONE,
+                )));
+            }
+            if text.chars().count() > MAX_HUD_CHARS {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("a HUD line holds at most {MAX_HUD_CHARS} characters").into(),
+                    Position::NONE,
+                )));
+            }
+            if let Some(bad) = text.chars().find(|c| !('\x20'..'\x7f').contains(c)) {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("HUD text is printable ASCII only, got {bad:?}").into(),
+                    Position::NONE,
+                )));
+            }
+            hud.push(text.to_string());
+            Ok(())
+        },
+    );
+    engine.register_fn("state", |w: &mut WorldApi, key: &str, default: f64| -> f64 {
+        w.state.borrow().get(key).copied().unwrap_or(default)
+    });
+    engine.register_fn("state", |w: &mut WorldApi, key: &str, default: i64| -> f64 {
+        w.state.borrow().get(key).copied().unwrap_or(default as f64)
+    });
+    engine.register_fn("set_state", |w: &mut WorldApi, key: &str, value: f64| {
+        w.state.borrow_mut().insert(key.to_string(), value);
+    });
+    engine.register_fn("set_state", |w: &mut WorldApi, key: &str, value: i64| {
+        w.state.borrow_mut().insert(key.to_string(), value as f64);
+    });
 
     engine.register_fn(
         "position",
@@ -266,6 +352,53 @@ fn curated_engine() -> rhai::Engine {
             })
         },
     );
+    // Wheel controls (M12): pedals and steering wheel. Physics reads these
+    // into its raycast-vehicle controller before every step.
+    engine.register_fn(
+        "engine_force",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| f64::from(wheel.engine_force))
+        },
+    );
+    engine.register_fn(
+        "set_engine_force",
+        |w: &mut WorldApi,
+         name: &str,
+         force: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| wheel.engine_force = force as f32)
+        },
+    );
+    engine.register_fn(
+        "brake",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| f64::from(wheel.brake))
+        },
+    );
+    engine.register_fn(
+        "set_brake",
+        |w: &mut WorldApi,
+         name: &str,
+         force: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| wheel.brake = force as f32)
+        },
+    );
+    engine.register_fn(
+        "steering",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| f64::from(wheel.steering))
+        },
+    );
+    engine.register_fn(
+        "set_steering",
+        |w: &mut WorldApi,
+         name: &str,
+         degrees: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| wheel.steering = degrees as f32)
+        },
+    );
     engine.register_fn(
         "look_at",
         |w: &mut WorldApi,
@@ -301,6 +434,49 @@ fn curated_engine() -> rhai::Engine {
             })
         },
     );
+    // HUD components (M12): scripts drive on-screen text and gauge bars the
+    // same way they drive Transforms — the elements are ordinary components,
+    // so a script write is visible to screenshot, bake, and the viewer alike.
+    engine.register_fn(
+        "hud_text",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<String, Box<EvalAltResult>> {
+            w.with_component::<HudText, _>(name, "HudText", |t| t.text.clone())
+        },
+    );
+    engine.register_fn(
+        "set_hud_text",
+        |w: &mut WorldApi,
+         name: &str,
+         text: &str|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            let text = text.to_string();
+            w.with_component::<HudText, _>(name, "HudText", move |t| t.text = text)
+        },
+    );
+    engine.register_fn(
+        "hud_rect_size",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.with_component::<HudRect, _>(name, "HudRect", |r| {
+                vec![
+                    Dynamic::from_float(f64::from(r.size.x)),
+                    Dynamic::from_float(f64::from(r.size.y)),
+                ]
+            })
+        },
+    );
+    engine.register_fn(
+        "set_hud_rect_size",
+        |w: &mut WorldApi,
+         name: &str,
+         width: f64,
+         height: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_component::<HudRect, _>(name, "HudRect", |r| {
+                r.size = glam::Vec2::new(width as f32, height as f32);
+            })
+        },
+    );
+
     engine.register_fn(
         "scale",
         |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
@@ -402,6 +578,7 @@ impl ScriptHost {
             scripts,
             names: Rc::new(names),
             dt: 1.0 / timestep_hz.max(1) as f32,
+            state: Rc::new(RefCell::new(HashMap::new())),
         }))
     }
 
@@ -409,20 +586,24 @@ impl ScriptHost {
     /// held-key set for the duration of the step and `contacts` as the
     /// touching-state left by the previous physics step. The world is moved
     /// into the scripts' reach for the duration and moved back out even on
-    /// error, so a failing script never swallows the ECS.
+    /// error, so a failing script never swallows the ECS. Returns the HUD
+    /// lines the step pushed — this step's alone; the list starts empty
+    /// every step.
     pub fn step(
         &self,
         world: &mut World,
         step: u64,
         input: &InputState,
         contacts: &ContactState,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         let api = WorldApi {
             world: Rc::new(RefCell::new(std::mem::take(world))),
             names: Rc::clone(&self.names),
             dt: self.dt,
             input: Rc::new(input.clone()),
             contacts: Rc::new(contacts.clone()),
+            state: Rc::clone(&self.state),
+            hud: Rc::new(RefCell::new(Vec::new())),
         };
 
         let mut failure: Option<EngineError> = None;
@@ -456,9 +637,14 @@ impl ScriptHost {
         };
         *world = inner;
 
+        let hud = match Rc::try_unwrap(api.hud) {
+            Ok(cell) => cell.into_inner(),
+            Err(shared) => shared.borrow().clone(),
+        };
+
         match failure {
             Some(error) => Err(error),
-            None => Ok(()),
+            None => Ok(hud),
         }
     }
 }
@@ -768,6 +954,74 @@ mod tests {
     }
 
     #[test]
+    fn wheel_controls_read_and_write_the_wheel_component() {
+        let dir = temp_dir("wheel");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                world.set_engine_force("WheelBL", 900.0);
+                world.set_brake("WheelBL", world.brake("WheelBL") + 2.0);
+                world.set_steering("WheelFL", 12.5);
+                if world.engine_force("WheelBL") != 900.0 {
+                    world.set_steering("WheelFL", -1.0); // readback failed
+                }
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Car","components":[
+                {"type":"Transform"},
+                {"type":"RigidBody","body":"dynamic"},
+                {"type":"Collider","shape":"cuboid","half_extents":[1.0,0.5,2.0]},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"WheelBL","components":[
+                {"type":"Transform"},
+                {"type":"Wheel","vehicle":"Car","offset":[-0.8,0.0,1.2]}
+            ]},
+            {"name":"WheelFL","components":[
+                {"type":"Transform"},
+                {"type":"Wheel","vehicle":"Car","offset":[-0.8,0.0,-1.2]}
+            ]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene =
+            Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+        host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap();
+
+        let wheel = |name: &str| {
+            let entity = scene.entity(name).unwrap();
+            scene
+                .world
+                .get::<&engine_core::components::Wheel>(entity)
+                .unwrap()
+                .clone()
+        };
+        let rear = wheel("WheelBL");
+        assert_eq!(rear.engine_force, 900.0);
+        assert_eq!(rear.brake, 4.0, "brake accumulated across two steps via readback");
+        let front = wheel("WheelFL");
+        assert_eq!(front.steering, 12.5, "steering set (and readback saw 900)");
+
+        // A wheel call against an entity with no Wheel is structured.
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.set_engine_force("Mover", 1.0); }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host
+            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(error.message.contains("no Wheel"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn velocity_access_without_a_rigid_body_is_a_structured_error() {
         let dir = temp_dir("novel");
         let (mut scene, path) = scene_with_script(
@@ -828,6 +1082,31 @@ mod tests {
     }
 
     #[test]
+    fn hud_lines_are_returned_per_step_and_do_not_accumulate() {
+        let dir = temp_dir("hud");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                if step == 0 {
+                    world.hud("SPEED 42 KM/H");
+                    world.hud("LAP 1");
+                }
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let hud = host
+            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .unwrap();
+        assert_eq!(hud, vec!["SPEED 42 KM/H".to_string(), "LAP 1".to_string()]);
+        // The next step pushes nothing, so the HUD is empty — not sticky.
+        let hud = host
+            .step(&mut scene.world, 1, &InputState::default(), &ContactState::default())
+            .unwrap();
+        assert!(hud.is_empty(), "{hud:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn contact_queries_on_unknown_entities_are_structured_errors() {
         let dir = temp_dir("contacts-nobody");
         let (mut scene, path) = scene_with_script(
@@ -840,6 +1119,110 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("Nobody"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hud_caps_and_non_ascii_are_structured_errors() {
+        let dir = temp_dir("hudcap");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                let i = 0;
+                while i < 17 { world.hud("line"); i += 1; }
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(error.message.contains("at most 16 lines"), "{}", error.message);
+
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            "fn step(world, step) { world.hud(\"caf\u{e9}\"); }",
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
+        assert!(error.message.contains("printable ASCII"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hud_component_accessors_read_and_write_text_and_rect_size() {
+        let dir = temp_dir("hudcomp");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                let old = world.hud_text("Speedo");
+                world.set_hud_text("Speedo", old + " KM/H");
+                let s = world.hud_rect_size("Bar");
+                world.set_hud_rect_size("Bar", s[0] * 2.0, s[1]);
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Speedo","components":[
+                {"type":"HudText","text":"42"},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"Bar","components":[
+                {"type":"HudRect","size":[50.0,8.0]}
+            ]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene =
+            Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+
+        let text = scene
+            .world
+            .get::<&HudText>(scene.entity("Speedo").unwrap())
+            .unwrap()
+            .text
+            .clone();
+        assert_eq!(text, "42 KM/H");
+        let size = scene
+            .world
+            .get::<&HudRect>(scene.entity("Bar").unwrap())
+            .unwrap()
+            .size;
+        assert_eq!(size, glam::Vec2::new(100.0, 8.0));
+
+        // Missing components are structured errors, like every accessor.
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.hud_text("Mover"); }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(error.message.contains("no HudText"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn state_persists_across_steps_and_defaults_when_unset() {
+        let dir = temp_dir("state");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                let laps = world.state("laps", 0);
+                if step == 5 { world.set_state("laps", laps + 1.0); }
+                world.set_position("Mover", laps, 0.0, world.state("missing", -7.5));
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        for step in 0..8 {
+            host.step(&mut scene.world, step, &InputState::default(), &ContactState::default()).unwrap();
+        }
+        let entity = scene.entity("Mover").unwrap();
+        let p = scene.world.get::<&Transform>(entity).unwrap().position;
+        // Step 7 read the value step 5 wrote; the unset key fell back.
+        assert_eq!(p.x, 1.0, "state write must persist: {p}");
+        assert_eq!(p.z, -7.5, "unset state must yield the default: {p}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -22,8 +22,7 @@ fn vec3_json(v: Vec3) -> Value {
 
 /// Step a scene `steps` times — scripts then physics, per the fixed system
 /// order — optionally replaying an input timeline and writing a JSONL
-/// trace. Returns the physics world (for queries) and the total contact
-/// count. No timeline means no keys held, which keeps every pre-input trace
+/// trace. No timeline means no keys held, which keeps every pre-input trace
 /// and baseline byte-identical.
 pub fn run(
     scene: &mut Scene,
@@ -31,7 +30,7 @@ pub fn run(
     steps: u32,
     input: Option<&InputTimeline>,
     mut trace: Option<&mut dyn Write>,
-) -> Result<(PhysicsWorld, u64)> {
+) -> Result<StepRun> {
     let scripts =
         engine_script::ScriptHost::build(&scene.world, scene_path, scene.physics.timestep_hz)?;
     let assets = engine_assets::AssetServer::for_scene(scene_path);
@@ -42,12 +41,14 @@ pub fn run(
     // What scripts see at step N is the touching-state physics left at step
     // N-1 — the causal order under animations → scripts → physics.
     let mut contact_state = engine_core::contact::ContactState::default();
+    let mut hud: Vec<String> = Vec::new();
+    let mut traced_hud: Vec<String> = Vec::new();
 
     for step in 1..=steps {
         if let Some(scripts) = &scripts {
             let step_index = u64::from(step) - 1;
             let held = input.map_or(&no_keys, |t| t.held_at(step_index));
-            scripts.step(&mut scene.world, step_index, held, &contact_state)?;
+            hud = scripts.step(&mut scene.world, step_index, held, &contact_state)?;
         }
         let events = physics.step(&mut scene.world);
         contact_state.apply(&events);
@@ -88,11 +89,30 @@ pub fn run(
                     }),
                 )?;
             }
+            // The HUD is part of the observable record: one line whenever it
+            // changes, so a lap crossing is a greppable trace event. Script-
+            // free scenes never emit one and pre-HUD traces stay byte-exact.
+            if hud != traced_hud {
+                write_line(trace, &json!({ "step": step, "hud": hud }))?;
+                traced_hud = hud.clone();
+            }
         }
         contacts += events.len() as u64;
     }
 
-    Ok((physics, contacts))
+    Ok(StepRun {
+        physics,
+        contacts,
+        hud,
+    })
+}
+
+/// What stepping a scene produced: the physics world (for queries), the
+/// total contact count, and the HUD lines the final step's scripts pushed.
+pub struct StepRun {
+    pub physics: PhysicsWorld,
+    pub contacts: u64,
+    pub hud: Vec<String>,
 }
 
 fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
@@ -106,10 +126,10 @@ fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
 
 /// Write the simulated state back into the original source text as a valid
 /// scene file, every untouched byte preserved. The rule is change-based:
-/// any `Transform` or `RigidBody` field that differs from the file's rest
-/// value gets spliced — which captures dynamic bodies, script-driven
-/// kinematics, and plain script-moved entities uniformly, without touching
-/// entities nothing moved.
+/// any `Transform`, `RigidBody`, or HUD-component field that differs from
+/// the file's rest value gets spliced — which captures dynamic bodies,
+/// script-driven kinematics, and script-driven HUD state uniformly, without
+/// touching entities nothing moved.
 pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
     let file: engine_core::SceneFile = serde_json::from_str(source).map_err(|e| {
         EngineError::new(
@@ -126,11 +146,14 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
         };
 
         let mut edits: Vec<SetComponentField> = Vec::new();
-        let edit = |field: &str, component: &str, value: Vec3| SetComponentField {
+        let field_edit = |field: &str, component: &str, value: Value| SetComponentField {
             entity: def.name.clone(),
             component: component.into(),
             field: field.into(),
-            value: vec3_json(value),
+            value,
+        };
+        let edit = |field: &str, component: &str, value: Vec3| {
+            field_edit(field, component, vec3_json(value))
         };
 
         if def.components.iter().any(|c| matches!(c, ComponentData::Transform(_))) {
@@ -172,6 +195,48 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                         "angular_velocity",
                         "RigidBody",
                         current.angular_velocity,
+                    ));
+                }
+            }
+        }
+        // Script-driven HUD state is scene state like any other: a changed
+        // readout or gauge width lands in the baked file.
+        if def.components.iter().any(|c| matches!(c, ComponentData::HudText(_))) {
+            if let Ok(current) = scene.world.get::<&engine_core::components::HudText>(entity) {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::HudText(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.text != rest.text {
+                    edits.push(field_edit(
+                        "text",
+                        "HudText",
+                        Value::String(current.text.clone()),
+                    ));
+                }
+            }
+        }
+        if def.components.iter().any(|c| matches!(c, ComponentData::HudRect(_))) {
+            if let Ok(current) = scene.world.get::<&engine_core::components::HudRect>(entity) {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::HudRect(r) => Some(*r),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.size != rest.size {
+                    edits.push(field_edit(
+                        "size",
+                        "HudRect",
+                        Value::Array(
+                            current.size.to_array().into_iter().map(number_from_f32).collect(),
+                        ),
                     ));
                 }
             }
@@ -254,7 +319,7 @@ pub fn simulate_command(
         None => None,
     };
 
-    let (_physics, contacts) = run(
+    let outcome = run(
         &mut scene,
         &scene_path,
         steps,
@@ -269,8 +334,13 @@ pub fn simulate_command(
     let mut result = json!({
         "simulated_steps": steps,
         "timestep_hz": scene.physics.timestep_hz,
-        "contacts": contacts,
+        "contacts": outcome.contacts,
     });
+    if !outcome.hud.is_empty() {
+        // The final step's HUD, so an agent reads the lap timer without a
+        // trace file.
+        result["hud"] = json!(outcome.hud);
+    }
     if let Some(path) = &bake_path {
         result["baked"] = json!(path.display().to_string());
     }
@@ -306,7 +376,7 @@ pub fn raycast_command(
     let mut scene = Scene::from_source(&source, &display)
         .map_err(|mut errors| errors.pop().expect("non-empty"))?;
 
-    let (mut physics, _) = run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
+    let mut physics = run(&mut scene, &scene_path, steps, input.as_ref(), None)?.physics;
     physics.refresh_queries();
 
     let result = match physics.raycast(from, direction) {

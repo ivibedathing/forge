@@ -103,6 +103,11 @@ impl ViewportRenderer {
                 camera_position,
                 lights,
                 clear: scene_renderer::DEFAULT_CLEAR,
+                // The orbit-camera viewport is not the game camera's frame;
+                // screen-anchored HUD elements would be misleading here, so
+                // the editor leaves the overlay off. `engine screenshot` is
+                // where the HUD is verified.
+                hud: None,
             },
         );
         target.id

@@ -49,7 +49,7 @@
             -0.5,
             0.0
           ],
-          "friction": 0.05
+          "friction": 0.6
         }
       ]
     },
@@ -2261,7 +2261,7 @@
           "type": "Transform",
           "position": [
             0.0,
-            0.47,
+            0.9,
             9.0
           ],
           "rotation": [
@@ -2270,41 +2270,31 @@
             0.0
           ],
           "scale": [
-            0.45,
-            0.45,
-            0.45
+            1.7,
+            0.7,
+            3.6
           ]
         },
         {
           "type": "RigidBody",
           "body": "dynamic",
-          "locked_rotations": [
-            true,
-            false,
-            true
-          ],
           "ccd": true
         },
         {
           "type": "Collider",
           "shape": "cuboid",
           "half_extents": [
-            1.458,
-            1.799,
-            3.046
+            0.5,
+            0.5,
+            0.5
           ],
-          "offset": [
-            0.0,
-            0.842,
-            0.676
-          ],
-          "density": 250.0,
-          "friction": 0.05,
+          "density": 350.0,
+          "friction": 0.3,
           "restitution": 0.1
         },
         {
           "type": "Mesh",
-          "asset": "meshes/truck.glb"
+          "asset": "builtin:cube"
         },
         {
           "type": "Material",
@@ -2319,6 +2309,222 @@
         {
           "type": "Script",
           "source": "scripts/car.rhai"
+        }
+      ]
+    },
+    {
+      "name": "WheelFL",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.25,
+            0.35,
+            9.92
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            90.0
+          ],
+          "scale": [
+            0.7,
+            0.26,
+            0.7
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.05,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.9
+        },
+        {
+          "type": "Wheel",
+          "vehicle": "Car",
+          "offset": [
+            -0.92,
+            -0.2,
+            -1.25
+          ],
+          "radius": 0.35,
+          "suspension_rest_length": 0.35,
+          "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8,
+          "suspension_damping": 3.8,
+          "suspension_travel": 0.2,
+          "side_friction_stiffness": 2.0,
+          "friction_slip": 1.0
+        }
+      ]
+    },
+    {
+      "name": "WheelFR",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.25,
+            0.35,
+            8.08
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            90.0
+          ],
+          "scale": [
+            0.7,
+            0.26,
+            0.7
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.05,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.9
+        },
+        {
+          "type": "Wheel",
+          "vehicle": "Car",
+          "offset": [
+            0.92,
+            -0.2,
+            -1.25
+          ],
+          "radius": 0.35,
+          "suspension_rest_length": 0.35,
+          "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8,
+          "suspension_damping": 3.8,
+          "suspension_travel": 0.2,
+          "side_friction_stiffness": 2.0,
+          "friction_slip": 1.0
+        }
+      ]
+    },
+    {
+      "name": "WheelRL",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.25,
+            0.35,
+            9.92
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            90.0
+          ],
+          "scale": [
+            0.7,
+            0.26,
+            0.7
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.05,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.9
+        },
+        {
+          "type": "Wheel",
+          "vehicle": "Car",
+          "offset": [
+            -0.92,
+            -0.2,
+            1.25
+          ],
+          "radius": 0.35,
+          "suspension_rest_length": 0.35,
+          "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8,
+          "suspension_damping": 3.8,
+          "suspension_travel": 0.2,
+          "side_friction_stiffness": 1.7,
+          "friction_slip": 1.0
+        }
+      ]
+    },
+    {
+      "name": "WheelRR",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.25,
+            0.35,
+            8.08
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            90.0
+          ],
+          "scale": [
+            0.7,
+            0.26,
+            0.7
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.05,
+            0.06
+          ],
+          "metallic": 0.0,
+          "roughness": 0.9
+        },
+        {
+          "type": "Wheel",
+          "vehicle": "Car",
+          "offset": [
+            0.92,
+            -0.2,
+            1.25
+          ],
+          "radius": 0.35,
+          "suspension_rest_length": 0.35,
+          "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8,
+          "suspension_damping": 3.8,
+          "suspension_travel": 0.2,
+          "side_friction_stiffness": 1.7,
+          "friction_slip": 1.0
         }
       ]
     },
@@ -2425,6 +2631,51 @@
           "near": 0.1,
           "far": 200.0,
           "active": false
+        }
+      ]
+    },
+    {
+      "name": "SpeedBarBack",
+      "components": [
+        {
+          "type": "HudRect",
+          "anchor": "bottom_left",
+          "offset": [
+            16.0,
+            16.0
+          ],
+          "size": [
+            260.0,
+            12.0
+          ],
+          "color": [
+            0.05,
+            0.06,
+            0.08
+          ],
+          "opacity": 0.75
+        }
+      ]
+    },
+    {
+      "name": "SpeedBar",
+      "components": [
+        {
+          "type": "HudRect",
+          "anchor": "bottom_left",
+          "offset": [
+            16.0,
+            16.0
+          ],
+          "size": [
+            0.0,
+            12.0
+          ],
+          "color": [
+            0.2,
+            0.9,
+            0.3
+          ]
         }
       ]
     }

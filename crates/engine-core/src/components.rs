@@ -10,7 +10,7 @@
 //! the bottom. That macro is what keeps the serialized enum, the name list used
 //! for `did_you_mean`, and the spawn logic from drifting apart.
 
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use hecs::EntityBuilder;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -428,6 +428,104 @@ pub struct AnimationPlayer {
     pub start_offset: f32,
 }
 
+/// Where a HUD element attaches on screen (M12).
+///
+/// `offset` is measured **inward** from the anchor: from a right anchor,
+/// `offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;
+/// from `center` it is the usual +x-right / +y-down applied to the element's
+/// center. The anchored point is the element's matching corner (its center
+/// for `center`), so `offset: [0, 0]` puts the element flush against its
+/// corner at any resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HudAnchor {
+    #[default]
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Center,
+}
+
+/// A screen-space text label (M12): one line of the built-in 8×8 pixel font,
+/// drawn over the 3D scene after lighting, independent of any camera.
+///
+/// Needs no `Transform` — placement is `anchor` + `offset` in framebuffer
+/// pixels, which is what the agent sees in the PNG. Text is always opaque
+/// and never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs
+/// outside the font's coverage render as a filled box: visibly wrong in the
+/// screenshot, never a panic. Draw order is file order, and all text draws
+/// over all `HudRect`s.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudText {
+    /// One line; no wrapping. Scripts may rewrite it via
+    /// `world.set_hud_text` — an empty string is a legal rest value for a
+    /// script-driven readout.
+    pub text: String,
+
+    #[serde(default)]
+    pub anchor: HudAnchor,
+
+    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    #[serde(default)]
+    #[schemars(with = "[f32; 2]")]
+    pub offset: Vec2,
+
+    /// Glyph height in pixels, `>= 4`. The 8×8 font renders at integer
+    /// scale `max(1, round(size / 8))`, so `16` means exactly 2× glyphs.
+    #[serde(default = "hud_text_size")]
+    #[schemars(range(min = 4.0))]
+    pub size: f32,
+
+    /// Linear RGB in `[0, 1]`, like every color in the engine; encoded to
+    /// sRGB when the overlay is rasterized.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+}
+
+fn hud_text_size() -> f32 {
+    16.0
+}
+
+fn white() -> Vec3 {
+    Vec3::ONE
+}
+
+/// A screen-space solid rectangle (M12): the primitive behind health bars,
+/// speed bars, and backdrops. Drawn before all `HudText`, file order within
+/// rects.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudRect {
+    #[serde(default)]
+    pub anchor: HudAnchor,
+
+    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    #[serde(default)]
+    #[schemars(with = "[f32; 2]")]
+    pub offset: Vec2,
+
+    /// `[width, height]` in pixels, each `>= 0` — zero is legal so a
+    /// script-driven bar can be empty. Scripts resize via
+    /// `world.set_hud_rect_size`.
+    #[schemars(with = "[f32; 2]", inner(range(min = 0.0)))]
+    pub size: Vec2,
+
+    /// Linear RGB in `[0, 1]`.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// `[0, 1]`; `1` (the default) replaces the pixel exactly, fractions
+    /// alpha-blend on the GPU (deterministic per adapter, like every
+    /// baseline).
+    #[serde(default = "one")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: f32,
+}
+
 /// Gameplay logic as data (M10): a Rhai script run once per fixed step.
 ///
 /// `source` is a relative `.rhai` path defining `fn step(world, step)`.
@@ -438,6 +536,142 @@ pub struct AnimationPlayer {
 #[serde(deny_unknown_fields)]
 pub struct Script {
     pub source: String,
+}
+
+/// One raycast-suspension wheel of a vehicle (M12).
+///
+/// Sits on its own entity — the wheel's visual — and names its chassis in
+/// `vehicle` (an entity with a **dynamic** `RigidBody` + `Collider`). The
+/// engine groups every wheel naming the same chassis into one raycast
+/// vehicle: each wheel casts a ray down its suspension, a spring/damper
+/// pushes the chassis, and a tire friction model drives and grips at the
+/// contact point. The wheel entity's own `Transform` is **written by
+/// physics** every step — suspension compression, steering yaw, and axle
+/// spin — so screenshots show wheels that steer, roll, and bounce. Author
+/// its rest pose; simulation owns it afterwards. A wheel entity must not
+/// carry its own `RigidBody` or `Collider` (`wheel_with_physics`) — the
+/// chassis owns all collision.
+///
+/// Control fields (`engine_force`, `brake`, `steering`) are runtime inputs
+/// the same way `RigidBody.linear_velocity` is: scripts write them via
+/// `world.set_engine_force(...)` and friends, and physics reads them each
+/// step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Wheel {
+    /// Name of the chassis entity this wheel belongs to. Must be a
+    /// *different* entity with a dynamic `RigidBody` and a `Collider`.
+    pub vehicle: String,
+
+    /// Suspension attachment point in the chassis's local frame, in meters
+    /// (rotated with the chassis, **not** multiplied by its
+    /// `Transform.scale`). The suspension ray starts here and points down
+    /// the chassis's local −Y.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub offset: Vec3,
+
+    /// Wheel radius in meters. `> 0`.
+    #[serde(default = "default_wheel_radius")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub radius: f32,
+
+    /// Suspension spring rest length in meters: how far below `offset` the
+    /// wheel center hangs when the spring is neither compressed nor
+    /// stretched. `>= 0`.
+    #[serde(default = "default_suspension_rest_length")]
+    #[schemars(range(min = 0.0))]
+    pub suspension_rest_length: f32,
+
+    /// Spring stiffness **per kilogram of chassis mass** (the backend
+    /// multiplies by mass, so the same value suspends a light or heavy
+    /// chassis identically). Higher = stiffer. `> 0`. Static sag per wheel
+    /// is roughly `9.81 / (4 * stiffness)` meters — keep
+    /// `suspension_travel` above that.
+    #[serde(default = "default_suspension_stiffness")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub suspension_stiffness: f32,
+
+    /// Damping while the spring compresses, per kilogram of chassis mass.
+    /// `sqrt(stiffness)` is critical damping; ~0.5× that is a comfortable
+    /// car. `>= 0`.
+    #[serde(default = "default_suspension_compression")]
+    #[schemars(range(min = 0.0))]
+    pub suspension_compression: f32,
+
+    /// Damping while the spring extends (rebound), per kilogram of chassis
+    /// mass. Usually a little higher than `suspension_compression`. `>= 0`.
+    #[serde(default = "default_suspension_damping")]
+    #[schemars(range(min = 0.0))]
+    pub suspension_damping: f32,
+
+    /// Maximum travel from rest length, in meters, both directions. `>= 0`.
+    #[serde(default = "default_suspension_travel")]
+    #[schemars(range(min = 0.0))]
+    pub suspension_travel: f32,
+
+    /// Hard cap on the suspension force, in newtons (not mass-scaled).
+    /// `>= 0`.
+    #[serde(default = "default_max_suspension_force")]
+    #[schemars(range(min = 0.0))]
+    pub max_suspension_force: f32,
+
+    /// Tire traction: how much forward/braking impulse the contact patch
+    /// transmits before it slips, as a multiple of the suspension load.
+    /// Larger = grippier; too large flips the vehicle under hard braking.
+    /// `>= 0`.
+    #[serde(default = "default_friction_slip")]
+    #[schemars(range(min = 0.0))]
+    pub friction_slip: f32,
+
+    /// Multiplier on the tire's sideways grip. `1.0` = full lateral
+    /// friction; lower values let the vehicle drift. `>= 0`.
+    #[serde(default = "one")]
+    #[schemars(range(min = 0.0))]
+    pub side_friction_stiffness: f32,
+
+    /// Drive force along the wheel's rolling direction, in newtons.
+    /// Positive is the chassis's forward (−Z); negative reverses. A runtime
+    /// input scripts write each step (`world.set_engine_force`).
+    #[serde(default)]
+    pub engine_force: f32,
+
+    /// Braking strength, `>= 0`. A runtime input scripts write each step
+    /// (`world.set_brake`).
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub brake: f32,
+
+    /// Steering angle in **degrees** about the chassis's up axis; positive
+    /// steers left. A runtime input scripts write each step
+    /// (`world.set_steering`).
+    #[serde(default)]
+    pub steering: f32,
+}
+
+fn default_wheel_radius() -> f32 {
+    0.3
+}
+fn default_suspension_rest_length() -> f32 {
+    0.3
+}
+fn default_suspension_stiffness() -> f32 {
+    24.0
+}
+fn default_suspension_compression() -> f32 {
+    2.5
+}
+fn default_suspension_damping() -> f32 {
+    3.5
+}
+fn default_suspension_travel() -> f32 {
+    0.25
+}
+fn default_max_suspension_force() -> f32 {
+    30000.0
+}
+fn default_friction_slip() -> f32 {
+    10.5
 }
 
 /// Defines the serialized component union alongside everything that must stay
@@ -491,6 +725,9 @@ components!(
     Collider,
     AnimationPlayer,
     Script,
+    Wheel,
+    HudText,
+    HudRect,
 );
 
 #[cfg(test)]
@@ -576,7 +813,10 @@ mod tests {
                 "RigidBody",
                 "Collider",
                 "AnimationPlayer",
-                "Script"
+                "Script",
+                "Wheel",
+                "HudText",
+                "HudRect"
             ]
         );
     }
