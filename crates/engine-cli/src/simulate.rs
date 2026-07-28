@@ -34,12 +34,16 @@ pub fn run(
 ) -> Result<StepRun> {
     let scripts =
         engine_script::ScriptHost::build(&scene.world, scene_path, scene.physics.timestep_hz)?;
-    let mut physics = PhysicsWorld::build(&scene.world, &scene.physics)?;
+    let assets = engine_assets::AssetServer::for_scene(scene_path);
+    let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
     let mut particles = ParticleSystem::build(&scene.world);
     let dt = 1.0 / scene.physics.timestep_hz.max(1) as f32;
     let trace_names = physics.dynamic_entity_names(&scene.world);
     let mut contacts = 0u64;
     let no_keys = InputState::default();
+    // What scripts see at step N is the touching-state physics left at step
+    // N-1 — the causal order under animations → scripts → physics.
+    let mut contact_state = engine_core::contact::ContactState::default();
     let mut hud: Vec<String> = Vec::new();
     let mut traced_hud: Vec<String> = Vec::new();
 
@@ -47,9 +51,10 @@ pub fn run(
         if let Some(scripts) = &scripts {
             let step_index = u64::from(step) - 1;
             let held = input.map_or(&no_keys, |t| t.held_at(step_index));
-            hud = scripts.step(&mut scene.world, step_index, held)?;
+            hud = scripts.step(&mut scene.world, step_index, held, &contact_state)?;
         }
         let events = physics.step(&mut scene.world);
+        contact_state.apply(&events);
         // Particles read the post-physics world, so an emitter riding a
         // dynamic body trails where the body actually went this step.
         particles.step(&scene.world, dt);

@@ -942,7 +942,7 @@ fn run_scene(
         || record_input.is_some()
     {
         let physics = if has_physics {
-            Some(engine_physics::PhysicsWorld::build(&scene.world, &scene.physics)?)
+            Some(engine_physics::PhysicsWorld::build(&scene.world, &scene.physics, &assets)?)
         } else {
             None
         };
@@ -960,6 +960,7 @@ fn run_scene(
             assets,
             camera_name: camera_name.map(String::from),
             held: engine_core::input::InputState::default(),
+            contacts: engine_core::contact::ContactState::default(),
             recorder,
             accumulator: 0.0,
             t: 0.0,

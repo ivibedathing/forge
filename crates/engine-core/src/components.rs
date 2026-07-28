@@ -304,6 +304,12 @@ pub enum ColliderShapeKind {
     Cuboid,
     Sphere,
     Capsule,
+    // NOTE: variants stay undocumented — a schemars doc comment on a variant
+    // turns the schema from a flat "enum" into oneOf/const, which blinds the
+    // walk's closed-vocabulary check (unknown_shape). Shape semantics are
+    // documented on `Collider`.
+    Trimesh,
+    ConvexHull,
 }
 
 /// Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on
@@ -312,16 +318,27 @@ pub enum ColliderShapeKind {
 ///
 /// One flat object discriminated by `shape` (the shape `jq` and an LLM
 /// handle best): `cuboid` uses `half_extents`, `sphere` uses `radius`,
-/// `capsule` (Y-axis) uses `half_height` + `radius`. Validation enforces
-/// which fields each shape requires and forbids — the file format is the
-/// contract, the flat Rust struct is how it stays walkable by the
-/// schema-driven validator and the editor's generated inspector.
+/// `capsule` (Y-axis) uses `half_height` + `radius`; `trimesh` and
+/// `convex_hull` take their geometry from `asset`, or from the entity's own
+/// `Mesh` when `asset` is absent — the collider matches what the screenshot
+/// shows, by construction. Validation enforces which fields each shape
+/// requires and forbids — the file format is the contract, the flat Rust
+/// struct is how it stays walkable by the schema-driven validator and the
+/// editor's generated inspector.
 ///
 /// `Transform.scale` scales the shape when the physics world is built — a
 /// cube scaled 2x collides 2x big, which is what the screenshot shows.
 /// Nonuniform scale on a round shape has no physics representation and is a
-/// validation error, never a silent approximation.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// validation error, never a silent approximation (mesh shapes scale
+/// per-vertex, so nonuniform is fine there).
+///
+/// Layers: `layers` names the collision layers this collider belongs to,
+/// `collides_with` restricts which layers it interacts with. Both absent
+/// means "collide with everything" — exactly the pre-layer behavior. Two
+/// colliders interact only if each one's `collides_with` (or absence)
+/// admits a layer the other belongs to. Layer names are scene-local
+/// strings; a scene may use at most 32 distinct names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Collider {
     pub shape: ColliderShapeKind,
@@ -338,6 +355,24 @@ pub struct Collider {
     /// `capsule` only: half the cylindrical section's height. `> 0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub half_height: Option<f32>,
+
+    /// `trimesh` and `convex_hull` only: the mesh whose geometry to collide
+    /// as (`builtin:` or a `.gltf`/`.glb` path relative to the scene file).
+    /// Absent, the entity's own `Mesh.asset` is used — the common case; a
+    /// mesh shape with neither is `collider_missing_mesh`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+
+    /// Collision layers this collider is a member of. Absent = member of
+    /// every layer. Empty is an error — omit the field instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
+
+    /// Only interact with colliders belonging to these layers. Absent =
+    /// interact with everything. Empty is an error — omit the field
+    /// instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collides_with: Option<Vec<String>>,
 
     /// `>= 0`.
     #[serde(default = "half")]

@@ -26,7 +26,9 @@
         "enum": [
           "cuboid",
           "sphere",
-          "capsule"
+          "capsule",
+          "trimesh",
+          "convex_hull"
         ],
         "type": "string"
       },
@@ -394,8 +396,25 @@
       },
       {
         "additionalProperties": false,
-        "description": "Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on\nthe entity, this is static collision geometry — the common case for\nground planes and walls.\n\nOne flat object discriminated by `shape` (the shape `jq` and an LLM\nhandle best): `cuboid` uses `half_extents`, `sphere` uses `radius`,\n`capsule` (Y-axis) uses `half_height` + `radius`. Validation enforces\nwhich fields each shape requires and forbids — the file format is the\ncontract, the flat Rust struct is how it stays walkable by the\nschema-driven validator and the editor's generated inspector.\n\n`Transform.scale` scales the shape when the physics world is built — a\ncube scaled 2x collides 2x big, which is what the screenshot shows.\nNonuniform scale on a round shape has no physics representation and is a\nvalidation error, never a silent approximation.",
+        "description": "Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on\nthe entity, this is static collision geometry — the common case for\nground planes and walls.\n\nOne flat object discriminated by `shape` (the shape `jq` and an LLM\nhandle best): `cuboid` uses `half_extents`, `sphere` uses `radius`,\n`capsule` (Y-axis) uses `half_height` + `radius`; `trimesh` and\n`convex_hull` take their geometry from `asset`, or from the entity's own\n`Mesh` when `asset` is absent — the collider matches what the screenshot\nshows, by construction. Validation enforces which fields each shape\nrequires and forbids — the file format is the contract, the flat Rust\nstruct is how it stays walkable by the schema-driven validator and the\neditor's generated inspector.\n\n`Transform.scale` scales the shape when the physics world is built — a\ncube scaled 2x collides 2x big, which is what the screenshot shows.\nNonuniform scale on a round shape has no physics representation and is a\nvalidation error, never a silent approximation (mesh shapes scale\nper-vertex, so nonuniform is fine there).\n\nLayers: `layers` names the collision layers this collider belongs to,\n`collides_with` restricts which layers it interacts with. Both absent\nmeans \"collide with everything\" — exactly the pre-layer behavior. Two\ncolliders interact only if each one's `collides_with` (or absence)\nadmits a layer the other belongs to. Layer names are scene-local\nstrings; a scene may use at most 32 distinct names.",
         "properties": {
+          "asset": {
+            "description": "`trimesh` and `convex_hull` only: the mesh whose geometry to collide\nas (`builtin:` or a `.gltf`/`.glb` path relative to the scene file).\nAbsent, the entity's own `Mesh.asset` is used — the common case; a\nmesh shape with neither is `collider_missing_mesh`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "collides_with": {
+            "description": "Only interact with colliders belonging to these layers. Absent =\ninteract with everything. Empty is an error — omit the field\ninstead.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "density": {
             "default": 1.0,
             "description": "Mass comes from `density` x shape volume. `> 0`.",
@@ -428,6 +447,16 @@
             "format": "float",
             "type": [
               "number",
+              "null"
+            ]
+          },
+          "layers": {
+            "description": "Collision layers this collider is a member of. Absent = member of\nevery layer. Empty is an error — omit the field instead.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -969,7 +998,9 @@
         "enum": [
           "cuboid",
           "sphere",
-          "capsule"
+          "capsule",
+          "trimesh",
+          "convex_hull"
         ],
         "type": "string"
       },
@@ -1325,8 +1356,25 @@
           },
           {
             "additionalProperties": false,
-            "description": "Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on\nthe entity, this is static collision geometry — the common case for\nground planes and walls.\n\nOne flat object discriminated by `shape` (the shape `jq` and an LLM\nhandle best): `cuboid` uses `half_extents`, `sphere` uses `radius`,\n`capsule` (Y-axis) uses `half_height` + `radius`. Validation enforces\nwhich fields each shape requires and forbids — the file format is the\ncontract, the flat Rust struct is how it stays walkable by the\nschema-driven validator and the editor's generated inspector.\n\n`Transform.scale` scales the shape when the physics world is built — a\ncube scaled 2x collides 2x big, which is what the screenshot shows.\nNonuniform scale on a round shape has no physics representation and is a\nvalidation error, never a silent approximation.",
+            "description": "Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on\nthe entity, this is static collision geometry — the common case for\nground planes and walls.\n\nOne flat object discriminated by `shape` (the shape `jq` and an LLM\nhandle best): `cuboid` uses `half_extents`, `sphere` uses `radius`,\n`capsule` (Y-axis) uses `half_height` + `radius`; `trimesh` and\n`convex_hull` take their geometry from `asset`, or from the entity's own\n`Mesh` when `asset` is absent — the collider matches what the screenshot\nshows, by construction. Validation enforces which fields each shape\nrequires and forbids — the file format is the contract, the flat Rust\nstruct is how it stays walkable by the schema-driven validator and the\neditor's generated inspector.\n\n`Transform.scale` scales the shape when the physics world is built — a\ncube scaled 2x collides 2x big, which is what the screenshot shows.\nNonuniform scale on a round shape has no physics representation and is a\nvalidation error, never a silent approximation (mesh shapes scale\nper-vertex, so nonuniform is fine there).\n\nLayers: `layers` names the collision layers this collider belongs to,\n`collides_with` restricts which layers it interacts with. Both absent\nmeans \"collide with everything\" — exactly the pre-layer behavior. Two\ncolliders interact only if each one's `collides_with` (or absence)\nadmits a layer the other belongs to. Layer names are scene-local\nstrings; a scene may use at most 32 distinct names.",
             "properties": {
+              "asset": {
+                "description": "`trimesh` and `convex_hull` only: the mesh whose geometry to collide\nas (`builtin:` or a `.gltf`/`.glb` path relative to the scene file).\nAbsent, the entity's own `Mesh.asset` is used — the common case; a\nmesh shape with neither is `collider_missing_mesh`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "collides_with": {
+                "description": "Only interact with colliders belonging to these layers. Absent =\ninteract with everything. Empty is an error — omit the field\ninstead.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "density": {
                 "default": 1.0,
                 "description": "Mass comes from `density` x shape volume. `> 0`.",
@@ -1359,6 +1407,16 @@
                 "format": "float",
                 "type": [
                   "number",
+                  "null"
+                ]
+              },
+              "layers": {
+                "description": "Collision layers this collider is a member of. Absent = member of\nevery layer. Empty is an error — omit the field instead.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
                   "null"
                 ]
               },

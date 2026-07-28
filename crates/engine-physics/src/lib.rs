@@ -12,13 +12,14 @@
 //! with this struct, and anything worth keeping is written back into hecs
 //! components, which `--bake` turns into ordinary scene text.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
 
 use engine_core::components::{
-    BodyKind, Collider as ColliderData, ColliderShapeKind, Name, RigidBody as RigidBodyData,
-    Transform, Wheel as WheelData,
+    BodyKind, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent, Name,
+    RigidBody as RigidBodyData, Transform, Wheel as WheelData,
 };
+use engine_core::mesh::MeshSource;
 use engine_core::scene::PhysicsSettings;
 use engine_core::{codes, EngineError, Result};
 use glam::{Quat, Vec3};
@@ -29,12 +30,9 @@ use rapier3d::parry::query::DefaultQueryDispatcher;
 use rapier3d::prelude::*;
 
 /// One contact begin/end between two named entities — what traces record.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContactEvent {
-    pub a: String,
-    pub b: String,
-    pub started: bool,
-}
+/// Shared vocabulary from `engine-core` so scripting can consume contacts
+/// without depending on this crate.
+pub use engine_core::contact::ContactEvent;
 
 /// A raycast hit, in scene terms.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,7 +122,13 @@ impl PhysicsWorld {
     }
 
     /// Build a fresh physics world from the (already validated) scene world.
-    pub fn build(world: &World, settings: &PhysicsSettings) -> Result<Self> {
+    /// `meshes` feeds `trimesh`/`convex_hull` colliders; scenes without mesh
+    /// shapes never call it (`BuiltinAssets` is fine for tests).
+    pub fn build(
+        world: &World,
+        settings: &PhysicsSettings,
+        meshes: &dyn MeshSource,
+    ) -> Result<Self> {
         let mut physics = Self {
             pipeline: PhysicsPipeline::new(),
             parameters: IntegrationParameters {
@@ -148,15 +152,32 @@ impl PhysicsWorld {
             vehicles: Vec::new(),
         };
 
+        // Collision layers (M12): map each distinct name to one bit of
+        // rapier's 32-bit interaction groups. BTreeSet iteration makes the
+        // name → bit assignment deterministic; validation capped the count.
+        let layer_bits: HashMap<String, Group> = {
+            let mut names = BTreeSet::new();
+            for collider in world.query::<&ColliderData>().iter() {
+                names.extend(collider.layers.iter().flatten().cloned());
+                names.extend(collider.collides_with.iter().flatten().cloned());
+            }
+            names
+                .into_iter()
+                .enumerate()
+                .map(|(bit, name)| (name, Group::from_bits_truncate(1 << (bit as u32 % 32))))
+                .collect()
+        };
+
         // Deterministic build order: hecs iteration order is stable for a
         // freshly spawned world, and every simulate run spawns fresh.
-        for (entity, name, transform, body, collider) in world
+        for (entity, name, transform, body, collider, mesh) in world
             .query::<(
                 Entity,
                 &Name,
                 &Transform,
                 Option<&RigidBodyData>,
                 Option<&ColliderData>,
+                Option<&MeshComponent>,
             )>()
             .iter()
         {
@@ -206,7 +227,14 @@ impl PhysicsWorld {
             });
 
             if let Some(collider) = collider {
-                let built = build_collider(collider, transform, &physics.name_of[&entity])?;
+                let built = build_collider(
+                    collider,
+                    transform,
+                    &physics.name_of[&entity],
+                    mesh.map(|m| m.asset.as_str()),
+                    meshes,
+                    &layer_bits,
+                )?;
                 let handle = match body_handle {
                     Some(body_handle) => physics.colliders.insert_with_parent(
                         built,
@@ -544,11 +572,15 @@ impl PhysicsWorld {
 }
 
 /// Collider shape with `Transform.scale` applied (validation already
-/// rejected nonuniform scale on round shapes).
+/// rejected nonuniform scale on round shapes; mesh shapes scale per-vertex,
+/// so any scale is representable).
 fn build_collider(
     collider: &ColliderData,
     transform: &Transform,
     entity: &str,
+    entity_mesh: Option<&str>,
+    meshes: &dyn MeshSource,
+    layer_bits: &HashMap<String, Group>,
 ) -> Result<rapier3d::geometry::Collider> {
     let scale = transform.scale;
 
@@ -578,9 +610,65 @@ fn build_collider(
                 .ok_or_else(|| shape_bug(entity, "capsule collider without half_height"))?;
             ColliderBuilder::capsule_y((half_height * scale.x).abs(), (radius * scale.x).abs())
         }
+        ColliderShapeKind::Trimesh | ColliderShapeKind::ConvexHull => {
+            let asset = collider
+                .asset
+                .as_deref()
+                .or(entity_mesh)
+                .ok_or_else(|| shape_bug(entity, "mesh collider with no asset in reach"))?;
+            let mesh = meshes.load_mesh(asset).map_err(|e| e.entity(entity))?;
+            let vertices: Vec<Vec3> = mesh
+                .positions
+                .iter()
+                .map(|p| Vec3::from_array(*p) * scale)
+                .collect();
+
+            match collider.shape {
+                ColliderShapeKind::Trimesh => {
+                    let indices: Vec<[u32; 3]> = mesh
+                        .indices
+                        .chunks_exact(3)
+                        .map(|t| [t[0], t[1], t[2]])
+                        .collect();
+                    ColliderBuilder::trimesh(vertices, indices).map_err(|e| {
+                        EngineError::new(
+                            codes::INVALID_SHAPE_DIMENSION,
+                            format!(
+                                "mesh {asset:?} on entity {entity:?} does not form a \
+                                 usable trimesh collider: {e:?}"
+                            ),
+                        )
+                        .entity(entity)
+                        .component("Collider")
+                        .field("asset")
+                    })?
+                }
+                _ => ColliderBuilder::convex_hull(&vertices).ok_or_else(|| {
+                    EngineError::new(
+                        codes::INVALID_SHAPE_DIMENSION,
+                        format!(
+                            "the vertices of mesh {asset:?} on entity {entity:?} \
+                             form no valid convex hull"
+                        ),
+                    )
+                    .entity(entity)
+                    .component("Collider")
+                    .field("asset")
+                })?,
+            }
+        }
     };
 
+    // Layers → interaction groups: absent fields mean "everything", which is
+    // rapier's default, so layer-free scenes build byte-identical worlds.
+    let groups = InteractionGroups::new(
+        group_mask(collider.layers.as_deref(), layer_bits),
+        group_mask(collider.collides_with.as_deref(), layer_bits),
+        InteractionTestMode::And,
+    );
+
     Ok(builder
+        .collision_groups(groups)
         .translation(collider.offset * scale)
         .friction(collider.friction)
         .restitution(collider.restitution)
@@ -601,6 +689,19 @@ fn build_collider(
             ActiveCollisionTypes::default() | ActiveCollisionTypes::KINEMATIC_FIXED,
         )
         .build())
+}
+
+/// A layer list as a rapier group mask. `None` (field absent) is ALL —
+/// the pre-layer behavior; every name has a bit because the map was built
+/// from the union of all names in the scene.
+fn group_mask(layers: Option<&[String]>, layer_bits: &HashMap<String, Group>) -> Group {
+    match layers {
+        None => Group::ALL,
+        Some(names) => names
+            .iter()
+            .filter_map(|name| layer_bits.get(name))
+            .fold(Group::NONE, |mask, bit| mask | *bit),
+    }
 }
 
 /// Validation guarantees per-shape fields; reaching this is an engine bug,
@@ -640,6 +741,7 @@ fn quat_to_euler_degrees(q: Quat) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_core::mesh::BuiltinAssets;
     use engine_core::Scene;
 
     const DROP: &str = r#"{
@@ -660,7 +762,7 @@ mod tests {
     fn simulate(source: &str, steps: u32) -> (Scene, PhysicsWorld, Vec<ContactEvent>) {
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
         let mut all_events = Vec::new();
         for _ in 0..steps {
             all_events.extend(physics.step(&mut scene.world));
@@ -718,7 +820,7 @@ mod tests {
         let apex = |source: &str| -> f32 {
             let mut scene = Scene::from_source(source, "t.json").unwrap();
             let settings = PhysicsSettings::default();
-            let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+            let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
             let mut bounced = false;
             let mut apex: f32 = 0.0;
             let mut previous_y = 5.0f32;
@@ -762,7 +864,7 @@ mod tests {
         ]}"#;
         let mut scene = Scene::from_source(source, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
 
         // Move the transform externally; the body must follow, not fight.
         let entity = scene.entity("Mover").unwrap();
@@ -839,7 +941,7 @@ mod tests {
         }"#;
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
         let entity = scene.entity("Car").unwrap();
 
         // Settle, then "throttle": write a forward velocity like a script.
@@ -944,7 +1046,7 @@ mod tests {
     fn engine_force_drives_the_chassis_forward() {
         let mut scene = Scene::from_source(CAR, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
 
         // Settle onto the springs first, then floor it.
         for _ in 0..120 {
@@ -988,7 +1090,7 @@ mod tests {
         );
         let mut scene = Scene::from_source(&source, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world);
         }
@@ -1019,7 +1121,7 @@ mod tests {
     fn brakes_stop_a_rolling_vehicle() {
         let mut scene = Scene::from_source(CAR, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world);
         }
@@ -1077,7 +1179,7 @@ mod tests {
         }"#;
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world);
         }
@@ -1086,6 +1188,115 @@ mod tests {
         assert!(
             rotation.x.abs() < 1e-3 && rotation.z.abs() < 1e-3,
             "pitch/roll must stay locked through a wall hit: {rotation}"
+        );
+    }
+
+    // ── Collision (M12): layers and mesh shapes ────────────────────────
+
+    /// Two spheres over one layered ground: the one whose `collides_with`
+    /// names the ground's layer lands; the one filtered elsewhere falls
+    /// straight through. Filtering is mutual (AND), so the ground's absent
+    /// fields ("everything") do not resurrect the filtered pair.
+    #[test]
+    fn collision_layers_filter_who_collides() {
+        let source = r#"{
+          "name": "layers",
+          "entities": [
+            {"name": "Ground", "components": [
+              {"type": "Transform"},
+              {"type": "Collider", "shape": "cuboid", "half_extents": [5.0, 0.05, 5.0],
+               "layers": ["ground"]}
+            ]},
+            {"name": "Lands", "components": [
+              {"type": "Transform", "position": [1.0, 2.0, 0.0]},
+              {"type": "RigidBody", "body": "dynamic"},
+              {"type": "Collider", "shape": "sphere", "radius": 0.5,
+               "collides_with": ["ground"]}
+            ]},
+            {"name": "Ghost", "components": [
+              {"type": "Transform", "position": [-1.0, 2.0, 0.0]},
+              {"type": "RigidBody", "body": "dynamic"},
+              {"type": "Collider", "shape": "sphere", "radius": 0.5,
+               "collides_with": ["debris"]}
+            ]}
+          ]
+        }"#;
+        let (scene, _, events) = simulate(source, 240);
+
+        let lands = position_of(&scene, "Lands");
+        assert!(
+            (lands.y - 0.55).abs() < 0.02,
+            "the ground-filtered sphere must land at ≈0.55, is at {lands:?}"
+        );
+        let ghost = position_of(&scene, "Ghost");
+        assert!(
+            ghost.y < -2.0,
+            "the debris-filtered sphere must fall through, is at {ghost:?}"
+        );
+        assert!(
+            events.iter().all(|e| !(e.a == "Ghost" || e.b == "Ghost")),
+            "a filtered pair must produce no contact events: {events:?}"
+        );
+    }
+
+    /// A trimesh collider borrowing the entity's own `Mesh`: the plane's two
+    /// triangles, scaled by the transform, carry a resting body — and the
+    /// landing shows up as an ordinary contact event.
+    #[test]
+    fn trimesh_colliders_borrow_the_entity_mesh() {
+        let source = r#"{
+          "name": "trimesh",
+          "entities": [
+            {"name": "Track", "components": [
+              {"type": "Transform", "scale": [10.0, 1.0, 10.0]},
+              {"type": "Mesh", "asset": "builtin:plane"},
+              {"type": "Collider", "shape": "trimesh"}
+            ]},
+            {"name": "Ball", "components": [
+              {"type": "Transform", "position": [2.0, 3.0, 2.0]},
+              {"type": "RigidBody", "body": "dynamic"},
+              {"type": "Collider", "shape": "sphere", "radius": 0.5}
+            ]}
+          ]
+        }"#;
+        let (scene, _, events) = simulate(source, 300);
+
+        let ball = position_of(&scene, "Ball");
+        assert!(
+            (ball.y - 0.5).abs() < 0.02,
+            "the ball must rest on the trimesh plane at ≈0.5, is at {ball:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.a == "Ball" && e.b == "Track" && e.started),
+            "the landing must appear as a contact event: {events:?}"
+        );
+    }
+
+    /// A dynamic body with a convex-hull collider (the hull of the unit cube
+    /// is the unit cube) rests exactly where a cuboid collider would.
+    #[test]
+    fn convex_hull_colliders_carry_dynamic_bodies() {
+        let source = r#"{
+          "name": "hull",
+          "entities": [
+            {"name": "Ground", "components": [
+              {"type": "Transform"},
+              {"type": "Collider", "shape": "cuboid", "half_extents": [5.0, 0.05, 5.0]}
+            ]},
+            {"name": "Crate", "components": [
+              {"type": "Transform", "position": [0.0, 3.0, 0.0]},
+              {"type": "RigidBody", "body": "dynamic"},
+              {"type": "Collider", "shape": "convex_hull", "asset": "builtin:cube"}
+            ]}
+          ]
+        }"#;
+        let (scene, _, _) = simulate(source, 300);
+
+        let y = position_of(&scene, "Crate").y;
+        // Ground top 0.05 + unit-cube half-height 0.5.
+        assert!(
+            (y - 0.55).abs() < 0.02,
+            "the hulled crate must rest at ≈0.55, is at {y}"
         );
     }
 }

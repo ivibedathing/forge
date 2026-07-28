@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M13 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, and M13 particles** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M13 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, and M13 particles** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -256,6 +256,27 @@ speedometer plus a lap timer (start-line crossing = x going positive → non-pos
 south straight, remembered step-to-step via `world.state`) whose final parked HUD (`LAP 3`,
 `LAST 13.42   BEST 13.42`) is pinned by the lap CLI test, plus a `SpeedBar` HudRect gauge
 (bottom-left) driven by `set_hud_rect_size`.
+
+Collision (M12): three additions, all opt-in so every pre-M12 trace and baseline is untouched.
+**Script contact queries** — `world.touching(name)` / `world.contacts_started(name)` return
+entity-name arrays from the touching-state the **previous** physics step left
+(`engine_core::contact::ContactState`, applied from `PhysicsWorld::step`'s events after each
+step; scripts run before physics, hence the one-step latency). `ContactEvent`/`ContactState`
+live in engine-core so engine-script never depends on rapier. **Mesh colliders** — `Collider.
+shape` gains `trimesh` and `convex_hull`; geometry comes from `Collider.asset` (`builtin:` or
+scene-relative glTF) or, absent that, the entity's own `Mesh.asset` (neither is
+`collider_missing_mesh`). Vertices are scaled by `Transform.scale`; a trimesh on a **dynamic**
+body is a validation error (`trimesh_on_dynamic_body` — rapier trimeshes are hollow; use
+`convex_hull`), and `PhysicsWorld::build` now takes a `&dyn MeshSource`. **Collision layers**
+— `Collider.layers` (membership) and `collides_with` (filter) are arrays of free-form layer
+names; absent means "everything" (which is why empty arrays are rejected —
+`empty_collision_layers`), two colliders interact only if the filter passes **both ways**,
+names map to rapier `InteractionGroups` bits sorted-name-deterministically (max 32 distinct
+names per scene, `too_many_collision_layers`), and a `collides_with` naming a layer nobody is
+a member of warns (`unknown_collision_layer`, with `did_you_mean`). The schemars gotcha
+discovered here: a doc comment on an enum **variant** turns the schema from a flat `"enum":
+[...]` into oneOf/const, which blinds the validation walk's closed-vocabulary check — keep
+`ColliderShapeKind` variants undocumented (a NOTE in components.rs guards this).
 
 Particles (M13): the `ParticleEmitter` component is a seeded deterministic emitter — cone
 spray around the entity's local **−Z** (the camera/light aiming convention: rising smoke is

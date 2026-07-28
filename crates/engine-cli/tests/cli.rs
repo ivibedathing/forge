@@ -1299,6 +1299,71 @@ fn the_m12_hud_fixture_pins_the_component_overlay() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ── collision (M12) ────────────────────────────────────────────────────
+
+/// End to end: a dynamic box drops onto a trimesh ground (geometry borrowed
+/// from the entity's own builtin plane, layer-filtered), and a script sees
+/// the contact through `world.touching` and reacts by moving a marker —
+/// gameplay reacting to a hit, verified from text files alone.
+#[test]
+fn scripts_react_to_contacts_end_to_end() {
+    let dir = std::env::temp_dir().join(format!("engine-m12-contact-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(
+        dir.join("scripts/alarm.rhai"),
+        r#"fn step(world, step) {
+            if world.touching("Box").len() > 0 {
+                world.set_position("Marker", 0.0, 9.0, 0.0);
+            }
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.json"),
+        r#"{"name":"m12","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform","scale":[10.0,1.0,10.0]},
+                {"type":"Mesh","asset":"builtin:plane"},
+                {"type":"RigidBody","body":"fixed"},
+                {"type":"Collider","shape":"trimesh","layers":["world"]}
+            ]},
+            {"name":"Box","components":[
+                {"type":"Transform","position":[0.0,1.5,0.0]},
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"RigidBody","body":"dynamic"},
+                {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5],
+                 "collides_with":["world"]}
+            ]},
+            {"name":"Marker","components":[
+                {"type":"Transform","position":[0.0,0.0,0.0]},
+                {"type":"Script","source":"scripts/alarm.rhai"}
+            ]},
+            {"name":"Cam","components":[{"type":"Camera","active":true}]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let validate = engine().arg("validate").arg(dir.join("scene.json")).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0), "{validate:?}");
+
+    let bake = dir.join("baked.json");
+    let output = engine()
+        .arg("simulate")
+        .arg(dir.join("scene.json"))
+        .args(["--steps", "90"])
+        .arg("--bake")
+        .arg(&bake)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        baked_position(&bake, "Marker"),
+        vec![0.0, 9.0, 0.0],
+        "the script must have seen the Box↔Ground contact"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ── particles (M13) ────────────────────────────────────────────────────
 
 /// A minimal emitter scene: sprays up from the origin, visible from the

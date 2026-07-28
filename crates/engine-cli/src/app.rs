@@ -59,6 +59,9 @@ pub struct Simulation {
     /// The keys held right now, fed by window events and sampled at each
     /// fixed step — scripts never see a between-steps edge.
     pub held: InputState,
+    /// Touching-state from the previous physics step, for script contact
+    /// queries — same one-step latency as the headless path.
+    pub contacts: engine_core::contact::ContactState,
     pub recorder: Option<InputRecorder>,
     pub accumulator: f32,
     pub t: f32,
@@ -232,6 +235,7 @@ impl ViewerApp {
                                     &mut sim.scene.world,
                                     sim.step_index,
                                     &sim.held,
+                                    &sim.contacts,
                                 ) {
                                     Ok(lines) => sim.hud_lines = lines,
                                     Err(e) => {
@@ -241,7 +245,8 @@ impl ViewerApp {
                                 }
                             }
                             if let Some(physics) = &mut sim.physics {
-                                physics.step(&mut sim.scene.world);
+                                let events = physics.step(&mut sim.scene.world);
+                                sim.contacts.apply(&events);
                             }
                             sim.particles.step(&sim.scene.world, dt);
                             sim.step_index += 1;
