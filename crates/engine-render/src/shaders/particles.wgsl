@@ -52,5 +52,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // circle, and exactly zero at the quad edge so sprites never show seams.
     let d = length(in.corner);
     let fade = clamp(1.0 - d, 0.0, 1.0);
-    return vec4(in.color.rgb, in.color.a * fade * fade);
+    let alpha = in.color.a * fade * fade;
+    // The corners outside the disc — over a fifth of every sprite — and any
+    // particle faded to nothing contribute alpha 0, and `src * 0 + dst * 1`
+    // leaves the destination byte for byte. Dropping those fragments is
+    // therefore bit-identical to blending them, and smoke is drawn
+    // back-to-front over large parts of the screen, so it is the cheapest
+    // fill this pass can save.
+    if alpha == 0.0 {
+        discard;
+    }
+    return vec4(in.color.rgb, alpha);
 }

@@ -64,18 +64,29 @@ state readout; typography is out of scope until a real need shows up.
 
 ## 3. Rendering
 
-The overlay is rasterized on the **CPU** into an RGBA8 buffer at framebuffer
-size (`engine-render/src/hud.rs`, pure function of the HUD component list +
+The overlay is rasterized on the **CPU** into RGBA8 buffers
+(`engine-render/src/hud.rs`, pure function of the HUD component list +
 dimensions — unit-testable with no GPU, same philosophy as `diff.rs`), then
-uploaded and composited by a single alpha-blended full-screen triangle pass
-after the mesh pass. One small pipeline (`shaders/hud.wgsl`), no per-glyph
-GPU work, and the windowed viewer and the offscreen path share it by
-construction because they share `SceneRenderer`. The same rasterizer also
-draws the M11.6 `world.hud` debug-line panel, topmost, with its original
-layout formulas — one code path, one canvas, one blit. The editor viewport
-deliberately passes no overlay: its orbit camera is not the game camera's
-frame, so a screen-anchored HUD there would mislead; `engine screenshot` is
-where the HUD is verified.
+uploaded and composited by alpha-blended full-screen triangles after the mesh
+pass. One small pipeline (`shaders/hud.wgsl`), no per-glyph GPU work, and the
+windowed viewer and the offscreen path share it by construction because they
+share `SceneRenderer`. The same rasterizer also draws the M11.6 `world.hud`
+debug-line panel, topmost, with its original layout formulas — one code path,
+one blit per canvas. The editor viewport deliberately passes no overlay: its
+orbit camera is not the game camera's frame, so a screen-anchored HUD there
+would mislead; `engine screenshot` is where the HUD is verified.
+
+Canvases cover only what the HUD touches (M15). The original design rasterized
+one buffer at framebuffer size, which is content-independent work: at 2560×1440
+that cost ~29 ms of CPU per frame — a HUD covering 0.3% of the screen setting
+the frame rate for everything else. Elements are measured first, elements whose
+boxes overlap are grouped (transitively), and each group gets a canvas covering
+its bounding box, composited under a scissor rect at that box. Overlapping
+elements still accumulate together in linear space and quantize once, so
+stacked translucency is unchanged; elements that never touch cannot affect each
+other's pixels, so splitting them is not an approximation. Uncovered pixels are
+transparent and blending a transparent pixel is a no-op — which is why this
+changed no baseline by a byte.
 
 Compositing math: the canvas holds sRGB-encoded bytes; opaque pixels
 (alpha 255) replace the destination byte exactly, alpha-0 pixels leave it

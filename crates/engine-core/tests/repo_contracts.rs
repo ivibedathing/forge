@@ -217,10 +217,13 @@ fn error_code_registry_matches_the_docs() {
 struct StubbedFileAssets;
 
 impl engine_core::mesh::MeshSource for StubbedFileAssets {
-    fn load_mesh(&self, asset: &str) -> engine_core::error::Result<engine_core::mesh::MeshData> {
+    fn load_mesh(
+        &self,
+        asset: &str,
+    ) -> engine_core::error::Result<std::sync::Arc<engine_core::mesh::MeshData>> {
         match engine_core::mesh::BuiltinMesh::parse(asset) {
-            Some(builtin) => Ok(builtin?.data()),
-            None => Ok(engine_core::mesh::BuiltinMesh::Cube.data()),
+            Some(builtin) => Ok(std::sync::Arc::new(builtin?.data())),
+            None => Ok(std::sync::Arc::new(engine_core::mesh::BuiltinMesh::Cube.data())),
         }
     }
 }

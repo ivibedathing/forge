@@ -194,6 +194,10 @@ the step that drew it, composited identically onto `screenshot`/
 `diff-render` output and the `run-scene` window (caps: 16 lines × 96 chars,
 exceeding either is a runtime error).
 
+The `run-scene` window additionally draws a frame-rate readout in its
+top-right corner. It is wall-clock, so it exists only there: no headless
+command renders it, and nothing reproducible depends on it.
+
 ## Breaking
 
 A `Breakable` component lists pre-authored fragments; the entity shatters

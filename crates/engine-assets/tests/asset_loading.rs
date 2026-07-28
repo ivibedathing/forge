@@ -196,14 +196,19 @@ fn server_loads_builtins_files_and_caches() {
 
     let server = engine_assets::AssetServer::new(&fixture.0);
     assert_eq!(
-        server.load_mesh("builtin:cube").unwrap(),
+        *server.load_mesh("builtin:cube").unwrap(),
         BuiltinMesh::Cube.data()
     );
 
     let first = server.load_mesh("tri.gltf").unwrap();
     // Delete the backing file: a second load must come from the cache.
     std::fs::remove_file(fixture.0.join("tri.gltf")).unwrap();
-    assert_eq!(server.load_mesh("tri.gltf").unwrap(), first);
+    let again = server.load_mesh("tri.gltf").unwrap();
+    assert_eq!(*again, *first);
+    // And the hit is the *same* allocation, not a copy of it — what lets a
+    // viewer rebuild its draw list every frame without copying geometry, and
+    // what the renderer keys its uploaded buffers on.
+    assert!(std::sync::Arc::ptr_eq(&first, &again));
 }
 
 #[test]
