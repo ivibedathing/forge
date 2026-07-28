@@ -8,7 +8,13 @@
 //!
 //! Scripts mutate component fields and never invent state: whatever they
 //! compute beyond their writes dies at the end of the step, and baked output
-//! is an ordinary valid scene file.
+//! is an ordinary valid scene file. Two deliberate exceptions ride on the
+//! host rather than the world: the numeric key/value store behind
+//! `world.state`/`world.set_state` (per-run memory — a lap timer's start
+//! step — deterministic under replay, reset by a fresh run, and *not*
+//! captured by bake, exactly like physics solver caches), and the HUD line
+//! list behind `world.hud` (cleared every step, so what is on screen is a
+//! pure function of the step that drew it).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -19,12 +25,21 @@ use engine_core::components::{Name, RigidBody, Script, Transform};
 use engine_core::input::{self, InputState};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
-use rhai::packages::{BasicArrayPackage, BasicMathPackage, CorePackage, Package};
+use rhai::packages::{
+    BasicArrayPackage, BasicMathPackage, BasicStringPackage, CorePackage, MoreStringPackage,
+    Package,
+};
 use rhai::{Dynamic, EvalAltResult, Position, Scope, AST};
 
 /// Per-call operation budget: a runaway loop becomes a structured error,
 /// which is the deterministic answer to a hang.
 const MAX_OPERATIONS: u64 = 1_000_000;
+
+/// HUD caps: enough for a readable overlay, small enough that a runaway
+/// loop cannot render the frame unreadable. Exceeding either is a runtime
+/// error, not a truncation — deterministic and loud.
+const MAX_HUD_LINES: usize = 16;
+const MAX_HUD_CHARS: usize = 96;
 
 struct CompiledScript {
     /// The entity the `Script` component sits on — error context.
@@ -40,6 +55,9 @@ pub struct ScriptHost {
     scripts: Vec<CompiledScript>,
     names: Rc<HashMap<String, hecs::Entity>>,
     dt: f32,
+    /// The `world.state` store: per-run, shared by every script (script
+    /// order is deterministic, so cross-script reads are too).
+    state: Rc<RefCell<HashMap<String, f64>>>,
 }
 
 /// What scripts see: the world, entity names, and the fixed timestep.
@@ -54,6 +72,10 @@ struct WorldApi {
     /// has input to offer, so runs without `--input` behave exactly as they
     /// did before input existed.
     input: Rc<InputState>,
+    /// `world.state` / `world.set_state`: numeric per-run memory.
+    state: Rc<RefCell<HashMap<String, f64>>>,
+    /// `world.hud`: the lines pushed during this step, in push order.
+    hud: Rc<RefCell<Vec<String>>>,
 }
 
 impl WorldApi {
@@ -117,6 +139,10 @@ fn curated_engine() -> rhai::Engine {
     engine.register_global_module(CorePackage::new().as_shared_module());
     engine.register_global_module(BasicArrayPackage::new().as_shared_module());
     engine.register_global_module(BasicMathPackage::new().as_shared_module());
+    // String building (concat, to_string, pad) so scripts can compose HUD
+    // text. Pure functions only — still no time, no I/O, no randomness.
+    engine.register_global_module(BasicStringPackage::new().as_shared_module());
+    engine.register_global_module(MoreStringPackage::new().as_shared_module());
     engine.set_max_operations(MAX_OPERATIONS);
 
     engine.register_type_with_name::<WorldApi>("World");
@@ -139,6 +165,45 @@ fn curated_engine() -> rhai::Engine {
             Ok(w.input.is_held(name))
         },
     );
+
+    engine.register_fn(
+        "hud",
+        |w: &mut WorldApi, text: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            let mut hud = w.hud.borrow_mut();
+            if hud.len() >= MAX_HUD_LINES {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("the HUD holds at most {MAX_HUD_LINES} lines per step").into(),
+                    Position::NONE,
+                )));
+            }
+            if text.chars().count() > MAX_HUD_CHARS {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("a HUD line holds at most {MAX_HUD_CHARS} characters").into(),
+                    Position::NONE,
+                )));
+            }
+            if let Some(bad) = text.chars().find(|c| !('\x20'..'\x7f').contains(c)) {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("HUD text is printable ASCII only, got {bad:?}").into(),
+                    Position::NONE,
+                )));
+            }
+            hud.push(text.to_string());
+            Ok(())
+        },
+    );
+    engine.register_fn("state", |w: &mut WorldApi, key: &str, default: f64| -> f64 {
+        w.state.borrow().get(key).copied().unwrap_or(default)
+    });
+    engine.register_fn("state", |w: &mut WorldApi, key: &str, default: i64| -> f64 {
+        w.state.borrow().get(key).copied().unwrap_or(default as f64)
+    });
+    engine.register_fn("set_state", |w: &mut WorldApi, key: &str, value: f64| {
+        w.state.borrow_mut().insert(key.to_string(), value);
+    });
+    engine.register_fn("set_state", |w: &mut WorldApi, key: &str, value: i64| {
+        w.state.borrow_mut().insert(key.to_string(), value as f64);
+    });
 
     engine.register_fn(
         "position",
@@ -371,19 +436,24 @@ impl ScriptHost {
             scripts,
             names: Rc::new(names),
             dt: 1.0 / timestep_hz.max(1) as f32,
+            state: Rc::new(RefCell::new(HashMap::new())),
         }))
     }
 
     /// Run every script's `step` for step index `step`, with `input` as the
     /// held-key set for the duration of the step. The world is moved into
     /// the scripts' reach for the duration and moved back out even on
-    /// error, so a failing script never swallows the ECS.
-    pub fn step(&self, world: &mut World, step: u64, input: &InputState) -> Result<()> {
+    /// error, so a failing script never swallows the ECS. Returns the HUD
+    /// lines the step pushed — this step's alone; the list starts empty
+    /// every step.
+    pub fn step(&self, world: &mut World, step: u64, input: &InputState) -> Result<Vec<String>> {
         let api = WorldApi {
             world: Rc::new(RefCell::new(std::mem::take(world))),
             names: Rc::clone(&self.names),
             dt: self.dt,
             input: Rc::new(input.clone()),
+            state: Rc::clone(&self.state),
+            hud: Rc::new(RefCell::new(Vec::new())),
         };
 
         let mut failure: Option<EngineError> = None;
@@ -417,9 +487,14 @@ impl ScriptHost {
         };
         *world = inner;
 
+        let hud = match Rc::try_unwrap(api.hud) {
+            Ok(cell) => cell.into_inner(),
+            Err(shared) => shared.borrow().clone(),
+        };
+
         match failure {
             Some(error) => Err(error),
-            None => Ok(()),
+            None => Ok(hud),
         }
     }
 }
@@ -741,6 +816,75 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("no RigidBody"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hud_lines_are_returned_per_step_and_do_not_accumulate() {
+        let dir = temp_dir("hud");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                if step == 0 {
+                    world.hud("SPEED 42 KM/H");
+                    world.hud("LAP 1");
+                }
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let hud = host.step(&mut scene.world, 0, &InputState::default()).unwrap();
+        assert_eq!(hud, vec!["SPEED 42 KM/H".to_string(), "LAP 1".to_string()]);
+        // The next step pushes nothing, so the HUD is empty — not sticky.
+        let hud = host.step(&mut scene.world, 1, &InputState::default()).unwrap();
+        assert!(hud.is_empty(), "{hud:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hud_caps_and_non_ascii_are_structured_errors() {
+        let dir = temp_dir("hudcap");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                let i = 0;
+                while i < 17 { world.hud("line"); i += 1; }
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(error.message.contains("at most 16 lines"), "{}", error.message);
+
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            "fn step(world, step) { world.hud(\"caf\u{e9}\"); }",
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
+        assert!(error.message.contains("printable ASCII"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn state_persists_across_steps_and_defaults_when_unset() {
+        let dir = temp_dir("state");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                let laps = world.state("laps", 0);
+                if step == 5 { world.set_state("laps", laps + 1.0); }
+                world.set_position("Mover", laps, 0.0, world.state("missing", -7.5));
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        for step in 0..8 {
+            host.step(&mut scene.world, step, &InputState::default()).unwrap();
+        }
+        let entity = scene.entity("Mover").unwrap();
+        let p = scene.world.get::<&Transform>(entity).unwrap().position;
+        // Step 7 read the value step 5 wrote; the unset key fell back.
+        assert_eq!(p.x, 1.0, "state write must persist: {p}");
+        assert_eq!(p.z, -7.5, "unset state must yield the default: {p}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -41,16 +41,22 @@ impl Image {
 /// sRGB encode, and readback therefore yields sRGB-encoded bytes — which is
 /// what a PNG is conventionally assumed to contain. Scene colors stay linear
 /// in the file; the PNG pixel is the lit, encoded result.
+///
+/// `hud` holds the scene's HUD components and `lines` the script debug lines
+/// from the last step; both composite over the finished frame through one
+/// rasterized overlay, so scenes with nothing to say pay nothing and render
+/// byte-identically to the pre-HUD engine.
 pub fn render(
     items: &[RenderItem],
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
-    hud: &HudItems,
     width: u32,
     height: u32,
+    hud: &HudItems,
+    lines: &[String],
 ) -> Result<Image> {
-    render_with_adapter(items, camera, camera_model, lights, hud, width, height)
+    render_with_adapter(items, camera, camera_model, lights, width, height, hud, lines)
         .map(|(image, _)| image)
 }
 
@@ -59,14 +65,16 @@ pub fn render(
 /// `engine diff-render` carries the adapter name in its report because
 /// cross-adapter baseline failures are the expected hard case — the report
 /// should include the one fact that diagnoses them.
+#[allow(clippy::too_many_arguments)]
 pub fn render_with_adapter(
     items: &[RenderItem],
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
-    hud: &HudItems,
     width: u32,
     height: u32,
+    hud: &HudItems,
+    lines: &[String],
 ) -> Result<(Image, String)> {
     let (width, height) = (width.max(1), height.max(1));
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -96,7 +104,9 @@ pub fn render_with_adapter(
     let view_projection =
         scene_renderer::view_projection(camera, camera_model, width as f32 / height as f32);
 
-    let canvas = (!hud.is_empty()).then(|| hud::rasterize(hud, width, height));
+    let no_lines = lines.iter().all(|l| l.is_empty());
+    let canvas =
+        (!(hud.is_empty() && no_lines)).then(|| hud::rasterize(hud, lines, width, height));
 
     renderer.draw(
         &gpu.device,

@@ -22,8 +22,7 @@ fn vec3_json(v: Vec3) -> Value {
 
 /// Step a scene `steps` times — scripts then physics, per the fixed system
 /// order — optionally replaying an input timeline and writing a JSONL
-/// trace. Returns the physics world (for queries) and the total contact
-/// count. No timeline means no keys held, which keeps every pre-input trace
+/// trace. No timeline means no keys held, which keeps every pre-input trace
 /// and baseline byte-identical.
 pub fn run(
     scene: &mut Scene,
@@ -31,19 +30,21 @@ pub fn run(
     steps: u32,
     input: Option<&InputTimeline>,
     mut trace: Option<&mut dyn Write>,
-) -> Result<(PhysicsWorld, u64)> {
+) -> Result<StepRun> {
     let scripts =
         engine_script::ScriptHost::build(&scene.world, scene_path, scene.physics.timestep_hz)?;
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics)?;
     let trace_names = physics.dynamic_entity_names(&scene.world);
     let mut contacts = 0u64;
     let no_keys = InputState::default();
+    let mut hud: Vec<String> = Vec::new();
+    let mut traced_hud: Vec<String> = Vec::new();
 
     for step in 1..=steps {
         if let Some(scripts) = &scripts {
             let step_index = u64::from(step) - 1;
             let held = input.map_or(&no_keys, |t| t.held_at(step_index));
-            scripts.step(&mut scene.world, step_index, held)?;
+            hud = scripts.step(&mut scene.world, step_index, held)?;
         }
         let events = physics.step(&mut scene.world);
 
@@ -83,11 +84,30 @@ pub fn run(
                     }),
                 )?;
             }
+            // The HUD is part of the observable record: one line whenever it
+            // changes, so a lap crossing is a greppable trace event. Script-
+            // free scenes never emit one and pre-HUD traces stay byte-exact.
+            if hud != traced_hud {
+                write_line(trace, &json!({ "step": step, "hud": hud }))?;
+                traced_hud = hud.clone();
+            }
         }
         contacts += events.len() as u64;
     }
 
-    Ok((physics, contacts))
+    Ok(StepRun {
+        physics,
+        contacts,
+        hud,
+    })
+}
+
+/// What stepping a scene produced: the physics world (for queries), the
+/// total contact count, and the HUD lines the final step's scripts pushed.
+pub struct StepRun {
+    pub physics: PhysicsWorld,
+    pub contacts: u64,
+    pub hud: Vec<String>,
 }
 
 fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
@@ -249,7 +269,7 @@ pub fn simulate_command(
         None => None,
     };
 
-    let (_physics, contacts) = run(
+    let outcome = run(
         &mut scene,
         &scene_path,
         steps,
@@ -264,8 +284,13 @@ pub fn simulate_command(
     let mut result = json!({
         "simulated_steps": steps,
         "timestep_hz": scene.physics.timestep_hz,
-        "contacts": contacts,
+        "contacts": outcome.contacts,
     });
+    if !outcome.hud.is_empty() {
+        // The final step's HUD, so an agent reads the lap timer without a
+        // trace file.
+        result["hud"] = json!(outcome.hud);
+    }
     if let Some(path) = &bake_path {
         result["baked"] = json!(path.display().to_string());
     }
@@ -301,7 +326,7 @@ pub fn raycast_command(
     let mut scene = Scene::from_source(&source, &display)
         .map_err(|mut errors| errors.pop().expect("non-empty"))?;
 
-    let (mut physics, _) = run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
+    let mut physics = run(&mut scene, &scene_path, steps, input.as_ref(), None)?.physics;
     physics.refresh_queries();
 
     let result = match physics.raycast(from, direction) {
