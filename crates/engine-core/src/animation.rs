@@ -302,6 +302,27 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "Wheel" => {
+            let Ok(mut c) = world.get::<&mut Wheel>(entity) else {
+                return false;
+            };
+            match field {
+                "offset" => c.offset = v3,
+                "radius" => c.radius = scalar,
+                "suspension_rest_length" => c.suspension_rest_length = scalar,
+                "suspension_stiffness" => c.suspension_stiffness = scalar,
+                "suspension_compression" => c.suspension_compression = scalar,
+                "suspension_damping" => c.suspension_damping = scalar,
+                "suspension_travel" => c.suspension_travel = scalar,
+                "max_suspension_force" => c.max_suspension_force = scalar,
+                "friction_slip" => c.friction_slip = scalar,
+                "side_friction_stiffness" => c.side_friction_stiffness = scalar,
+                "engine_force" => c.engine_force = scalar,
+                "brake" => c.brake = scalar,
+                "steering" => c.steering = scalar,
+                _ => return false,
+            }
+        }
         _ => return false,
     }
     true
@@ -754,7 +775,8 @@ mod tests {
                 {"type":"AmbientLight"},
                 {"type":"RigidBody","body":"kinematic"},
                 {"type":"Collider","shape":"sphere","radius":0.5},
-                {"type":"AnimationPlayer","clip":"x"}
+                {"type":"AnimationPlayer","clip":"x"},
+                {"type":"Wheel","vehicle":"E"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

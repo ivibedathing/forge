@@ -1,178 +1,103 @@
 {"step": 0, "held": ["ArrowUp"]}
-{"step": 100, "held": ["ArrowDown"]}
 {"step": 110, "held": []}
-{"step": 120, "held": ["ArrowUp"]}
-{"step": 140, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 150, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 180, "held": ["ArrowRight"]}
-{"step": 190, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 200, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 210, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 220, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 230, "held": ["ArrowUp"]}
-{"step": 250, "held": ["ArrowDown"]}
-{"step": 270, "held": ["ArrowUp"]}
+{"step": 140, "held": ["ArrowDown", "ArrowRight"]}
+{"step": 150, "held": ["ArrowRight"]}
+{"step": 230, "held": ["ArrowRight", "ArrowUp"]}
+{"step": 240, "held": ["ArrowUp"]}
+{"step": 260, "held": ["ArrowLeft"]}
+{"step": 270, "held": []}
 {"step": 300, "held": ["ArrowRight"]}
-{"step": 320, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 340, "held": ["ArrowRight"]}
-{"step": 350, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 360, "held": ["ArrowUp"]}
-{"step": 370, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 380, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 390, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 400, "held": ["ArrowUp"]}
-{"step": 430, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 440, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 450, "held": ["ArrowUp"]}
-{"step": 500, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 510, "held": ["ArrowRight"]}
-{"step": 520, "held": []}
-{"step": 530, "held": ["ArrowUp"]}
-{"step": 550, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 560, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 600, "held": ["ArrowUp"]}
-{"step": 640, "held": ["ArrowDown"]}
-{"step": 650, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 660, "held": ["ArrowRight", "ArrowDown"]}
+{"step": 400, "held": ["ArrowRight", "ArrowUp"]}
+{"step": 410, "held": ["ArrowUp"]}
+{"step": 450, "held": []}
+{"step": 470, "held": ["ArrowUp"]}
+{"step": 480, "held": ["ArrowLeft"]}
+{"step": 490, "held": []}
+{"step": 540, "held": ["ArrowDown"]}
+{"step": 550, "held": ["ArrowRight"]}
+{"step": 560, "held": []}
+{"step": 570, "held": ["ArrowDown", "ArrowRight"]}
+{"step": 580, "held": ["ArrowRight"]}
+{"step": 660, "held": ["ArrowRight", "ArrowUp"]}
 {"step": 670, "held": ["ArrowUp"]}
-{"step": 690, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 700, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 710, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 740, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 750, "held": ["ArrowRight"]}
-{"step": 760, "held": ["ArrowUp"]}
-{"step": 780, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 790, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 800, "held": ["ArrowUp"]}
-{"step": 830, "held": ["ArrowDown"]}
-{"step": 850, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 860, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 870, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 880, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 890, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 900, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 910, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 920, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 930, "held": ["ArrowLeft"]}
-{"step": 940, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 950, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 960, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 970, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1000, "held": ["ArrowRight"]}
-{"step": 1010, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1030, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1040, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1050, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 1060, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1070, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1080, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1090, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 1100, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1110, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1120, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1130, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 1140, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1170, "held": ["ArrowRight"]}
-{"step": 1180, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1190, "held": ["ArrowUp"]}
-{"step": 1220, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1230, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1240, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1250, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1260, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1270, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1280, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1290, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 1300, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1310, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 1320, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 1330, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1340, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1350, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1360, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 1370, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1410, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1420, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1430, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1440, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1450, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1460, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 1470, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 1480, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1490, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1500, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1510, "held": ["ArrowRight"]}
-{"step": 1530, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1550, "held": ["ArrowRight"]}
-{"step": 1560, "held": ["ArrowUp"]}
+{"step": 680, "held": ["ArrowLeft", "ArrowUp"]}
+{"step": 690, "held": ["ArrowLeft"]}
+{"step": 710, "held": []}
+{"step": 720, "held": ["ArrowRight"]}
+{"step": 840, "held": ["ArrowRight", "ArrowUp"]}
+{"step": 850, "held": ["ArrowUp"]}
+{"step": 900, "held": []}
+{"step": 910, "held": ["ArrowLeft"]}
+{"step": 920, "held": ["ArrowUp"]}
+{"step": 930, "held": []}
+{"step": 960, "held": ["ArrowRight"]}
+{"step": 970, "held": []}
+{"step": 980, "held": ["ArrowDown"]}
+{"step": 990, "held": []}
+{"step": 1000, "held": ["ArrowLeft"]}
+{"step": 1010, "held": ["ArrowDown", "ArrowRight"]}
+{"step": 1020, "held": ["ArrowRight"]}
+{"step": 1130, "held": ["ArrowRight", "ArrowUp"]}
+{"step": 1140, "held": ["ArrowUp"]}
+{"step": 1150, "held": ["ArrowLeft", "ArrowUp"]}
+{"step": 1160, "held": ["ArrowLeft"]}
+{"step": 1170, "held": []}
+{"step": 1190, "held": ["ArrowRight"]}
+{"step": 1230, "held": []}
+{"step": 1240, "held": ["ArrowRight"]}
+{"step": 1300, "held": ["ArrowRight", "ArrowUp"]}
+{"step": 1310, "held": ["ArrowUp"]}
+{"step": 1320, "held": ["ArrowLeft", "ArrowUp"]}
+{"step": 1340, "held": ["ArrowUp"]}
+{"step": 1370, "held": []}
+{"step": 1430, "held": ["ArrowUp"]}
+{"step": 1440, "held": ["ArrowDown"]}
+{"step": 1450, "held": ["ArrowDown", "ArrowRight"]}
+{"step": 1460, "held": []}
+{"step": 1470, "held": ["ArrowDown", "ArrowRight"]}
+{"step": 1480, "held": ["ArrowRight"]}
+{"step": 1560, "held": ["ArrowRight", "ArrowUp"]}
+{"step": 1570, "held": ["ArrowUp"]}
 {"step": 1580, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1590, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1600, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1610, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1620, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1630, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1640, "held": ["ArrowDown"]}
-{"step": 1650, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1660, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1670, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 1680, "held": ["ArrowUp"]}
-{"step": 1700, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 1710, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1720, "held": ["ArrowRight"]}
-{"step": 1730, "held": ["ArrowLeft", "ArrowUp"]}
+{"step": 1590, "held": ["ArrowLeft"]}
+{"step": 1610, "held": []}
+{"step": 1620, "held": ["ArrowRight"]}
 {"step": 1740, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1750, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 1760, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1800, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1810, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1820, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1830, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1840, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 1850, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1860, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 1870, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1880, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1890, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1900, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 1910, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1950, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1960, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1970, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 1980, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 1990, "held": ["ArrowLeft", "ArrowUp"]}
+{"step": 1750, "held": ["ArrowUp"]}
+{"step": 1800, "held": []}
+{"step": 1820, "held": ["ArrowLeft"]}
+{"step": 1830, "held": ["ArrowUp"]}
+{"step": 1840, "held": []}
+{"step": 1870, "held": ["ArrowRight"]}
+{"step": 1880, "held": ["ArrowDown"]}
+{"step": 1900, "held": []}
+{"step": 1910, "held": ["ArrowRight"]}
 {"step": 2000, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2010, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 2020, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2030, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 2040, "held": ["ArrowUp"]}
-{"step": 2060, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 2070, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 2080, "held": ["ArrowUp"]}
-{"step": 2100, "held": ["ArrowRight"]}
-{"step": 2110, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 2120, "held": ["ArrowRight"]}
-{"step": 2140, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2160, "held": ["ArrowRight"]}
-{"step": 2170, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2180, "held": ["ArrowUp"]}
+{"step": 2010, "held": ["ArrowUp"]}
+{"step": 2020, "held": ["ArrowLeft", "ArrowUp"]}
+{"step": 2030, "held": ["ArrowLeft"]}
+{"step": 2040, "held": []}
+{"step": 2070, "held": ["ArrowRight"]}
+{"step": 2180, "held": ["ArrowRight", "ArrowUp"]}
+{"step": 2190, "held": ["ArrowUp"]}
 {"step": 2200, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 2210, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2220, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 2230, "held": ["ArrowRight", "ArrowDown"]}
-{"step": 2240, "held": ["ArrowLeft", "ArrowDown"]}
-{"step": 2250, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2260, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 2270, "held": ["ArrowUp"]}
-{"step": 2280, "held": ["ArrowRight"]}
-{"step": 2290, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2300, "held": ["ArrowRight"]}
-{"step": 2310, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2330, "held": ["ArrowRight"]}
-{"step": 2340, "held": ["ArrowUp"]}
-{"step": 2350, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 2360, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2370, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 2380, "held": ["ArrowRight", "ArrowUp"]}
-{"step": 2390, "held": ["ArrowLeft", "ArrowUp"]}
-{"step": 2400, "held": ["ArrowDown"]}
-{"step": 2442, "held": []}
+{"step": 2220, "held": ["ArrowUp"]}
+{"step": 2240, "held": ["ArrowRight", "ArrowUp"]}
+{"step": 2250, "held": []}
+{"step": 2310, "held": ["ArrowUp"]}
+{"step": 2320, "held": ["ArrowDown"]}
+{"step": 2340, "held": []}
+{"step": 2350, "held": ["ArrowDown", "ArrowRight"]}
+{"step": 2360, "held": ["ArrowRight"]}
+{"step": 2440, "held": ["ArrowRight", "ArrowUp"]}
+{"step": 2450, "held": ["ArrowUp"]}
+{"step": 2470, "held": ["ArrowLeft", "ArrowUp"]}
+{"step": 2480, "held": []}
+{"step": 2510, "held": ["ArrowDown", "ArrowRight"]}
+{"step": 2520, "held": ["ArrowRight"]}
+{"step": 2620, "held": []}
+{"step": 2670, "held": ["ArrowLeft"]}
+{"step": 2680, "held": ["ArrowDown"]}
+{"step": 2700, "held": ["ArrowUp"]}
+{"step": 2710, "held": ["ArrowDown"]}
+{"step": 2770, "held": []}

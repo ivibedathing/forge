@@ -17,12 +17,13 @@ use std::sync::Mutex;
 
 use engine_core::components::{
     BodyKind, Collider as ColliderData, ColliderShapeKind, Name, RigidBody as RigidBodyData,
-    Transform,
+    Transform, Wheel as WheelData,
 };
 use engine_core::scene::PhysicsSettings;
 use engine_core::{codes, EngineError, Result};
 use glam::{Quat, Vec3};
 use hecs::{Entity, World};
+use rapier3d::control::{DynamicRayCastVehicleController, WheelTuning};
 use rapier3d::math::Pose;
 use rapier3d::parry::query::DefaultQueryDispatcher;
 use rapier3d::prelude::*;
@@ -100,6 +101,18 @@ pub struct PhysicsWorld {
     entity_of_collider: HashMap<ColliderHandle, Entity>,
     /// Entity → stable name, resolved once at build.
     name_of: HashMap<Entity, String>,
+    /// Raycast vehicles (M12): one controller per chassis entity that has
+    /// `Wheel` components pointing at it, in chassis-name order.
+    vehicles: Vec<Vehicle>,
+}
+
+/// One raycast vehicle: a chassis body plus its wheels' visual entities,
+/// in wheel-entity-name order (the controller's wheel indices follow it).
+struct Vehicle {
+    controller: DynamicRayCastVehicleController,
+    chassis: RigidBodyHandle,
+    /// The wheel visual entities, index-aligned with the controller's wheels.
+    wheel_entities: Vec<Entity>,
 }
 
 impl PhysicsWorld {
@@ -132,6 +145,7 @@ impl PhysicsWorld {
             entity_of_collider: HashMap::new(),
             name_of: HashMap::new(),
             written_velocities: HashMap::new(),
+            vehicles: Vec::new(),
         };
 
         // Deterministic build order: hecs iteration order is stable for a
@@ -211,6 +225,88 @@ impl PhysicsWorld {
             }
         }
 
+        // ── Vehicles (M12): group Wheel components by chassis name ────
+        // Deterministic build order: chassis sorted by name, wheels within a
+        // vehicle sorted by their entity name; the controller's wheel
+        // indices follow that order.
+        let mut wheels_by_chassis: Vec<(String, Vec<(String, Entity, WheelData)>)> = Vec::new();
+        for (entity, name, wheel) in world.query::<(Entity, &Name, &WheelData)>().iter() {
+            match wheels_by_chassis.iter_mut().find(|(c, _)| *c == wheel.vehicle) {
+                Some((_, list)) => list.push((name.0.clone(), entity, wheel.clone())),
+                None => wheels_by_chassis
+                    .push((wheel.vehicle.clone(), vec![(name.0.clone(), entity, wheel.clone())])),
+            }
+        }
+        wheels_by_chassis.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (chassis_name, mut wheel_list) in wheels_by_chassis {
+            wheel_list.sort_by(|a, b| a.0.cmp(&b.0));
+
+            let chassis_handle = physics
+                .body_of
+                .iter()
+                .find(|(entity, _)| physics.name_of.get(entity) == Some(&chassis_name))
+                .map(|(_, &handle)| handle)
+                .ok_or_else(|| {
+                    // Validation guarantees the chassis exists with a dynamic
+                    // body; reaching this is an engine bug.
+                    EngineError::new(
+                        codes::SCENE_PARSE_DESYNC,
+                        format!(
+                            "Wheel components name vehicle {chassis_name:?} but no such \
+                             rigid body was built; this survived validation, which is an \
+                             engine bug"
+                        ),
+                    )
+                    .entity(&chassis_name)
+                })?;
+
+            let mut controller = DynamicRayCastVehicleController::new(chassis_handle);
+            // File conventions: up is +Y, forward is the chassis's local −Z
+            // (the camera/light convention). The controller has no sign on
+            // its forward axis; +Z with the axle on +X makes the drive
+            // direction `normal × axle = −Z`, so positive `engine_force`
+            // pushes the chassis forward. See the sign notes on `Wheel`.
+            controller.index_up_axis = 1;
+            controller.index_forward_axis = 2;
+
+            let mut wheel_entities = Vec::with_capacity(wheel_list.len());
+            for (_, entity, wheel) in wheel_list {
+                let tuning = WheelTuning {
+                    suspension_stiffness: wheel.suspension_stiffness,
+                    suspension_compression: wheel.suspension_compression,
+                    suspension_damping: wheel.suspension_damping,
+                    max_suspension_travel: wheel.suspension_travel,
+                    side_friction_stiffness: wheel.side_friction_stiffness,
+                    friction_slip: wheel.friction_slip,
+                    max_suspension_force: wheel.max_suspension_force,
+                };
+                controller.add_wheel(
+                    wheel.offset,
+                    -Vector::Y,
+                    Vector::X,
+                    wheel.suspension_rest_length,
+                    wheel.radius,
+                    &tuning,
+                );
+                wheel_entities.push(entity);
+            }
+
+            physics.vehicles.push(Vehicle {
+                controller,
+                chassis: chassis_handle,
+                wheel_entities,
+            });
+        }
+
+        // The suspension rays run *before* the first pipeline step, and the
+        // broad-phase BVH is otherwise only built inside `step` — without
+        // this the wheels would find no ground on step 0. Vehicle-free
+        // worlds skip it so their traces stay byte-identical to M8.
+        if !physics.vehicles.is_empty() {
+            physics.refresh_queries();
+        }
+
         Ok(physics)
     }
 
@@ -241,7 +337,48 @@ impl PhysicsWorld {
             }
         }
 
-        // 2. One fixed step.
+        // 2. Vehicles (M12): push script-written controls into each
+        //    controller, then let it cast its suspension rays and apply
+        //    spring, drive, brake, and tire impulses to the chassis. Runs
+        //    after the velocity sync so suspension sees script-written
+        //    velocities, and before the solver integrates the impulses.
+        let dt = self.parameters.dt;
+        for vehicle in &mut self.vehicles {
+            let mut any_drive = false;
+            for (index, &entity) in vehicle.wheel_entities.iter().enumerate() {
+                let Ok(wheel) = world.get::<&WheelData>(entity) else {
+                    continue;
+                };
+                let state = &mut vehicle.controller.wheels_mut()[index];
+                state.engine_force = wheel.engine_force;
+                state.brake = wheel.brake;
+                state.steering = wheel.steering.to_radians();
+                any_drive |= wheel.engine_force != 0.0 || wheel.brake != 0.0;
+            }
+            // The controller only wakes the chassis for *positive* engine
+            // force; reverse and braking must not act on a sleeping body
+            // either, so wake it for any nonzero control ourselves.
+            if any_drive {
+                if let Some(body) = self.bodies.get_mut(vehicle.chassis) {
+                    body.wake_up(true);
+                }
+            }
+
+            // Suspension rays must not hit the chassis itself (they start
+            // inside its collider) and must not ride on sensors.
+            let filter = QueryFilter::default()
+                .exclude_rigid_body(vehicle.chassis)
+                .exclude_sensors();
+            let queries = self.broad_phase.as_query_pipeline_mut(
+                &DefaultQueryDispatcher,
+                &mut self.bodies,
+                &mut self.colliders,
+                filter,
+            );
+            vehicle.controller.update_vehicle(dt, queries);
+        }
+
+        // 3. One fixed step.
         self.pipeline.step(
             self.gravity,
             &self.parameters,
@@ -257,7 +394,7 @@ impl PhysicsWorld {
             &self.events,
         );
 
-        // 3. Write back into hecs for dynamic bodies: the scene components
+        // 4. Write back into hecs for dynamic bodies: the scene components
         //    are the only state anyone else ever sees.
         for (&entity, &handle) in &self.body_of {
             let Some(body) = self.bodies.get(handle) else {
@@ -278,6 +415,37 @@ impl PhysicsWorld {
                     entity,
                     (rigid_body.linear_velocity, rigid_body.angular_velocity),
                 );
+            }
+        }
+
+        // 5. Pose the wheel visuals from the *post-step* chassis pose:
+        //    suspension compression drops the wheel down its ray, steering
+        //    yaws it, and the accumulated axle spin rolls it. The trailing
+        //    Z-90° maps the builtin cylinder's Y axis onto the axle.
+        for vehicle in &self.vehicles {
+            let Some(chassis) = self.bodies.get(vehicle.chassis) else {
+                continue;
+            };
+            let chassis_position = chassis.translation();
+            let chassis_rotation = *chassis.rotation();
+
+            for (index, &entity) in vehicle.wheel_entities.iter().enumerate() {
+                let state = &vehicle.controller.wheels()[index];
+                let offset = match world.get::<&WheelData>(entity) {
+                    Ok(wheel) => wheel.offset,
+                    Err(_) => continue,
+                };
+                let length = state.raycast_info().suspension_length;
+                let center = chassis_position
+                    + chassis_rotation * (offset - Vec3::Y * length);
+                let pose = chassis_rotation
+                    * Quat::from_rotation_y(state.steering)
+                    * Quat::from_rotation_x(state.rotation)
+                    * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+                if let Ok(mut transform) = world.get::<&mut Transform>(entity) {
+                    transform.position = center;
+                    transform.rotation = quat_to_euler_degrees(pose);
+                }
             }
         }
 
@@ -706,6 +874,182 @@ mod tests {
             position_of(&scene_b, "Cube"),
             "byte-identical runs"
         );
+    }
+
+    /// A four-wheeled box on flat ground: the suspension must hold the
+    /// chassis up (no wheel ray reaches its rest state with the chassis
+    /// resting on its collider), and the wheel visuals must hang below
+    /// their attachment points.
+    const CAR: &str = r#"{
+      "name": "car",
+      "entities": [
+        {"name": "Ground", "components": [
+          {"type": "Transform"},
+          {"type": "Collider", "shape": "cuboid", "half_extents": [50.0, 0.5, 50.0],
+           "offset": [0.0, -0.5, 0.0]}
+        ]},
+        {"name": "Chassis", "components": [
+          {"type": "Transform", "position": [0.0, 0.8, 0.0]},
+          {"type": "RigidBody", "body": "dynamic", "can_sleep": false},
+          {"type": "Collider", "shape": "cuboid", "half_extents": [0.8, 0.25, 1.6],
+           "density": 120.0}
+        ]},
+        {"name": "WheelBL", "components": [
+          {"type": "Transform"},
+          {"type": "Wheel", "vehicle": "Chassis", "offset": [-0.8, -0.1, 1.3],
+           "radius": 0.3, "suspension_rest_length": 0.4}
+        ]},
+        {"name": "WheelBR", "components": [
+          {"type": "Transform"},
+          {"type": "Wheel", "vehicle": "Chassis", "offset": [0.8, -0.1, 1.3],
+           "radius": 0.3, "suspension_rest_length": 0.4}
+        ]},
+        {"name": "WheelFL", "components": [
+          {"type": "Transform"},
+          {"type": "Wheel", "vehicle": "Chassis", "offset": [-0.8, -0.1, -1.3],
+           "radius": 0.3, "suspension_rest_length": 0.4}
+        ]},
+        {"name": "WheelFR", "components": [
+          {"type": "Transform"},
+          {"type": "Wheel", "vehicle": "Chassis", "offset": [0.8, -0.1, -1.3],
+           "radius": 0.3, "suspension_rest_length": 0.4}
+        ]}
+      ]
+    }"#;
+
+    #[test]
+    fn suspension_holds_the_chassis_off_the_ground() {
+        let (scene, _, _) = simulate(CAR, 300);
+        let y = position_of(&scene, "Chassis").y;
+        // Wheel bottom at rest: chassis_y - 0.1 (offset) - rest 0.4 - radius
+        // 0.3 touches ground at 0 → chassis_y ≈ 0.8 minus static sag
+        // (9.81 / (4 * 24) ≈ 0.10). Riding on springs means noticeably
+        // above the bottomed-out height (0.25) and below the unsagged 0.8.
+        assert!(
+            y > 0.45 && y < 0.78,
+            "chassis should settle on its springs below 0.8, is at {y}"
+        );
+
+        // Wheel visuals hang below their attachment points by ray length,
+        // i.e. between rest-length-compressed and full droop.
+        let wheel = position_of(&scene, "WheelFL");
+        assert!(
+            wheel.y < y - 0.1 && wheel.y > 0.0,
+            "wheel visual should sit between chassis and ground, is at {}",
+            wheel.y
+        );
+    }
+
+    #[test]
+    fn engine_force_drives_the_chassis_forward() {
+        let mut scene = Scene::from_source(CAR, "t.json").unwrap();
+        let settings = PhysicsSettings::default();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+
+        // Settle onto the springs first, then floor it.
+        for _ in 0..120 {
+            physics.step(&mut scene.world);
+        }
+        let start = position_of(&scene, "Chassis");
+        for name in ["WheelBL", "WheelBR"] {
+            let entity = scene.entity(name).unwrap();
+            scene.world.get::<&mut WheelData>(entity).unwrap().engine_force = 1500.0;
+        }
+        for _ in 0..120 {
+            physics.step(&mut scene.world);
+        }
+        let moved = start - position_of(&scene, "Chassis");
+        // Positive engine force drives the chassis's local −Z.
+        assert!(
+            moved.z > 2.0,
+            "rear-wheel drive should move the chassis toward −Z, moved {moved:?}"
+        );
+        assert!(
+            moved.x.abs() < 0.3,
+            "straight wheels should not veer, moved {moved:?}"
+        );
+
+        // The wheel visual must actually roll about its axle.
+        let entity = scene.entity("WheelBL").unwrap();
+        let rotation = scene.world.get::<&Transform>(entity).unwrap().rotation;
+        let spun = rotation.x.abs() + rotation.z.abs();
+        assert!(spun > 1.0, "a driving wheel's visual should spin: {rotation}");
+    }
+
+    #[test]
+    fn steering_turns_the_vehicle_left() {
+        // Pitch/roll locked to isolate the yaw response: an unloaded 300 kg
+        // box at full steer simply rolls over, which is physics working but
+        // not what this test is about.
+        let source = CAR.replace(
+            r#""body": "dynamic", "can_sleep": false"#,
+            r#""body": "dynamic", "can_sleep": false,
+               "locked_rotations": [true, false, true]"#,
+        );
+        let mut scene = Scene::from_source(&source, "t.json").unwrap();
+        let settings = PhysicsSettings::default();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        for _ in 0..120 {
+            physics.step(&mut scene.world);
+        }
+        for name in ["WheelBL", "WheelBR"] {
+            let entity = scene.entity(name).unwrap();
+            scene.world.get::<&mut WheelData>(entity).unwrap().engine_force = 600.0;
+        }
+        for name in ["WheelFL", "WheelFR"] {
+            let entity = scene.entity(name).unwrap();
+            scene.world.get::<&mut WheelData>(entity).unwrap().steering = 15.0;
+        }
+        for _ in 0..120 {
+            physics.step(&mut scene.world);
+        }
+        let position = position_of(&scene, "Chassis");
+        // Starting toward −Z, positive steering curves the path toward −X.
+        assert!(
+            position.x < -0.5,
+            "positive steering must curve the path left (−X), ended at {position:?}"
+        );
+        assert!(
+            position.z < -1.0,
+            "the car should still be moving forward while turning: {position:?}"
+        );
+    }
+
+    #[test]
+    fn brakes_stop_a_rolling_vehicle() {
+        let mut scene = Scene::from_source(CAR, "t.json").unwrap();
+        let settings = PhysicsSettings::default();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings).unwrap();
+        for _ in 0..120 {
+            physics.step(&mut scene.world);
+        }
+        let drive = |world: &mut hecs::World, scene_entity: hecs::Entity, force: f32| {
+            world.get::<&mut WheelData>(scene_entity).unwrap().engine_force = force;
+        };
+        let bl = scene.entity("WheelBL").unwrap();
+        let br = scene.entity("WheelBR").unwrap();
+        drive(&mut scene.world, bl, 1500.0);
+        drive(&mut scene.world, br, 1500.0);
+        for _ in 0..120 {
+            physics.step(&mut scene.world);
+        }
+        drive(&mut scene.world, bl, 0.0);
+        drive(&mut scene.world, br, 0.0);
+        for name in ["WheelBL", "WheelBR", "WheelFL", "WheelFR"] {
+            let entity = scene.entity(name).unwrap();
+            scene.world.get::<&mut WheelData>(entity).unwrap().brake = 15.0;
+        }
+        for _ in 0..240 {
+            physics.step(&mut scene.world);
+        }
+        let entity = scene.entity("Chassis").unwrap();
+        let speed = scene
+            .world
+            .get::<&RigidBodyData>(entity)
+            .unwrap()
+            .linear_velocity
+            .length();
+        assert!(speed < 0.2, "braked vehicle should stop, still moving at {speed}");
     }
 
     /// `locked_rotations` holds the axis fixed even under off-center impact.

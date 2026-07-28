@@ -1057,10 +1057,10 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
 }
 
 /// The committed demo: replaying the recorded session drives the physical
-/// car (dynamic RigidBody; the script is engine/brakes/tires) three laps
-/// around the track and parks it on the start line. This is the M11
-/// verification fixture — interactive gameplay, verified headlessly from
-/// text files alone.
+/// car (dynamic box chassis on four raycast-suspension Wheels; the script
+/// is only the driver) three laps around the track and parks it on the
+/// start line. This is the M11/M12 verification fixture — interactive
+/// gameplay, verified headlessly from text files alone.
 #[test]
 fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     let scene = repo_path("examples/scenes/car_track.json");
@@ -1087,11 +1087,11 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     };
 
     // Mid-drive: far side of the circuit (the north straight, z ≈ -9).
-    let mid = baked_position(&bake_at("1260", "mid.json"), "Car");
+    let mid = baked_position(&bake_at("480", "mid.json"), "Car");
     assert!(mid[2] < -5.0, "mid-drive the car is on the far straight: {mid:?}");
 
     // After three laps and the braking phase: parked on the start line.
-    let end = baked_position(&bake_at("2520", "end.json"), "Car");
+    let end = baked_position(&bake_at("2880", "end.json"), "Car");
     let (dx, dz) = (end[0], end[2] - 9.0);
     let distance = (dx * dx + dz * dz).sqrt();
     assert!(distance < 1.5, "the drive must park on the start line: {end:?}");
