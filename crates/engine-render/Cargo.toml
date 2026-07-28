@@ -11,4 +11,4 @@ wgpu.workspace = true
 glam.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true
-font8x8 = { version = "0.3", default-features = false }
+font8x8.workspace = true

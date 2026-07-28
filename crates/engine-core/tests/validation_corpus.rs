@@ -69,7 +69,20 @@ const AGREEMENT_CORPUS: &[&str] = &[
         {"type":"Collider","shape":"sphere","radius":-2.0,"half_extents":[1,1,1]}]}]}"#,
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"RigidBody","body":"dynmaic"}]}]}"#,
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Collider","shape":"donut"}]}]}"#,
+    // HUD components (M12): valid, range-broken (serde parses), shape-broken.
+    r#"{"name":"s","entities":[
+        {"name":"Label","components":[{"type":"HudText","text":"HI","anchor":"bottom_right","offset":[8,8],"size":16,"color":[1,1,1]}]},
+        {"name":"Bar","components":[{"type":"HudRect","anchor":"center","size":[200,12],"color":[0.2,0.9,0.3],"opacity":0.5}]}
+    ]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[
+        {"type":"HudText","text":"HI","size":2.0,"color":[2,0,0]}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[
+        {"type":"HudRect","size":[-1,5],"opacity":1.5}]}]}"#,
     // Shape-broken — serde must reject every one of these.
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"HudText"}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"HudText","text":42}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"HudText","text":"HI","anchor":"top_lft"}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"HudRect"}]}]}"#,
     r#"{"entities":[]}"#,
     r#"{"name":"s"}"#,
     r#"{"name":42,"entities":[]}"#,

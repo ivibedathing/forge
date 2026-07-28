@@ -613,6 +613,7 @@ fn diff_render(
         scene.lights().resolved(),
         baseline.width,
         baseline.height,
+        &scene.hud_items(),
         &hud,
     )?;
 
@@ -753,6 +754,7 @@ fn filmstrip(
             scene.lights().resolved(),
             tile_width,
             tile_height,
+            &scene.hud_items(),
             &[],
         )?;
         let tile =
@@ -877,6 +879,7 @@ fn screenshot(
         scene.lights().resolved(),
         width,
         height,
+        &scene.hud_items(),
         &hud,
     )?;
 
@@ -913,6 +916,7 @@ fn run_scene(
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
     let lights = scene.lights().resolved();
+    let hud_items = scene.hud_items();
     let title = format!("engine — {}", scene.name);
 
     // Physics and animated scenes come alive in the viewer; static scenes
@@ -964,6 +968,7 @@ fn run_scene(
             camera,
             camera_model: camera_transform.matrix(),
             lights,
+            hud_items,
             simulation,
         },
     ))

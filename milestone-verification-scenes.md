@@ -749,6 +749,36 @@ render), `world.look_at`, and the determinism promise extended over recorded inp
 
 ---
 
+## M12 — HUD components: `verify/m12_hud.json`
+
+Screen-anchored `HudText` + `HudRect` components (hud-design.md), rendered by the same
+rasterizer/overlay pass as the M11.6 `world.hud` lines. The fixture covers every anchor, a
+glyph-coverage line, rect-under-text draw order, a fractional-opacity panel, and a script
+(`verify/scripts/m12_hud.rhai`) that writes the step counter into a `HudText` and stretches a
+`HudRect` one pixel per step.
+
+```bash
+engine validate examples/scenes/verify/m12_hud.json
+engine diff-render examples/scenes/verify/m12_hud.json     examples/scenes/verify/baselines/m12_hud.png --steps 60
+# → bit-exact: "M12 HUD" top-left on its translucent panel, coverage line
+#   top-right, BL/BR corner labels, "+" dead center, STEP 60, and the green
+#   bar at 100 of 160 px (40 rest + 60 steps)
+engine simulate examples/scenes/verify/m12_hud.json --steps 60 --bake /tmp/m12.json
+# → the baked file reads "STEP 60" and "size": [100.0, 10.0] — script-driven
+#   HUD state bakes under the change-based rule (CLI test)
+```
+
+The car demo carries the applied version: a `SpeedBar` HudRect gauge (bottom-left) driven by
+`world.set_hud_rect_size` from the same speed the `world.hud` readout shows —
+`verify/baselines/m11_lap.png` includes it (re-blessed with M12; timeline and physics
+untouched, the parked bar is empty over its backdrop).
+
+**What this regresses:** the component overlay (anchor math, draw order, opacity, glyph
+rendering), the schema validation of HUD components (anchor enum with `did_you_mean`, size and
+color ranges), the M12 script accessors, and HUD-field bake.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):

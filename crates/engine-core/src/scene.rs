@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use glam::Vec3;
 
 use crate::components::{
-    AmbientLight, Camera, ComponentData, DirectionalLight, Name, Transform,
+    AmbientLight, Camera, ComponentData, DirectionalLight, HudRect, HudText, Name, Transform,
 };
 use crate::error::{EngineError, Result};
 use crate::validate;
@@ -76,6 +76,21 @@ pub struct RenderItem {
     pub mesh: crate::mesh::MeshData,
     pub model: glam::Mat4,
     pub material: crate::components::Material,
+}
+
+/// The scene's screen-space overlay, extracted as plain data in draw order
+/// (M12): `rects` under `texts`, each in scene-file order. An empty overlay
+/// means no HUD pass runs at all, so pre-M12 scenes render byte-identically.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HudItems {
+    pub rects: Vec<HudRect>,
+    pub texts: Vec<HudText>,
+}
+
+impl HudItems {
+    pub fn is_empty(&self) -> bool {
+        self.rects.is_empty() && self.texts.is_empty()
+    }
 }
 
 /// The scene's light entities, extracted as plain data.
@@ -320,6 +335,31 @@ impl Scene {
         }
 
         Ok(items)
+    }
+
+    /// Extract the screen-space overlay as plain data, in draw order (M12):
+    /// every `HudRect`, then every `HudText`, each in scene-file order — text
+    /// always reads over bars, and within a class the file is the z-order.
+    ///
+    /// File order is recovered by sorting on entity id: `instantiate` spawns
+    /// definitions sequentially into a fresh world and nothing ever despawns,
+    /// so hecs ids are monotone in file order even though archetype iteration
+    /// is not.
+    pub fn hud_items(&self) -> HudItems {
+        fn in_file_order<C: Clone + hecs::Component>(world: &World) -> Vec<C> {
+            let mut found: Vec<(u64, C)> = world
+                .query::<(Entity, &C)>()
+                .iter()
+                .map(|(entity, c)| (entity.to_bits().get(), c.clone()))
+                .collect();
+            found.sort_by_key(|(bits, _)| *bits);
+            found.into_iter().map(|(_, c)| c).collect()
+        }
+
+        HudItems {
+            rects: in_file_order::<HudRect>(&self.world),
+            texts: in_file_order::<HudText>(&self.world),
+        }
     }
 
     /// Extract the scene's lights as plain data.

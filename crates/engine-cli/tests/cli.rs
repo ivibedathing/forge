@@ -1221,3 +1221,80 @@ fn the_hud_lands_in_screenshot_pixels() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ── HUD components (M12) ───────────────────────────────────────────────
+
+/// The M12 fixture end to end: the component overlay (all five anchors,
+/// draw order, opacity, glyph coverage) plus the script-driven HudText and
+/// HudRect render bit-exactly against the committed baseline, and the
+/// script's HUD writes land in the baked scene under the change-based rule.
+#[test]
+fn the_m12_hud_fixture_pins_the_component_overlay() {
+    let scene = repo_path("examples/scenes/verify/m12_hud.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m12_hud.png");
+    let dir = std::env::temp_dir().join(format!("engine-m12-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "60"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+    } else {
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+    }
+
+    // The bake half needs no GPU: after 60 steps the script has written
+    // "STEP 60" and stretched the bar to 40 + 60 = 100 px.
+    let baked_path = dir.join("baked.json");
+    let bake = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "60"])
+        .arg("--bake")
+        .arg(&baked_path)
+        .output()
+        .unwrap();
+    assert_eq!(bake.status.code(), Some(0), "{bake:?}");
+
+    let baked: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&baked_path).unwrap()).unwrap();
+    let component = |entity: &str, kind: &str| -> serde_json::Value {
+        baked["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == entity)
+            .and_then(|e| {
+                e["components"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|c| c["type"] == kind)
+            })
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(component("StepCounter", "HudText")["text"], "STEP 60");
+    assert_eq!(
+        component("GrowBar", "HudRect")["size"],
+        serde_json::json!([100.0, 10.0])
+    );
+    // The backdrop bar was never written; its bytes are untouched.
+    assert_eq!(
+        component("GrowBarBack", "HudRect")["size"],
+        serde_json::json!([160.0, 10.0])
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

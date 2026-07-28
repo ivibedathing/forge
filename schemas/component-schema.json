@@ -29,6 +29,17 @@
           "capsule"
         ],
         "type": "string"
+      },
+      "HudAnchor": {
+        "description": "Where a HUD element attaches on screen (M12).\n\n`offset` is measured **inward** from the anchor: from a right anchor,\n`offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;\nfrom `center` it is the usual +x-right / +y-down applied to the element's\ncenter. The anchored point is the element's matching corner (its center\nfor `center`), so `offset: [0, 0]` puts the element flush against its\ncorner at any resolution.",
+        "enum": [
+          "top_left",
+          "top_right",
+          "bottom_left",
+          "bottom_right",
+          "center"
+        ],
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -637,6 +648,136 @@
           "vehicle"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A screen-space text label (M12): one line of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic. Draw order is file order, and all text draws\nover all `HudRect`s.",
+        "properties": {
+          "anchor": {
+            "$ref": "#/$defs/HudAnchor",
+            "default": "top_left"
+          },
+          "color": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Linear RGB in `[0, 1]`, like every color in the engine; encoded to\nsRGB when the overlay is rasterized.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "size": {
+            "default": 16.0,
+            "description": "Glyph height in pixels, `>= 4`. The 8×8 font renders at integer\nscale `max(1, round(size / 8))`, so `16` means exactly 2× glyphs.",
+            "format": "float",
+            "minimum": 4.0,
+            "type": "number"
+          },
+          "text": {
+            "description": "One line; no wrapping. Scripts may rewrite it via\n`world.set_hud_text` — an empty string is a legal rest value for a\nscript-driven readout.",
+            "type": "string"
+          },
+          "type": {
+            "const": "HudText",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn before all `HudText`, file order within\nrects.",
+        "properties": {
+          "anchor": {
+            "$ref": "#/$defs/HudAnchor",
+            "default": "top_left"
+          },
+          "color": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Linear RGB in `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "opacity": {
+            "default": 1.0,
+            "description": "`[0, 1]`; `1` (the default) replaces the pixel exactly, fractions\nalpha-blend on the GPU (deterministic per adapter, like every\nbaseline).",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "size": {
+            "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size`.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": {
+            "const": "HudRect",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "size"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -652,7 +793,9 @@
     "Collider",
     "AnimationPlayer",
     "Script",
-    "Wheel"
+    "Wheel",
+    "HudText",
+    "HudRect"
   ],
   "scene": {
     "$defs": {
@@ -1291,6 +1434,136 @@
               "vehicle"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A screen-space text label (M12): one line of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic. Draw order is file order, and all text draws\nover all `HudRect`s.",
+            "properties": {
+              "anchor": {
+                "$ref": "#/$defs/HudAnchor",
+                "default": "top_left"
+              },
+              "color": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Linear RGB in `[0, 1]`, like every color in the engine; encoded to\nsRGB when the overlay is rasterized.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "offset": {
+                "default": [
+                  0.0,
+                  0.0
+                ],
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "size": {
+                "default": 16.0,
+                "description": "Glyph height in pixels, `>= 4`. The 8×8 font renders at integer\nscale `max(1, round(size / 8))`, so `16` means exactly 2× glyphs.",
+                "format": "float",
+                "minimum": 4.0,
+                "type": "number"
+              },
+              "text": {
+                "description": "One line; no wrapping. Scripts may rewrite it via\n`world.set_hud_text` — an empty string is a legal rest value for a\nscript-driven readout.",
+                "type": "string"
+              },
+              "type": {
+                "const": "HudText",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn before all `HudText`, file order within\nrects.",
+            "properties": {
+              "anchor": {
+                "$ref": "#/$defs/HudAnchor",
+                "default": "top_left"
+              },
+              "color": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Linear RGB in `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "offset": {
+                "default": [
+                  0.0,
+                  0.0
+                ],
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "opacity": {
+                "default": 1.0,
+                "description": "`[0, 1]`; `1` (the default) replaces the pixel exactly, fractions\nalpha-blend on the GPU (deterministic per adapter, like every\nbaseline).",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "size": {
+                "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size`.",
+                "items": {
+                  "format": "float",
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": {
+                "const": "HudRect",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "size"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -1314,6 +1587,17 @@
           "name"
         ],
         "type": "object"
+      },
+      "HudAnchor": {
+        "description": "Where a HUD element attaches on screen (M12).\n\n`offset` is measured **inward** from the anchor: from a right anchor,\n`offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;\nfrom `center` it is the usual +x-right / +y-down applied to the element's\ncenter. The anchored point is the element's matching corner (its center\nfor `center`), so `offset: [0, 0]` puts the element flush against its\ncorner at any resolution.",
+        "enum": [
+          "top_left",
+          "top_right",
+          "bottom_left",
+          "bottom_right",
+          "center"
+        ],
+        "type": "string"
       },
       "PhysicsSettings": {
         "additionalProperties": false,

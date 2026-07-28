@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use engine_core::components::{Name, RigidBody, Script, Transform, Wheel};
+use engine_core::components::{HudRect, HudText, Name, RigidBody, Script, Transform, Wheel};
 use engine_core::input::{self, InputState};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
@@ -88,20 +88,31 @@ impl WorldApi {
         })
     }
 
+    /// Borrow one component mutably for the duration of a closure; `what`
+    /// names the component type in the missing-component error.
+    fn with_component<C: hecs::Component, T>(
+        &mut self,
+        name: &str,
+        what: &str,
+        f: impl FnOnce(&mut C) -> T,
+    ) -> std::result::Result<T, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow_mut();
+        let mut component = world.get::<&mut C>(entity).map_err(|_| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                format!("entity {name:?} has no {what}").into(),
+                Position::NONE,
+            ))
+        })?;
+        Ok(f(&mut component))
+    }
+
     fn with_transform<T>(
         &mut self,
         name: &str,
         f: impl FnOnce(&mut Transform) -> T,
     ) -> std::result::Result<T, Box<EvalAltResult>> {
-        let entity = self.entity(name)?;
-        let world = self.world.borrow_mut();
-        let mut transform = world.get::<&mut Transform>(entity).map_err(|_| {
-            Box::new(EvalAltResult::ErrorRuntime(
-                format!("entity {name:?} has no Transform").into(),
-                Position::NONE,
-            ))
-        })?;
-        Ok(f(&mut transform))
+        self.with_component(name, "Transform", f)
     }
 
     /// The vehicle path: velocity access needs a `RigidBody`; what a write
@@ -112,15 +123,7 @@ impl WorldApi {
         name: &str,
         f: impl FnOnce(&mut RigidBody) -> T,
     ) -> std::result::Result<T, Box<EvalAltResult>> {
-        let entity = self.entity(name)?;
-        let world = self.world.borrow_mut();
-        let mut body = world.get::<&mut RigidBody>(entity).map_err(|_| {
-            Box::new(EvalAltResult::ErrorRuntime(
-                format!("entity {name:?} has no RigidBody").into(),
-                Position::NONE,
-            ))
-        })?;
-        Ok(f(&mut body))
+        self.with_component(name, "RigidBody", f)
     }
 
     /// The wheel path (M12): drive/brake/steer access needs a `Wheel`;
@@ -400,6 +403,49 @@ fn curated_engine() -> rhai::Engine {
             })
         },
     );
+    // HUD components (M12): scripts drive on-screen text and gauge bars the
+    // same way they drive Transforms — the elements are ordinary components,
+    // so a script write is visible to screenshot, bake, and the viewer alike.
+    engine.register_fn(
+        "hud_text",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<String, Box<EvalAltResult>> {
+            w.with_component::<HudText, _>(name, "HudText", |t| t.text.clone())
+        },
+    );
+    engine.register_fn(
+        "set_hud_text",
+        |w: &mut WorldApi,
+         name: &str,
+         text: &str|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            let text = text.to_string();
+            w.with_component::<HudText, _>(name, "HudText", move |t| t.text = text)
+        },
+    );
+    engine.register_fn(
+        "hud_rect_size",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.with_component::<HudRect, _>(name, "HudRect", |r| {
+                vec![
+                    Dynamic::from_float(f64::from(r.size.x)),
+                    Dynamic::from_float(f64::from(r.size.y)),
+                ]
+            })
+        },
+    );
+    engine.register_fn(
+        "set_hud_rect_size",
+        |w: &mut WorldApi,
+         name: &str,
+         width: f64,
+         height: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_component::<HudRect, _>(name, "HudRect", |r| {
+                r.size = glam::Vec2::new(width as f32, height as f32);
+            })
+        },
+    );
+
     engine.register_fn(
         "scale",
         |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
@@ -995,6 +1041,62 @@ mod tests {
         let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
         let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
         assert!(error.message.contains("printable ASCII"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hud_component_accessors_read_and_write_text_and_rect_size() {
+        let dir = temp_dir("hudcomp");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                let old = world.hud_text("Speedo");
+                world.set_hud_text("Speedo", old + " KM/H");
+                let s = world.hud_rect_size("Bar");
+                world.set_hud_rect_size("Bar", s[0] * 2.0, s[1]);
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Speedo","components":[
+                {"type":"HudText","text":"42"},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"Bar","components":[
+                {"type":"HudRect","size":[50.0,8.0]}
+            ]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene =
+            Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        host.step(&mut scene.world, 0, &InputState::default()).unwrap();
+
+        let text = scene
+            .world
+            .get::<&HudText>(scene.entity("Speedo").unwrap())
+            .unwrap()
+            .text
+            .clone();
+        assert_eq!(text, "42 KM/H");
+        let size = scene
+            .world
+            .get::<&HudRect>(scene.entity("Bar").unwrap())
+            .unwrap()
+            .size;
+        assert_eq!(size, glam::Vec2::new(100.0, 8.0));
+
+        // Missing components are structured errors, like every accessor.
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.hud_text("Mover"); }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host.step(&mut scene.world, 0, &InputState::default()).unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(error.message.contains("no HudText"), "{}", error.message);
         std::fs::remove_dir_all(&dir).ok();
     }
 

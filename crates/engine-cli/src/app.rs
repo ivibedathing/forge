@@ -34,6 +34,9 @@ pub enum Content {
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
+        /// The scene's HUD components; refreshed per frame when a simulation
+        /// runs (clips and scripts can drive them), static otherwise.
+        hud_items: engine_core::scene::HudItems,
         /// Present when the scene has physics components: the viewer drives
         /// the same fixed step through a wall-clock accumulator (the
         /// headless path stays canonical; frame pacing may vary here).
@@ -113,7 +116,6 @@ enum Paint {
     Scene {
         renderer: SceneRenderer,
         depth: wgpu::TextureView,
-        hud: engine_render::hud::HudRenderer,
     },
 }
 
@@ -180,16 +182,13 @@ impl ViewerApp {
             }),
 
             (
-                Paint::Scene {
-                    renderer,
-                    depth,
-                    hud,
-                },
+                Paint::Scene { renderer, depth },
                 Content::Scene {
                     items,
                     camera,
                     camera_model,
                     lights,
+                    hud_items,
                     simulation,
                 },
             ) => {
@@ -247,6 +246,7 @@ impl ViewerApp {
                     if let Ok(fresh) = sim.scene.render_items(&sim.assets) {
                         *items = fresh;
                     }
+                    *hud_items = sim.scene.hud_items();
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
                     if let Ok((fresh_camera, fresh_transform)) =
@@ -265,6 +265,12 @@ impl ViewerApp {
                 let hud_lines: &[String] = simulation
                     .as_ref()
                     .map_or(&[], |sim| sim.hud_lines.as_slice());
+                // The same overlay the screenshot path composites — the
+                // played game and the pinned PNG say the same thing.
+                let no_lines = hud_lines.iter().all(|l| l.is_empty());
+                let canvas = (!(hud_items.is_empty() && no_lines)).then(|| {
+                    engine_render::hud::rasterize(hud_items, hud_lines, width, height)
+                });
                 target.render_with(|device, queue, view| {
                     renderer.draw(
                         device,
@@ -277,11 +283,9 @@ impl ViewerApp {
                             camera_position: camera_model.w_axis.truncate(),
                             lights: *lights,
                             clear: scene_renderer::DEFAULT_CLEAR,
+                            hud: canvas.as_ref(),
                         },
                     );
-                    // The same overlay the screenshot path composites — the
-                    // played game and the pinned PNG say the same thing.
-                    hud.draw(device, queue, view, width, height, hud_lines);
                 })
             }
 
@@ -329,10 +333,6 @@ impl ApplicationHandler for ViewerApp {
                 Paint::Scene {
                     renderer: SceneRenderer::new(&target.gpu.device, target.format()),
                     depth: scene_renderer::depth_texture(&target.gpu.device, width, height),
-                    hud: engine_render::hud::HudRenderer::new(
-                        &target.gpu.device,
-                        target.format(),
-                    ),
                 }
             }
         };
