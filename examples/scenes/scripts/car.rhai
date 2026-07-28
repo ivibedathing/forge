@@ -137,6 +137,13 @@ fn step(world, step) {
 
     // The speed the tires ended the step with, planar, in km/h.
     let speed = sqrt(forward_speed * forward_speed + lateral_speed * lateral_speed) * 3.6;
+
+    // Speed bar: the HudRect gauge (M12) — full width at top speed. The
+    // component write bakes and replays like any other scene state.
+    let frac = speed / (top_speed * 3.6);
+    if frac > 1.0 { frac = 1.0; }
+    world.set_hud_rect_size("SpeedBar", 260.0 * frac, 12.0);
+
     let lap_time = (step - lap_start.to_int()).to_float() * dt;
     world.hud("SPEED " + speed.round().to_int() + " KM/H");
     world.hud("LAP " + lap.to_int() + "   TIME " + fmt_secs(lap_time));

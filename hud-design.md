@@ -69,8 +69,13 @@ size (`engine-render/src/hud.rs`, pure function of the HUD component list +
 dimensions — unit-testable with no GPU, same philosophy as `diff.rs`), then
 uploaded and composited by a single alpha-blended full-screen triangle pass
 after the mesh pass. One small pipeline (`shaders/hud.wgsl`), no per-glyph
-GPU work, and the windowed viewer, the editor viewport, and the offscreen
-path share it by construction because they share `SceneRenderer`.
+GPU work, and the windowed viewer and the offscreen path share it by
+construction because they share `SceneRenderer`. The same rasterizer also
+draws the M11.6 `world.hud` debug-line panel, topmost, with its original
+layout formulas — one code path, one canvas, one blit. The editor viewport
+deliberately passes no overlay: its orbit camera is not the game camera's
+frame, so a screen-anchored HUD there would mislead; `engine screenshot` is
+where the HUD is verified.
 
 Compositing math: the canvas holds sRGB-encoded bytes; opaque pixels
 (alpha 255) replace the destination byte exactly, alpha-0 pixels leave it

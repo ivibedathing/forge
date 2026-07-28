@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M11 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M12 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input and M12 HUD components** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -199,21 +199,35 @@ would double-brake the drive force). `car_track_lap.input.jsonl` is a 2 442-step
 keys) driving three clockwise laps and parking on the start line — pinned by CLI test and
 `verify/baselines/m11_lap.png`.
 
-HUD (M11.6): `world.hud(text)` pushes printable-ASCII overlay lines, cleared every step —
-the HUD is a pure function of the step that drew it — and `world.state(key, default)` /
+HUD (M11.6 lines + M12 components, `hud-design.md`): two layers, one render path.
+`world.hud(text)` pushes printable-ASCII debug lines, cleared every step — the line HUD is a
+pure function of the step that drew it — and `world.state(key, default)` /
 `world.set_state(key, value)` is numeric per-run memory on the ScriptHost (replay-
 deterministic, reset by a fresh run, deliberately *not* baked — same disposability as
-solver caches). Rendering is `engine-render/src/hud.rs`: a CPU rasterizer over the
-embedded `font8x8` bitmap font (unit-tested without a GPU) composited as one alpha-blended
-quad by both `offscreen::render` and the `run-scene` viewer, so the played game and the
-pinned PNG show the same overlay; an empty HUD draws nothing, keeping every pre-HUD
-baseline byte-identical. The HUD is also observable without pixels: `simulate`/`screenshot`
-report the final step's lines as `"hud"`, and `--trace` logs `{"step", "hud"}` on every
-change (script-free traces unchanged; the curated Rhai engine gained the string packages
-so scripts can build the text). Caps 16 lines × 96 chars, runtime error beyond. Demo:
-`car.rhai` shows a speedometer plus a lap timer (start-line crossing = x going positive →
-non-positive on the south straight, remembered step-to-step via `world.state`) whose final
-parked HUD (`LAP 3`, `LAST 13.42   BEST 13.42`) is pinned by the lap CLI test.
+solver caches). Caps 16 lines × 96 chars, runtime error beyond. **M12 adds `HudText` /
+`HudRect` components**: screen-anchored (anchor enum + pixel offset measured inward; five
+anchors), pixel-sized, schema-validated (size/color/opacity ranges, anchor typos get
+`did_you_mean`), needing no Transform and ignoring the camera. Text snaps to integer scales
+of the 8×8 font (`size` 16 = 2×), colors are linear RGB like everything else, draw order is
+rects-then-texts in file order, and the `world.hud` line panel draws topmost with its
+original layout formulas. Rendering is `engine-render/src/hud.rs`: **one** CPU rasterizer
+(unit-tested without a GPU) producing a target-sized sRGB straight-alpha canvas that
+`SceneRenderer` composites as a sampler-less fullscreen-triangle blit (`ScenePass.hud`) —
+`offscreen::render` and the `run-scene` viewer share it, so the played game and the pinned
+PNG show the same overlay; an empty HUD draws nothing, keeping every pre-HUD baseline
+byte-identical (opaque canvas texels land byte-exact through the sRGB round trip; the
+editor viewport deliberately passes `hud: None` — its orbit camera is not the game frame).
+Scripts drive components via `world.hud_text`/`set_hud_text` and
+`world.hud_rect_size`/`set_hud_rect_size`; changed `HudText.text` / `HudRect.size` bake
+under the change-based rule (unlike `world.hud` lines, which are per-step output). The line
+HUD stays observable without pixels: `simulate`/`screenshot` report the final step's lines
+as `"hud"`, and `--trace` logs `{"step", "hud"}` on every change. Fixture:
+`verify/m12_hud.json` + `verify/baselines/m12_hud.png` (all anchors, draw order, opacity,
+script-driven counter + growing bar, pinned by CLI test). Demo: `car.rhai` shows a
+speedometer plus a lap timer (start-line crossing = x going positive → non-positive on the
+south straight, remembered step-to-step via `world.state`) whose final parked HUD (`LAP 3`,
+`LAST 13.42   BEST 13.42`) is pinned by the lap CLI test, plus a `SpeedBar` HudRect gauge
+(bottom-left) driven by `set_hud_rect_size`.
 
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).

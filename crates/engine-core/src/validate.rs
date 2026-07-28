@@ -1874,6 +1874,48 @@ mod tests {
     }
 
     #[test]
+    fn hud_components_validate_through_the_schema() {
+        // Anchor typo: the generic enum path, with did_you_mean. Ranges:
+        // size >= 4, colors in [0, 1], opacity in [0, 1], rect size >= 0 —
+        // all authored as schemars attributes, all caught by the walk.
+        let source = r#"{"name":"s","entities":[
+            {"name":"Label","components":[
+                {"type":"HudText","text":"HI","anchor":"top_lft","size":2.0,"color":[2.0,0.0,0.0]}
+            ]},
+            {"name":"Bar","components":[
+                {"type":"HudRect","size":[-1.0,5.0],"opacity":1.5}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+
+        let anchor = errors
+            .iter()
+            .find(|e| e.context().and_then(|c| c.field.as_deref()) == Some("anchor"))
+            .unwrap();
+        assert_eq!(anchor.error, "invalid_field_type");
+        assert_eq!(anchor.context().unwrap().did_you_mean.as_deref(), Some("top_left"));
+
+        let range_fields: Vec<&str> = errors
+            .iter()
+            .filter(|e| e.error == "value_out_of_range")
+            .filter_map(|e| e.context().and_then(|c| c.path.as_deref()))
+            .collect();
+        for expected in ["size", "color/0", "size/0", "opacity"] {
+            assert!(
+                range_fields.iter().any(|p| p.ends_with(expected)),
+                "missing range error for {expected}: {range_fields:?}"
+            );
+        }
+
+        // A well-formed pair of HUD components validates clean.
+        let valid = r#"{"name":"s","entities":[
+            {"name":"Label","components":[{"type":"HudText","text":"HI","anchor":"bottom_right"}]},
+            {"name":"Bar","components":[{"type":"HudRect","size":[0.0,0.0]}]}
+        ]}"#;
+        assert!(validate_source(valid, "t").is_empty(), "{:?}", validate_source(valid, "t"));
+    }
+
+    #[test]
     fn rejects_a_dynamic_body_without_a_collider() {
         let source = r#"{"name":"s","entities":[
             {"name":"Faller","components":[

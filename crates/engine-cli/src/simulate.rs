@@ -121,10 +121,10 @@ fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
 
 /// Write the simulated state back into the original source text as a valid
 /// scene file, every untouched byte preserved. The rule is change-based:
-/// any `Transform` or `RigidBody` field that differs from the file's rest
-/// value gets spliced — which captures dynamic bodies, script-driven
-/// kinematics, and plain script-moved entities uniformly, without touching
-/// entities nothing moved.
+/// any `Transform`, `RigidBody`, or HUD-component field that differs from
+/// the file's rest value gets spliced — which captures dynamic bodies,
+/// script-driven kinematics, and script-driven HUD state uniformly, without
+/// touching entities nothing moved.
 pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
     let file: engine_core::SceneFile = serde_json::from_str(source).map_err(|e| {
         EngineError::new(
@@ -141,11 +141,14 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
         };
 
         let mut edits: Vec<SetComponentField> = Vec::new();
-        let edit = |field: &str, component: &str, value: Vec3| SetComponentField {
+        let field_edit = |field: &str, component: &str, value: Value| SetComponentField {
             entity: def.name.clone(),
             component: component.into(),
             field: field.into(),
-            value: vec3_json(value),
+            value,
+        };
+        let edit = |field: &str, component: &str, value: Vec3| {
+            field_edit(field, component, vec3_json(value))
         };
 
         if def.components.iter().any(|c| matches!(c, ComponentData::Transform(_))) {
@@ -187,6 +190,48 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                         "angular_velocity",
                         "RigidBody",
                         current.angular_velocity,
+                    ));
+                }
+            }
+        }
+        // Script-driven HUD state is scene state like any other: a changed
+        // readout or gauge width lands in the baked file.
+        if def.components.iter().any(|c| matches!(c, ComponentData::HudText(_))) {
+            if let Ok(current) = scene.world.get::<&engine_core::components::HudText>(entity) {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::HudText(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.text != rest.text {
+                    edits.push(field_edit(
+                        "text",
+                        "HudText",
+                        Value::String(current.text.clone()),
+                    ));
+                }
+            }
+        }
+        if def.components.iter().any(|c| matches!(c, ComponentData::HudRect(_))) {
+            if let Ok(current) = scene.world.get::<&engine_core::components::HudRect>(entity) {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::HudRect(r) => Some(*r),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.size != rest.size {
+                    edits.push(field_edit(
+                        "size",
+                        "HudRect",
+                        Value::Array(
+                            current.size.to_array().into_iter().map(number_from_f32).collect(),
+                        ),
                     ));
                 }
             }

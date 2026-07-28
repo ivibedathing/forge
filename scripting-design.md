@@ -88,6 +88,8 @@ fn step(world, step) {
 | `world.look_at(name, x, y, z)` | (M11) aim the entity's local −Z at a point with a level horizon — the chase-camera primitive (composing pitch and yaw through the XYZ Euler order rolls the horizon; this computes the decomposition correctly) |
 | `world.state(key, default)` / `world.set_state(key, value)` | numeric per-run memory on the host (a lap timer's start step): replay-deterministic, reset by a fresh run, deliberately **not** captured by bake — the same disposability as physics solver caches |
 | `world.hud(text)` | push one printable-ASCII overlay line for *this step only* (the list clears every step, so the HUD is a pure function of the step that drew it); composited onto screenshots, diff-renders, and the run-scene window, mirrored into simulate traces/reports. Caps: 16 lines × 96 chars, runtime error beyond |
+| `world.hud_text(name)` / `world.set_hud_text(name, text)` | (M12) `HudText.text` — the component readout; unlike `world.hud` lines this is scene state, so it bakes under the change-based rule |
+| `world.hud_rect_size(name)` (returns `[w, h]`) / `world.set_hud_rect_size(name, w, h)` | (M12) `HudRect.size` in pixels — the gauge-bar primitive; bakes like any component field |
 
 Getters return `[x, y, z]` arrays. A name that resolves to no entity, or an entity without a
 `Transform`, raises a script runtime error naming the entity — deterministic failure over
