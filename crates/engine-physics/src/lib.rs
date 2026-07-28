@@ -142,6 +142,10 @@ pub struct PhysicsWorld {
     break_thresholds: HashMap<Entity, f32>,
     /// Blasts queued for the next step.
     queued_explosions: Vec<Explosion>,
+    /// Whether the broad-phase BVH is still empty because no step has run.
+    /// Only vehicles care: their suspension rays are cast *before* the first
+    /// pipeline step (see `step`).
+    bvh_cold: bool,
     /// Breaks this step decided on; drained by `take_pending_breaks`.
     pending_breaks: Vec<PendingBreak>,
 }
@@ -198,6 +202,7 @@ impl PhysicsWorld {
             break_thresholds: HashMap::new(),
             queued_explosions: Vec::new(),
             pending_breaks: Vec::new(),
+            bvh_cold: true,
         };
 
         // Collision layers (M12): map each distinct name to one bit of
@@ -384,14 +389,6 @@ impl PhysicsWorld {
                 chassis: chassis_handle,
                 wheel_entities,
             });
-        }
-
-        // The suspension rays run *before* the first pipeline step, and the
-        // broad-phase BVH is otherwise only built inside `step` — without
-        // this the wheels would find no ground on step 0. Vehicle-free
-        // worlds skip it so their traces stay byte-identical to M8.
-        if !physics.vehicles.is_empty() {
-            physics.refresh_queries();
         }
 
         Ok(physics)
@@ -615,6 +612,34 @@ impl PhysicsWorld {
         //    after the velocity sync so suspension sees script-written
         //    velocities, and before the solver integrates the impulses.
         let dt = self.parameters.dt;
+
+        // On the very first step the BVH is still empty — it is built inside
+        // `pipeline.step`, which has not run yet — so the suspension rays
+        // below would find no ground. Build it on a *scratch copy* rather
+        // than on `self.broad_phase`: a broad-phase update reports each new
+        // collider pair exactly once, and `NarrowPhase::register_pairs` is
+        // private to rapier, so priming the real one here would swallow the
+        // pairs of everything already resting in contact at load. Those
+        // bodies would then never touch anything again and would fall
+        // straight through the floor — with no error, in a scene that
+        // validates.
+        let mut cold_bvh = None;
+        if self.bvh_cold && !self.vehicles.is_empty() {
+            let mut scratch = self.broad_phase.clone();
+            let modified: Vec<ColliderHandle> =
+                self.colliders.iter().map(|(handle, _)| handle).collect();
+            scratch.update(
+                &self.parameters,
+                &self.colliders,
+                &self.bodies,
+                &modified,
+                &[],
+                &mut Vec::new(),
+            );
+            cold_bvh = Some(scratch);
+        }
+        self.bvh_cold = false;
+
         for vehicle in &mut self.vehicles {
             let mut any_drive = false;
             for (index, &entity) in vehicle.wheel_entities.iter().enumerate() {
@@ -641,7 +666,11 @@ impl PhysicsWorld {
             let filter = QueryFilter::default()
                 .exclude_rigid_body(vehicle.chassis)
                 .exclude_sensors();
-            let queries = self.broad_phase.as_query_pipeline_mut(
+            let bvh = match cold_bvh.as_mut() {
+                Some(scratch) => scratch,
+                None => &mut self.broad_phase,
+            };
+            let queries = bvh.as_query_pipeline_mut(
                 &DefaultQueryDispatcher,
                 &mut self.bodies,
                 &mut self.colliders,
@@ -801,6 +830,13 @@ impl PhysicsWorld {
     /// Make scene queries valid before any step has run: the broad-phase
     /// BVH is normally maintained inside `step`, so a freshly built world
     /// (`--steps 0`) has an empty tree until this runs.
+    ///
+    /// **Destructive — call this only when no further `step` follows.** A
+    /// broad-phase update reports each newly overlapping collider pair
+    /// exactly once, into an event list the narrow phase is supposed to
+    /// consume; rapier keeps `NarrowPhase::register_pairs` private, so the
+    /// events this drops are gone for good and the pairs never become
+    /// contacts. The `--steps 0` query path is the only safe caller.
     pub fn refresh_queries(&mut self) {
         let modified: Vec<ColliderHandle> =
             self.colliders.iter().map(|(handle, _)| handle).collect();
@@ -1320,6 +1356,39 @@ mod tests {
             wheel.y < y - 0.1 && wheel.y > 0.0,
             "wheel visual should sit between chassis and ground, is at {}",
             wheel.y
+        );
+    }
+
+    /// A vehicle in the world must not cost every *other* body its contacts.
+    ///
+    /// The first step's suspension rays need a broad-phase BVH, which is
+    /// otherwise built inside `pipeline.step`. Priming it on the real broad
+    /// phase looked free and was not: an update reports each new collider
+    /// pair exactly once, into events the narrow phase never got, so anything
+    /// already resting in contact when the scene loaded — a crate on the
+    /// ground, a stack, a wall — silently fell through the world for the rest
+    /// of the run. Nothing errored; the scene validated; only the pixels were
+    /// wrong. A body dropped from a height was *not* affected, which is why
+    /// every fixture missed it.
+    #[test]
+    fn a_vehicle_does_not_break_contacts_for_bodies_resting_at_load() {
+        // The box starts flush on the ground — touching, not falling.
+        let scene = CAR.replace(
+            r#"{"name": "WheelBL", "components": ["#,
+            r#"{"name": "Crate", "components": [
+          {"type": "Transform", "position": [8.0, 0.5, 0.0]},
+          {"type": "RigidBody", "body": "dynamic"},
+          {"type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+           "density": 60.0}
+        ]},
+        {"name": "WheelBL", "components": ["#,
+        );
+
+        let (settled, _, _) = simulate(&scene, 120);
+        let y = position_of(&settled, "Crate").y;
+        assert!(
+            (y - 0.5).abs() < 0.05,
+            "the crate rested on the ground at load and must still be there, is at {y}"
         );
     }
 

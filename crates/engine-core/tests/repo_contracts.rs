@@ -80,6 +80,54 @@ fn mesh_import_scene_is_valid() {
 }
 
 #[test]
+fn showcase_tour_scene_is_valid() {
+    assert_scene_validates("examples/scenes/showcase_tour.json");
+}
+
+/// The showcase tour's growth contract (`showcase-tour.md`): it exists to be
+/// the one scene where *every* system is on screen at once, so a component
+/// the engine has but the tour does not use is a hole in the demo — and, more
+/// to the point, a hole in what the FPS and render checks actually measure.
+///
+/// This test is deliberately the thing that fails on the commit that adds a
+/// component. Adding an entity that uses it to `showcase_tour.json` is the
+/// fix; there is no allowlist to append to, because an allowlist is how a
+/// contract like this quietly stops meaning anything.
+#[test]
+fn showcase_tour_uses_every_component_the_engine_has() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&engine_core::schema::canonical_json()).unwrap();
+    let known: Vec<&str> = schema["components"]
+        .as_array()
+        .expect("the schema publishes its component list")
+        .iter()
+        .map(|name| name.as_str().expect("component names are strings"))
+        .collect();
+
+    let scene: serde_json::Value =
+        serde_json::from_str(&repo_file("examples/scenes/showcase_tour.json")).unwrap();
+    let used: std::collections::BTreeSet<&str> = scene["entities"]
+        .as_array()
+        .expect("entities")
+        .iter()
+        .flat_map(|entity| entity["components"].as_array().expect("components"))
+        .filter_map(|component| component["type"].as_str())
+        .collect();
+
+    let missing: Vec<&str> = known
+        .iter()
+        .copied()
+        .filter(|name| !used.contains(name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "examples/scenes/showcase_tour.json shows off every engine system, and \
+         these components are not in it: {missing:?}\n\
+         Add an entity that uses each one — see showcase-tour.md."
+    );
+}
+
+#[test]
 fn m4_lighting_verify_scene_is_valid() {
     // The M4 verification fixture (milestone-verification-scenes.md): its
     // JSON is canonical and never edited casually, so it validating is a
