@@ -810,6 +810,21 @@ draws nothing, so adding one to a scene never disturbs that scene's unstepped ba
 Integer fields (`seed`, `max_particles`) validate like everything else: `"seed": 1.5` or
 `-1` is `invalid_field_type`, `"max_particles": 0` is `value_out_of_range`, all located.
 
+The car demo carries the applied version: an `Exhaust` emitter that `scripts/car.rhai` parks
+at the tailpipe every step, from the same `world.forward` heading the driver already uses.
+Because particles are world-space once spawned, the trail is left *behind* a moving car —
+which is the visible proof that the emitter's position is sampled per step, not per render:
+
+```bash
+engine diff-render examples/scenes/car_track.json \
+    examples/scenes/verify/baselines/m11_lap.png --steps 2880 \
+    --input examples/scenes/car_track_lap.input.jsonl
+# → bit-exact, smoke and all: a stochastic effect on a recorded drive is
+#   still a pinnable render. m11_lap.png was re-blessed when the exhaust
+#   landed; the timeline, the physics, and the HUD strings did not move,
+#   because particles never feed back into simulation.
+```
+
 **What this regresses:** the particle step (spawn credit, cone sampling, integrate,
 age-out), start→end interpolation, billboard rendering (camera-facing quads, soft-disc
 falloff, alpha blending, back-to-front sort), the system order (scripts → physics →

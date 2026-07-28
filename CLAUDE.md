@@ -299,7 +299,12 @@ schema walk gained a first-class `"integer"` arm (a float, negative, or out-of-u
 where a u32 belongs is `invalid_field_type`; a below-minimum integer is
 `value_out_of_range`); without it, walk/serde disagreement on these fields would fire
 `scene_parse_desync`. The editor viewport shows scenes at rest — no particles until the
-fixed clock advances.
+fixed clock advances. The car demo carries the applied version: an `Exhaust` emitter that
+`car.rhai` parks at the tailpipe each step (rear bumper, offset to the car's right, from
+the same `world.forward` heading the driver already computes) — particles are world-space
+once spawned, so a moving car leaves a trail behind it rather than dragging a plume along.
+It cost `verify/baselines/m11_lap.png` a re-bless; the timeline, physics, and the pinned
+HUD strings are untouched, because particles never feed back into simulation.
 
 Breaking (M14, design in `breaking-design.md`): `Breakable` lists **pre-authored fragments**
 (mesh ref + local placement + cuboid `half_extents` + `density` — no runtime fracture, the

@@ -2529,6 +2529,58 @@
       ]
     },
     {
+      "name": "Exhaust",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            2.05,
+            0.4,
+            8.45
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 55.0,
+          "lifetime": 1.4,
+          "speed": 1.0,
+          "spread": 16.0,
+          "acceleration": [
+            0.0,
+            1.1,
+            0.0
+          ],
+          "drag": 1.2,
+          "start_size": 0.09,
+          "end_size": 0.4,
+          "start_color": [
+            0.3,
+            0.3,
+            0.32
+          ],
+          "end_color": [
+            0.55,
+            0.55,
+            0.58
+          ],
+          "start_alpha": 0.75,
+          "end_alpha": 0.0,
+          "max_particles": 128,
+          "seed": 20
+        }
+      ]
+    },
+    {
       "name": "Sun",
       "components": [
         {
