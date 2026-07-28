@@ -825,10 +825,28 @@ engine diff-render examples/scenes/car_track.json \
 #   because particles never feed back into simulation.
 ```
 
+Emission answers to gameplay through `world.set_particle_rate`: the car's `SkidLeft` /
+`SkidRight` emitters rest at `"rate": 0.0` and are driven off chassis sideslip (with a
+1 m/s deadband, so suspension jitter is not a skid) plus a braking-lockup term, which is
+why the tires smoke in the corners and go silent on the straights.
+
+```bash
+engine simulate examples/scenes/car_track.json --steps 550 \
+    --input examples/scenes/car_track_lap.input.jsonl --bake /tmp/skid.json
+# → SkidLeft bakes "rate": 60.0 under braking — a script-driven component
+#   field bakes change-based, like a velocity or a gauge width. The same
+#   bake at a straight-line step carries no rate edit at all, because the
+#   gate wrote back the file's own 0.0. Particle *state* is in neither file.
+```
+
+A rate the schema forbids (negative, NaN, or too large for f32) is a `script_runtime_error`
+at the call — not a file that bakes and then fails `validate`.
+
 **What this regresses:** the particle step (spawn credit, cone sampling, integrate,
 age-out), start→end interpolation, billboard rendering (camera-facing quads, soft-disc
 falloff, alpha blending, back-to-front sort), the system order (scripts → physics →
-particles → render), and schema-driven validation of the first integer component fields.
+particles → render), schema-driven validation of the first integer component fields, and
+the script emission-rate accessor with its bake path.
 
 ---
 

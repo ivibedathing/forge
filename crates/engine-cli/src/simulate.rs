@@ -294,6 +294,28 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                 }
             }
         }
+        // A script-driven emission rate is scene state too. The particles
+        // themselves are not baked (they are disposable simulation state,
+        // like solver caches) — but `rate` is an authored component field
+        // that a script changed, so it bakes under the same change-based
+        // rule as a velocity or a gauge width.
+        if def.components.iter().any(|c| matches!(c, ComponentData::ParticleEmitter(_))) {
+            if let Ok(current) =
+                scene.world.get::<&engine_core::components::ParticleEmitter>(entity)
+            {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::ParticleEmitter(e) => Some(*e),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.rate != rest.rate {
+                    edits.push(field_edit("rate", "ParticleEmitter", number_from_f32(current.rate)));
+                }
+            }
+        }
         for edit in edits {
             baked = formatter::apply_set_component_field(&baked, &edit)?;
         }
