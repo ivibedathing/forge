@@ -1057,10 +1057,10 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
 }
 
 /// The committed demo: replaying the recorded session drives the physical
-/// car (dynamic RigidBody; the script is engine/brakes/tires) three laps
-/// around the track and parks it on the start line. This is the M11
-/// verification fixture — interactive gameplay, verified headlessly from
-/// text files alone.
+/// car (dynamic box chassis on four raycast-suspension Wheels; the script
+/// is only the driver) three laps around the track and parks it on the
+/// start line. This is the M11/M12 verification fixture — interactive
+/// gameplay, verified headlessly from text files alone.
 #[test]
 fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     let scene = repo_path("examples/scenes/car_track.json");
@@ -1088,27 +1088,27 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     };
 
     // Mid-drive: far side of the circuit (the north straight, z ≈ -9).
-    let (mid_bake, _) = bake_at("1260", "mid.json");
+    let (mid_bake, _) = bake_at("480", "mid.json");
     let mid = baked_position(&mid_bake, "Car");
     assert!(mid[2] < -5.0, "mid-drive the car is on the far straight: {mid:?}");
 
     // After three laps and the braking phase: parked on the start line.
-    let (end_bake, report) = bake_at("2520", "end.json");
+    let (end_bake, report) = bake_at("2880", "end.json");
     let end = baked_position(&end_bake, "Car");
     let (dx, dz) = (end[0], end[2] - 9.0);
     let distance = (dx * dx + dz * dz).sqrt();
     assert!(distance < 1.5, "the drive must park on the start line: {end:?}");
 
-    // The script's HUD is part of the pinned record: parked (speed 0), on
-    // lap 3, with two completed laps of 14.02 and 13.42 behind it. These
-    // strings are golden the way traces are — a drivetrain or timing change
-    // shows up here first.
+    // The script's HUD is part of the pinned record: parked (speed 0),
+    // just across the line onto lap 4, with three completed timed laps
+    // behind it (last 15.45 s, best 15.00 s). These strings are golden the
+    // way traces are — a drivetrain or timing change shows up here first.
     assert_eq!(
         report["hud"],
         serde_json::json!([
             "SPEED 0 KM/H",
-            "LAP 3   TIME 14.55",
-            "LAST 13.42   BEST 13.42"
+            "LAP 4   TIME 2.03",
+            "LAST 15.45   BEST 15.00"
         ]),
         "{report}"
     );

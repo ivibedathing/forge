@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use engine_core::components::{HudRect, HudText, Name, RigidBody, Script, Transform};
+use engine_core::components::{HudRect, HudText, Name, RigidBody, Script, Transform, Wheel};
 use engine_core::input::{self, InputState};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
@@ -124,6 +124,24 @@ impl WorldApi {
         f: impl FnOnce(&mut RigidBody) -> T,
     ) -> std::result::Result<T, Box<EvalAltResult>> {
         self.with_component(name, "RigidBody", f)
+    }
+
+    /// The wheel path (M12): drive/brake/steer access needs a `Wheel`;
+    /// physics reads the fields into its vehicle controller each step.
+    fn with_wheel<T>(
+        &mut self,
+        name: &str,
+        f: impl FnOnce(&mut Wheel) -> T,
+    ) -> std::result::Result<T, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow_mut();
+        let mut wheel = world.get::<&mut Wheel>(entity).map_err(|_| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                format!("entity {name:?} has no Wheel").into(),
+                Position::NONE,
+            ))
+        })?;
+        Ok(f(&mut wheel))
     }
 }
 
@@ -301,6 +319,53 @@ fn curated_engine() -> rhai::Engine {
             w.with_rigid_body(name, |b| {
                 b.angular_velocity = glam::Vec3::new(x as f32, y as f32, z as f32);
             })
+        },
+    );
+    // Wheel controls (M12): pedals and steering wheel. Physics reads these
+    // into its raycast-vehicle controller before every step.
+    engine.register_fn(
+        "engine_force",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| f64::from(wheel.engine_force))
+        },
+    );
+    engine.register_fn(
+        "set_engine_force",
+        |w: &mut WorldApi,
+         name: &str,
+         force: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| wheel.engine_force = force as f32)
+        },
+    );
+    engine.register_fn(
+        "brake",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| f64::from(wheel.brake))
+        },
+    );
+    engine.register_fn(
+        "set_brake",
+        |w: &mut WorldApi,
+         name: &str,
+         force: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| wheel.brake = force as f32)
+        },
+    );
+    engine.register_fn(
+        "steering",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| f64::from(wheel.steering))
+        },
+    );
+    engine.register_fn(
+        "set_steering",
+        |w: &mut WorldApi,
+         name: &str,
+         degrees: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_wheel(name, |wheel| wheel.steering = degrees as f32)
         },
     );
     engine.register_fn(
@@ -846,6 +911,74 @@ mod tests {
         let body = *scene.world.get::<&engine_core::components::RigidBody>(entity).unwrap();
         assert_eq!(body.linear_velocity, glam::Vec3::new(3.0, 0.0, 0.0));
         assert_eq!(body.angular_velocity, glam::Vec3::new(0.0, 45.0, 0.0));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn wheel_controls_read_and_write_the_wheel_component() {
+        let dir = temp_dir("wheel");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                world.set_engine_force("WheelBL", 900.0);
+                world.set_brake("WheelBL", world.brake("WheelBL") + 2.0);
+                world.set_steering("WheelFL", 12.5);
+                if world.engine_force("WheelBL") != 900.0 {
+                    world.set_steering("WheelFL", -1.0); // readback failed
+                }
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Car","components":[
+                {"type":"Transform"},
+                {"type":"RigidBody","body":"dynamic"},
+                {"type":"Collider","shape":"cuboid","half_extents":[1.0,0.5,2.0]},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"WheelBL","components":[
+                {"type":"Transform"},
+                {"type":"Wheel","vehicle":"Car","offset":[-0.8,0.0,1.2]}
+            ]},
+            {"name":"WheelFL","components":[
+                {"type":"Transform"},
+                {"type":"Wheel","vehicle":"Car","offset":[-0.8,0.0,-1.2]}
+            ]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene =
+            Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        host.step(&mut scene.world, 0, &InputState::default()).unwrap();
+        host.step(&mut scene.world, 1, &InputState::default()).unwrap();
+
+        let wheel = |name: &str| {
+            let entity = scene.entity(name).unwrap();
+            scene
+                .world
+                .get::<&engine_core::components::Wheel>(entity)
+                .unwrap()
+                .clone()
+        };
+        let rear = wheel("WheelBL");
+        assert_eq!(rear.engine_force, 900.0);
+        assert_eq!(rear.brake, 4.0, "brake accumulated across two steps via readback");
+        let front = wheel("WheelFL");
+        assert_eq!(front.steering, 12.5, "steering set (and readback saw 900)");
+
+        // A wheel call against an entity with no Wheel is structured.
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.set_engine_force("Mover", 1.0); }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host
+            .step(&mut scene.world, 0, &InputState::default())
+            .unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(error.message.contains("no Wheel"), "{}", error.message);
         std::fs::remove_dir_all(&dir).ok();
     }
 
