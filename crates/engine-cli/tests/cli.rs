@@ -1461,3 +1461,283 @@ fn m13_smoke_fixture_validates_clean() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// ── breaking (M14) ─────────────────────────────────────────────────────
+
+/// Determinism extends through breaks: the fixture's crate shatters at the
+/// same step into the same fragments, byte-identical run to run and against
+/// the committed golden. The golden also pins the trace shape: one `broke`
+/// line, and fragment rows joining from the step after the break.
+#[test]
+fn breaking_traces_are_deterministic_and_match_the_golden() {
+    let scene = repo_path("examples/scenes/verify/m14_break.json");
+    let trace = |name: &str| {
+        let path = std::env::temp_dir().join(format!(
+            "engine-m14-{}-{name}.jsonl",
+            std::process::id()
+        ));
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", "300"])
+            .arg("--trace")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        std::fs::read(&path).unwrap()
+    };
+
+    let first = trace("a");
+    assert_eq!(first, trace("b"), "twice-run traces must be byte-identical");
+
+    let golden = std::fs::read(repo_path(
+        "examples/scenes/verify/baselines/m14_break.trace.jsonl",
+    ))
+    .unwrap();
+    assert_eq!(
+        first, golden,
+        "trace drifted from the committed golden — if a rapier upgrade \
+         caused this, review the diff as a breaking change"
+    );
+
+    let lines: Vec<serde_json::Value> = String::from_utf8(golden)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let breaks: Vec<&serde_json::Value> =
+        lines.iter().filter(|l| l.get("broke").is_some()).collect();
+    assert_eq!(breaks.len(), 1, "exactly one break");
+    assert_eq!(breaks[0]["broke"], "Crate");
+    let broke_step = breaks[0]["step"].as_u64().unwrap();
+    let first_fragment_row = lines
+        .iter()
+        .find(|l| l["entity"] == "Crate.frag0")
+        .expect("fragments join the rows");
+    assert_eq!(
+        first_fragment_row["step"].as_u64().unwrap(),
+        broke_step + 1,
+        "fragment rows start the step after the break"
+    );
+}
+
+/// A break is a structural change bake must survive: the broken entity is
+/// spliced out of the file, its fragments spliced in with their full
+/// current state, and the result is a valid scene.
+#[test]
+fn a_break_bakes_to_a_valid_scene_with_fragments() {
+    let scene = repo_path("examples/scenes/verify/m14_break.json");
+    let dir = std::env::temp_dir().join(format!("engine-m14-bake-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let baked = dir.join("baked.json");
+
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "300"])
+        .arg("--bake")
+        .arg(&baked)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    let validate = engine().arg("validate").arg(&baked).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0), "the baked scene validates: {validate:?}");
+
+    let root: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&baked).unwrap()).unwrap();
+    let names: Vec<&str> = root["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"Crate"), "the broken entity is gone: {names:?}");
+    assert!(names.contains(&"Ball"), "untouched entities survive: {names:?}");
+    for i in 0..4 {
+        let name = format!("Crate.frag{i}");
+        let entity = root["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == name.as_str())
+            .unwrap_or_else(|| panic!("{name} baked in: {names:?}"));
+        let body = entity["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["type"] == "RigidBody")
+            .expect("fragments bake with their body");
+        assert_eq!(body["body"], "dynamic");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The baked post-break scene reloads into exactly the post-break world:
+/// rendering it at rest equals rendering the original scene at the bake
+/// step, bit for bit.
+#[test]
+fn a_baked_break_renders_bit_exactly() {
+    let scene = repo_path("examples/scenes/verify/m14_break.json");
+    let dir = std::env::temp_dir().join(format!("engine-m14-render-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let baked = dir.join("baked.json");
+
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "300"])
+        .arg("--bake")
+        .arg(&baked)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    let shot = |scene: &Path, steps: &str, out: &str| {
+        let path = dir.join(out);
+        let output = engine()
+            .arg("screenshot")
+            .arg(scene)
+            .args(["--steps", steps])
+            .args(["--width", "320", "--height", "180"])
+            .arg("--out")
+            .arg(&path)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "screenshot failed for a non-GPU reason: {stderr}"
+            );
+            return None;
+        }
+        Some(path)
+    };
+
+    let Some(live) = shot(&scene, "300", "live.png") else {
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    };
+    let resumed = shot(&baked, "0", "resumed.png").expect("GPU worked a moment ago");
+    assert_eq!(
+        std::fs::read(&live).unwrap(),
+        std::fs::read(&resumed).unwrap(),
+        "the baked scene must reload into exactly the post-break world"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `world.break_entity` and `world.explode` drive breaks from scripts —
+/// headless, deterministic, and observable in the trace. The script-only
+/// crate has no threshold (nothing but the script can break it); the
+/// thresholded one is broken by the blast.
+#[test]
+fn scripts_break_and_explode() {
+    let dir = std::env::temp_dir().join(format!("engine-m14-script-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(
+        dir.join("scripts/demolish.rhai"),
+        r#"fn step(world, step) {
+            if step == 5 { world.break_entity("CrateA"); }
+            if step == 10 { world.explode(0.0, 0.5, 2.0, 3.0, 50.0); }
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.json"),
+        r#"{"name":"demolition","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"cuboid","half_extents":[10.0,0.05,10.0]}
+            ]},
+            {"name":"CrateA","components":[
+                {"type":"Transform","position":[0.0,0.55,0.0]},
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Breakable","fragments":[
+                    {"mesh":"builtin:cube","offset":[-0.25,0.0,0.0],
+                     "scale":[0.5,0.5,0.5],"half_extents":[0.25,0.25,0.25]},
+                    {"mesh":"builtin:cube","offset":[0.25,0.0,0.0],
+                     "scale":[0.5,0.5,0.5],"half_extents":[0.25,0.25,0.25]}
+                ]},
+                {"type":"Script","source":"scripts/demolish.rhai"}
+            ]},
+            {"name":"CrateB","components":[
+                {"type":"Transform","position":[0.0,0.55,2.0]},
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5]},
+                {"type":"Breakable","impulse_threshold":5.0,"fragments":[
+                    {"mesh":"builtin:cube","offset":[0.0,0.0,0.0],
+                     "scale":[0.5,0.5,0.5],"half_extents":[0.25,0.25,0.25]}
+                ]}
+            ]},
+            {"name":"Cam","components":[{"type":"Camera","active":true}]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let trace_path = dir.join("t.jsonl");
+    let run = || {
+        let output = engine()
+            .arg("simulate")
+            .arg(dir.join("scene.json"))
+            .args(["--steps", "60"])
+            .arg("--trace")
+            .arg(&trace_path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        std::fs::read(&trace_path).unwrap()
+    };
+    let first = run();
+    assert_eq!(first, run(), "scripted breaks stay deterministic");
+
+    let lines: Vec<serde_json::Value> = String::from_utf8(first)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let breaks: Vec<(&str, u64)> = lines
+        .iter()
+        .filter_map(|l| Some((l.get("broke")?.as_str()?, l["step"].as_u64()?)))
+        .collect();
+    // break_entity is queued at script step 5 (trace step 6); the blast is
+    // queued at script step 10 and lands in trace step 11's physics.
+    assert_eq!(breaks, [("CrateA", 6), ("CrateB", 11)], "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l["entity"] == "CrateA.frag0"),
+        "script-broken fragments trace as dynamic bodies"
+    );
+    assert!(
+        lines.iter().any(|l| l["entity"] == "CrateB.frag0"),
+        "blast-broken fragments trace as dynamic bodies"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The new validation rule rides the NDJSON protocol like every other:
+/// a thresholded Breakable with no Collider is `breakable_without_collider`,
+/// exit 1.
+#[test]
+fn a_thresholded_breakable_without_a_collider_fails_validation() {
+    let scene = scene_file(
+        "breakable-no-collider",
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Crate","components":[
+                {"type":"Transform"},
+                {"type":"Breakable","impulse_threshold":5.0,
+                 "fragments":[{"mesh":"builtin:cube"}]}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout_of(&output).is_empty(), "stdout must be empty on failure");
+    let codes = codes_of(&stderr_lines(&output));
+    assert!(
+        codes.contains(&"breakable_without_collider".to_string()),
+        "{codes:?}"
+    );
+}

@@ -137,6 +137,10 @@ registry! {
     ANIMATION_ON_DYNAMIC_BODY = "animation_on_dynamic_body", Input,
         "a clip animates the Transform of a dynamic RigidBody; make it kinematic";
 
+    // ── Breaking (M14) ─────────────────────────────────────────────────
+    BREAKABLE_WITHOUT_COLLIDER = "breakable_without_collider", Input,
+        "a Breakable sets impulse_threshold but the entity has no Collider to be hit on";
+
     // ── Scripting (M10) ────────────────────────────────────────────────
     SCRIPT_PARSE_ERROR = "script_parse_error", Input,
         "a script file does not compile";

@@ -526,6 +526,79 @@ pub struct HudRect {
     pub opacity: f32,
 }
 
+/// One piece a `Breakable` entity shatters into (M14).
+///
+/// `mesh` follows `Mesh.asset` rules (builtin or relative glTF path).
+/// `offset`/`rotation`/`scale` place the fragment relative to the parent
+/// entity, so the assembled fragments overlay the unbroken model.
+/// `half_extents` is the fragment's cuboid collider in fragment-local units —
+/// `scale` scales it, exactly as `Transform.scale` scales a `Collider`.
+/// Cuboid-only fragment colliders are deliberate v1 scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Fragment {
+    pub mesh: String,
+
+    /// Position relative to the parent entity's origin, in parent-local
+    /// units (the parent's `Transform.scale` applies).
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub offset: Vec3,
+
+    /// Euler angles in **degrees**, `[x, y, z]`, XYZ order — the same
+    /// convention as `Transform.rotation`.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub rotation: Vec3,
+
+    #[serde(default = "ones")]
+    #[schemars(with = "[f32; 3]")]
+    pub scale: Vec3,
+
+    /// Cuboid collider half-extents. The default matches `builtin:cube`, so
+    /// a fragment that is a scaled builtin cube needs no collider authoring.
+    #[serde(default = "half_cube")]
+    #[schemars(with = "[f32; 3]")]
+    pub half_extents: Vec3,
+
+    /// Fragment mass comes from `density` x collider volume. `> 0`.
+    #[serde(default = "one")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub density: f32,
+}
+
+fn ones() -> Vec3 {
+    Vec3::ONE
+}
+
+fn half_cube() -> Vec3 {
+    Vec3::splat(0.5)
+}
+
+/// Breaks into pre-authored fragments (M14) — on a hard enough collision,
+/// inside an explosion, or when a script calls `world.break_entity`.
+///
+/// On break the entity is replaced, after that step's physics, by one
+/// dynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),
+/// each inheriting the parent's `Material` and motion. Fragments are
+/// ordinary entities afterwards: they render, trace, and bake like anything
+/// else. See `breaking-design.md`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Breakable {
+    /// What the entity becomes. At least one.
+    #[schemars(length(min = 1))]
+    pub fragments: Vec<Fragment>,
+
+    /// Contact impulse, in kg·m/s (≈ mass x closing speed), at or above
+    /// which a collision breaks this entity. **Absent means collisions
+    /// never break it** — only scripts and explosions do. Impulse rather
+    /// than force so the number survives a `timestep_hz` change. `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub impulse_threshold: Option<f32>,
+}
+
 /// Gameplay logic as data (M10): a Rhai script run once per fixed step.
 ///
 /// `source` is a relative `.rhai` path defining `fn step(world, step)`.
@@ -811,6 +884,19 @@ macro_rules! components {
                     $(Self::$variant(component) => { builder.add(component); })*
                 }
             }
+
+            /// Every component the entity currently holds, in declaration
+            /// order — how bake serializes an entity the run spawned (a
+            /// break's fragments) back into scene JSON.
+            pub fn collect_from(world: &hecs::World, entity: hecs::Entity) -> Vec<ComponentData> {
+                let mut components = Vec::new();
+                $(
+                    if let Ok(c) = world.get::<&$variant>(entity) {
+                        components.push(Self::$variant((*c).clone()));
+                    }
+                )*
+                components
+            }
         }
     };
 }
@@ -824,6 +910,7 @@ components!(
     AmbientLight,
     RigidBody,
     Collider,
+    Breakable,
     AnimationPlayer,
     Script,
     Wheel,
@@ -914,6 +1001,7 @@ mod tests {
                 "AmbientLight",
                 "RigidBody",
                 "Collider",
+                "Breakable",
                 "AnimationPlayer",
                 "Script",
                 "Wheel",

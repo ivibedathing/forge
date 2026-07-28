@@ -668,6 +668,76 @@ pub fn apply_remove_component(source: &str, edit: &RemoveComponent) -> Result<St
     Ok(edited)
 }
 
+/// Remove one entity from the scene — bake's structural splice for an entity
+/// that no longer exists in the world (it broke into fragments). Addressed
+/// by `name`; a vanished target is `edit_target_missing`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveEntity {
+    pub entity: String,
+}
+
+/// Apply a [`RemoveEntity`]: delete exactly the entity's bytes plus the one
+/// separating comma, leaving every other byte in place. Removing the only
+/// entity leaves `[]`.
+pub fn apply_remove_entity(source: &str, edit: &RemoveEntity) -> Result<String> {
+    let root: Value = serde_json::from_str(source).map_err(|e| {
+        EngineError::new(
+            codes::EDIT_TARGET_MISSING,
+            format!("cannot edit a file that no longer parses: {e}"),
+        )
+    })?;
+    let entities = root["entities"].as_array().ok_or_else(|| {
+        EngineError::new(codes::EDIT_TARGET_MISSING, "the file has no entities array")
+    })?;
+    let entity_index = entities
+        .iter()
+        .position(|e| e["name"] == edit.entity.as_str())
+        .ok_or_else(|| {
+            EngineError::new(
+                codes::EDIT_TARGET_MISSING,
+                format!("entity {:?} is no longer in the file", edit.entity),
+            )
+            .entity(&edit.entity)
+        })?;
+
+    let index = SpanIndex::new(source);
+    let span_of = |pointer: &str| {
+        index.span_of(pointer).ok_or_else(|| {
+            EngineError::new(
+                codes::EDIT_TARGET_MISSING,
+                format!("nothing at {pointer:?} to edit"),
+            )
+            .path(pointer)
+        })
+    };
+
+    let (cut_start, cut_end, replacement) = if entities.len() == 1 {
+        // The only entity: the array collapses to `[]`.
+        let array = span_of("/entities")?;
+        (array.start, array.end, "[]")
+    } else if entity_index + 1 < entities.len() {
+        // Not the last: cut from this entity's start to the next one's,
+        // which eats the separating comma and keeps this one's indentation
+        // bytes for its successor.
+        let this = span_of(&format!("/entities/{entity_index}"))?;
+        let next = span_of(&format!("/entities/{}", entity_index + 1))?;
+        (this.start, next.start, "")
+    } else {
+        // The last: cut from the previous entity's end through this one's,
+        // eating the comma and the line break before it.
+        let previous = span_of(&format!("/entities/{}", entity_index - 1))?;
+        let this = span_of(&format!("/entities/{entity_index}"))?;
+        (previous.end, this.end, "")
+    };
+
+    let mut edited = String::with_capacity(source.len());
+    edited.push_str(&source[..cut_start]);
+    edited.push_str(replacement);
+    edited.push_str(&source[cut_end..]);
+    check_still_parses(&edited, "/entities")?;
+    Ok(edited)
+}
+
 /// Leading whitespace of the line containing byte `at`.
 fn line_indent(source: &str, at: usize) -> String {
     let line_start = source[..at].rfind('\n').map_or(0, |i| i + 1);
@@ -1147,6 +1217,41 @@ mod tests {
         let err = apply_remove_component(SCENE, &edit).unwrap_err();
         assert_eq!(err.error, "edit_target_missing");
         assert_eq!(err.context().unwrap().component.as_deref(), Some("Camera"));
+    }
+
+    #[test]
+    fn remove_entity_cuts_exactly_one_block() {
+        let edit = RemoveEntity { entity: "Sphere".into() };
+        let edited = apply_remove_entity(SCENE, &edit).unwrap();
+        assert!(!edited.contains("Sphere"), "{edited}");
+        let root: Value = serde_json::from_str(&edited).unwrap();
+        assert_eq!(root["entities"].as_array().unwrap().len(), 1);
+        assert_eq!(root["entities"][0]["name"], json!("Camera1"));
+
+        // The last entity: the predecessor keeps its bytes, loses its comma.
+        let edit = RemoveEntity { entity: "Camera1".into() };
+        let edited = apply_remove_entity(SCENE, &edit).unwrap();
+        let root: Value = serde_json::from_str(&edited).unwrap();
+        assert_eq!(root["entities"].as_array().unwrap().len(), 1);
+        assert_eq!(root["entities"][0]["name"], json!("Sphere"));
+    }
+
+    #[test]
+    fn remove_the_only_entity_leaves_an_empty_array() {
+        let edited =
+            apply_remove_entity(SCENE, &RemoveEntity { entity: "Sphere".into() }).unwrap();
+        let edited =
+            apply_remove_entity(&edited, &RemoveEntity { entity: "Camera1".into() }).unwrap();
+        let root: Value = serde_json::from_str(&edited).unwrap();
+        assert_eq!(root["entities"], json!([]));
+    }
+
+    #[test]
+    fn remove_entity_against_a_vanished_target_reports_not_corrupts() {
+        let err =
+            apply_remove_entity(SCENE, &RemoveEntity { entity: "Gone".into() }).unwrap_err();
+        assert_eq!(err.error, "edit_target_missing");
+        assert_eq!(err.context().unwrap().entity.as_deref(), Some("Gone"));
     }
 
     #[test]

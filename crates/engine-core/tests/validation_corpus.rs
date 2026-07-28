@@ -89,6 +89,17 @@ const AGREEMENT_CORPUS: &[&str] = &[
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"ParticleEmitter","seed":1.5}]}]}"#,
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"ParticleEmitter","seed":-1}]}]}"#,
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"ParticleEmitter","max_particles":4294967296}]}]}"#,
+    // Breaking (M14): valid, semantically broken (serde parses), shape-broken.
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Transform"},
+        {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5]},
+        {"type":"Breakable","impulse_threshold":5.0,"fragments":[
+            {"mesh":"builtin:cube","offset":[0.25,0,0],"scale":[0.5,0.5,0.5]}]}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Transform"},
+        {"type":"Breakable","fragments":[]}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Transform"},
+        {"type":"Breakable","impulse_threshold":5.0,"fragments":[{"mesh":"builtin:cube"}]}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Transform"},
+        {"type":"Breakable","fragments":[{"mesh":"builtin:cube","half_extents":[-1,1,1]}]}]}]}"#,
     // Shape-broken — serde must reject every one of these.
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"HudText"}]}]}"#,
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"HudText","text":42}]}]}"#,
@@ -108,6 +119,13 @@ const AGREEMENT_CORPUS: &[&str] = &[
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Transform","position":[0,1]}]}]}"#,
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Transform","position":[0,"x",2]}]}]}"#,
     r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Camera","active":"yes"}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Breakable","fragments":5}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Breakable","fragments":[7]}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[{"type":"Breakable","fragments":[{}]}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[
+        {"type":"Breakable","fragments":[{"mesh":42}]}]}]}"#,
+    r#"{"name":"s","entities":[{"name":"A","components":[
+        {"type":"Breakable","fragments":[{"mesh":"builtin:cube","ofset":[0,0,0]}]}]}]}"#,
 ];
 
 #[test]

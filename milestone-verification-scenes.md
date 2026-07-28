@@ -817,6 +817,46 @@ particles → render), and schema-driven validation of the first integer compone
 
 ---
 
+## M14 — Breaking objects (pre-authored fragments)
+
+**Scene:** `examples/scenes/verify/m14_break.json` — a breakable crate (four pre-authored
+quarter-cube fragments, `impulse_threshold: 5.0`) standing on the ground with a heavy ball
+falling on it. The ball smashes the crate at step 52; the fragments scatter and settle.
+
+The pass condition is the M12 thesis — *a break is data, not an effect*:
+
+```bash
+engine validate examples/scenes/verify/m14_break.json
+engine simulate examples/scenes/verify/m14_break.json --steps 300 --trace /tmp/m14.jsonl
+# → the trace holds one {"broke": "Crate", "fragments": ["Crate.frag0", ...]} line at
+#   step 52, and the fragment rows join from step 53; byte-identical to the committed
+#   golden examples/scenes/verify/baselines/m14_break.trace.jsonl
+engine diff-render examples/scenes/verify/m14_break.json \
+    examples/scenes/verify/baselines/m14_break.png --steps 300
+# → bit-exact: scattered fragments are a pinnable render like any other pose
+engine simulate examples/scenes/verify/m14_break.json --steps 300 --bake /tmp/m14_baked.json
+engine validate /tmp/m14_baked.json
+# → the baked file has no "Crate" entity and four Crate.frag* entities with full state;
+#   rendering it at --steps 0 equals the live scene at --steps 300, bit for bit (CLI test)
+
+# Script triggers (CLI test `scripts_break_and_explode`): world.break_entity(name) breaks a
+# threshold-less crate on demand; world.explode(x,y,z,radius,impulse) breaks a thresholded
+# one in range and kicks its fragments outward. Both replay deterministically.
+
+# Error path: {"type": "Breakable", "impulse_threshold": 5.0, ...} on an entity with no
+# Collider must fail validation with breakable_without_collider, exit 1.
+```
+
+A scene with no `Breakable` must behave exactly as before M14 — the M8 golden trace and
+every committed baseline stay byte-identical (force events only exist on breakable
+colliders; the break phase without candidates is a no-op).
+
+**What this regresses:** contact-event plumbing, the validation walk (arrays of objects),
+trace shape, bake's new structural splices (`apply_remove_entity` / `apply_add_entity`),
+and the script→physics queue boundary.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):

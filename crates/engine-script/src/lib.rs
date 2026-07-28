@@ -21,7 +21,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use engine_core::components::{HudRect, HudText, Name, RigidBody, Script, Transform, Wheel};
+use engine_core::components::{
+    Breakable, HudRect, HudText, Name, RigidBody, Script, Transform, Wheel,
+};
 use engine_core::contact::ContactState;
 use engine_core::input::{self, InputState};
 use engine_core::{codes, EngineError, Result};
@@ -42,6 +44,16 @@ const MAX_OPERATIONS: u64 = 1_000_000;
 const MAX_HUD_LINES: usize = 16;
 const MAX_HUD_CHARS: usize = 96;
 
+/// A blast queued by `world.explode`, waiting for the next physics step.
+/// Plain numbers so the crate that owns physics can translate — scripting
+/// does not depend on the physics crate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QueuedExplosion {
+    pub center: [f32; 3],
+    pub radius: f32,
+    pub impulse: f32,
+}
+
 struct CompiledScript {
     /// The entity the `Script` component sits on — error context.
     owner: String,
@@ -59,6 +71,12 @@ pub struct ScriptHost {
     /// The `world.state` store: per-run, shared by every script (script
     /// order is deterministic, so cross-script reads are too).
     state: Rc<RefCell<HashMap<String, f64>>>,
+    /// Breaks queued by `world.break_entity`, drained by the sim loop after
+    /// the step via [`ScriptHost::take_breaks`].
+    breaks: Rc<RefCell<Vec<String>>>,
+    /// Blasts queued by `world.explode`, drained via
+    /// [`ScriptHost::take_explosions`].
+    explosions: Rc<RefCell<Vec<QueuedExplosion>>>,
 }
 
 /// What scripts see: the world, entity names, and the fixed timestep.
@@ -81,6 +99,10 @@ struct WorldApi {
     state: Rc<RefCell<HashMap<String, f64>>>,
     /// `world.hud`: the lines pushed during this step, in push order.
     hud: Rc<RefCell<Vec<String>>>,
+    /// `world.break_entity`: entity names queued to break after this step.
+    breaks: Rc<RefCell<Vec<String>>>,
+    /// `world.explode`: blasts queued for the next physics step.
+    explosions: Rc<RefCell<Vec<QueuedExplosion>>>,
 }
 
 impl WorldApi {
@@ -256,6 +278,53 @@ fn curated_engine() -> rhai::Engine {
     engine.register_fn("set_state", |w: &mut WorldApi, key: &str, value: i64| {
         w.state.borrow_mut().insert(key.to_string(), value as f64);
     });
+
+    engine.register_fn(
+        "break_entity",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Validated at call time (unknown name, nothing to break into):
+            // deterministic failure over a silent no-op. The break itself
+            // applies after this step's physics.
+            let entity = w.entity(name)?;
+            if w.world.borrow().get::<&Breakable>(entity).is_err() {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("entity {name:?} has no Breakable").into(),
+                    Position::NONE,
+                )));
+            }
+            w.breaks.borrow_mut().push(name.to_string());
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "explode",
+        |w: &mut WorldApi,
+         x: f64,
+         y: f64,
+         z: f64,
+         radius: f64,
+         impulse: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            if !(radius > 0.0) {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("explosion radius must be positive, got {radius}").into(),
+                    Position::NONE,
+                )));
+            }
+            if impulse < 0.0 {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("explosion impulse cannot be negative, got {impulse}").into(),
+                    Position::NONE,
+                )));
+            }
+            w.explosions.borrow_mut().push(QueuedExplosion {
+                center: [x as f32, y as f32, z as f32],
+                radius: radius as f32,
+                impulse: impulse as f32,
+            });
+            Ok(())
+        },
+    );
 
     engine.register_fn(
         "position",
@@ -500,6 +569,16 @@ fn curated_engine() -> rhai::Engine {
     engine
 }
 
+fn name_table(world: &World) -> Rc<HashMap<String, hecs::Entity>> {
+    Rc::new(
+        world
+            .query::<(hecs::Entity, &Name)>()
+            .iter()
+            .map(|(entity, name)| (name.0.clone(), entity))
+            .collect(),
+    )
+}
+
 fn parse_error(file: &str, owner: &str, e: &rhai::ParseError) -> EngineError {
     let mut error = EngineError::new(
         codes::SCRIPT_PARSE_ERROR,
@@ -567,19 +646,32 @@ impl ScriptHost {
         // Deterministic script order: sort by owning entity name.
         scripts.sort_by(|a, b| a.owner.cmp(&b.owner));
 
-        let names: HashMap<String, hecs::Entity> = world
-            .query::<(hecs::Entity, &Name)>()
-            .iter()
-            .map(|(entity, name)| (name.0.clone(), entity))
-            .collect();
-
         Ok(Some(Self {
             engine,
             scripts,
-            names: Rc::new(names),
+            names: name_table(world),
             dt: 1.0 / timestep_hz.max(1) as f32,
             state: Rc::new(RefCell::new(HashMap::new())),
+            breaks: Rc::new(RefCell::new(Vec::new())),
+            explosions: Rc::new(RefCell::new(Vec::new())),
         }))
+    }
+
+    /// Rebuild the name table from the world. Call after anything changes
+    /// the entity set — a break despawns the parent and spawns fragments,
+    /// and scripts address entities by name.
+    pub fn sync_names(&mut self, world: &World) {
+        self.names = name_table(world);
+    }
+
+    /// Drain the breaks scripts queued this step, in call order.
+    pub fn take_breaks(&self) -> Vec<String> {
+        self.breaks.borrow_mut().drain(..).collect()
+    }
+
+    /// Drain the explosions scripts queued this step, in call order.
+    pub fn take_explosions(&self) -> Vec<QueuedExplosion> {
+        self.explosions.borrow_mut().drain(..).collect()
     }
 
     /// Run every script's `step` for step index `step`, with `input` as the
@@ -604,6 +696,8 @@ impl ScriptHost {
             contacts: Rc::new(contacts.clone()),
             state: Rc::clone(&self.state),
             hud: Rc::new(RefCell::new(Vec::new())),
+            breaks: Rc::clone(&self.breaks),
+            explosions: Rc::clone(&self.explosions),
         };
 
         let mut failure: Option<EngineError> = None;
@@ -1223,6 +1317,100 @@ mod tests {
         // Step 7 read the value step 5 wrote; the unset key fell back.
         assert_eq!(p.x, 1.0, "state write must persist: {p}");
         assert_eq!(p.z, -7.5, "unset state must yield the default: {p}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn breakable_scene(dir: &Path, script: &str) -> (Scene, std::path::PathBuf) {
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join("scripts/test.rhai"), script).unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Crate","components":[
+                {"type":"Transform","position":[0.0,0.5,0.0]},
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5]},
+                {"type":"Breakable","fragments":[{"mesh":"builtin:cube"}]},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"Solid","components":[{"type":"Transform"}]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        (scene, scene_path)
+    }
+
+    #[test]
+    fn break_entity_queues_and_validates_at_call_time() {
+        let dir = temp_dir("break");
+        let (mut scene, path) = breakable_scene(
+            &dir,
+            r#"fn step(world, step) {
+                if step == 0 { world.break_entity("Crate"); }
+                if step == 1 { world.break_entity("Solid"); }
+                if step == 2 { world.break_entity("Ghost"); }
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+
+        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+        assert_eq!(host.take_breaks(), vec!["Crate".to_string()]);
+        assert!(host.take_breaks().is_empty(), "draining drains");
+
+        let error = host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap_err();
+        assert!(error.message.contains("no Breakable"), "{}", error.message);
+
+        let error = host.step(&mut scene.world, 2, &InputState::default(), &ContactState::default()).unwrap_err();
+        assert!(error.message.contains("no entity named"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn explode_queues_a_blast_and_rejects_a_bad_radius() {
+        let dir = temp_dir("explode");
+        let (mut scene, path) = breakable_scene(
+            &dir,
+            r#"fn step(world, step) {
+                if step == 0 { world.explode(1.0, 2.0, 3.0, 5.0, 20.0); }
+                if step == 1 { world.explode(0.0, 0.0, 0.0, 0.0, 1.0); }
+                if step == 2 { world.explode(0.0, 0.0, 0.0, 1.0, -1.0); }
+            }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+
+        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+        assert_eq!(
+            host.take_explosions(),
+            vec![QueuedExplosion { center: [1.0, 2.0, 3.0], radius: 5.0, impulse: 20.0 }]
+        );
+
+        let error = host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap_err();
+        assert!(error.message.contains("radius must be positive"), "{}", error.message);
+
+        let error = host.step(&mut scene.world, 2, &InputState::default(), &ContactState::default()).unwrap_err();
+        assert!(error.message.contains("cannot be negative"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sync_names_lets_scripts_reach_spawned_entities() {
+        let dir = temp_dir("sync");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.set_position("Fragment", 1.0, 2.0, 3.0); }"#,
+        );
+        let mut host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+
+        // Before the spawn the name is unknown — a runtime error.
+        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
+        assert!(error.message.contains("no entity named"), "{}", error.message);
+
+        let spawned = scene
+            .world
+            .spawn((Name("Fragment".to_string()), Transform::default()));
+        host.sync_names(&scene.world);
+        host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap();
+        let p = scene.world.get::<&Transform>(spawned).unwrap().position;
+        assert_eq!(p, glam::Vec3::new(1.0, 2.0, 3.0));
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -1,0 +1,62 @@
+{
+  "name": "m14_break",
+  "physics": { "gravity": [0.0, -9.81, 0.0], "timestep_hz": 60 },
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "scale": [10.0, 1.0, 10.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.35, 0.4, 0.32], "roughness": 0.9 },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.05, 0.5] }
+      ]
+    },
+    {
+      "name": "Crate",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.55, 0.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.8, 0.5, 0.2], "roughness": 0.7 },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5] },
+        { "type": "Breakable", "impulse_threshold": 5.0, "fragments": [
+          { "mesh": "builtin:cube", "offset": [-0.25, -0.25, -0.25],
+            "scale": [0.5, 0.5, 0.5], "half_extents": [0.25, 0.25, 0.25] },
+          { "mesh": "builtin:cube", "offset": [0.25, -0.25, 0.25],
+            "scale": [0.5, 0.5, 0.5], "half_extents": [0.25, 0.25, 0.25] },
+          { "mesh": "builtin:cube", "offset": [-0.25, 0.25, 0.25],
+            "scale": [0.5, 0.5, 0.5], "half_extents": [0.25, 0.25, 0.25] },
+          { "mesh": "builtin:cube", "offset": [0.25, 0.25, -0.25],
+            "scale": [0.5, 0.5, 0.5], "half_extents": [0.25, 0.25, 0.25] }
+        ] }
+      ]
+    },
+    {
+      "name": "Ball",
+      "components": [
+        { "type": "Transform", "position": [0.0, 5.0, 0.0] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.2, 0.35, 0.9], "roughness": 0.4 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "sphere", "radius": 0.5, "density": 20.0 }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-50.0, 30.0, 0.0] },
+        { "type": "DirectionalLight" }
+      ]
+    },
+    {
+      "name": "Ambient",
+      "components": [ { "type": "AmbientLight", "intensity": 0.05 } ]
+    },
+    {
+      "name": "Player",
+      "components": [
+        { "type": "Transform", "position": [0.0, 3.0, 10.0], "rotation": [-12.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 50.0, "active": true }
+      ]
+    }
+  ]
+}

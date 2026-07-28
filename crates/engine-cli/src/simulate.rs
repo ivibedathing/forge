@@ -14,6 +14,7 @@ use engine_core::input::{InputState, InputTimeline};
 use engine_core::particles::ParticleSystem;
 use engine_core::{codes, EngineError, Result, Scene};
 use engine_physics::PhysicsWorld;
+use engine_script::ScriptHost;
 use glam::Vec3;
 use serde_json::{json, Value};
 
@@ -32,13 +33,12 @@ pub fn run(
     input: Option<&InputTimeline>,
     mut trace: Option<&mut dyn Write>,
 ) -> Result<StepRun> {
-    let scripts =
+    let mut scripts =
         engine_script::ScriptHost::build(&scene.world, scene_path, scene.physics.timestep_hz)?;
     let assets = engine_assets::AssetServer::for_scene(scene_path);
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
     let mut particles = ParticleSystem::build(&scene.world);
     let dt = 1.0 / scene.physics.timestep_hz.max(1) as f32;
-    let trace_names = physics.dynamic_entity_names(&scene.world);
     let mut contacts = 0u64;
     let no_keys = InputState::default();
     // What scripts see at step N is the touching-state physics left at step
@@ -52,6 +52,13 @@ pub fn run(
             let step_index = u64::from(step) - 1;
             let held = input.map_or(&no_keys, |t| t.held_at(step_index));
             hud = scripts.step(&mut scene.world, step_index, held, &contact_state)?;
+            for blast in scripts.take_explosions() {
+                physics.queue_explosion(engine_physics::Explosion {
+                    center: Vec3::from(blast.center),
+                    radius: blast.radius,
+                    impulse: blast.impulse,
+                });
+            }
         }
         let events = physics.step(&mut scene.world);
         contact_state.apply(&events);
@@ -60,6 +67,10 @@ pub fn run(
         particles.step(&scene.world, dt);
 
         if let Some(trace) = trace.as_deref_mut() {
+            // Re-enumerated every step: a broken entity's row disappears the
+            // step after its break, and fragment rows join then. Sorted, so
+            // scenes where nothing breaks trace identically every step.
+            let trace_names = physics.dynamic_entity_names(&scene.world);
             for name in &trace_names {
                 let Some(entity) = scene.entity(name) else {
                     continue;
@@ -104,6 +115,28 @@ pub fn run(
             }
         }
         contacts += events.len() as u64;
+
+        // Breaks apply after physics, before the next step's scripts: the
+        // broken entity traced its final position above, and its fragments
+        // enter the rows from the next step.
+        let forced = scripts.as_ref().map(ScriptHost::take_breaks).unwrap_or_default();
+        let broke = engine_physics::apply_breaks(&mut scene.world, &mut physics, &forced)?;
+        if !broke.is_empty() {
+            scene.refresh_names();
+            if let Some(scripts) = &mut scripts {
+                scripts.sync_names(&scene.world);
+            }
+            if let Some(trace) = trace.as_deref_mut() {
+                for event in &broke {
+                    let fragments: Vec<&str> =
+                        event.fragments.iter().map(|(name, _)| name.as_str()).collect();
+                    write_line(
+                        trace,
+                        &json!({ "step": step, "broke": event.entity, "fragments": fragments }),
+                    )?;
+                }
+            }
+        }
     }
 
     Ok(StepRun {
@@ -138,7 +171,11 @@ fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
 /// any `Transform`, `RigidBody`, or HUD-component field that differs from
 /// the file's rest value gets spliced — which captures dynamic bodies,
 /// script-driven kinematics, and script-driven HUD state uniformly, without
-/// touching entities nothing moved.
+/// touching entities nothing moved. The rule extends to structure: a file
+/// entity that no longer exists in the world (it broke) is spliced out, and
+/// a world entity not in the file (a fragment) is spliced in with its full
+/// current state, so a baked post-break scene reloads into exactly the
+/// post-break world.
 pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
     let file: engine_core::SceneFile = serde_json::from_str(source).map_err(|e| {
         EngineError::new(
@@ -151,6 +188,13 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
     let mut baked = source.to_string();
     for def in &file.entities {
         let Some(entity) = scene.entity(&def.name) else {
+            // Gone from the world: it broke into fragments. Splice it out.
+            baked = formatter::apply_remove_entity(
+                &baked,
+                &formatter::RemoveEntity {
+                    entity: def.name.clone(),
+                },
+            )?;
             continue;
         };
 
@@ -255,7 +299,63 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
         }
     }
 
+    // Entities the run spawned (fragments): splice each in as a full entity
+    // with its current state, in name order for a deterministic file.
+    let file_names: std::collections::HashSet<&str> =
+        file.entities.iter().map(|d| d.name.as_str()).collect();
+    let mut spawned: Vec<(String, engine_core::hecs::Entity)> = scene
+        .world
+        .query::<(engine_core::hecs::Entity, &engine_core::components::Name)>()
+        .iter()
+        .filter(|(_, name)| !file_names.contains(name.0.as_str()))
+        .map(|(entity, name)| (name.0.clone(), entity))
+        .collect();
+    spawned.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, entity) in spawned {
+        let components = ComponentData::collect_from(&scene.world, entity)
+            .iter()
+            .map(|component| {
+                let kind = component.name().to_string();
+                let mut value = serde_json::to_value(component).map_err(|e| {
+                    EngineError::new(
+                        codes::OUTPUT_SERIALIZATION_FAILED,
+                        format!("could not serialize a {kind} for bake: {e}"),
+                    )
+                })?;
+                clean_numbers(&mut value);
+                let fields: Vec<(String, Value)> = value
+                    .as_object()
+                    .map(|object| {
+                        object
+                            .iter()
+                            .filter(|(key, _)| key.as_str() != "type")
+                            .map(|(key, field)| (key.clone(), field.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Ok((kind, fields))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        baked = formatter::apply_add_entity(&baked, &formatter::AddEntity { name, components })?;
+    }
+
     formatter::write_atomic(out, &baked)
+}
+
+/// Rewrite every number through the f32-shortest text path, so serialized
+/// components bake as `0.1` rather than the f64-widened
+/// `0.10000000149011612`. Lossless: every component numeric field is f32.
+fn clean_numbers(value: &mut Value) {
+    match value {
+        Value::Number(n) => {
+            if let Some(f) = n.as_f64() {
+                *value = number_from_f32(f as f32);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(clean_numbers),
+        Value::Object(map) => map.values_mut().for_each(clean_numbers),
+        _ => {}
+    }
 }
 
 /// Load an `--input` timeline, if one was given. Every timeline error is

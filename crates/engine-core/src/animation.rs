@@ -315,6 +315,15 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "Breakable" => {
+            let Ok(mut c) = world.get::<&mut Breakable>(entity) else {
+                return false;
+            };
+            match field {
+                "impulse_threshold" => c.impulse_threshold = Some(scalar),
+                _ => return false,
+            }
+        }
         "AnimationPlayer" => {
             let Ok(mut c) = world.get::<&mut AnimationPlayer>(entity) else {
                 return false;
@@ -818,6 +827,7 @@ mod tests {
                 {"type":"AmbientLight"},
                 {"type":"RigidBody","body":"kinematic"},
                 {"type":"Collider","shape":"sphere","radius":0.5},
+                {"type":"Breakable","fragments":[{"mesh":"builtin:cube"}]},
                 {"type":"AnimationPlayer","clip":"x"},
                 {"type":"Wheel","vehicle":"E"},
                 {"type":"HudText","text":"x"},
