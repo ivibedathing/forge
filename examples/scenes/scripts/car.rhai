@@ -104,6 +104,17 @@ fn step(world, step) {
     );
     world.look_at("ChaseCam", p[0], 1.0, p[2]);
 
+    // Exhaust smoke: park the emitter at the tailpipe — behind the rear
+    // bumper, offset to the car's right, near the ground — every step.
+    // Particles are world-space once spawned, so the moving car leaves its
+    // own trail. Right of forward (yaw only) is (-f[2], 0, f[0]).
+    world.set_position(
+        "Exhaust",
+        p[0] - f[0] * 2.05 - f[2] * 0.55,
+        0.4,
+        p[2] - f[2] * 2.05 + f[0] * 0.55,
+    );
+
     // Lap timing. The start line is the x=0 plane across the south straight
     // (z > 6); racing direction there is -X, so a lap completes when x goes
     // positive → non-positive. The car *starts on* the line, and parking
