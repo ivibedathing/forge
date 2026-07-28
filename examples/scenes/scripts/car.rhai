@@ -90,7 +90,9 @@ fn step(world, step) {
     world.set_steering("WheelFR", angle);
 
     // Chase camera: spring toward a point behind the car, then aim over the
-    // cab. The lag is what makes speed visible.
+    // cab. The lag is what makes speed visible. Height springs too — the
+    // circuit climbs and drops nearly eight meters, so a camera pinned to a
+    // fixed altitude would sink into the hill on the way up Raidillon.
     let p = world.position("Car");
     let goal_x = p[0] - f[0] * 8.0;
     let goal_z = p[2] - f[2] * 8.0;
@@ -99,10 +101,10 @@ fn step(world, step) {
     world.set_position(
         "ChaseCam",
         cam[0] + (goal_x - cam[0]) * k,
-        3.2,
+        cam[1] + (p[1] + 2.3 - cam[1]) * k,
         cam[2] + (goal_z - cam[2]) * k,
     );
-    world.look_at("ChaseCam", p[0], 1.0, p[2]);
+    world.look_at("ChaseCam", p[0], p[1] + 0.1, p[2]);
 
     // Exhaust smoke: park the emitter at the tailpipe — behind the rear
     // bumper, offset to the car's right, near the ground — every step.
@@ -111,7 +113,7 @@ fn step(world, step) {
     world.set_position(
         "Exhaust",
         p[0] - f[0] * 2.05 - f[2] * 0.55,
-        0.4,
+        p[1] - 0.5,
         p[2] - f[2] * 2.05 + f[0] * 0.55,
     );
 
@@ -135,32 +137,41 @@ fn step(world, step) {
     world.set_particle_rate("SkidLeft", tire_smoke);
     world.set_particle_rate("SkidRight", tire_smoke);
     // Park each emitter at its rear contact patch (chassis-local ∓0.92 across
-    // the axle, 1.25 back), just off the tarmac.
+    // the axle, 1.25 back), just off the tarmac. The height tracks the car,
+    // like the exhaust: the circuit climbs, and a contact patch pinned to a
+    // fixed altitude would smoke from inside the hill.
     world.set_position(
         "SkidLeft",
         p[0] - f[0] * 1.25 - right_x * 0.92,
-        0.12,
+        p[1] - 0.78,
         p[2] - f[2] * 1.25 - right_z * 0.92,
     );
     world.set_position(
         "SkidRight",
         p[0] - f[0] * 1.25 + right_x * 0.92,
-        0.12,
+        p[1] - 0.78,
         p[2] - f[2] * 1.25 + right_z * 0.92,
     );
 
-    // Lap timing. The start line is the x=0 plane across the south straight
-    // (z > 6); racing direction there is -X, so a lap completes when x goes
-    // positive → non-positive. The car *starts on* the line, and parking
-    // jitter could re-cross it, so a crossing only counts after 300 steps
-    // (5 s) of lap — a real lap takes well over that.
-    let prev_x = world.state("lap_prev_x", 0.0);
+    // Lap timing. The start line lies across the pit straight, which climbs
+    // north-north-west toward La Source: racing direction is -Z there, so a
+    // lap completes when z crosses the line going negative, within a dozen
+    // meters of the line's x. (Both numbers are printed by
+    // make_car_track.py — they move whenever the layout does.) The car
+    // *starts on* the line, and parking jitter could re-cross it, so a
+    // crossing only counts after 300 steps (5 s) of lap — a real lap here
+    // takes well over half a minute.
+    let line_z = -37.74;
+    let line_x = -65.80;
+
+    let prev_z = world.state("lap_prev_z", line_z);
     let lap = world.state("lap", 1);
     let lap_start = world.state("lap_start", 0);
     let last_lap = world.state("last_lap", 0.0);
     let best_lap = world.state("best_lap", 0.0);
 
-    if prev_x > 0.0 && p[0] <= 0.0 && p[2] > 6.0 && step - lap_start.to_int() > 300 {
+    if prev_z > line_z && p[2] <= line_z && abs(p[0] - line_x) < 12.0
+        && step - lap_start.to_int() > 300 {
         let lap_time = (step - lap_start.to_int()).to_float() * dt;
         last_lap = lap_time;
         if best_lap == 0.0 || lap_time < best_lap { best_lap = lap_time; }
@@ -171,7 +182,7 @@ fn step(world, step) {
         world.set_state("lap", lap);
         world.set_state("lap_start", lap_start);
     }
-    world.set_state("lap_prev_x", p[0]);
+    world.set_state("lap_prev_z", p[2]);
 
     // The chassis's planar speed after the last physics step, in km/h.
     let speed = sqrt(v[0] * v[0] + v[2] * v[2]) * 3.6;

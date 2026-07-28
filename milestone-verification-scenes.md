@@ -710,32 +710,43 @@ structured errors in one run.
 
 ## M11 — Input (keyboard, replayable)
 
-**Scene:** `examples/scenes/car_track.json` — the drivable-car demo itself: a barrier-lined
-rectangular circuit with real colliders, a box-chassis car that is a **dynamic RigidBody**
-(≈1.5 t from collider density) riding on four `Wheel` components (M12 raycast suspension:
-spring/damper per wheel, tire grip, drive and braking at the contact point, wheel visuals
-that steer, spin, and compress). `scripts/car.rhai` is only the *driver* — pedals and a
-speed-scaled steering wheel via `world.set_engine_force` / `set_brake` / `set_steering` —
-plus a spring chase camera (`world.look_at`). **Timeline:**
-`examples/scenes/car_track_lap.input.jsonl` — a committed 2 770-step recording (authored by
-a closed-loop autopilot driving the real engine chunk-by-chunk) that laps the circuit three
-times clockwise on real suspension, brakes, and parks on the start line.
+**Scene:** `examples/scenes/car_track.json` — the drivable-car demo itself: a ≈546 m
+barrier-lined circuit that climbs and drops through ≈7.6 m of elevation on real colliders
+(Spa in miniature — La Source, Eau Rouge, the Kemmel climb, Les Combes, Rivage, Pouhon,
+Stavelot, Blanchimont, the Bus Stop chicane), and a box-chassis car that is a **dynamic
+RigidBody** (≈1.5 t from collider density) riding on four `Wheel` components (M12 raycast
+suspension: spring/damper per wheel, tire grip, drive and braking at the contact point, wheel
+visuals that steer, spin, and compress). `scripts/car.rhai` is only the *driver* — pedals and
+a speed-scaled steering wheel via `world.set_engine_force` / `set_brake` / `set_steering` —
+plus a spring chase camera (`world.look_at`) that now tracks the car's *height* as well, since
+the circuit no longer lies flat.
+
+The scene is **generated**, by `examples/scenes/make_car_track.py` from a closed polygon of
+named corners; `examples/scenes/make_car_track_lap.py` then drives it to author the timeline.
+Regenerating either means regenerating the other and re-blessing the baseline. **Timeline:**
+`examples/scenes/car_track_lap.input.jsonl` — a committed recording (authored by a closed-loop
+autopilot driving the real engine, replaying from step 0 every round so the recording cannot
+drift from the drive that made it) that laps the circuit three times clockwise on real
+suspension, brakes, and parks just past the start line.
 
 The pass condition is the M11 thesis — *interactive never means unverifiable*:
 
 ```bash
 engine validate examples/scenes/car_track.json
-# Replay the lap headlessly; the car must return to the start line:
-engine simulate examples/scenes/car_track.json --steps 2880 \
+# Replay the drive headlessly; the car must come back to the start line:
+engine simulate examples/scenes/car_track.json --steps 11988 \
     --input examples/scenes/car_track_lap.input.jsonl --bake /tmp/lap.json
-# → Car parked within 1.5 of the start line [0, 0.82, 9], speed ~0 (CLI test)
+# → Car stopped a few meters past the line at [-65.8, ~5.3, -37.7], speed 0.
+#   The same replay is sampled mid-drive at two places (CLI test): out east
+#   above y=7 near the crest, and down at Stavelot below y=2.5 — one
+#   recording that climbs and descends is what makes the elevation real.
 engine diff-render examples/scenes/car_track.json \
-    examples/scenes/verify/baselines/m11_lap.png --steps 2880 \
+    examples/scenes/verify/baselines/m11_lap.png --steps 11988 \
     --input examples/scenes/car_track_lap.input.jsonl
 # → bit-exact; a recorded drive is a pinnable render like any other pose.
 #   The baseline includes the script's HUD overlay (speedometer + lap
-#   timer, M11.6): the parked car reads SPEED 0 KM/H, LAP 3,
-#   LAST 13.42 / BEST 13.42 — the simulate report carries the same lines
+#   timer, M11.6): the parked car reads SPEED 0 KM/H, LAP 4,
+#   LAST 64.37 / BEST 64.15 — the simulate report carries the same lines
 #   as "hud", so the timing is also asserted without a GPU
 engine run-scene examples/scenes/car_track.json   # the playable version
 ```
@@ -817,7 +828,7 @@ which is the visible proof that the emitter's position is sampled per step, not 
 
 ```bash
 engine diff-render examples/scenes/car_track.json \
-    examples/scenes/verify/baselines/m11_lap.png --steps 2880 \
+    examples/scenes/verify/baselines/m11_lap.png --steps 11988 \
     --input examples/scenes/car_track_lap.input.jsonl
 # → bit-exact, smoke and all: a stochastic effect on a recorded drive is
 #   still a pinnable render. m11_lap.png was re-blessed when the exhaust

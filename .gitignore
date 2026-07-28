@@ -8,3 +8,6 @@
 !examples/**/baselines/*.png
 
 .DS_Store
+
+# Python bytecode from the scene generators
+__pycache__/
