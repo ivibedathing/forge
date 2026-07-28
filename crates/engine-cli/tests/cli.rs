@@ -1058,9 +1058,14 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
 
 /// The committed demo: replaying the recorded session drives the physical
 /// car (dynamic box chassis on four raycast-suspension Wheels; the script
-/// is only the driver) three laps around the track and parks it on the
-/// start line. This is the M11/M12 verification fixture — interactive
-/// gameplay, verified headlessly from text files alone.
+/// is only the driver) three laps around the generated Spa-in-miniature
+/// circuit — climbing and dropping through nearly eight meters on the way —
+/// and parks it just past the start line. This is the M11/M12 verification
+/// fixture: interactive gameplay, verified headlessly from text alone.
+///
+/// Scene and timeline are both generated (`examples/scenes/make_car_track.py`
+/// and `make_car_track_lap.py`). Regenerating either moves every number
+/// below, and `verify/baselines/m11_lap.png` with them.
 #[test]
 fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     let scene = repo_path("examples/scenes/car_track.json");
@@ -1087,28 +1092,44 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
         (path, report)
     };
 
-    // Mid-drive: far side of the circuit (the north straight, z ≈ -9).
-    let (mid_bake, _) = bake_at("480", "mid.json");
-    let mid = baked_position(&mid_bake, "Car");
-    assert!(mid[2] < -5.0, "mid-drive the car is on the far straight: {mid:?}");
+    // Mid-drive, high side: out at the far east of the circuit, up near the
+    // crest at the end of the Kemmel climb.
+    let (high_bake, _) = bake_at("2000", "high.json");
+    let high = baked_position(&high_bake, "Car");
+    assert!(high[0] > 60.0, "mid-drive the car is on the far side: {high:?}");
+    assert!(high[1] > 7.0, "and up on the high part of the circuit: {high:?}");
 
-    // After three laps and the braking phase: parked on the start line.
-    let (end_bake, report) = bake_at("2880", "end.json");
+    // Mid-drive, low side: down at Stavelot, the bottom of the map. The same
+    // recording reaching both is what makes the elevation real rather than
+    // decorative — the car drove up there and back down on its suspension.
+    let (low_bake, _) = bake_at("7200", "low.json");
+    let low = baked_position(&low_bake, "Car");
+    assert!(low[1] < 2.5, "the drive descends to the low point too: {low:?}");
+    assert!(
+        high[1] - low[1] > 5.0,
+        "the circuit's elevation is driven, not flat: {high:?} vs {low:?}"
+    );
+
+    // After three laps and the braking phase: stopped on the pit straight,
+    // a few meters past the start line it just crossed.
+    let (end_bake, report) = bake_at("11988", "end.json");
     let end = baked_position(&end_bake, "Car");
-    let (dx, dz) = (end[0], end[2] - 9.0);
+    let (dx, dz) = (end[0] - -65.80, end[2] - -37.74);
     let distance = (dx * dx + dz * dz).sqrt();
-    assert!(distance < 1.5, "the drive must park on the start line: {end:?}");
+    assert!(distance < 8.0, "the drive must park by the start line: {end:?}");
+    assert!(end[2] < -37.74, "having crossed it, not stopped short: {end:?}");
 
-    // The script's HUD is part of the pinned record: parked (speed 0),
-    // just across the line onto lap 4, with three completed timed laps
-    // behind it (last 15.45 s, best 15.00 s). These strings are golden the
-    // way traces are — a drivetrain or timing change shows up here first.
+    // The script's HUD is part of the pinned record: parked (speed 0), just
+    // across the line onto lap 4, with three completed timed laps behind it
+    // (last 64.37 s, best 64.15 s — a lap of this circuit is over a minute).
+    // These strings are golden the way traces are: a drivetrain, geometry or
+    // timing change shows up here first.
     assert_eq!(
         report["hud"],
         serde_json::json!([
             "SPEED 0 KM/H",
-            "LAP 4   TIME 2.03",
-            "LAST 15.45   BEST 15.00"
+            "LAP 4   TIME 3.25",
+            "LAST 64.37   BEST 64.15"
         ]),
         "{report}"
     );

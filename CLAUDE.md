@@ -223,9 +223,39 @@ momentum; ≈1.0 gives a physical μ≈0.9 tire that slides instead of sticking.
 cylinder wheels; `scripts/car.rhai` is now only the *driver* (pedals, speed-scaled steering
 wheel with finite slew rate, low-gear torque boost below 8 m/s so full-lock corners don't
 stall against front-tire slip drag, chase camera). `car_track_lap.input.jsonl` is a committed
-recording (closed-loop autopilot: simulate a 10-step chunk from step 0 → bake → read state →
-next keys) driving three clockwise laps on real suspension and parking on the start line —
+recording driving three clockwise laps on real suspension and parking on the start line —
 pinned by CLI test and `verify/baselines/m11_lap.png`.
+
+**The circuit is generated** (M15): `examples/scenes/make_car_track.py` emits the scene from a
+closed polygon of 14 named corners (Spa in miniature — La Source's hairpin, the plunge to Eau
+Rouge, the climb onto Kemmel, Les Combes at the crest, Rivage, Pouhon, Stavelot at the low
+point, Blanchimont, the Bus Stop chicane), ≈546 m round with ≈7.6 m of elevation and grades to
+7.5%. Authoring the loop as a *polygon* is what makes closure free: a closed polygon returns
+to its first vertex and its exterior angles sum to one turn, so position, heading, and the
+height profile all shut without a solver — corners carry `(x, z, radius, height)` and nothing
+carries a heading. Two things the polygon can't guarantee are checked and refuse to build: a
+corner radius too big for the edges feeding it, and a grade too steep to climb.
+Three geometry lessons are baked into the emitter and are easy to reintroduce by
+"simplifying" it:
+
+- **One collider, not two.** Each segment's drivable surface is a single deep box cut to the
+  road's grade and reaching below the ground plane (which hides its underside); the asphalt is
+  a thin *colliderless* slab laid 3 cm proud of it. Road and shoulder as two colliders at
+  different heights builds a ledge at the asphalt edge, and a wheel that drops off it wedges
+  against the step and stops the car dead.
+- **The guardrail is continuous.** Posts are spaced 5 m and are 5.4 m long. Dashed barriers let
+  the car slip between two of them and fall off the elevated road.
+- **Radii are sized for the car, not the map.** The layout is Spa at ~1/15 but the car is full
+  size, so no corner is under 12 m however tight the real one is.
+
+`make_car_track_lap.py` authors the input timeline the same way it is replayed: a closed loop
+that replays the whole timeline from step 0 each round, reads the car's state back out of the
+`simulate` report's `hud` (a scratch copy of the scene whose driver pushes one telemetry line
+— HUD is output, never input, so it drives identically), and appends the next tenth of a
+second of keys. Steering is pure pursuit; the throttle brakes on a `v² = v_corner² + 2ad`
+envelope, without which the car reads corners correctly and arrives far too fast anyway.
+Regenerating the track means regenerating the timeline and re-blessing the baseline — the two
+scripts print the start-line constants `car.rhai` needs.
 
 HUD (M11.6 lines + M12 components, `hud-design.md`): two layers, one render path.
 `world.hud(text)` pushes printable-ASCII debug lines, cleared every step — the line HUD is a
@@ -252,9 +282,9 @@ HUD stays observable without pixels: `simulate`/`screenshot` report the final st
 as `"hud"`, and `--trace` logs `{"step", "hud"}` on every change. Fixture:
 `verify/m12_hud.json` + `verify/baselines/m12_hud.png` (all anchors, draw order, opacity,
 script-driven counter + growing bar, pinned by CLI test). Demo: `car.rhai` shows a
-speedometer plus a lap timer (start-line crossing = x going positive → non-positive on the
-south straight, remembered step-to-step via `world.state`) whose final parked HUD (`LAP 3`,
-`LAST 13.42   BEST 13.42`) is pinned by the lap CLI test, plus a `SpeedBar` HudRect gauge
+speedometer plus a lap timer (start-line crossing = z falling past the line on the pit
+straight, remembered step-to-step via `world.state`) whose final parked HUD (`LAP 4`,
+`LAST 64.37   BEST 64.15`) is pinned by the lap CLI test, plus a `SpeedBar` HudRect gauge
 (bottom-left) driven by `set_hud_rect_size`.
 
 Collision (M12): three additions, all opt-in so every pre-M12 trace and baseline is untouched.
