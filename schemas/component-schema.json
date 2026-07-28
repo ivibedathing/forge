@@ -32,6 +32,85 @@
         ],
         "type": "string"
       },
+      "Fragment": {
+        "additionalProperties": false,
+        "description": "One piece a `Breakable` entity shatters into (M14).\n\n`mesh` follows `Mesh.asset` rules (builtin or relative glTF path).\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model.\n`half_extents` is the fragment's cuboid collider in fragment-local units —\n`scale` scales it, exactly as `Transform.scale` scales a `Collider`.\nCuboid-only fragment colliders are deliberate v1 scope.",
+        "properties": {
+          "density": {
+            "default": 1.0,
+            "description": "Fragment mass comes from `density` x collider volume. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "half_extents": {
+            "default": [
+              0.5,
+              0.5,
+              0.5
+            ],
+            "description": "Cuboid collider half-extents. The default matches `builtin:cube`, so\na fragment that is a scaled builtin cube needs no collider authoring.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "mesh": {
+            "type": "string"
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Position relative to the parent entity's origin, in parent-local\nunits (the parent's `Transform.scale` applies).",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Euler angles in **degrees**, `[x, y, z]`, XYZ order — the same\nconvention as `Transform.rotation`.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "scale": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        },
+        "required": [
+          "mesh"
+        ],
+        "type": "object"
+      },
       "HudAnchor": {
         "description": "Where a HUD element attaches on screen (M12).\n\n`offset` is measured **inward** from the anchor: from a right anchor,\n`offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;\nfrom `center` it is the usual +x-right / +y-down applied to the element's\ncenter. The anchored point is the element's matching corner (its center\nfor `center`), so `offset: [0, 0]` puts the element flush against its\ncorner at any resolution.",
         "enum": [
@@ -512,6 +591,38 @@
       },
       {
         "additionalProperties": false,
+        "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse. See `breaking-design.md`.",
+        "properties": {
+          "fragments": {
+            "description": "What the entity becomes. At least one.",
+            "items": {
+              "$ref": "#/$defs/Fragment"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "impulse_threshold": {
+            "description": "Contact impulse, in kg·m/s (≈ mass x closing speed), at or above\nwhich a collision breaks this entity. **Absent means collisions\nnever break it** — only scripts and explosions do. Impulse rather\nthan force so the number survives a `timestep_hz` change. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "Breakable",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "fragments"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
         "description": "Plays an animation clip against scene time (M9).\n\n`clip` is a relative path to a property clip (`*.anim.json`); a\n`path#ClipName` glTF fragment is reserved for skeletal clips (not yet\nsupported). A player in the file is playing — there is no play/pause\nruntime state, because pose is a pure function of (files, time).",
         "properties": {
           "clip": {
@@ -964,6 +1075,7 @@
     "AmbientLight",
     "RigidBody",
     "Collider",
+    "Breakable",
     "AnimationPlayer",
     "Script",
     "Wheel",
@@ -1472,6 +1584,38 @@
           },
           {
             "additionalProperties": false,
+            "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse. See `breaking-design.md`.",
+            "properties": {
+              "fragments": {
+                "description": "What the entity becomes. At least one.",
+                "items": {
+                  "$ref": "#/$defs/Fragment"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "impulse_threshold": {
+                "description": "Contact impulse, in kg·m/s (≈ mass x closing speed), at or above\nwhich a collision breaks this entity. **Absent means collisions\nnever break it** — only scripts and explosions do. Impulse rather\nthan force so the number survives a `timestep_hz` change. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "Breakable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "fragments"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
             "description": "Plays an animation clip against scene time (M9).\n\n`clip` is a relative path to a property clip (`*.anim.json`); a\n`path#ClipName` glTF fragment is reserved for skeletal clips (not yet\nsupported). A player in the file is playing — there is no play/pause\nruntime state, because pose is a pure function of (files, time).",
             "properties": {
               "clip": {
@@ -1932,6 +2076,85 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "Fragment": {
+        "additionalProperties": false,
+        "description": "One piece a `Breakable` entity shatters into (M14).\n\n`mesh` follows `Mesh.asset` rules (builtin or relative glTF path).\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model.\n`half_extents` is the fragment's cuboid collider in fragment-local units —\n`scale` scales it, exactly as `Transform.scale` scales a `Collider`.\nCuboid-only fragment colliders are deliberate v1 scope.",
+        "properties": {
+          "density": {
+            "default": 1.0,
+            "description": "Fragment mass comes from `density` x collider volume. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "half_extents": {
+            "default": [
+              0.5,
+              0.5,
+              0.5
+            ],
+            "description": "Cuboid collider half-extents. The default matches `builtin:cube`, so\na fragment that is a scaled builtin cube needs no collider authoring.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "mesh": {
+            "type": "string"
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Position relative to the parent entity's origin, in parent-local\nunits (the parent's `Transform.scale` applies).",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Euler angles in **degrees**, `[x, y, z]`, XYZ order — the same\nconvention as `Transform.rotation`.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "scale": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        },
+        "required": [
+          "mesh"
         ],
         "type": "object"
       },

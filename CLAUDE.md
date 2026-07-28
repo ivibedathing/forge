@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M13 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, and M13 particles** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M13 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, and M14 breaking objects** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -300,6 +300,29 @@ where a u32 belongs is `invalid_field_type`; a below-minimum integer is
 `value_out_of_range`); without it, walk/serde disagreement on these fields would fire
 `scene_parse_desync`. The editor viewport shows scenes at rest — no particles until the
 fixed clock advances.
+
+Breaking (M14, design in `breaking-design.md`): `Breakable` lists **pre-authored fragments**
+(mesh ref + local placement + cuboid `half_extents` + `density` — no runtime fracture, the
+settled decision) and breaks three ways: collision (`impulse_threshold` in kg·m/s — rapier
+contact *force* × dt at the event boundary, **peak** per step not sum, and force events are
+enabled only on breakable colliders so no-Breakable scenes are byte-identical to pre-M14),
+`world.break_entity(name)` (validated at call time, queued on the ScriptHost, drained by the
+sim loop), and `world.explode(x,y,z,radius,impulse)` (radial impulse, linear falloff,
+applied inside `step()` before integration; thresholded breakables in range break with a
+kick). Breaks apply after physics in entity-name order (`engine-physics/src/breaking.rs`):
+despawn parent, spawn `Parent.fragN` (suffix-deduped) as dynamic bodies inheriting
+v + ω×r, then `Scene::refresh_names` + `ScriptHost::sync_names` — fragments are ordinary
+entities everywhere downstream. Trace rows **re-enumerate dynamic bodies every step** (sorted,
+so unchanged scenes trace identically) plus `{"step", "broke", "fragments"}` lines; bake
+extends change-based to structure via `formatter::apply_remove_entity` (new) +
+`apply_add_entity` with `ComponentData::collect_from` — a baked post-break scene revalidates
+and re-renders **bit-exactly** (pinned by CLI test; fixture `verify/m14_break.json`, golden
+trace + PNG in `verify/baselines/`). Validation: the schema walk now recurses into objects
+and arrays-of-objects (open-ended `minItems` reports as `value_out_of_range`, keeping the
+walk/serde agreement); fragment `mesh` refs resolve like `Mesh.asset` in both passes;
+`impulse_threshold` without a `Collider` is `breakable_without_collider`. The editor inspector
+routes only arrays-of-numbers to the vec3 widget. A threshold-less `Breakable` is
+script/explosion-only by design.
 
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).

@@ -194,6 +194,26 @@ the step that drew it, composited identically onto `screenshot`/
 `diff-render` output and the `run-scene` window (caps: 16 lines × 96 chars,
 exceeding either is a runtime error).
 
+## Breaking
+
+A `Breakable` component lists pre-authored fragments; the entity shatters
+into them on a hard enough collision (`impulse_threshold`, kg·m/s — absent
+means collisions never break it), on `world.break_entity(name)` (queued,
+applied after the step's physics; unknown name or no `Breakable` is a
+runtime error at call time), or inside `world.explode(x, y, z, radius,
+impulse)` (radial impulse with linear falloff; thresholded breakables in
+range whose falloff impulse meets their threshold break too). Fragments are
+ordinary entities (`Parent.frag0`, …, suffix-deduped) — dynamic bodies that
+inherit the parent's motion — so they render, trace, and bake with no
+special casing. The trace records each break as
+`{"step": N, "broke": "Crate", "fragments": [...]}`; per-step rows
+re-enumerate, so fragment rows join from the step after the break (scenes
+where nothing breaks trace identically to pre-M14). Bake extends its
+change-based rule to structure: a broken file entity is spliced out, its
+fragments spliced in with full state, and the baked scene reloads into
+exactly the post-break world — pinned bit-exact by CLI test. A thresholded
+`Breakable` with no `Collider` is `breakable_without_collider` at validation.
+
 ## Input
 
 Keyboard input is sampled per fixed step — scripts ask `world.key("ArrowUp")`

@@ -231,7 +231,12 @@ fn field_widget(
 ) -> Option<Value> {
     let mut committed = None;
 
-    if property["type"].as_str() == Some("array") {
+    // Only arrays *of numbers* get the vec3 widget; structured arrays
+    // (Breakable.fragments) and boolean triples fall through to the
+    // read-only label below.
+    if property["type"].as_str() == Some("array")
+        && property["items"]["type"].as_str() == Some("number")
+    {
         ui.add_enabled_ui(!read_only, |ui| {
             committed = vec3_widget(ui, state, key, field, property, current);
         });

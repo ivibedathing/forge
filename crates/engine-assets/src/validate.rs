@@ -35,33 +35,60 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
 
     for (entity_index, entity) in file.entities.iter().enumerate() {
         for (component_index, component) in entity.components.iter().enumerate() {
-            // Mesh geometry references: `Mesh.asset`, and `Collider.asset`
-            // on the mesh-collider shapes (M12) — both must parse.
-            let (asset, component_name) = match component {
-                ComponentData::Mesh(mesh) => (mesh.asset.as_str(), "Mesh"),
+            let component_path = format!("/entities/{entity_index}/components/{component_index}");
+
+            // Every mesh reference this component holds: a Mesh's `asset`,
+            // a Collider's mesh-collider `asset` (M12), or each fragment
+            // `mesh` of a Breakable (M14).
+            let references: Vec<(String, &str, &str, &str)> = match component {
+                ComponentData::Mesh(mesh) => vec![(
+                    format!("{component_path}/asset"),
+                    mesh.asset.as_str(),
+                    "Mesh",
+                    "asset",
+                )],
                 ComponentData::Collider(collider) => match &collider.asset {
-                    Some(asset) => (asset.as_str(), "Collider"),
+                    Some(asset) => vec![(
+                        format!("{component_path}/asset"),
+                        asset.as_str(),
+                        "Collider",
+                        "asset",
+                    )],
                     None => continue,
                 },
+                ComponentData::Breakable(breakable) => breakable
+                    .fragments
+                    .iter()
+                    .enumerate()
+                    .map(|(i, fragment)| {
+                        (
+                            format!("{component_path}/fragments/{i}/mesh"),
+                            fragment.mesh.as_str(),
+                            "Breakable",
+                            "mesh",
+                        )
+                    })
+                    .collect(),
                 _ => continue,
             };
 
-            let verdict = verdicts
-                .entry(asset)
-                .or_insert_with(|| check_asset(asset, base_dir));
+            for (json_path, asset, component_name, field) in references {
+                let verdict = verdicts
+                    .entry(asset)
+                    .or_insert_with(|| check_asset(asset, base_dir));
 
-            if let Some(template) = verdict {
-                let json_path = format!("/entities/{entity_index}/components/{component_index}/asset");
-                let mut error = template
-                    .clone()
-                    .file(path)
-                    .entity(entity.name.clone())
-                    .component(component_name)
-                    .field("asset");
-                if let Some(line) = index.line_of_or_parent(&json_path) {
-                    error = error.line(line);
+                if let Some(template) = verdict {
+                    let mut error = template
+                        .clone()
+                        .file(path)
+                        .entity(entity.name.clone())
+                        .component(component_name)
+                        .field(field);
+                    if let Some(line) = index.line_of_or_parent(&json_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(json_path));
                 }
-                errors.push(error.path(json_path));
             }
         }
     }

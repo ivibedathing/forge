@@ -16,8 +16,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
 
 use engine_core::components::{
-    BodyKind, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent, Name,
-    RigidBody as RigidBodyData, Transform, Wheel as WheelData,
+    BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent,
+    Name, RigidBody as RigidBodyData, Transform, Wheel as WheelData,
 };
 use engine_core::mesh::MeshSource;
 use engine_core::scene::PhysicsSettings;
@@ -28,6 +28,9 @@ use rapier3d::control::{DynamicRayCastVehicleController, WheelTuning};
 use rapier3d::math::Pose;
 use rapier3d::parry::query::DefaultQueryDispatcher;
 use rapier3d::prelude::*;
+
+mod breaking;
+pub use breaking::{apply_breaks, BreakEvent};
 
 /// One contact begin/end between two named entities — what traces record.
 /// Shared vocabulary from `engine-core` so scripting can consume contacts
@@ -43,10 +46,35 @@ pub struct RayHit {
     pub distance: f32,
 }
 
+/// A queued blast (M12): applied at the start of the next step's
+/// integration, so the explosion moves bodies the same step it fires.
+/// Impulse falls off linearly from full strength at the center to zero at
+/// `radius`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Explosion {
+    pub center: Vec3,
+    pub radius: f32,
+    pub impulse: f32,
+}
+
+/// One break decision a step produced: a thresholded `Breakable` whose
+/// threshold was met, with the explosion that did it when one did (fragment
+/// kicks need the blast geometry).
+#[derive(Debug, Clone, Copy)]
+pub struct PendingBreak {
+    pub entity: Entity,
+    pub kick: Option<Explosion>,
+}
+
 /// Collects rapier collision events; drained after each step.
 #[derive(Default)]
 struct EventSink {
     collisions: Mutex<Vec<CollisionEvent>>,
+    /// `(pair, contact impulse)` for pairs that opted into force events —
+    /// breakable colliders only (M12). rapier reports force; multiplying by
+    /// `dt` here makes the number an impulse, which survives a
+    /// `timestep_hz` change.
+    impulses: Mutex<Vec<(ColliderHandle, ColliderHandle, f32)>>,
 }
 
 impl EventHandler for EventSink {
@@ -64,12 +92,19 @@ impl EventHandler for EventSink {
 
     fn handle_contact_force_event(
         &self,
-        _dt: Real,
+        dt: Real,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,
-        _contact_pair: &ContactPair,
-        _total_force_magnitude: Real,
+        contact_pair: &ContactPair,
+        total_force_magnitude: Real,
     ) {
+        if let Ok(mut impulses) = self.impulses.lock() {
+            impulses.push((
+                contact_pair.collider1,
+                contact_pair.collider2,
+                total_force_magnitude * dt,
+            ));
+        }
     }
 }
 
@@ -102,6 +137,13 @@ pub struct PhysicsWorld {
     /// Raycast vehicles (M12): one controller per chassis entity that has
     /// `Wheel` components pointing at it, in chassis-name order.
     vehicles: Vec<Vehicle>,
+    /// Entities with a thresholded `Breakable` (M14): their colliders opt
+    /// into contact-force events, and explosions test them for breaks.
+    break_thresholds: HashMap<Entity, f32>,
+    /// Blasts queued for the next step.
+    queued_explosions: Vec<Explosion>,
+    /// Breaks this step decided on; drained by `take_pending_breaks`.
+    pending_breaks: Vec<PendingBreak>,
 }
 
 /// One raycast vehicle: a chassis body plus its wheels' visual entities,
@@ -115,10 +157,13 @@ struct Vehicle {
 
 impl PhysicsWorld {
     /// Whether a world contains any physics component at all — scenes
-    /// without physics never construct a physics world.
+    /// without physics never construct a physics world. A `Breakable`
+    /// counts (M12): its fragments spawn as dynamic bodies, so a break
+    /// needs a physics world even if nothing else does.
     pub fn scene_has_physics(world: &World) -> bool {
         world.query::<&RigidBodyData>().iter().next().is_some()
             || world.query::<&ColliderData>().iter().next().is_some()
+            || world.query::<&Breakable>().iter().next().is_some()
     }
 
     /// Build a fresh physics world from the (already validated) scene world.
@@ -150,6 +195,9 @@ impl PhysicsWorld {
             name_of: HashMap::new(),
             written_velocities: HashMap::new(),
             vehicles: Vec::new(),
+            break_thresholds: HashMap::new(),
+            queued_explosions: Vec::new(),
+            pending_breaks: Vec::new(),
         };
 
         // Collision layers (M12): map each distinct name to one bit of
@@ -170,7 +218,7 @@ impl PhysicsWorld {
 
         // Deterministic build order: hecs iteration order is stable for a
         // freshly spawned world, and every simulate run spawns fresh.
-        for (entity, name, transform, body, collider, mesh) in world
+        for (entity, name, transform, body, collider, mesh, breakable) in world
             .query::<(
                 Entity,
                 &Name,
@@ -178,6 +226,7 @@ impl PhysicsWorld {
                 Option<&RigidBodyData>,
                 Option<&ColliderData>,
                 Option<&MeshComponent>,
+                Option<&Breakable>,
             )>()
             .iter()
         {
@@ -185,6 +234,15 @@ impl PhysicsWorld {
                 continue;
             }
             physics.name_of.insert(entity, name.0.clone());
+
+            // A thresholded Breakable with a collider watches for breaking
+            // impacts; its collider opts into contact-force events below.
+            let break_threshold = breakable.and_then(|b| b.impulse_threshold);
+            if let Some(threshold) = break_threshold {
+                if collider.is_some() {
+                    physics.break_thresholds.insert(entity, threshold);
+                }
+            }
 
             let position = pose_of(transform);
 
@@ -234,6 +292,7 @@ impl PhysicsWorld {
                     mesh.map(|m| m.asset.as_str()),
                     meshes,
                     &layer_bits,
+                    break_threshold.is_some(),
                 )?;
                 let handle = match body_handle {
                     Some(body_handle) => physics.colliders.insert_with_parent(
@@ -338,6 +397,148 @@ impl PhysicsWorld {
         Ok(physics)
     }
 
+    /// Insert one entity's physics presence — shared by the initial build
+    /// and by fragment spawning (M12). Entities with neither a body nor a
+    /// collider have no presence and are skipped. A `break_threshold` opts
+    /// the entity's collider into contact-force events.
+    pub fn insert_entity(
+        &mut self,
+        entity: Entity,
+        name: &str,
+        transform: &Transform,
+        body: Option<&RigidBodyData>,
+        collider: Option<&ColliderData>,
+        break_threshold: Option<f32>,
+    ) -> Result<()> {
+        if body.is_none() && collider.is_none() {
+            return Ok(());
+        }
+        self.name_of.insert(entity, name.to_string());
+        if let Some(threshold) = break_threshold {
+            if collider.is_some() {
+                self.break_thresholds.insert(entity, threshold);
+            }
+        }
+
+        let position = pose_of(transform);
+
+        let body_handle = body.map(|body| {
+            let builder = match body.body {
+                BodyKind::Dynamic => RigidBodyBuilder::dynamic(),
+                BodyKind::Kinematic => RigidBodyBuilder::kinematic_position_based(),
+                BodyKind::Fixed => RigidBodyBuilder::fixed(),
+            };
+            let mut locked = LockedAxes::empty();
+            for (axis, flag) in [
+                LockedAxes::ROTATION_LOCKED_X,
+                LockedAxes::ROTATION_LOCKED_Y,
+                LockedAxes::ROTATION_LOCKED_Z,
+            ]
+            .into_iter()
+            .zip(body.locked_rotations)
+            {
+                if flag {
+                    locked |= axis;
+                }
+            }
+            let built = builder
+                .pose(position)
+                .linvel(body.linear_velocity)
+                .angvel(degrees_to_radians(body.angular_velocity))
+                .gravity_scale(body.gravity_scale)
+                .linear_damping(body.linear_damping)
+                .angular_damping(body.angular_damping)
+                .ccd_enabled(body.ccd)
+                .can_sleep(body.can_sleep)
+                .locked_axes(locked)
+                .build();
+            let handle = self.bodies.insert(built);
+            self.body_of.insert(entity, handle);
+            self.written_velocities
+                .insert(entity, (body.linear_velocity, body.angular_velocity));
+            handle
+        });
+
+        if let Some(collider) = collider {
+            // Spawned entities (fragments) carry cuboid colliders with no
+            // mesh shapes and no layers, so builtin meshes and an empty
+            // layer table cover every caller.
+            let built = build_collider(
+                collider,
+                transform,
+                name,
+                None,
+                &engine_core::mesh::BuiltinAssets,
+                &HashMap::new(),
+                break_threshold.is_some(),
+            )?;
+            let handle = match body_handle {
+                Some(body_handle) => {
+                    self.colliders
+                        .insert_with_parent(built, body_handle, &mut self.bodies)
+                }
+                None => {
+                    // Static geometry: place the collider in world space
+                    // directly; no body needed.
+                    let mut built = built;
+                    built.set_position(position * built.position());
+                    self.colliders.insert(built)
+                }
+            };
+            self.entity_of_collider.insert(handle, entity);
+        }
+
+        Ok(())
+    }
+
+    /// Remove an entity's physics presence entirely (M12 breaks): body,
+    /// colliders (attached or static), and every map entry.
+    pub fn remove_entity(&mut self, entity: Entity) {
+        if let Some(handle) = self.body_of.remove(&entity) {
+            self.bodies.remove(
+                handle,
+                &mut self.islands,
+                &mut self.colliders,
+                &mut self.impulse_joints,
+                &mut self.multibody_joints,
+                true,
+            );
+        }
+        let orphans: Vec<ColliderHandle> = self
+            .entity_of_collider
+            .iter()
+            .filter(|(_, e)| **e == entity)
+            .map(|(handle, _)| *handle)
+            .collect();
+        for handle in orphans {
+            if self.colliders.get(handle).is_some() {
+                self.colliders
+                    .remove(handle, &mut self.islands, &mut self.bodies, true);
+            }
+            self.entity_of_collider.remove(&handle);
+        }
+        self.written_velocities.remove(&entity);
+        self.name_of.remove(&entity);
+        self.break_thresholds.remove(&entity);
+    }
+
+    /// Queue a blast for the next step (M12). Scripts call this through
+    /// `world.explode`; it is applied before integration, so the blast
+    /// moves bodies the same step it fires.
+    pub fn queue_explosion(&mut self, explosion: Explosion) {
+        self.queued_explosions.push(explosion);
+    }
+
+    /// The break decisions the last step made, sorted by entity name and
+    /// deduplicated (first cause wins, so an explosion's kick survives).
+    /// Callers apply them via [`apply_breaks`](crate::apply_breaks).
+    pub fn take_pending_breaks(&mut self) -> Vec<PendingBreak> {
+        let mut breaks = std::mem::take(&mut self.pending_breaks);
+        breaks.sort_by(|a, b| self.name_of.get(&a.entity).cmp(&self.name_of.get(&b.entity)));
+        breaks.dedup_by_key(|b| b.entity);
+        breaks
+    }
+
     /// Advance one fixed step and write the results back into hecs. Returns
     /// the contact events the step produced, in deterministic order.
     pub fn step(&mut self, world: &mut World) -> Vec<ContactEvent> {
@@ -361,6 +562,49 @@ impl PhysicsWorld {
                         body.set_angvel(degrees_to_radians(current.1), true);
                         self.written_velocities.insert(entity, current);
                     }
+                }
+            }
+        }
+
+        // 1.5. Queued blasts (M14): a radial, linearly-falling-off impulse
+        //      to every dynamic body in range, applied before integration
+        //      so the blast moves bodies the same step it fires. Impulses
+        //      to distinct bodies commute, so map order cannot matter;
+        //      multiple blasts apply in queue order.
+        let explosions = std::mem::take(&mut self.queued_explosions);
+        for explosion in &explosions {
+            for &handle in self.body_of.values() {
+                let Some(body) = self.bodies.get_mut(handle) else {
+                    continue;
+                };
+                if !body.is_dynamic() {
+                    continue;
+                }
+                let delta = body.translation() - explosion.center;
+                let distance = delta.length();
+                if distance >= explosion.radius {
+                    continue;
+                }
+                let direction = if distance > 1e-6 { delta / distance } else { Vec3::Y };
+                let falloff = 1.0 - distance / explosion.radius;
+                body.apply_impulse(direction * (explosion.impulse * falloff), true);
+            }
+
+            // Threshold checks read entity positions from hecs, so static
+            // breakables (a wall with no RigidBody) break too.
+            for (&entity, &threshold) in &self.break_thresholds {
+                let Ok(transform) = world.get::<&Transform>(entity) else {
+                    continue;
+                };
+                let distance = (transform.position - explosion.center).length();
+                if distance >= explosion.radius {
+                    continue;
+                }
+                if explosion.impulse * (1.0 - distance / explosion.radius) >= threshold {
+                    self.pending_breaks.push(PendingBreak {
+                        entity,
+                        kick: Some(*explosion),
+                    });
                 }
             }
         }
@@ -477,6 +721,32 @@ impl PhysicsWorld {
             }
         }
 
+        // 6. Contact-impulse breaks (M14): the step's peak contact impulse
+        //    per thresholded breakable, compared against its threshold.
+        //    Peak (not sum): one hard hit breaks a crate, resting contact
+        //    under gravity accumulating over steps must not.
+        let impulses = match self.events.impulses.lock() {
+            Ok(mut impulses) => std::mem::take(&mut *impulses),
+            Err(_) => Vec::new(),
+        };
+        let mut peak: HashMap<Entity, f32> = HashMap::new();
+        for (h1, h2, impulse) in impulses {
+            for handle in [h1, h2] {
+                let Some(&entity) = self.entity_of_collider.get(&handle) else {
+                    continue;
+                };
+                if self.break_thresholds.contains_key(&entity) {
+                    let slot = peak.entry(entity).or_insert(0.0);
+                    *slot = slot.max(impulse);
+                }
+            }
+        }
+        for (entity, impulse) in peak {
+            if impulse >= self.break_thresholds[&entity] {
+                self.pending_breaks.push(PendingBreak { entity, kick: None });
+            }
+        }
+
         self.drain_events()
     }
 
@@ -573,7 +843,9 @@ impl PhysicsWorld {
 
 /// Collider shape with `Transform.scale` applied (validation already
 /// rejected nonuniform scale on round shapes; mesh shapes scale per-vertex,
-/// so any scale is representable).
+/// so any scale is representable). `force_events` opts the collider into
+/// contact-force events — thresholded breakables only, so scenes without
+/// breakables run the exact event path they always did.
 fn build_collider(
     collider: &ColliderData,
     transform: &Transform,
@@ -581,6 +853,7 @@ fn build_collider(
     entity_mesh: Option<&str>,
     meshes: &dyn MeshSource,
     layer_bits: &HashMap<String, Group>,
+    force_events: bool,
 ) -> Result<rapier3d::geometry::Collider> {
     let scale = transform.scale;
 
@@ -666,6 +939,11 @@ fn build_collider(
         group_mask(collider.collides_with.as_deref(), layer_bits),
         InteractionTestMode::And,
     );
+    let events = if force_events {
+        ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS
+    } else {
+        ActiveEvents::COLLISION_EVENTS
+    };
 
     Ok(builder
         .collision_groups(groups)
@@ -684,7 +962,10 @@ fn build_collider(
         // Kinematic-vs-fixed pairs are opted in explicitly: rapier skips
         // them by default, but a scripted kinematic platform crossing a
         // static sensor is exactly what M10 traces need to see.
-        .active_events(ActiveEvents::COLLISION_EVENTS)
+        .active_events(events)
+        // Report every contact force (the engine compares impulses against
+        // the break threshold itself, in one place).
+        .contact_force_event_threshold(0.0)
         .active_collision_types(
             ActiveCollisionTypes::default() | ActiveCollisionTypes::KINEMATIC_FIXED,
         )
@@ -725,7 +1006,7 @@ fn degrees_to_radians(v: Vec3) -> Vec3 {
 /// Quaternion → Euler XYZ degrees, the file representation. Lossy as a
 /// *representation* but deterministic, and canonicalized (−0 becomes 0) so
 /// baked files are stable.
-fn quat_to_euler_degrees(q: Quat) -> Vec3 {
+pub(crate) fn quat_to_euler_degrees(q: Quat) -> Vec3 {
     let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
     let canonical = |r: f32| {
         let degrees = r.to_degrees();

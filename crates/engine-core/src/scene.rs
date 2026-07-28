@@ -228,6 +228,17 @@ impl Scene {
         self.by_name.get(name).copied()
     }
 
+    /// Rebuild the name lookup from the world. Call after anything changes
+    /// the entity set — a break despawns the parent and spawns fragments.
+    pub fn refresh_names(&mut self) {
+        self.by_name = self
+            .world
+            .query::<(Entity, &Name)>()
+            .iter()
+            .map(|(entity, name)| (name.0.clone(), entity))
+            .collect();
+    }
+
     pub fn entity_count(&self) -> usize {
         self.by_name.len()
     }

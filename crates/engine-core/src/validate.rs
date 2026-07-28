@@ -228,6 +228,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut rigid_body: Option<(crate::components::BodyKind, String)> = None;
         let mut collider: Option<(crate::components::Collider, String)> = None;
         let mut wheel_path: Option<String> = None;
+        let mut breakable_threshold: Option<String> = None;
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
@@ -290,6 +291,11 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 Some(ComponentData::Wheel(w)) => {
                     wheel_path = Some(component_path.clone());
                     wheels.push((name.to_string(), w, component_path));
+                }
+                Some(ComponentData::Breakable(b)) => {
+                    if b.impulse_threshold.is_some() {
+                        breakable_threshold = Some(component_path);
+                    }
                 }
                 _ => {}
             }
@@ -451,6 +457,28 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     )
                     .entity(name)
                     .component("Wheel"),
+                );
+            }
+        }
+
+        // A collision can only break what a collider can hit: a threshold
+        // with nothing to receive the impact is dead data. Script- or
+        // explosion-only breakables just omit the threshold.
+        if let Some(path) = &breakable_threshold {
+            if collider.is_none() {
+                errors.push(
+                    cx.err(
+                        codes::BREAKABLE_WITHOUT_COLLIDER,
+                        format!(
+                            "entity {name:?} sets Breakable.impulse_threshold but has no \
+                             Collider; no collision can ever reach the threshold — add a \
+                             Collider or drop the threshold"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Breakable")
+                    .field("impulse_threshold"),
                 );
             }
         }
@@ -1155,6 +1183,50 @@ fn check_component(
         // whatever validated, so there is nothing semantic left to check.
         ComponentData::ParticleEmitter(_) => {}
 
+        // Fragment mesh references resolve like `Mesh.asset` (existence,
+        // extension, relative path); fragment collider dimensions are
+        // strictly positive like a Collider's.
+        ComponentData::Breakable(ref breakable) => {
+            let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+            for (i, fragment) in breakable.fragments.iter().enumerate() {
+                let fragment_path = format!("{component_path}/fragments/{i}");
+                if let Err(resolve) = MeshAsset::resolve(&fragment.mesh, base_dir) {
+                    let mut error = cx
+                        .err(
+                            resolve.error,
+                            resolve.message.clone(),
+                            &format!("{fragment_path}/mesh"),
+                        )
+                        .entity(entity)
+                        .component("Breakable")
+                        .field("mesh");
+                    if let Some(suggestion) =
+                        resolve.context().and_then(|c| c.did_you_mean.clone())
+                    {
+                        error = error.did_you_mean(suggestion);
+                    }
+                    errors.push(error);
+                }
+                for (axis, v) in fragment.half_extents.to_array().into_iter().enumerate() {
+                    if !(v > 0.0) {
+                        errors.push(
+                            cx.err(
+                                codes::INVALID_SHAPE_DIMENSION,
+                                format!(
+                                    "Breakable.fragments[{i}].half_extents[{axis}] is {v}; \
+                                     it must be greater than 0"
+                                ),
+                                &format!("{fragment_path}/half_extents/{axis}"),
+                            )
+                            .entity(entity)
+                            .component("Breakable")
+                            .field("half_extents"),
+                        );
+                    }
+                }
+            }
+        }
+
         // Script references: relative, existing, .rhai. Compilation is the
         // script pass's job (engine-script), like glTF parsing is the asset
         // pass's.
@@ -1330,7 +1402,7 @@ fn walk_component(
         let property = schemas.resolve(property);
         let field_path = format!("{component_path}/{key}");
         shape_clean &=
-            check_value(cx, property, value, type_name, entity, key, &field_path, errors);
+            check_value(cx, schemas, property, value, type_name, entity, key, &field_path, errors);
     }
 
     shape_clean
@@ -1375,6 +1447,7 @@ fn enum_values(schema: &Value) -> Option<Vec<&str>> {
 #[allow(clippy::too_many_arguments)]
 fn check_value(
     cx: &Cx<'_>,
+    schemas: &ComponentSchemas,
     schema: &Value,
     value: &Value,
     component: &str,
@@ -1509,8 +1582,29 @@ fn check_value(
             let min_items = schema["minItems"].as_u64();
             let max_items = schema["maxItems"].as_u64();
             if min_items.is_some_and(|n| len < n) || max_items.is_some_and(|n| len > n) {
+                // Fixed arity ([f32; 3] fields) is a shape error — serde
+                // rejects the wrong length too. An open-ended bound (a Vec
+                // with a minimum, like Breakable.fragments) still parses, so
+                // it reports as a range violation and checking continues —
+                // the walk must never be stricter than the loader about what
+                // *parses* (the corpus agreement property).
+                if min_items.is_some() && min_items == max_items {
+                    errors.push(
+                        cx.err(
+                            codes::INVALID_FIELD_TYPE,
+                            format!(
+                                "{field:?} must be an array of exactly {} elements, found {len}",
+                                min_items.unwrap_or(0)
+                            ),
+                            json_path,
+                        )
+                        .entity(entity)
+                        .component(component)
+                        .field(field),
+                    );
+                    return false;
+                }
                 let expected = match (min_items, max_items) {
-                    (Some(a), Some(b)) if a == b => format!("exactly {a}"),
                     (Some(a), Some(b)) => format!("between {a} and {b}"),
                     (Some(a), None) => format!("at least {a}"),
                     (None, Some(b)) => format!("at most {b}"),
@@ -1518,18 +1612,17 @@ fn check_value(
                 };
                 errors.push(
                     cx.err(
-                        codes::INVALID_FIELD_TYPE,
-                        format!("{field:?} must be an array of {expected} elements, found {len}"),
+                        codes::VALUE_OUT_OF_RANGE,
+                        format!("{field:?} must have {expected} elements, found {len}"),
                         json_path,
                     )
                     .entity(entity)
                     .component(component)
                     .field(field),
                 );
-                return false;
             }
 
-            let item_schema = &schema["items"];
+            let item_schema = schemas.resolve(&schema["items"]);
             let mut clean = true;
             for (i, item) in items.iter().enumerate() {
                 let item_path = format!("{json_path}/{i}");
@@ -1553,8 +1646,86 @@ fn check_value(
                         cx, item_schema, number, component, entity, field, &label, &item_path,
                         errors,
                     );
+                } else if item_schema["type"].as_str() == Some("object") {
+                    // Arrays of objects (Breakable.fragments): recurse, so a
+                    // bad fragment is a located walk error rather than a
+                    // serde rejection masquerading as scene_parse_desync.
+                    clean &= check_value(
+                        cx, schemas, item_schema, item, component, entity, field, &item_path,
+                        errors,
+                    );
                 }
             }
+            clean
+        }
+
+        Some("object") => {
+            let Some(map) = value.as_object() else {
+                errors.push(
+                    cx.wrong_type(field, "object", value, json_path)
+                        .entity(entity)
+                        .component(component),
+                );
+                return false;
+            };
+
+            let empty = Map::new();
+            let properties = schema["properties"].as_object().unwrap_or(&empty);
+            let mut clean = true;
+
+            for key in map.keys() {
+                if !properties.contains_key(key.as_str()) {
+                    clean = false;
+                    errors.push(
+                        cx.err(
+                            codes::UNKNOWN_FIELD,
+                            format!("{field:?} entries have no field {key:?}"),
+                            &format!("{json_path}/{key}"),
+                        )
+                        .entity(entity)
+                        .component(component)
+                        .field(key)
+                        .suggest_from(key, properties.keys().map(String::as_str)),
+                    );
+                }
+            }
+
+            if let Some(required) = schema["required"].as_array() {
+                for req in required.iter().filter_map(Value::as_str) {
+                    if !map.contains_key(req) {
+                        clean = false;
+                        errors.push(
+                            cx.err(
+                                codes::MISSING_FIELD,
+                                format!("each {field:?} entry requires the field {req:?}"),
+                                json_path,
+                            )
+                            .entity(entity)
+                            .component(component)
+                            .field(req),
+                        );
+                    }
+                }
+            }
+
+            for (key, item) in map {
+                let Some(property) = properties.get(key.as_str()) else {
+                    continue; // already reported as unknown
+                };
+                let property = schemas.resolve(property);
+                clean &= check_value(
+                    cx,
+                    schemas,
+                    property,
+                    item,
+                    component,
+                    entity,
+                    key,
+                    &format!("{json_path}/{key}"),
+                    errors,
+                );
+            }
+
             clean
         }
 
@@ -2361,6 +2532,120 @@ mod tests {
             2,
             "{codes:?}"
         );
+    }
+
+    #[test]
+    fn accepts_a_valid_breakable() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Crate","components":[
+                {"type":"Transform"},
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5]},
+                {"type":"Breakable","impulse_threshold":8.0,"fragments":[
+                    {"mesh":"builtin:cube","offset":[-0.25,0.0,0.0],"scale":[0.5,0.5,0.5]},
+                    {"mesh":"builtin:sphere","rotation":[0.0,30.0,0.0],
+                     "half_extents":[0.2,0.2,0.2],"density":2.0}
+                ]}
+            ]}
+        ]}"#;
+        assert!(validate_source(source, "test.json").is_empty());
+    }
+
+    #[test]
+    fn rejects_an_empty_fragments_list() {
+        // An empty Vec still *parses* — the minimum is a range check, not a
+        // shape error, per the corpus agreement property.
+        let source = r#"{"name":"s","entities":[
+            {"name":"Crate","components":[
+                {"type":"Transform"},
+                {"type":"Breakable","fragments":[]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(source), ["value_out_of_range"]);
+    }
+
+    #[test]
+    fn rejects_unknown_fragment_fields_with_a_suggestion() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Crate","components":[
+                {"type":"Transform"},
+                {"type":"Breakable","fragments":[
+                    {"mesh":"builtin:cube","ofset":[0.1,0.0,0.0]}
+                ]}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].error, "unknown_field");
+        assert_eq!(errors[0].context().unwrap().did_you_mean.as_deref(), Some("offset"));
+        assert_eq!(
+            errors[0].context().unwrap().path.as_deref(),
+            Some("/entities/0/components/1/fragments/0/ofset")
+        );
+    }
+
+    #[test]
+    fn rejects_a_fragment_missing_its_mesh() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Crate","components":[
+                {"type":"Transform"},
+                {"type":"Breakable","fragments":[{"offset":[0.1,0.0,0.0]}]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(source), ["missing_field"]);
+    }
+
+    #[test]
+    fn suggests_a_near_miss_fragment_mesh() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Crate","components":[
+                {"type":"Transform"},
+                {"type":"Breakable","fragments":[{"mesh":"builtin:cubee"}]}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].error, "asset_not_found");
+        assert_eq!(errors[0].context().unwrap().did_you_mean.as_deref(), Some("builtin:cube"));
+        assert_eq!(
+            errors[0].context().unwrap().path.as_deref(),
+            Some("/entities/0/components/1/fragments/0/mesh")
+        );
+    }
+
+    #[test]
+    fn rejects_non_positive_fragment_half_extents() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Crate","components":[
+                {"type":"Transform"},
+                {"type":"Breakable","fragments":[
+                    {"mesh":"builtin:cube","half_extents":[0.2,0.0,0.2]}
+                ]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(source), ["invalid_shape_dimension"]);
+    }
+
+    #[test]
+    fn rejects_a_thresholded_breakable_without_a_collider() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Crate","components":[
+                {"type":"Transform"},
+                {"type":"Breakable","impulse_threshold":5.0,
+                 "fragments":[{"mesh":"builtin:cube"}]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(source), ["breakable_without_collider"]);
+
+        // Omitting the threshold makes it script/explosion-only: no collider
+        // needed.
+        let source = r#"{"name":"s","entities":[
+            {"name":"Crate","components":[
+                {"type":"Transform"},
+                {"type":"Breakable","fragments":[{"mesh":"builtin:cube"}]}
+            ]}
+        ]}"#;
+        assert!(validate_source(source, "test.json").is_empty());
     }
 
     #[test]

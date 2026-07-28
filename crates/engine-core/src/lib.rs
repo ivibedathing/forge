@@ -22,6 +22,9 @@ pub mod validate;
 pub use error::{EngineError, Result};
 pub use scene::{Scene, SceneFile};
 
+/// The ECS, re-exported so downstream crates share one `hecs` version.
+pub use hecs;
+
 /// Math types, re-exported so downstream crates share one `glam` version.
 pub mod math {
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};

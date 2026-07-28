@@ -243,10 +243,44 @@ impl ViewerApp {
                                         break;
                                     }
                                 }
+                                if let Some(physics) = &mut sim.physics {
+                                    for blast in scripts.take_explosions() {
+                                        physics.queue_explosion(engine_physics::Explosion {
+                                            center: blast.center.into(),
+                                            radius: blast.radius,
+                                            impulse: blast.impulse,
+                                        });
+                                    }
+                                }
                             }
                             if let Some(physics) = &mut sim.physics {
                                 let events = physics.step(&mut sim.scene.world);
                                 sim.contacts.apply(&events);
+                                // Breaks apply after physics, exactly as in
+                                // the headless loop — played and simulated
+                                // runs must not diverge.
+                                let forced = sim
+                                    .scripts
+                                    .as_ref()
+                                    .map(engine_script::ScriptHost::take_breaks)
+                                    .unwrap_or_default();
+                                match engine_physics::apply_breaks(
+                                    &mut sim.scene.world,
+                                    physics,
+                                    &forced,
+                                ) {
+                                    Ok(broke) if !broke.is_empty() => {
+                                        sim.scene.refresh_names();
+                                        if let Some(scripts) = &mut sim.scripts {
+                                            scripts.sync_names(&sim.scene.world);
+                                        }
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        self.error = Some(e);
+                                        break;
+                                    }
+                                }
                             }
                             sim.particles.step(&sim.scene.world, dt);
                             sim.step_index += 1;
