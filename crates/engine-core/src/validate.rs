@@ -110,6 +110,8 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     let mut active_cameras: Vec<(String, String)> = Vec::new();
     let mut directional_lights: Vec<(String, String)> = Vec::new();
     let mut ambient_lights: Vec<(String, String)> = Vec::new();
+    // Wheel pass inputs (M12): checked cross-entity once names are known.
+    let mut wheels: Vec<(String, crate::components::Wheel, String)> = Vec::new();
 
     for (entity_index, entity) in entities.iter().enumerate() {
         let entity_path = format!("/entities/{entity_index}");
@@ -218,6 +220,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut scale = glam::Vec3::ONE;
         let mut rigid_body: Option<(crate::components::BodyKind, String)> = None;
         let mut collider: Option<(crate::components::ColliderShapeKind, String)> = None;
+        let mut wheel_path: Option<String> = None;
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
@@ -276,6 +279,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 }
                 Some(ComponentData::Collider(c)) => {
                     collider = Some((c.shape, component_path));
+                }
+                Some(ComponentData::Wheel(w)) => {
+                    wheel_path = Some(component_path.clone());
+                    wheels.push((name.to_string(), w, component_path));
                 }
                 _ => {}
             }
@@ -342,6 +349,39 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     .entity(name)
                     .component("Collider")
                     .field("shape"),
+                );
+            }
+        }
+
+        // ── Wheel entity checks (M12) ─────────────────────────────────
+        if let Some(path) = &wheel_path {
+            if !has_transform {
+                errors.push(
+                    cx.err(
+                        codes::MISSING_TRANSFORM,
+                        format!(
+                            "entity {name:?} has a Wheel but no Transform; \
+                             physics writes the wheel's pose into it every step"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Wheel"),
+                );
+            }
+            if rigid_body.is_some() || collider.is_some() {
+                errors.push(
+                    cx.err(
+                        codes::WHEEL_WITH_PHYSICS,
+                        format!(
+                            "entity {name:?} has a Wheel and its own RigidBody or \
+                             Collider; the chassis owns all collision — the wheel \
+                             touches the road through its suspension ray"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Wheel"),
                 );
             }
         }
@@ -413,6 +453,52 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 )
                 .component(component)
                 .candidates(names),
+            );
+        }
+    }
+
+    // ── Wheel pass (M12): every wheel's chassis must exist and be a
+    //    different entity with a dynamic RigidBody ─────────────────────
+    for (owner, wheel, wheel_component_path) in &wheels {
+        let vehicle_path = format!("{wheel_component_path}/vehicle");
+        if !seen_names.contains(&wheel.vehicle.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::WHEEL_VEHICLE_NOT_FOUND,
+                    format!(
+                        "the Wheel on {owner:?} names vehicle {:?}, which is not \
+                         an entity in this scene",
+                        wheel.vehicle
+                    ),
+                    &vehicle_path,
+                )
+                .entity(owner)
+                .component("Wheel")
+                .field("vehicle")
+                .suggest_from(&wheel.vehicle, seen_names.iter().copied()),
+            );
+        } else if wheel.vehicle == *owner
+            || body_kinds.get(&wheel.vehicle) != Some(&crate::components::BodyKind::Dynamic)
+        {
+            let why = if wheel.vehicle == *owner {
+                "a wheel cannot be its own chassis".to_string()
+            } else {
+                format!("{:?} has no dynamic RigidBody to suspend", wheel.vehicle)
+            };
+            errors.push(
+                cx.err(
+                    codes::WHEEL_VEHICLE_INVALID,
+                    format!(
+                        "the Wheel on {owner:?} names vehicle {:?}, but {why}; \
+                         the vehicle must be a different entity with a dynamic \
+                         RigidBody and a Collider",
+                        wheel.vehicle
+                    ),
+                    &vehicle_path,
+                )
+                .entity(owner)
+                .component("Wheel")
+                .field("vehicle"),
             );
         }
     }
@@ -877,6 +963,11 @@ fn check_component(
         // RigidBody's numeric ranges live in the published schema; the
         // cross-component requirements (Transform, Collider) are entity-level.
         ComponentData::RigidBody(_) => {}
+
+        // Wheel's numeric ranges live in the schema; its entity-level rules
+        // (Transform required, no own physics) and its cross-entity vehicle
+        // reference are checked by the scene-level wheel pass.
+        ComponentData::Wheel(_) => {}
 
         // Script references: relative, existing, .rhai. Compilation is the
         // script pass's job (engine-script), like glTF parsing is the asset
@@ -1917,6 +2008,53 @@ mod tests {
             ]}
         ]}"#;
         assert_eq!(codes_of(source), ["nonuniform_scale_on_round_collider"]);
+    }
+
+    #[test]
+    fn wheels_need_a_real_chassis_and_no_physics_of_their_own() {
+        // A correct vehicle: chassis + one wheel — no errors.
+        let good = r#"{"name":"s","entities":[
+            {"name":"Car","components":[
+                {"type":"Transform"},
+                {"type":"RigidBody","body":"dynamic"},
+                {"type":"Collider","shape":"cuboid","half_extents":[1.0,0.5,2.0]}
+            ]},
+            {"name":"WheelFL","components":[
+                {"type":"Transform"},
+                {"type":"Wheel","vehicle":"Car","offset":[-0.8,0.0,-1.2]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(good), Vec::<&str>::new());
+
+        // Typo'd chassis name: not found, with a suggestion.
+        let typo = good.replace(r#""vehicle":"Car","#, r#""vehicle":"Carr","#);
+        let errors = validate_source(&typo, "test.json");
+        assert_eq!(errors[0].error, "wheel_vehicle_not_found");
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("Car")
+        );
+
+        // Chassis without a dynamic body is invalid.
+        let fixed = good.replace(r#""body":"dynamic""#, r#""body":"fixed""#);
+        assert_eq!(codes_of(&fixed), ["wheel_vehicle_invalid"]);
+
+        // A wheel cannot be its own chassis.
+        let own = good.replace(r#""vehicle":"Car","#, r#""vehicle":"WheelFL","#);
+        assert_eq!(codes_of(&own), ["wheel_vehicle_invalid"]);
+
+        // A wheel entity with its own collider: the chassis owns collision.
+        let armored = good.replace(
+            r#"{"type":"Wheel","vehicle":"Car","#,
+            r#"{"type":"Collider","shape":"sphere","radius":0.3},
+               {"type":"Wheel","vehicle":"Car","#,
+        );
+        assert_eq!(codes_of(&armored), ["wheel_with_physics"]);
+
+        // And it needs a Transform for physics to write the pose into.
+        let bare = good.replace(r#"{"type":"Transform"},
+                {"type":"Wheel""#, r#"{"type":"Wheel""#);
+        assert_eq!(codes_of(&bare), ["missing_transform"]);
     }
 
     #[test]

@@ -53,6 +53,9 @@ build fails.
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |
+| `wheel_vehicle_not_found` | 1 | a Wheel's "vehicle" names no entity in the scene |
+| `wheel_vehicle_invalid` | 1 | a Wheel's "vehicle" must be a different entity with a dynamic RigidBody |
+| `wheel_with_physics` | 1 | a Wheel entity may not have its own RigidBody or Collider; the chassis owns all collision |
 | `input_unreadable` | 1 | the input timeline file could not be read |
 | `input_parse_error` | 1 | an input timeline line is not a valid {"step", "held"} object |
 | `unknown_key` | 1 | an input timeline holds a name that is no known key |

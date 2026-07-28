@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M11 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M12 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input and M12 vehicle wheels** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -30,6 +30,8 @@ engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --co
 engine list-animations <scene-or-clip> [--schema]
 # Script component: {"type": "Script", "source": "scripts/x.rhai"} — runs fn step(world, step)
 # once per fixed step (order: animations → scripts → physics → render)
+# Wheel component (M12): raycast-suspension wheel on its own visual entity, chassis by name —
+# physics suspends/drives the chassis and writes the wheel's Transform back (steer/spin/bounce)
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode (keyboard reaches scripts)
 engine list-components                   # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
@@ -184,20 +186,44 @@ Vehicle dynamics (M11.5): scripts read/write `RigidBody` velocities — `world.l
 pushes a dynamic body's component velocity into rapier **only when it differs from what
 physics last wrote back** (cache in `written_velocities`), so the deg↔rad round-trip never
 touches untouched runs and the M8 golden trace stays byte-identical. `RigidBody.
-locked_rotations: [bool; 3]` maps to rapier `LockedAxes` (a vehicle locks `[true, false,
-true]`). `world.forward(name)` returns the entity's world -Z — **required** for heading math:
+locked_rotations: [bool; 3]` maps to rapier `LockedAxes`. `world.forward(name)` returns the
+entity's world -Z — **required** for heading math:
 XYZ Euler clamps the middle angle to ±90°, so physics-integrated yaws past that come back as
 the `(±180, θ, ±180)` twin and `rotation[1]` stops being "the yaw" (this bug cost a debugging
 session; the twin is also why `animation.rs::field_shape` only treats arrays *of numbers* as
-animatable). Demo: `examples/scenes/car_track.json` + `scripts/car.rhai` — the truck is a
-dynamic body (≈1.5 t via collider density; collider box measured from the glb, `offset`
-centers it); the script is drivetrain+tires: accel/brake/drag/grip/speed-scaled steering
-against the body's velocity, physics owns gravity and barrier collisions. Contact friction on
-car+ground is near zero *on purpose* (the script models rolling resistance; rapier friction
-would double-brake the drive force). `car_track_lap.input.jsonl` is a 2 442-step recording
-(authored by a closed-loop autopilot: simulate a 10-step chunk → bake → read state → next
-keys) driving three clockwise laps and parking on the start line — pinned by CLI test and
-`verify/baselines/m11_lap.png`.
+animatable).
+
+Wheels (M12): the `Wheel` component is one raycast-suspension wheel — it sits on its own
+*visual* entity (Transform + cylinder Mesh, **no** RigidBody/Collider of its own, enforced by
+`wheel_with_physics`) and names its chassis in `vehicle` (a different entity with a dynamic
+RigidBody + Collider; `wheel_vehicle_not_found` / `wheel_vehicle_invalid`). engine-physics
+groups wheels by chassis name (both levels name-sorted for determinism) into rapier
+`DynamicRayCastVehicleController`s: suspension spring/damper per wheel (stiffness is **per kg
+of chassis mass**; static sag ≈ `9.81/(4·stiffness)`), drive/brake/steer at the contact
+point. Conventions: up +Y, forward −Z via `index_forward_axis = 2` + axle +X (drive direction
+is `normal × axle = −Z`, so positive `engine_force` is forward); positive `steering` (degrees)
+steers **left**. `Wheel.offset` is chassis-local meters, rotated but **not** scaled by
+`Transform.scale`. Control fields (`engine_force`/`brake`/`steering`) are runtime inputs like
+`RigidBody` velocities: scripts write them (`world.set_engine_force/set_brake/set_steering`
++ getters), physics reads them each step and wakes the chassis itself (rapier only wakes on
+*positive* engine force). Physics writes each wheel entity's Transform back every step —
+post-step chassis pose + ray length + steer yaw + accumulated spin, ×`Qz(90°)` mapping the
+builtin cylinder's Y axis onto the axle — so wheels visibly bounce, steer, and roll in
+screenshots. Vehicle worlds call `refresh_queries()` at build (suspension rays run before the
+first pipeline step builds the BVH); vehicle-free worlds skip everything, keeping M8 golden.
+**Tire model caveats** (bullet port): lateral grip is a velocity damper — side impulse =
+`0.2 · side_friction_stiffness · lateral_vel · effective_mass` per wheel per step, so the sum
+of `0.2·side_friction_stiffness` over wheels is the fraction of lateral velocity removed per
+step (>1 over-corrects and glues the car); `friction_slip` is the skid clamp as a multiple of
+suspension load — its 10.5 default never saturates and a large sideslip then wipes all
+momentum; ≈1.0 gives a physical μ≈0.9 tire that slides instead of sticking. Demo:
+`examples/scenes/car_track.json` — box chassis (`builtin:cube`, ≈1.5 t via density) + four
+cylinder wheels; `scripts/car.rhai` is now only the *driver* (pedals, speed-scaled steering
+wheel with finite slew rate, low-gear torque boost below 8 m/s so full-lock corners don't
+stall against front-tire slip drag, chase camera). `car_track_lap.input.jsonl` is a committed
+recording (closed-loop autopilot: simulate a 10-step chunk from step 0 → bake → read state →
+next keys) driving three clockwise laps on real suspension and parking on the start line —
+pinned by CLI test and `verify/baselines/m11_lap.png`.
 
 HUD (M11.6): `world.hud(text)` pushes printable-ASCII overlay lines, cleared every step —
 the HUD is a pure function of the step that drew it — and `world.state(key, default)` /

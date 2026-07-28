@@ -521,6 +521,122 @@
           "source"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "One raycast-suspension wheel of a vehicle (M12).\n\nSits on its own entity — the wheel's visual — and names its chassis in\n`vehicle` (an entity with a **dynamic** `RigidBody` + `Collider`). The\nengine groups every wheel naming the same chassis into one raycast\nvehicle: each wheel casts a ray down its suspension, a spring/damper\npushes the chassis, and a tire friction model drives and grips at the\ncontact point. The wheel entity's own `Transform` is **written by\nphysics** every step — suspension compression, steering yaw, and axle\nspin — so screenshots show wheels that steer, roll, and bounce. Author\nits rest pose; simulation owns it afterwards. A wheel entity must not\ncarry its own `RigidBody` or `Collider` (`wheel_with_physics`) — the\nchassis owns all collision.\n\nControl fields (`engine_force`, `brake`, `steering`) are runtime inputs\nthe same way `RigidBody.linear_velocity` is: scripts write them via\n`world.set_engine_force(...)` and friends, and physics reads them each\nstep.",
+        "properties": {
+          "brake": {
+            "default": 0.0,
+            "description": "Braking strength, `>= 0`. A runtime input scripts write each step\n(`world.set_brake`).",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "engine_force": {
+            "default": 0.0,
+            "description": "Drive force along the wheel's rolling direction, in newtons.\nPositive is the chassis's forward (−Z); negative reverses. A runtime\ninput scripts write each step (`world.set_engine_force`).",
+            "format": "float",
+            "type": "number"
+          },
+          "friction_slip": {
+            "default": 10.5,
+            "description": "Tire traction: how much forward/braking impulse the contact patch\ntransmits before it slips, as a multiple of the suspension load.\nLarger = grippier; too large flips the vehicle under hard braking.\n`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "max_suspension_force": {
+            "default": 30000.0,
+            "description": "Hard cap on the suspension force, in newtons (not mass-scaled).\n`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Suspension attachment point in the chassis's local frame, in meters\n(rotated with the chassis, **not** multiplied by its\n`Transform.scale`). The suspension ray starts here and points down\nthe chassis's local −Y.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "radius": {
+            "default": 0.30000001192092896,
+            "description": "Wheel radius in meters. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "side_friction_stiffness": {
+            "default": 1.0,
+            "description": "Multiplier on the tire's sideways grip. `1.0` = full lateral\nfriction; lower values let the vehicle drift. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "steering": {
+            "default": 0.0,
+            "description": "Steering angle in **degrees** about the chassis's up axis; positive\nsteers left. A runtime input scripts write each step\n(`world.set_steering`).",
+            "format": "float",
+            "type": "number"
+          },
+          "suspension_compression": {
+            "default": 2.5,
+            "description": "Damping while the spring compresses, per kilogram of chassis mass.\n`sqrt(stiffness)` is critical damping; ~0.5× that is a comfortable\ncar. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "suspension_damping": {
+            "default": 3.5,
+            "description": "Damping while the spring extends (rebound), per kilogram of chassis\nmass. Usually a little higher than `suspension_compression`. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "suspension_rest_length": {
+            "default": 0.30000001192092896,
+            "description": "Suspension spring rest length in meters: how far below `offset` the\nwheel center hangs when the spring is neither compressed nor\nstretched. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "suspension_stiffness": {
+            "default": 24.0,
+            "description": "Spring stiffness **per kilogram of chassis mass** (the backend\nmultiplies by mass, so the same value suspends a light or heavy\nchassis identically). Higher = stiffer. `> 0`. Static sag per wheel\nis roughly `9.81 / (4 * stiffness)` meters — keep\n`suspension_travel` above that.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "suspension_travel": {
+            "default": 0.25,
+            "description": "Maximum travel from rest length, in meters, both directions. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": {
+            "const": "Wheel",
+            "type": "string"
+          },
+          "vehicle": {
+            "description": "Name of the chassis entity this wheel belongs to. Must be a\n*different* entity with a dynamic `RigidBody` and a `Collider`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "vehicle"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -535,7 +651,8 @@
     "RigidBody",
     "Collider",
     "AnimationPlayer",
-    "Script"
+    "Script",
+    "Wheel"
   ],
   "scene": {
     "$defs": {
@@ -1056,6 +1173,122 @@
             "required": [
               "type",
               "source"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "One raycast-suspension wheel of a vehicle (M12).\n\nSits on its own entity — the wheel's visual — and names its chassis in\n`vehicle` (an entity with a **dynamic** `RigidBody` + `Collider`). The\nengine groups every wheel naming the same chassis into one raycast\nvehicle: each wheel casts a ray down its suspension, a spring/damper\npushes the chassis, and a tire friction model drives and grips at the\ncontact point. The wheel entity's own `Transform` is **written by\nphysics** every step — suspension compression, steering yaw, and axle\nspin — so screenshots show wheels that steer, roll, and bounce. Author\nits rest pose; simulation owns it afterwards. A wheel entity must not\ncarry its own `RigidBody` or `Collider` (`wheel_with_physics`) — the\nchassis owns all collision.\n\nControl fields (`engine_force`, `brake`, `steering`) are runtime inputs\nthe same way `RigidBody.linear_velocity` is: scripts write them via\n`world.set_engine_force(...)` and friends, and physics reads them each\nstep.",
+            "properties": {
+              "brake": {
+                "default": 0.0,
+                "description": "Braking strength, `>= 0`. A runtime input scripts write each step\n(`world.set_brake`).",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "engine_force": {
+                "default": 0.0,
+                "description": "Drive force along the wheel's rolling direction, in newtons.\nPositive is the chassis's forward (−Z); negative reverses. A runtime\ninput scripts write each step (`world.set_engine_force`).",
+                "format": "float",
+                "type": "number"
+              },
+              "friction_slip": {
+                "default": 10.5,
+                "description": "Tire traction: how much forward/braking impulse the contact patch\ntransmits before it slips, as a multiple of the suspension load.\nLarger = grippier; too large flips the vehicle under hard braking.\n`>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "max_suspension_force": {
+                "default": 30000.0,
+                "description": "Hard cap on the suspension force, in newtons (not mass-scaled).\n`>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "offset": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "Suspension attachment point in the chassis's local frame, in meters\n(rotated with the chassis, **not** multiplied by its\n`Transform.scale`). The suspension ray starts here and points down\nthe chassis's local −Y.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "radius": {
+                "default": 0.30000001192092896,
+                "description": "Wheel radius in meters. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "side_friction_stiffness": {
+                "default": 1.0,
+                "description": "Multiplier on the tire's sideways grip. `1.0` = full lateral\nfriction; lower values let the vehicle drift. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "steering": {
+                "default": 0.0,
+                "description": "Steering angle in **degrees** about the chassis's up axis; positive\nsteers left. A runtime input scripts write each step\n(`world.set_steering`).",
+                "format": "float",
+                "type": "number"
+              },
+              "suspension_compression": {
+                "default": 2.5,
+                "description": "Damping while the spring compresses, per kilogram of chassis mass.\n`sqrt(stiffness)` is critical damping; ~0.5× that is a comfortable\ncar. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "suspension_damping": {
+                "default": 3.5,
+                "description": "Damping while the spring extends (rebound), per kilogram of chassis\nmass. Usually a little higher than `suspension_compression`. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "suspension_rest_length": {
+                "default": 0.30000001192092896,
+                "description": "Suspension spring rest length in meters: how far below `offset` the\nwheel center hangs when the spring is neither compressed nor\nstretched. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "suspension_stiffness": {
+                "default": 24.0,
+                "description": "Spring stiffness **per kilogram of chassis mass** (the backend\nmultiplies by mass, so the same value suspends a light or heavy\nchassis identically). Higher = stiffer. `> 0`. Static sag per wheel\nis roughly `9.81 / (4 * stiffness)` meters — keep\n`suspension_travel` above that.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "suspension_travel": {
+                "default": 0.25,
+                "description": "Maximum travel from rest length, in meters, both directions. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "type": {
+                "const": "Wheel",
+                "type": "string"
+              },
+              "vehicle": {
+                "description": "Name of the chassis entity this wheel belongs to. Must be a\n*different* entity with a dynamic `RigidBody` and a `Collider`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "vehicle"
             ],
             "type": "object"
           }
