@@ -1,0 +1,757 @@
+{
+  "name": "showcase_tour",
+  "physics": { "gravity": [0.0, -9.81, 0.0], "timestep_hz": 60 },
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "scale": [200.0, 1.0, 200.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.13, 0.19, 0.11], "roughness": 0.95 },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "offset": [0.0, -0.5, 0.0], "friction": 0.9, "layers": ["ground"] }
+      ]
+    },
+
+    {
+      "name": "Monolith",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0], "scale": [4.0, 5.5, 4.0] },
+        { "type": "Mesh", "asset": "../meshes/pyramid.gltf" },
+        { "type": "Material", "albedo": [0.30, 0.29, 0.31], "metallic": 0.15, "roughness": 0.55 },
+        { "type": "Collider", "shape": "convex_hull", "layers": ["ground"] }
+      ]
+    },
+    {
+      "name": "Beacon",
+      "components": [
+        { "type": "Transform", "position": [0.0, 6.4, 0.0], "scale": [0.5, 0.5, 0.5] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "emissive": [0.15, 0.85, 0.95] },
+        { "type": "AnimationPlayer", "clip": "animations/tour_beacon.anim.json", "looping": true }
+      ]
+    },
+
+    {
+      "name": "Trunk1",
+      "components": [
+        { "type": "Transform", "position": [-16.5, 1.7, -12.5], "scale": [0.55, 3.4, 0.55] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Foliage1",
+      "components": [
+        { "type": "Transform", "position": [-16.5, 4.5, -12.5], "scale": [2.0, 2.3, 2.0] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.07, 0.24, 0.09], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "Trunk2",
+      "components": [
+        { "type": "Transform", "position": [-11.0, 1.4, -14.0], "scale": [0.5, 2.8, 0.5] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Foliage2",
+      "components": [
+        { "type": "Transform", "position": [-11.0, 3.8, -14.0], "scale": [1.7, 2.0, 1.7] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.09, 0.28, 0.10], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "Trunk3",
+      "components": [
+        { "type": "Transform", "position": [-15.0, 1.9, -6.5], "scale": [0.6, 3.8, 0.6] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.18, 0.12, 0.06], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Foliage3",
+      "components": [
+        { "type": "Transform", "position": [-15.0, 5.0, -6.5], "scale": [2.2, 2.5, 2.2] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.06, 0.22, 0.08], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "Trunk4",
+      "components": [
+        { "type": "Transform", "position": [-9.5, 1.3, -8.0], "scale": [0.45, 2.6, 0.45] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.21, 0.14, 0.08], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Foliage4",
+      "components": [
+        { "type": "Transform", "position": [-9.5, 3.5, -8.0], "scale": [1.6, 1.9, 1.6] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.10, 0.30, 0.11], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "Trunk5",
+      "components": [
+        { "type": "Transform", "position": [-19.0, 1.6, -8.5], "scale": [0.52, 3.2, 0.52] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Foliage5",
+      "components": [
+        { "type": "Transform", "position": [-19.0, 4.3, -8.5], "scale": [1.9, 2.2, 1.9] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.08, 0.26, 0.09], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "Trunk6",
+      "components": [
+        { "type": "Transform", "position": [-7.5, 1.5, -12.5], "scale": [0.5, 3.0, 0.5] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.19, 0.12, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Foliage6",
+      "components": [
+        { "type": "Transform", "position": [-7.5, 4.1, -12.5], "scale": [1.8, 2.1, 1.8] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.07, 0.25, 0.09], "roughness": 0.9 }
+      ]
+    },
+
+    {
+      "name": "Critter1",
+      "components": [
+        { "type": "Transform", "position": [-10.0, 0.32, -10.0], "scale": [0.34, 0.30, 0.50] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.42, 0.26, 0.12], "roughness": 0.85 },
+        { "type": "RigidBody", "body": "kinematic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "layers": ["critter"], "collides_with": ["ground"] }
+      ]
+    },
+    {
+      "name": "Critter2",
+      "components": [
+        { "type": "Transform", "position": [-16.0, 0.32, -9.0], "scale": [0.30, 0.27, 0.44] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.55, 0.53, 0.50], "roughness": 0.85 },
+        { "type": "RigidBody", "body": "kinematic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "layers": ["critter"], "collides_with": ["ground"] }
+      ]
+    },
+    {
+      "name": "Critter3",
+      "components": [
+        { "type": "Transform", "position": [-12.0, 0.32, -13.5], "scale": [0.28, 0.25, 0.42] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.72, 0.70, 0.66], "roughness": 0.8 },
+        { "type": "RigidBody", "body": "kinematic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "layers": ["critter"], "collides_with": ["ground"] }
+      ]
+    },
+    {
+      "name": "Critter4",
+      "components": [
+        { "type": "Transform", "position": [-14.5, 0.32, -6.0], "scale": [0.32, 0.29, 0.47] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.30, 0.22, 0.14], "roughness": 0.9 },
+        { "type": "RigidBody", "body": "kinematic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "layers": ["critter"], "collides_with": ["ground"] }
+      ]
+    },
+
+    {
+      "name": "FirePit",
+      "components": [
+        { "type": "Transform", "position": [9.0, 0.14, -13.0], "scale": [3.0, 0.28, 3.0] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.15, 0.14, 0.13], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Log1",
+      "components": [
+        { "type": "Transform", "position": [8.6, 0.45, -13.0], "rotation": [0.0, 24.0, 8.0],
+          "scale": [1.9, 0.32, 0.32] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.13, 0.08, 0.05], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Log2",
+      "components": [
+        { "type": "Transform", "position": [9.3, 0.45, -13.2], "rotation": [0.0, -38.0, -6.0],
+          "scale": [1.8, 0.30, 0.30] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.11, 0.07, 0.04], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "FireCore",
+      "components": [
+        { "type": "Transform", "position": [9.0, 0.55, -13.0], "scale": [0.5, 0.4, 0.5] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.05, 0.02, 0.0], "emissive": [1.0, 0.42, 0.06] }
+      ]
+    },
+    {
+      "name": "Fire",
+      "components": [
+        { "type": "Transform", "position": [9.0, 0.45, -13.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 130.0, "lifetime": 0.75, "speed": 2.4, "spread": 26.0,
+          "acceleration": [0.0, 2.6, 0.0], "drag": 1.6,
+          "start_size": 0.26, "end_size": 0.05,
+          "start_color": [1.0, 0.52, 0.10], "end_color": [0.55, 0.05, 0.01],
+          "start_alpha": 0.9, "end_alpha": 0.0, "max_particles": 512, "seed": 101 }
+      ]
+    },
+    {
+      "name": "FireSmoke",
+      "components": [
+        { "type": "Transform", "position": [9.0, 2.1, -13.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 26.0, "lifetime": 4.0, "speed": 1.3, "spread": 16.0,
+          "acceleration": [0.55, 0.8, 0.15], "drag": 0.45,
+          "start_size": 0.30, "end_size": 1.5,
+          "start_color": [0.24, 0.23, 0.23], "end_color": [0.42, 0.42, 0.45],
+          "start_alpha": 0.6, "end_alpha": 0.0, "max_particles": 320, "seed": 102 }
+      ]
+    },
+    {
+      "name": "Sparks",
+      "components": [
+        { "type": "Transform", "position": [9.0, 0.7, -13.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 22.0, "lifetime": 1.6, "speed": 3.6, "spread": 34.0,
+          "acceleration": [0.3, -2.4, 0.1], "drag": 0.5,
+          "start_size": 0.05, "end_size": 0.015,
+          "start_color": [1.0, 0.85, 0.35], "end_color": [1.0, 0.30, 0.02],
+          "start_alpha": 1.0, "end_alpha": 0.0, "max_particles": 128, "seed": 103 }
+      ]
+    },
+
+    {
+      "name": "PondBed",
+      "components": [
+        { "type": "Transform", "position": [15.0, 0.04, 6.0], "scale": [13.6, 1.0, 13.6] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.02, 0.04, 0.05], "roughness": 0.6 }
+      ]
+    },
+    { "name": "Water00", "components": [
+      { "type": "Transform", "position": [10.35, 0.14, 1.35], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water01", "components": [
+      { "type": "Transform", "position": [10.35, 0.14, 4.45], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water02", "components": [
+      { "type": "Transform", "position": [10.35, 0.14, 7.55], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water03", "components": [
+      { "type": "Transform", "position": [10.35, 0.14, 10.65], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water10", "components": [
+      { "type": "Transform", "position": [13.45, 0.14, 1.35], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water11", "components": [
+      { "type": "Transform", "position": [13.45, 0.14, 4.45], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water12", "components": [
+      { "type": "Transform", "position": [13.45, 0.14, 7.55], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water13", "components": [
+      { "type": "Transform", "position": [13.45, 0.14, 10.65], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water20", "components": [
+      { "type": "Transform", "position": [16.55, 0.14, 1.35], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water21", "components": [
+      { "type": "Transform", "position": [16.55, 0.14, 4.45], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water22", "components": [
+      { "type": "Transform", "position": [16.55, 0.14, 7.55], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water23", "components": [
+      { "type": "Transform", "position": [16.55, 0.14, 10.65], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water30", "components": [
+      { "type": "Transform", "position": [19.65, 0.14, 1.35], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water31", "components": [
+      { "type": "Transform", "position": [19.65, 0.14, 4.45], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water32", "components": [
+      { "type": "Transform", "position": [19.65, 0.14, 7.55], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+    { "name": "Water33", "components": [
+      { "type": "Transform", "position": [19.65, 0.14, 10.65], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+
+    {
+      "name": "IceShelf",
+      "components": [
+        { "type": "Transform", "position": [15.0, 1.6, -1.6], "scale": [10.0, 3.2, 3.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.52, 0.72, 0.84], "metallic": 0.08, "roughness": 0.10 },
+        { "type": "Collider", "shape": "trimesh", "asset": "builtin:cube", "layers": ["ground"] }
+      ]
+    },
+    {
+      "name": "IceBlock1",
+      "components": [
+        { "type": "Transform", "position": [21.2, 0.7, 1.2], "rotation": [0.0, 22.0, 6.0],
+          "scale": [1.8, 1.4, 1.6] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.58, 0.77, 0.88], "metallic": 0.06, "roughness": 0.08 }
+      ]
+    },
+    {
+      "name": "IceBlock2",
+      "components": [
+        { "type": "Transform", "position": [22.0, 0.5, 4.6], "rotation": [0.0, -14.0, 0.0],
+          "scale": [1.4, 1.0, 1.4] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.62, 0.80, 0.90], "metallic": 0.06, "roughness": 0.06 }
+      ]
+    },
+    {
+      "name": "IceBlock3",
+      "components": [
+        { "type": "Transform", "position": [9.2, 0.6, 12.4], "rotation": [0.0, 40.0, -5.0],
+          "scale": [1.6, 1.2, 1.5] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.55, 0.75, 0.86], "metallic": 0.06, "roughness": 0.09 }
+      ]
+    },
+    {
+      "name": "IceSpire",
+      "components": [
+        { "type": "Transform", "position": [20.0, 1.8, -3.0], "rotation": [0.0, 0.0, 7.0],
+          "scale": [1.2, 3.6, 1.2] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.60, 0.79, 0.90], "metallic": 0.05, "roughness": 0.05 }
+      ]
+    },
+    {
+      "name": "Waterfall",
+      "components": [
+        { "type": "Transform", "position": [15.0, 3.1, 0.1], "rotation": [-110.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 170.0, "lifetime": 1.3, "speed": 2.6, "spread": 11.0,
+          "acceleration": [0.0, -9.0, 0.0], "drag": 0.1,
+          "start_size": 0.11, "end_size": 0.24,
+          "start_color": [0.52, 0.74, 0.94], "end_color": [0.86, 0.93, 1.0],
+          "start_alpha": 0.75, "end_alpha": 0.0, "max_particles": 512, "seed": 201 }
+      ]
+    },
+    {
+      "name": "Spray",
+      "components": [
+        { "type": "Transform", "position": [15.0, 0.35, 1.4], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 95.0, "lifetime": 0.95, "speed": 1.7, "spread": 58.0,
+          "acceleration": [0.0, -4.0, 0.0], "drag": 1.1,
+          "start_size": 0.08, "end_size": 0.34,
+          "start_color": [0.82, 0.90, 0.98], "end_color": [0.95, 0.97, 1.0],
+          "start_alpha": 0.55, "end_alpha": 0.0, "max_particles": 320, "seed": 202 }
+      ]
+    },
+    {
+      "name": "Frost",
+      "components": [
+        { "type": "Transform", "position": [16.0, 4.2, 4.0], "rotation": [-90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 16.0, "lifetime": 4.5, "speed": 0.35, "spread": 80.0,
+          "acceleration": [0.12, -0.35, 0.05], "drag": 0.3,
+          "start_size": 0.05, "end_size": 0.02,
+          "start_color": [0.88, 0.95, 1.0], "end_color": [0.7, 0.85, 1.0],
+          "start_alpha": 0.8, "end_alpha": 0.0, "max_particles": 128, "seed": 203 }
+      ]
+    },
+
+    {
+      "name": "BreakPad",
+      "components": [
+        { "type": "Transform", "position": [-2.0, 0.04, 15.0], "scale": [12.0, 0.08, 8.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.28, 0.27, 0.25], "roughness": 0.85 }
+      ]
+    },
+    {
+      "name": "Crate1",
+      "components": [
+        { "type": "Transform", "position": [-3.15, 0.5, 15.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.55, 0.34, 0.14], "roughness": 0.75 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "density": 60.0, "friction": 0.7, "layers": ["debris"] },
+        { "type": "Breakable", "impulse_threshold": 150.0, "fragments": [
+          { "mesh": "builtin:cube", "offset": [-0.25, -0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, -0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [-0.25, 0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, 0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 }
+        ] }
+      ]
+    },
+    {
+      "name": "Crate2",
+      "components": [
+        { "type": "Transform", "position": [-2.0, 0.5, 15.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.58, 0.37, 0.16], "roughness": 0.75 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "density": 60.0, "friction": 0.7, "layers": ["debris"] },
+        { "type": "Breakable", "impulse_threshold": 150.0, "fragments": [
+          { "mesh": "builtin:cube", "offset": [-0.25, -0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, -0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [-0.25, 0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, 0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 }
+        ] }
+      ]
+    },
+    {
+      "name": "Crate3",
+      "components": [
+        { "type": "Transform", "position": [-0.85, 0.5, 15.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.52, 0.32, 0.13], "roughness": 0.75 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "density": 60.0, "friction": 0.7, "layers": ["debris"] },
+        { "type": "Breakable", "impulse_threshold": 150.0, "fragments": [
+          { "mesh": "builtin:cube", "offset": [-0.25, -0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, -0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [-0.25, 0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, 0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 }
+        ] }
+      ]
+    },
+    {
+      "name": "Crate4",
+      "components": [
+        { "type": "Transform", "position": [-2.6, 1.5, 15.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.60, 0.39, 0.18], "roughness": 0.75 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "density": 60.0, "friction": 0.7, "layers": ["debris"] },
+        { "type": "Breakable", "impulse_threshold": 150.0, "fragments": [
+          { "mesh": "builtin:cube", "offset": [-0.25, -0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, -0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [-0.25, 0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, 0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 }
+        ] }
+      ]
+    },
+    {
+      "name": "Crate5",
+      "components": [
+        { "type": "Transform", "position": [-1.45, 1.5, 15.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.50, 0.31, 0.12], "roughness": 0.75 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "density": 60.0, "friction": 0.7, "layers": ["debris"] },
+        { "type": "Breakable", "impulse_threshold": 150.0, "fragments": [
+          { "mesh": "builtin:cube", "offset": [-0.25, -0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, -0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [-0.25, 0.25, 0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 },
+          { "mesh": "builtin:cube", "offset": [0.25, 0.25, -0.25], "scale": [0.5, 0.5, 0.5],
+            "half_extents": [0.5, 0.5, 0.5], "density": 120.0 }
+        ] }
+      ]
+    },
+    {
+      "name": "IcePillar",
+      "components": [
+        { "type": "Transform", "position": [1.8, 1.0, 15.0], "scale": [1.0, 2.0, 1.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.58, 0.78, 0.89], "metallic": 0.06, "roughness": 0.07 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "density": 40.0, "friction": 0.4, "layers": ["debris"] },
+        { "type": "Breakable", "fragments": [
+          { "mesh": "builtin:cube", "offset": [0.0, -0.375, 0.0], "scale": [1.0, 0.25, 1.0],
+            "half_extents": [0.5, 0.5, 0.5], "density": 40.0 },
+          { "mesh": "builtin:cube", "offset": [0.0, -0.125, 0.0], "scale": [1.0, 0.25, 1.0],
+            "half_extents": [0.5, 0.5, 0.5], "density": 40.0 },
+          { "mesh": "builtin:cube", "offset": [0.0, 0.125, 0.0], "scale": [1.0, 0.25, 1.0],
+            "half_extents": [0.5, 0.5, 0.5], "density": 40.0 },
+          { "mesh": "builtin:cube", "offset": [0.0, 0.375, 0.0], "scale": [1.0, 0.25, 1.0],
+            "half_extents": [0.5, 0.5, 0.5], "density": 40.0 }
+        ] }
+      ]
+    },
+    {
+      "name": "Boulder",
+      "components": [
+        { "type": "Transform", "position": [-11.5, 0.9, 15.0], "scale": [0.9, 0.9, 0.9] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.22, 0.21, 0.20], "roughness": 0.9 },
+        { "type": "RigidBody", "body": "dynamic", "ccd": true },
+        { "type": "Collider", "shape": "sphere", "radius": 1.0, "density": 90.0,
+          "friction": 0.6, "layers": ["debris"] }
+      ]
+    },
+    {
+      "name": "Blast",
+      "components": [
+        { "type": "Transform", "position": [-1.0, 0.9, 15.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 0.0, "lifetime": 0.55, "speed": 9.0, "spread": 180.0,
+          "acceleration": [0.0, -3.0, 0.0], "drag": 4.0,
+          "start_size": 0.35, "end_size": 0.06,
+          "start_color": [1.0, 0.72, 0.26], "end_color": [0.45, 0.08, 0.02],
+          "start_alpha": 1.0, "end_alpha": 0.0, "max_particles": 512, "seed": 302 }
+      ]
+    },
+    {
+      "name": "Dust",
+      "components": [
+        { "type": "Transform", "position": [-1.0, 0.5, 15.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 0.0, "lifetime": 2.6, "speed": 3.4, "spread": 75.0,
+          "acceleration": [0.0, -0.5, 0.0], "drag": 1.5,
+          "start_size": 0.30, "end_size": 1.9,
+          "start_color": [0.46, 0.42, 0.36], "end_color": [0.58, 0.55, 0.50],
+          "start_alpha": 0.7, "end_alpha": 0.0, "max_particles": 512, "seed": 301 }
+      ]
+    },
+
+    {
+      "name": "Truck",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.9, 27.0], "rotation": [0.0, 90.0, 0.0],
+          "scale": [1.7, 0.7, 3.6] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.72, 0.15, 0.12], "metallic": 0.1, "roughness": 0.55 },
+        { "type": "RigidBody", "body": "dynamic", "ccd": true },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5],
+          "density": 350.0, "friction": 0.3, "restitution": 0.1 },
+        { "type": "Script", "source": "scripts/tour_truck.rhai" }
+      ]
+    },
+    {
+      "name": "WheelFL",
+      "components": [
+        { "type": "Transform", "position": [-1.25, 0.35, 27.92], "rotation": [0.0, 90.0, 90.0],
+          "scale": [0.7, 0.26, 0.7] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "roughness": 0.9 },
+        { "type": "Wheel", "vehicle": "Truck", "offset": [-0.92, -0.2, -1.25], "radius": 0.35,
+          "suspension_rest_length": 0.35, "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8, "suspension_damping": 3.8, "suspension_travel": 0.2,
+          "side_friction_stiffness": 2.0, "friction_slip": 1.0 }
+      ]
+    },
+    {
+      "name": "WheelFR",
+      "components": [
+        { "type": "Transform", "position": [-1.25, 0.35, 26.08], "rotation": [0.0, 90.0, 90.0],
+          "scale": [0.7, 0.26, 0.7] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "roughness": 0.9 },
+        { "type": "Wheel", "vehicle": "Truck", "offset": [0.92, -0.2, -1.25], "radius": 0.35,
+          "suspension_rest_length": 0.35, "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8, "suspension_damping": 3.8, "suspension_travel": 0.2,
+          "side_friction_stiffness": 2.0, "friction_slip": 1.0 }
+      ]
+    },
+    {
+      "name": "WheelRL",
+      "components": [
+        { "type": "Transform", "position": [1.25, 0.35, 27.92], "rotation": [0.0, 90.0, 90.0],
+          "scale": [0.7, 0.26, 0.7] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "roughness": 0.9 },
+        { "type": "Wheel", "vehicle": "Truck", "offset": [-0.92, -0.2, 1.25], "radius": 0.35,
+          "suspension_rest_length": 0.35, "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8, "suspension_damping": 3.8, "suspension_travel": 0.2,
+          "side_friction_stiffness": 1.7, "friction_slip": 1.0 }
+      ]
+    },
+    {
+      "name": "WheelRR",
+      "components": [
+        { "type": "Transform", "position": [1.25, 0.35, 26.08], "rotation": [0.0, 90.0, 90.0],
+          "scale": [0.7, 0.26, 0.7] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "roughness": 0.9 },
+        { "type": "Wheel", "vehicle": "Truck", "offset": [0.92, -0.2, 1.25], "radius": 0.35,
+          "suspension_rest_length": 0.35, "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8, "suspension_damping": 3.8, "suspension_travel": 0.2,
+          "side_friction_stiffness": 1.7, "friction_slip": 1.0 }
+      ]
+    },
+    {
+      "name": "Exhaust",
+      "components": [
+        { "type": "Transform", "position": [2.05, 0.4, 27.45], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 55.0, "lifetime": 1.4, "speed": 1.0, "spread": 16.0,
+          "acceleration": [0.0, 1.1, 0.0], "drag": 1.2,
+          "start_size": 0.09, "end_size": 0.4,
+          "start_color": [0.3, 0.3, 0.32], "end_color": [0.55, 0.55, 0.58],
+          "start_alpha": 0.75, "end_alpha": 0.0, "max_particles": 128, "seed": 401 }
+      ]
+    },
+    {
+      "name": "SkidLeft",
+      "components": [
+        { "type": "Transform", "position": [1.25, 0.12, 27.92], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 0.0, "lifetime": 0.9, "speed": 0.8, "spread": 55.0,
+          "acceleration": [0.0, 0.6, 0.0], "drag": 2.0,
+          "start_size": 0.1, "end_size": 0.5,
+          "start_color": [0.62, 0.62, 0.62], "end_color": [0.78, 0.78, 0.78],
+          "start_alpha": 0.5, "end_alpha": 0.0, "max_particles": 160, "seed": 402 }
+      ]
+    },
+    {
+      "name": "SkidRight",
+      "components": [
+        { "type": "Transform", "position": [1.25, 0.12, 26.08], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 0.0, "lifetime": 0.9, "speed": 0.8, "spread": 55.0,
+          "acceleration": [0.0, 0.6, 0.0], "drag": 2.0,
+          "start_size": 0.1, "end_size": 0.5,
+          "start_color": [0.62, 0.62, 0.62], "end_color": [0.78, 0.78, 0.78],
+          "start_alpha": 0.5, "end_alpha": 0.0, "max_particles": 160, "seed": 403 }
+      ]
+    },
+
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-42.0, 35.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.95, 0.86], "intensity": 1.15 }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [
+        { "type": "AmbientLight", "color": [0.45, 0.56, 0.72], "intensity": 0.22 }
+      ]
+    },
+    {
+      "name": "TourCam",
+      "components": [
+        { "type": "Transform", "position": [-24.0, 7.0, -18.0], "rotation": [-12.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 55.0, "near": 0.1, "far": 400.0, "active": true }
+      ]
+    },
+
+    {
+      "name": "TourDirector",
+      "components": [
+        { "type": "Transform" },
+        { "type": "Script", "source": "scripts/tour_director.rhai" }
+      ]
+    },
+    {
+      "name": "Wildlife",
+      "components": [
+        { "type": "Transform" },
+        { "type": "Script", "source": "scripts/tour_wildlife.rhai" }
+      ]
+    },
+    {
+      "name": "Effects",
+      "components": [
+        { "type": "Transform" },
+        { "type": "Script", "source": "scripts/tour_effects.rhai" }
+      ]
+    },
+
+    {
+      "name": "LowerThird",
+      "components": [
+        { "type": "HudRect", "anchor": "bottom_left", "offset": [8.0, 8.0], "size": [352.0, 92.0],
+          "color": [0.02, 0.03, 0.05], "opacity": 0.5 }
+      ]
+    },
+    {
+      "name": "TimeBarBack",
+      "components": [
+        { "type": "HudRect", "anchor": "bottom_left", "offset": [16.0, 16.0], "size": [320.0, 8.0],
+          "color": [0.06, 0.07, 0.09], "opacity": 0.9 }
+      ]
+    },
+    {
+      "name": "TimeBar",
+      "components": [
+        { "type": "HudRect", "anchor": "bottom_left", "offset": [16.0, 16.0], "size": [0.0, 8.0],
+          "color": [1.0, 0.72, 0.15] }
+      ]
+    },
+    {
+      "name": "Title",
+      "components": [
+        { "type": "HudText", "text": "FORGE ENGINE TOUR", "anchor": "bottom_left",
+          "offset": [16.0, 78.0], "size": 8.0, "color": [1.0, 0.86, 0.30] }
+      ]
+    },
+    {
+      "name": "StationLabel",
+      "components": [
+        { "type": "HudText", "text": "01 FOREST", "anchor": "bottom_left",
+          "offset": [16.0, 52.0], "size": 16.0, "color": [0.92, 0.96, 1.0] }
+      ]
+    },
+    {
+      "name": "SystemsLabel",
+      "components": [
+        { "type": "HudText", "text": "SYSTEMS", "anchor": "bottom_left",
+          "offset": [16.0, 34.0], "size": 8.0, "color": [0.62, 0.74, 0.88] }
+      ]
+    },
+    {
+      "name": "TruckLabel",
+      "components": [
+        { "type": "HudText", "text": "TRUCK 0 KMH", "anchor": "bottom_right",
+          "offset": [12.0, 12.0], "size": 8.0, "color": [0.9, 0.9, 0.95] }
+      ]
+    }
+  ]
+}

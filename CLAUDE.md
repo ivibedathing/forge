@@ -396,6 +396,26 @@ corner (`app.rs::with_fps_readout`, averaged over 0.5 s) — wall-clock and ther
 it rides ordinary `HudText`/`HudRect` components appended to the scene's own HUD, and headless
 renders never see it, so nothing reproducible depends on how fast this machine drew.
 
+Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
+camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
+with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,
+truck}.rhai`) and six 640×360 baselines (`verify/baselines/showcase_*.png`, per-adapter, checked
+by hand with `diff-render`, not by a CLI test). **Its growth contract is a test**:
+`repo_contracts.rs::showcase_tour_uses_every_component_the_engine_has` fails on any schema
+component the tour does not use, so a new component's commit adds an entity here — there is no
+allowlist, deliberately. Station 04 fires all three `Breakable` triggers in one run (collision at
+~585, `break_entity` at 601, `explode` at 636). What is real: particles, physics, fragments. What
+is faked and named as such in the doc: water (opaque low-roughness tiles on a scripted sine wave —
+no transparency), ice (pale dielectric, no transmission), animals (scaled spheres on parametric
+loops). `Material` alpha/transmission is the upgrade that would move this scene most.
+**Building it found a physics bug** now fixed and regression-tested: priming the broad-phase BVH
+before the first step (vehicle worlds did this so wheel rays hit ground on step 0) consumed the
+pair events, and rapier's `NarrowPhase::register_pairs` is private — so every collider **already
+resting in contact at load** silently lost its contacts and fell through the world forever. Bodies
+*dropped* from a height were unaffected, which is why every earlier fixture missed it. The
+first-step BVH now goes on a scratch clone (`bvh_cold` in engine-physics); `refresh_queries` is
+documented destructive, with the `--steps 0` query path its only safe caller.
+
 Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).
 

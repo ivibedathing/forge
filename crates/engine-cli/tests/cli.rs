@@ -1845,3 +1845,144 @@ fn a_thresholded_breakable_without_a_collider_fails_validation() {
         "{codes:?}"
     );
 }
+
+// ── The showcase tour (showcase-tour.md) ───────────────────────────────────
+
+/// The tour is the scene every system has to keep working in, so what it
+/// pins is the *whole stack running together for 15 seconds*: animation,
+/// scripts, wheels, physics, breaking and particles all advancing on one
+/// fixed clock, twice, to the same bytes.
+///
+/// The trace itself is 2 MB and would churn on every framing tweak, so there
+/// is no committed golden here — determinism against a second run plus the
+/// pinned story beats below is the contract. The PNG baselines under
+/// `verify/baselines/showcase_*.png` are per-adapter artifacts and are
+/// checked with `engine diff-render` by hand, not from a test.
+#[test]
+fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
+    let scene = repo_path("examples/scenes/showcase_tour.json");
+    let trace = |name: &str| {
+        let path = std::env::temp_dir()
+            .join(format!("engine-tour-{}-{name}.jsonl", std::process::id()));
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", "900"])
+            .arg("--trace")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        (bytes, stdout_of(&output))
+    };
+
+    let (first, report) = trace("a");
+    let (second, _) = trace("b");
+    assert_eq!(first, second, "twice-run traces must be byte-identical");
+
+    // 900 steps at 60 Hz is the advertised fifteen seconds.
+    let report: serde_json::Value = serde_json::from_str(report.trim()).unwrap();
+    assert_eq!(report["simulated_steps"], 900);
+    assert_eq!(report["timestep_hz"], 60);
+    assert_eq!(
+        report["hud"][0].as_str().unwrap(),
+        "TOUR 900/900  05 THE WHOLE WORLD",
+        "the director's last line names the last station"
+    );
+
+    let lines: Vec<serde_json::Value> = String::from_utf8(first)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+
+    // Station 04 demonstrates all three ways to break something, and each
+    // has to land inside its 180-step window (steps 540..720) or the camera
+    // is looking somewhere else when it happens.
+    let breaks: Vec<(u64, &str)> = lines
+        .iter()
+        .filter_map(|l| {
+            Some((l.get("step")?.as_u64()?, l.get("broke")?.as_str()?))
+        })
+        .collect();
+    for (step, what) in &breaks {
+        assert!(
+            (540..720).contains(step),
+            "{what} broke at step {step}, outside the breaking station's window"
+        );
+    }
+    // Which crate each trigger happens to claim is a float-level detail that
+    // moves between optimisation levels, so what is pinned is the trigger
+    // *sequence*: the boulder's impact, then the script's named break on its
+    // exact step, then the blast.
+    let scripted = breaks
+        .iter()
+        .find(|(_, what)| *what == "IcePillar")
+        .expect("world.break_entity fires on IcePillar");
+    assert_eq!(scripted.0, 601, "a scripted break lands the step after the call");
+    assert!(
+        breaks.iter().any(|(step, _)| (580..600).contains(step)),
+        "the boulder should shatter something on impact: {breaks:?}"
+    );
+    assert!(
+        breaks.iter().any(|(step, _)| *step >= 637),
+        "the explosion should still find something to break: {breaks:?}"
+    );
+
+    // Nothing may leave the world. A body that loses its ground contact
+    // falls forever in silence — no error, no failed validation, just a
+    // scene that renders wrong — so the tour asserts the floor holds.
+    let last = lines
+        .iter()
+        .filter(|l| l["step"] == 900 && l.get("position").is_some());
+    for row in last {
+        let y = row["position"][1].as_f64().unwrap();
+        assert!(
+            y > -1.0,
+            "{} ended up at y={y}: it fell through the world",
+            row["entity"]
+        );
+    }
+}
+
+/// The tour drives a vehicle around a world full of resting bodies — the
+/// combination that used to silently disable every other collider's
+/// contacts. The crates start flush on the ground, so if the first step
+/// swallows their broad-phase pairs they never touch anything again.
+#[test]
+fn the_showcase_tour_keeps_its_crates_on_the_ground() {
+    let scene = repo_path("examples/scenes/showcase_tour.json");
+    let path = std::env::temp_dir().join(format!("engine-tour-rest-{}.jsonl", std::process::id()));
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "300"])
+        .arg("--trace")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let trace = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    // Five seconds in, long before anything is meant to move, the stack is
+    // still standing where the file put it.
+    let resting: Vec<serde_json::Value> = trace
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .filter(|l: &serde_json::Value| l["step"] == 300)
+        .collect();
+    for name in ["Crate1", "Crate2", "Crate3", "Boulder", "IcePillar"] {
+        let row = resting
+            .iter()
+            .find(|l| l["entity"] == name)
+            .unwrap_or_else(|| panic!("{name} left the trace entirely"));
+        let y = row["position"][1].as_f64().unwrap();
+        assert!(
+            y > 0.2,
+            "{name} sank to y={y} — a resting body lost its ground contact"
+        );
+    }
+}
