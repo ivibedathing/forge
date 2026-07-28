@@ -90,13 +90,14 @@ fn step(world, step) {
 | `world.hud(text)` | push one printable-ASCII overlay line for *this step only* (the list clears every step, so the HUD is a pure function of the step that drew it); composited onto screenshots, diff-renders, and the run-scene window, mirrored into simulate traces/reports. Caps: 16 lines × 96 chars, runtime error beyond |
 | `world.hud_text(name)` / `world.set_hud_text(name, text)` | (M12) `HudText.text` — the component readout; unlike `world.hud` lines this is scene state, so it bakes under the change-based rule |
 | `world.hud_rect_size(name)` (returns `[w, h]`) / `world.set_hud_rect_size(name, w, h)` | (M12) `HudRect.size` in pixels — the gauge-bar primitive; bakes like any component field |
+| `world.particle_rate(name)` / `world.set_particle_rate(name, rate)` | (M13) `ParticleEmitter.rate` in particles/sec — the one emitter parameter scripts drive, so an effect can answer to gameplay (a skidding tire smokes, a rolling one does not). Takes effect on the same step (the emitter re-reads `rate` every step) and bakes like any component field. Rate 0 pauses emission without disturbing live particles, which live out their lifetime. A negative, NaN, or f32-overflowing rate is a runtime error rather than a scene file that bakes and then fails to validate |
 | `world.touching(name)` | (M12) names of entities the entity's collider is in contact with, as an array of strings — the touching-state left by the **previous** physics step (system order is scripts → physics, so a contact at physics step N is script-visible at step N+1) |
 | `world.contacts_started(name)` | (M12) the subset of `touching` that began on the previous physics step — the "on hit" edge trigger; empty again the step after |
 
 Getters return `[x, y, z]` arrays. A name that resolves to no entity, or an entity without a
 `Transform`, raises a script runtime error naming the entity — deterministic failure over
 silent no-op. Material access and spawning are deferred (§7); velocity access arrived with
-M11's car, contact queries with M12's collision work.
+M11's car, contact queries with M12's collision work, and emission rate with M13's particles.
 Input semantics (key names, the timeline file `--input` replays) live in `input-design.md`.
 
 ## 5. Workspace

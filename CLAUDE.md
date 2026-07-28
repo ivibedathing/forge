@@ -305,6 +305,17 @@ the same `world.forward` heading the driver already computes) — particles are 
 once spawned, so a moving car leaves a trail behind it rather than dragging a plume along.
 It cost `verify/baselines/m11_lap.png` a re-bless; the timeline, physics, and the pinned
 HUD strings are untouched, because particles never feed back into simulation.
+`rate` is the one emitter parameter scripts drive — `world.particle_rate` /
+`set_particle_rate`, the only particle field in the curated API, since the component is
+re-read every step. It bakes change-based like a velocity or a gauge width, and the setter
+rejects negative/NaN/f32-overflowing values **at the call** so a bad rate is a located
+script error rather than a baked file that fails `validate`. Rate 0 pauses emission without
+touching live particles (they live out their lifetime), which is what makes gating cheap:
+`car.rhai` runs `SkidLeft`/`SkidRight` emitters at the rear contact patches off chassis
+sideslip (lateral velocity, 1 m/s deadband so suspension jitter is not a skid) plus a
+braking-lockup term, so the tires smoke in corners and under braking and are silent on the
+straights. Those two emitters rest at `"rate": 0.0` and the parked car is not sliding, so
+`m11_lap.png` did **not** move a pixel when they landed.
 
 Breaking (M14, design in `breaking-design.md`): `Breakable` lists **pre-authored fragments**
 (mesh ref + local placement + cuboid `half_extents` + `density` — no runtime fracture, the

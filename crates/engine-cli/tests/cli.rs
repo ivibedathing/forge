@@ -848,6 +848,89 @@ fn scripted_bake_is_a_valid_scene_with_the_moved_state() {
     std::fs::remove_file(&out).ok();
 }
 
+/// A script-driven emission rate is scene state: it bakes under the same
+/// change-based rule as a velocity, and the baked file revalidates. The
+/// particles themselves stay out of the file — they are disposable
+/// simulation state, so only the authored `rate` field moves.
+#[test]
+fn a_script_driven_particle_rate_bakes_and_revalidates() {
+    let dir = std::env::temp_dir().join(format!("engine-m13-rate-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(
+        dir.join("scripts/gate.rhai"),
+        // Emission answers to gameplay: off, then hard on at step 30.
+        "fn step(world, step) {\n\
+             world.set_particle_rate(\"Puff\", if step >= 30 { 90.0 } else { 0.0 });\n\
+         }\n",
+    )
+    .unwrap();
+    let scene_path = dir.join("scene.json");
+    std::fs::write(
+        &scene_path,
+        r#"{"name":"rate","entities":[
+            {"name":"Puff","components":[
+                {"type":"Transform", "rotation": [90.0, 0.0, 0.0]},
+                {"type":"ParticleEmitter","rate":12.0,"seed":3},
+                {"type":"Script","source":"scripts/gate.rhai"}
+            ]},
+            {"name":"Cam","components":[
+                {"type":"Transform","position":[0.0,1.0,5.0]},
+                {"type":"Camera","active":true}]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let out = dir.join("baked.json");
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene_path)
+        .args(["--steps", "60"])
+        .arg("--bake")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    let validate = engine().arg("validate").arg(&out).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0), "{validate:?}");
+
+    let baked: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    let emitter = baked["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Puff")
+        .unwrap()["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["type"] == "ParticleEmitter")
+        .unwrap()
+        .clone();
+    assert_eq!(emitter["rate"], 90.0, "the live rate must bake: {emitter}");
+    // Particle state is not scene state — no particle array leaks in.
+    assert!(emitter.get("particles").is_none(), "{emitter}");
+
+    // A rate the schema forbids is a located script error, not a file that
+    // bakes and then fails to validate.
+    std::fs::write(
+        dir.join("scripts/gate.rhai"),
+        "fn step(world, step) { world.set_particle_rate(\"Puff\", -5.0); }\n",
+    )
+    .unwrap();
+    let bad = engine()
+        .arg("simulate")
+        .arg(&scene_path)
+        .args(["--steps", "1"])
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&bad));
+    assert!(codes.contains(&"script_runtime_error".to_string()), "{codes:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A script runtime error surfaces as structured JSON naming the script
 /// file and line, exit 1 — never a panic, never a silent no-op.
 #[test]

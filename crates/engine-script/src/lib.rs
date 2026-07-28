@@ -22,7 +22,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use engine_core::components::{
-    Breakable, HudRect, HudText, Name, RigidBody, Script, Transform, Wheel,
+    Breakable, HudRect, HudText, Name, ParticleEmitter, RigidBody, Script, Transform, Wheel,
 };
 use engine_core::contact::ContactState;
 use engine_core::input::{self, InputState};
@@ -542,6 +542,43 @@ fn curated_engine() -> rhai::Engine {
          -> std::result::Result<(), Box<EvalAltResult>> {
             w.with_component::<HudRect, _>(name, "HudRect", |r| {
                 r.size = glam::Vec2::new(width as f32, height as f32);
+            })
+        },
+    );
+
+    // Emission rate (M13): the one particle parameter a script drives, so
+    // effects can answer to gameplay — a skidding tire smokes, a healthy
+    // engine does not. `ParticleEmitter` re-reads `rate` every step, so the
+    // write takes effect on the same step; particle *state* stays untouched,
+    // which keeps rate 0 a pause (live particles live out their lifetime)
+    // rather than a reset.
+    engine.register_fn(
+        "particle_rate",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_component::<ParticleEmitter, _>(name, "ParticleEmitter", |e| {
+                f64::from(e.rate)
+            })
+        },
+    );
+    engine.register_fn(
+        "set_particle_rate",
+        |w: &mut WorldApi, name: &str, rate: f64| -> std::result::Result<(), Box<EvalAltResult>> {
+            // The schema says `rate >= 0`, and bake writes this field back
+            // into a scene file that must revalidate. Rejecting the bad
+            // value here makes that a located script error on the step it
+            // happened, not `value_out_of_range` on a file nobody hand-wrote.
+            // The test is on the *stored* f32: NaN would poison the spawn
+            // credit, and a finite f64 too big for f32 (1e300) overflows to
+            // an infinity that serializes as JSON `null`.
+            let stored = rate as f32;
+            if !stored.is_finite() || stored < 0.0 {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("particle rate must be a finite number >= 0, got {rate}").into(),
+                    Position::NONE,
+                )));
+            }
+            w.with_component::<ParticleEmitter, _>(name, "ParticleEmitter", |e| {
+                e.rate = stored;
             })
         },
     );
@@ -1295,6 +1332,90 @@ mod tests {
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("no HudText"), "{}", error.message);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn particle_rate_accessor_reads_writes_and_rejects_bad_values() {
+        let dir = temp_dir("particlerate");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                // Gate the effect on gameplay: smoke only while "skidding".
+                let idle = world.particle_rate("Puff");
+                world.set_particle_rate("Puff", if step >= 2 { idle * 4.0 } else { 0.0 });
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Puff","components":[
+                {"type":"Transform"},
+                {"type":"ParticleEmitter","rate":25.0},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        let rate_now = |scene: &Scene| {
+            scene
+                .world
+                .get::<&ParticleEmitter>(scene.entity("Puff").unwrap())
+                .unwrap()
+                .rate
+        };
+
+        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+        assert_eq!(rate_now(&scene), 0.0, "the script must be able to shut emission off");
+        host.step(&mut scene.world, 2, &InputState::default(), &ContactState::default()).unwrap();
+        // The getter read the *live* 0.0 the previous step wrote, not the
+        // file's 25.0 — the component is the single source of truth.
+        assert_eq!(rate_now(&scene), 0.0, "the getter must see the live value");
+
+        // A negative rate would bake into a file that fails validation, and
+        // NaN would poison the spawn credit: both are located script errors.
+        for bad in ["-1.0", "0.0/0.0", "1e300"] {
+            let (mut scene, path) = scene_with_emitter(
+                &dir,
+                &format!("fn step(world, step) {{ world.set_particle_rate(\"Puff\", {bad}); }}"),
+            );
+            let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+            let error = host
+                .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+                .unwrap_err();
+            assert_eq!(error.error, "script_runtime_error", "{bad}");
+            assert!(error.message.contains("finite number >= 0"), "{bad}: {}", error.message);
+        }
+
+        // Missing components are structured errors, like every accessor.
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.particle_rate("Mover"); }"#,
+        );
+        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let error = host
+            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .unwrap_err();
+        assert!(error.message.contains("no ParticleEmitter"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A one-entity scene whose emitter the given script drives.
+    fn scene_with_emitter(dir: &Path, script: &str) -> (Scene, std::path::PathBuf) {
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join("scripts/emitter.rhai"), script).unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Puff","components":[
+                {"type":"Transform"},
+                {"type":"ParticleEmitter","rate":25.0},
+                {"type":"Script","source":"scripts/emitter.rhai"}
+            ]}
+        ]}"#;
+        let scene_path = dir.join("emitter_scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        (scene, scene_path)
     }
 
     #[test]

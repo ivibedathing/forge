@@ -115,6 +115,40 @@ fn step(world, step) {
         p[2] - f[2] * 2.05 + f[0] * 0.55,
     );
 
+    // Tire smoke (M13 + the M13 rate accessor): the rear tires smoke when
+    // they are *sliding*, not when they are rolling. Sideslip is the lateral
+    // component of the chassis velocity — the car moving in a direction it
+    // is not pointing — and hard braking at speed adds lockup on top. Both
+    // feed one emission rate, which drops to 0 the moment grip returns; that
+    // gating is the whole point of world.set_particle_rate, since an emitter
+    // that cannot be switched off has to be a permanent feature of the scene.
+    let right_x = -f[2];
+    let right_z = f[0];
+    let lateral = abs(v[0] * right_x + v[2] * right_z);
+    // A deadband below 1 m/s: suspension jitter is not a skid, and a parked
+    // car must not smoulder.
+    let skid = (lateral - 1.0) / 3.0;
+    if skid < 0.0 { skid = 0.0; }
+    if braking && forward_speed > 6.0 { skid += 0.5; }
+    if skid > 1.0 { skid = 1.0; }
+    let tire_smoke = 120.0 * skid;
+    world.set_particle_rate("SkidLeft", tire_smoke);
+    world.set_particle_rate("SkidRight", tire_smoke);
+    // Park each emitter at its rear contact patch (chassis-local ∓0.92 across
+    // the axle, 1.25 back), just off the tarmac.
+    world.set_position(
+        "SkidLeft",
+        p[0] - f[0] * 1.25 - right_x * 0.92,
+        0.12,
+        p[2] - f[2] * 1.25 - right_z * 0.92,
+    );
+    world.set_position(
+        "SkidRight",
+        p[0] - f[0] * 1.25 + right_x * 0.92,
+        0.12,
+        p[2] - f[2] * 1.25 + right_z * 0.92,
+    );
+
     // Lap timing. The start line is the x=0 plane across the south straight
     // (z > 6); racing direction there is -X, so a lap completes when x goes
     // positive → non-positive. The car *starts on* the line, and parking

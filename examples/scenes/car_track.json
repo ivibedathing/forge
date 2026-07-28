@@ -2581,6 +2581,110 @@
       ]
     },
     {
+      "name": "SkidLeft",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.25,
+            0.12,
+            9.92
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 0.0,
+          "lifetime": 0.9,
+          "speed": 0.8,
+          "spread": 55.0,
+          "acceleration": [
+            0.0,
+            0.6,
+            0.0
+          ],
+          "drag": 2.0,
+          "start_size": 0.1,
+          "end_size": 0.5,
+          "start_color": [
+            0.62,
+            0.62,
+            0.62
+          ],
+          "end_color": [
+            0.78,
+            0.78,
+            0.78
+          ],
+          "start_alpha": 0.5,
+          "end_alpha": 0.0,
+          "max_particles": 160,
+          "seed": 31
+        }
+      ]
+    },
+    {
+      "name": "SkidRight",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.25,
+            0.12,
+            8.08
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 0.0,
+          "lifetime": 0.9,
+          "speed": 0.8,
+          "spread": 55.0,
+          "acceleration": [
+            0.0,
+            0.6,
+            0.0
+          ],
+          "drag": 2.0,
+          "start_size": 0.1,
+          "end_size": 0.5,
+          "start_color": [
+            0.62,
+            0.62,
+            0.62
+          ],
+          "end_color": [
+            0.78,
+            0.78,
+            0.78
+          ],
+          "start_alpha": 0.5,
+          "end_alpha": 0.0,
+          "max_particles": 160,
+          "seed": 32
+        }
+      ]
+    },
+    {
       "name": "Sun",
       "components": [
         {
