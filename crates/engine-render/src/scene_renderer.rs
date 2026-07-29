@@ -29,7 +29,7 @@ use engine_core::components::Camera;
 use engine_core::math::{Mat4, Vec3};
 use engine_core::mesh::MeshData;
 use engine_core::particles::ParticleInstance;
-use engine_core::scene::{RenderItem, ResolvedLights};
+use engine_core::scene::{EnvironmentSettings, RenderItem, ResolvedLights};
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -44,6 +44,8 @@ struct ObjectUniform {
     normal_matrix: [[f32; 4]; 4],
     albedo_metallic: [f32; 4],
     emissive_roughness: [f32; 4],
+    /// x = alpha, y = transmission; z and w are padding.
+    surface: [f32; 4],
 }
 
 /// Per-pass shader data, matching WGSL `FrameUniform`. Colors arrive already
@@ -56,6 +58,13 @@ struct FrameUniform {
     sun_direction: [f32; 4],
     sun_color: [f32; 4],
     ambient: [f32; 4],
+    inv_view_proj: [[f32; 4]; 4],
+    light_view_proj: [[f32; 4]; 4],
+    sky_zenith: [f32; 4],
+    sky_horizon: [f32; 4],
+    sky_ground: [f32; 4],
+    /// x = fog density, y = shadows on, z = shadow-map texel size, w = sky on.
+    params: [f32; 4],
 }
 
 /// Per-pass particle data, matching WGSL `ParticleFrame`.
@@ -65,6 +74,9 @@ struct ParticleFrameUniform {
     view_proj: [[f32; 4]; 4],
     camera_right: [f32; 4],
     camera_up: [f32; 4],
+    /// xyz = camera position, w = fog density.
+    camera_pos: [f32; 4],
+    fog_color: [f32; 4],
 }
 
 /// One particle billboard as the instance buffer carries it.
@@ -121,9 +133,80 @@ struct HudTarget {
     height: u32,
 }
 
+/// Resolution of the directional shadow map, in texels on a side.
+///
+/// Fixed rather than authored: `EnvironmentSettings::shadow_distance` already
+/// gives the scene the sharpness knob that matters (it sets how much world
+/// these texels are spread over), and a second one would only let a scene ask
+/// for 8192² and blame the engine for the memory.
+const SHADOW_MAP_SIZE: u32 = 2048;
+
+/// The shadow map and the bind group naming it.
+///
+/// A 1×1 placeholder stands in when a scene does not cast shadows: WGSL binds
+/// the texture unconditionally, but the sampling is behind `params.y`, so
+/// nothing ever reads the placeholder's undefined contents. That keeps one
+/// mesh pipeline for both cases instead of two shader permutations.
+struct ShadowMap {
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+}
+
+impl ShadowMap {
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: u32) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow-map"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow-sampler"),
+            // Linear filtering on a comparison sampler is hardware PCF: each
+            // tap already returns a bilinear blend of four depth *tests*, so
+            // the 3×3 kernel in the shader is effectively 6×6 for free.
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow-bind-group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        Self { view, bind_group }
+    }
+}
+
 /// Everything one scene render needs beyond the device and queue.
 pub struct ScenePass<'a> {
+    /// Where the finished, single-sampled image lands. With MSAA on this is
+    /// the resolve target rather than the thing drawn into.
     pub target: &'a wgpu::TextureView,
+    /// The multisampled color attachment, when `environment.samples > 1`.
+    /// `None` draws straight into `target`, exactly as before MSAA existed.
+    pub msaa: Option<&'a wgpu::TextureView>,
+    /// Must match the sample count of the color attachment actually drawn
+    /// into — see [`depth_texture_multisampled`].
     pub depth: &'a wgpu::TextureView,
     pub items: &'a [RenderItem],
     /// Particle billboards, drawn after the meshes (alpha-blended, depth-read
@@ -137,6 +220,12 @@ pub struct ScenePass<'a> {
     pub camera_right: Vec3,
     pub camera_up: Vec3,
     pub lights: ResolvedLights,
+    /// How this scene is rendered: sky, fog, shadows, sample count (M16). All
+    /// defaults off, in which case this draws exactly what it drew before the
+    /// block existed.
+    pub environment: EnvironmentSettings,
+    /// Used only when `environment.sky` is off; the sky pass overwrites every
+    /// pixel it would have set.
     pub clear: wgpu::Color,
     /// Screen-space overlay, composited after the mesh pass (M12). Must be
     /// rasterized at the target's dimensions. `None` skips the overlay pass
@@ -146,13 +235,25 @@ pub struct ScenePass<'a> {
 
 pub struct SceneRenderer {
     pipeline: wgpu::RenderPipeline,
+    /// Same shader as `pipeline`, blended and depth-write-off, for materials
+    /// with `alpha < 1` or `transmission > 0`.
+    transparent_pipeline: wgpu::RenderPipeline,
+    shadow_pipeline: wgpu::RenderPipeline,
+    sky_pipeline: wgpu::RenderPipeline,
     particle_pipeline: wgpu::RenderPipeline,
     object_layout: wgpu::BindGroupLayout,
     hud_pipeline: wgpu::RenderPipeline,
     hud_layout: wgpu::BindGroupLayout,
+    shadow_layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
+    samples: u32,
 
     // Everything below persists across frames; see the module doc.
+    /// Bound whenever shadows are off. See [`ShadowMap`].
+    shadow_placeholder: ShadowMap,
+    /// The real map, allocated the first time a scene casts shadows so that
+    /// scenes which never do pay nothing for it.
+    shadow_map: Option<ShadowMap>,
     meshes: HashMap<usize, CachedMesh>,
     frame_uniform: Uniforms,
     /// Object uniforms for the whole draw list, one per `object_stride` bytes.
@@ -168,10 +269,26 @@ pub struct SceneRenderer {
 }
 
 impl SceneRenderer {
+    /// A renderer for single-sampled targets — the pre-MSAA constructor, kept
+    /// because most callers (tests, the editor viewport) have no scene to ask.
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::with_samples(device, format, 1)
+    }
+
+    /// A renderer whose scene pipelines are built for `samples`-way MSAA.
+    ///
+    /// The sample count is baked into every pipeline, so it belongs to the
+    /// renderer rather than to a frame: a scene that changes `samples` gets a
+    /// new `SceneRenderer`, which is what the viewer's reload path does.
+    pub fn with_samples(device: &wgpu::Device, format: wgpu::TextureFormat, samples: u32) -> Self {
+        let samples = samples.max(1);
+        let multisample = wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh-shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("shaders/mesh.wgsl"))),
         });
 
         let uniform_layout = |label: &str, binding_size: Option<u64>| {
@@ -201,9 +318,37 @@ impl SceneRenderer {
         );
         let frame_layout = uniform_layout("frame-uniforms", None);
 
+        // Group 2: the shadow map and its comparison sampler. Always present
+        // in the layout even when a scene casts no shadows — see `ShadowMap`.
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow-map"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
+
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh-pipeline-layout"),
-            bind_group_layouts: &[Some(&object_layout), Some(&frame_layout)],
+            bind_group_layouts: &[
+                Some(&object_layout),
+                Some(&frame_layout),
+                Some(&shadow_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -261,10 +406,55 @@ impl SceneRenderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample,
             multiview_mask: None,
             cache: None,
         });
+
+        // The blended twin of the mesh pipeline: same shader, same layout,
+        // same geometry. What differs is that it must not write depth (two
+        // transparent surfaces have to blend with each other rather than the
+        // nearer one masking the farther) and that its blend factors expect
+        // the premultiplied color `fs_main` produces for these materials.
+        let transparent_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mesh-transparent-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_layouts,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let shadow_pipeline =
+            Self::shadow_pipeline(device, &object_layout, &frame_layout, &vertex_layouts[..1]);
+        let sky_pipeline = Self::sky_pipeline(device, &frame_layout, format, multisample);
 
         let (hud_pipeline, hud_layout) = Self::hud_pipeline(device, format);
 
@@ -334,7 +524,7 @@ impl SceneRenderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample,
             multiview_mask: None,
             cache: None,
         });
@@ -360,13 +550,22 @@ impl SceneRenderer {
         let object_stride =
             std::mem::size_of::<ObjectUniform>().next_multiple_of(alignment as usize) as u64;
 
+        let shadow_placeholder = ShadowMap::new(device, &shadow_layout, 1);
+
         Self {
             pipeline,
+            transparent_pipeline,
+            shadow_pipeline,
+            sky_pipeline,
             particle_pipeline,
             object_layout,
             hud_pipeline,
             hud_layout,
+            shadow_layout,
             format,
+            samples,
+            shadow_placeholder,
+            shadow_map: None,
             meshes: HashMap::new(),
             frame_uniform,
             objects: None,
@@ -376,6 +575,120 @@ impl SceneRenderer {
             hud_targets: Vec::new(),
             frame_index: 0,
         }
+    }
+
+    /// The depth-only caster pass (M16). No fragment stage and no color
+    /// target: the rasterizer writing depth is the whole point.
+    ///
+    /// Culling is inverted relative to the mesh pass. Recording the *back* of
+    /// each caster moves the stored depth away from the lit surface by the
+    /// thickness of the object, which is a far better peeling margin than any
+    /// constant bias, and it costs nothing.
+    fn shadow_pipeline(
+        device: &wgpu::Device,
+        object_layout: &wgpu::BindGroupLayout,
+        frame_layout: &wgpu::BindGroupLayout,
+        vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
+    ) -> wgpu::RenderPipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow-shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadow.wgsl").into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow-pipeline-layout"),
+            bind_group_layouts: &[Some(object_layout), Some(frame_layout)],
+            immediate_size: 0,
+        });
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: vertex_layouts,
+                compilation_options: Default::default(),
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                // A slope-scaled hardware bias on top of the shader's, which
+                // is what keeps large ground-facing polygons from self-
+                // shadowing in bands.
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    /// The procedural sky (M16): one fullscreen triangle, drawn before the
+    /// meshes with the depth test passing always and depth writes off, so
+    /// every mesh that follows simply covers it.
+    fn sky_pipeline(
+        device: &wgpu::Device,
+        frame_layout: &wgpu::BindGroupLayout,
+        format: wgpu::TextureFormat,
+        multisample: wgpu::MultisampleState,
+    ) -> wgpu::RenderPipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sky-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("shaders/sky.wgsl"))),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sky-pipeline-layout"),
+            bind_group_layouts: &[Some(frame_layout)],
+            immediate_size: 0,
+        });
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        })
     }
 
     /// The HUD overlay blit (M12): fullscreen triangle, no vertex buffers, no
@@ -464,6 +777,12 @@ impl SceneRenderer {
         self.format
     }
 
+    /// The MSAA sample count baked into this renderer's pipelines. A caller
+    /// whose scene now asks for a different one has to build a new renderer.
+    pub fn samples(&self) -> u32 {
+        self.samples
+    }
+
     /// Upload a draw list and render it.
     ///
     /// Geometry uploads once and is reused: `items` carry shared
@@ -473,6 +792,7 @@ impl SceneRenderer {
     pub fn draw(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pass: ScenePass<'_>) {
         let ScenePass {
             target,
+            msaa,
             depth,
             items,
             particles,
@@ -481,17 +801,49 @@ impl SceneRenderer {
             camera_right,
             camera_up,
             lights,
+            environment,
             clear,
             hud,
         } = pass;
 
         self.frame_index += 1;
 
+        // Shadows need a real map; allocate it the first time any scene asks.
+        if environment.shadows && self.shadow_map.is_none() {
+            self.shadow_map = Some(ShadowMap::new(
+                device,
+                &self.shadow_layout,
+                SHADOW_MAP_SIZE,
+            ));
+        }
+        let light_view_proj = if environment.shadows {
+            light_view_projection(
+                lights.sun_direction,
+                camera_position,
+                view_projection,
+                environment.shadow_distance,
+                SHADOW_MAP_SIZE,
+            )
+        } else {
+            Mat4::IDENTITY
+        };
+
         let frame = FrameUniform {
             camera_pos: camera_position.extend(1.0).to_array(),
             sun_direction: lights.sun_direction.extend(0.0).to_array(),
             sun_color: lights.sun_color.extend(1.0).to_array(),
             ambient: lights.ambient.extend(1.0).to_array(),
+            inv_view_proj: view_projection.inverse().to_cols_array_2d(),
+            light_view_proj: light_view_proj.to_cols_array_2d(),
+            sky_zenith: environment.sky_zenith.extend(1.0).to_array(),
+            sky_horizon: environment.sky_horizon.extend(1.0).to_array(),
+            sky_ground: environment.sky_ground.extend(1.0).to_array(),
+            params: [
+                environment.fog_density,
+                if environment.shadows { 1.0 } else { 0.0 },
+                1.0 / SHADOW_MAP_SIZE as f32,
+                if environment.sky { 1.0 } else { 0.0 },
+            ],
         };
         queue.write_buffer(&self.frame_uniform.buffer, 0, bytemuck::bytes_of(&frame));
 
@@ -515,6 +867,7 @@ impl SceneRenderer {
                 normal_matrix: item.model.inverse().transpose().to_cols_array_2d(),
                 albedo_metallic: material.albedo.extend(material.metallic).to_array(),
                 emissive_roughness: material.emissive.extend(material.roughness).to_array(),
+                surface: [material.alpha, material.transmission, 0.0, 0.0],
             };
             let at = index * stride;
             object_bytes[at..at + std::mem::size_of::<ObjectUniform>()]
@@ -531,6 +884,25 @@ impl SceneRenderer {
             );
             queue.write_buffer(&objects.buffer, 0, &object_bytes);
         }
+
+        // Split the draw list by blend mode. Opaque keeps file order (it is
+        // depth-tested, so order does not matter and stability is worth more);
+        // transparent sorts back-to-front, because blending does not commute.
+        // The tiebreak on entity name keeps two surfaces at the same distance
+        // — the water tiles of the showcase pond, say — in an order that does
+        // not depend on how the world happened to iterate.
+        let opaque: Vec<usize> = (0..items.len())
+            .filter(|&i| !items[i].material.is_transparent())
+            .collect();
+        let mut transparent: Vec<usize> = (0..items.len())
+            .filter(|&i| items[i].material.is_transparent())
+            .collect();
+        transparent.sort_by(|&a, &b| {
+            let da = (items[a].model.w_axis.truncate() - camera_position).length_squared();
+            let db = (items[b].model.w_axis.truncate() - camera_position).length_squared();
+            db.total_cmp(&da)
+                .then_with(|| items[a].entity.cmp(&items[b].entity))
+        });
 
         // Translucent billboards sort back-to-front (blending is order
         // dependent) and upload as one instance buffer. Distance to the
@@ -567,6 +939,8 @@ impl SceneRenderer {
                 view_proj: view_projection.to_cols_array_2d(),
                 camera_right: camera_right.normalize_or_zero().extend(0.0).to_array(),
                 camera_up: camera_up.normalize_or_zero().extend(0.0).to_array(),
+                camera_pos: camera_position.extend(environment.fog_density).to_array(),
+                fog_color: environment.sky_horizon.extend(1.0).to_array(),
             };
             queue.write_buffer(
                 &self.particle_uniform.buffer,
@@ -625,12 +999,60 @@ impl SceneRenderer {
             label: Some("scene-encoder"),
         });
 
+        // The caster pass, before anything is shaded: the mesh pass samples
+        // what it writes. Only opaque geometry casts — a transparent surface
+        // that shadowed as if it were solid would be worse than one that does
+        // not shadow at all.
+        if environment.shadows {
+            let shadow_map = self.shadow_map.as_ref().expect("allocated above");
+            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow-pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &shadow_map.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            if let Some(objects) = &self.objects {
+                shadow_pass.set_pipeline(&self.shadow_pipeline);
+                shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                for &index in &opaque {
+                    let mesh = &self.meshes[&keys[index]];
+                    shadow_pass.set_bind_group(
+                        0,
+                        &objects.bind_group,
+                        &[(index as u64 * self.object_stride) as u32],
+                    );
+                    shadow_pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    shadow_pass
+                        .set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+            }
+        }
+
+        // With MSAA the multisampled texture is what gets drawn into and
+        // `target` receives the resolve; without it, `target` is drawn into
+        // directly, exactly as it always was.
+        let (color_view, resolve_target) = match msaa {
+            Some(msaa) => (msaa, Some(target)),
+            None => (target, None),
+        };
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
+                    view: color_view,
+                    resolve_target,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
@@ -650,12 +1072,25 @@ impl SceneRenderer {
                 multiview_mask: None,
             });
 
+            // The sky first, filling every pixel the geometry will not.
+            if environment.sky {
+                pass.set_pipeline(&self.sky_pipeline);
+                pass.set_bind_group(0, &self.frame_uniform.bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+
+            let shadows = match (environment.shadows, &self.shadow_map) {
+                (true, Some(map)) => map,
+                _ => &self.shadow_placeholder,
+            };
+
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+            pass.set_bind_group(2, &shadows.bind_group, &[]);
 
             if let Some(objects) = &self.objects {
-                for (index, key) in keys.iter().enumerate() {
-                    let mesh = &self.meshes[key];
+                let draw = |pass: &mut wgpu::RenderPass<'_>, index: usize| {
+                    let mesh = &self.meshes[&keys[index]];
                     pass.set_bind_group(
                         0,
                         &objects.bind_group,
@@ -665,10 +1100,24 @@ impl SceneRenderer {
                     pass.set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                };
+
+                for &index in &opaque {
+                    draw(&mut pass, index);
+                }
+
+                // Blended geometry after every opaque surface has written
+                // depth, so it is occluded by what is in front of it, and
+                // back-to-front among itself.
+                if !transparent.is_empty() {
+                    pass.set_pipeline(&self.transparent_pipeline);
+                    for &index in &transparent {
+                        draw(&mut pass, index);
+                    }
                 }
             }
 
-            // Particles last, over the opaque scene, inside the same pass so
+            // Particles last, over the whole scene, inside the same pass so
             // they test against the depth the meshes just wrote.
             if particle_count > 0 {
                 let instances = self.particle_instances.as_ref().expect("just written");
@@ -892,6 +1341,21 @@ impl HudTarget {
     }
 }
 
+/// Prepend the shared sky gradient to a shader source.
+///
+/// WGSL has no `#include` and wgpu has no preprocessor, so the sky pass and
+/// the mesh pass share `sky_gradient` by concatenation. They have to share it:
+/// the mesh pass reflects the sky off metal and water, and a reflection drawn
+/// from a second copy of the curve would drift away from the sky behind it the
+/// first time either was touched.
+fn with_sky_common(source: &str) -> std::borrow::Cow<'static, str> {
+    let mut combined = String::with_capacity(source.len() + 1024);
+    combined.push_str(include_str!("shaders/sky_common.wgsl"));
+    combined.push('\n');
+    combined.push_str(source);
+    std::borrow::Cow::Owned(combined)
+}
+
 /// A buffer holding `contents`, created once and never rewritten — the shape
 /// mesh geometry wants.
 fn buffer_with(
@@ -954,6 +1418,20 @@ pub fn view_projection(camera: &Camera, camera_model: Mat4, aspect: f32) -> Mat4
 
 /// Create the depth texture for a target of this size.
 pub fn depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+    depth_texture_multisampled(device, width, height, 1)
+}
+
+/// The depth texture for a target of this size at `samples`-way MSAA.
+///
+/// A render pass requires every attachment to agree on sample count, so this
+/// has to match whatever color attachment is actually drawn into — the
+/// multisampled one when MSAA is on, not the resolve target.
+pub fn depth_texture_multisampled(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    samples: u32,
+) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
@@ -963,13 +1441,113 @@ pub fn depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Te
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: samples.max(1),
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         })
         .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// The multisampled color attachment the scene pass draws into when MSAA is
+/// on. Never read back or sampled — it only ever resolves into the real
+/// target — so it wants no `COPY_SRC` or `TEXTURE_BINDING`.
+pub fn msaa_color_texture(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    samples: u32,
+) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("msaa-color"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: samples.max(1),
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// The world-space direction the camera looks, recovered from its
+/// view-projection.
+///
+/// Taken from the matrix rather than from `ScenePass::camera_right`/`_up`
+/// because those are documented as meaningful only when there are particles,
+/// and the shadow box has to be fitted for every scene that casts.
+fn camera_forward(view_projection: Mat4) -> Vec3 {
+    let inverse = view_projection.inverse();
+    let unproject = |z: f32| {
+        let p = inverse * glam::Vec4::new(0.0, 0.0, z, 1.0);
+        p.truncate() / p.w
+    };
+    (unproject(1.0) - unproject(0.0)).normalize_or_zero()
+}
+
+/// Fit the sun's orthographic frustum around the part of the world the camera
+/// can see, and return world → light clip.
+///
+/// The box is a `shadow_distance`-long slab starting at the camera and
+/// following its view direction, which is the cheapest thing that keeps the
+/// texels where the viewer is looking. Two details are load-bearing:
+///
+/// - **The center is snapped to whole texels.** Without it, moving the camera
+///   slides the shadow map's sampling grid continuously across the world and
+///   every shadow edge crawls and fizzes — the artifact reads as a rendering
+///   bug rather than as low resolution, and it is far more visible in motion
+///   than the resolution itself.
+/// - **The eye is pulled well back** along the light, so that casters above
+///   the slab (the showcase tour's monolith, a truck on a rise) are inside the
+///   depth range and can shadow the ground they should.
+fn light_view_projection(
+    sun_direction: Vec3,
+    camera_position: Vec3,
+    view_projection: Mat4,
+    shadow_distance: f32,
+    map_size: u32,
+) -> Mat4 {
+    let radius = (shadow_distance * 0.5).max(0.5);
+    let center = camera_position + camera_forward(view_projection) * radius;
+
+    let travel = if sun_direction.length_squared() > 1e-12 {
+        sun_direction.normalize()
+    } else {
+        Vec3::NEG_Y
+    };
+    // `up` only has to be non-parallel to the light; a sun directly overhead
+    // would make the usual +Y degenerate.
+    let up = if travel.y.abs() > 0.99 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+
+    let orientation = glam::camera::rh::view::look_to_mat4(Vec3::ZERO, travel, up);
+    let texel = 2.0 * radius / map_size as f32;
+    let in_light_space = orientation.transform_point3(center);
+    let snapped = Vec3::new(
+        (in_light_space.x / texel).round() * texel,
+        (in_light_space.y / texel).round() * texel,
+        in_light_space.z,
+    );
+    let center = orientation.inverse().transform_point3(snapped);
+
+    let depth = radius * 4.0 + 50.0;
+    let eye = center - travel * (depth * 0.5);
+    let view = glam::camera::rh::view::look_to_mat4(eye, travel, up);
+    let projection = glam::camera::rh::proj::directx::orthographic(
+        -radius, radius, -radius, radius, 0.1, depth,
+    );
+    projection * view
 }
 
 /// Default clear color — a neutral dark backdrop that neither of the demo

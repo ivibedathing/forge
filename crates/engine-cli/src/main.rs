@@ -613,6 +613,7 @@ fn diff_render(
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),
+        scene.environment,
         baseline.width,
         baseline.height,
         &scene.hud_items(),
@@ -757,6 +758,7 @@ fn filmstrip(
             &camera,
             camera_transform.matrix(),
             scene.lights().resolved(),
+            scene.environment,
             tile_width,
             tile_height,
             &scene.hud_items(),
@@ -884,6 +886,7 @@ fn screenshot(
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),
+        scene.environment,
         width,
         height,
         &scene.hud_items(),
@@ -923,6 +926,7 @@ fn run_scene(
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
     let lights = scene.lights().resolved();
+    let environment = scene.environment;
     let hud_items = scene.hud_items();
     let title = format!("engine — {}", scene.name);
 
@@ -981,6 +985,7 @@ fn run_scene(
             camera,
             camera_model: camera_transform.matrix(),
             lights,
+            environment,
             hud_items,
             simulation,
         },

@@ -149,6 +149,38 @@ pub struct Material {
     /// `[0, 1]` per component.
     #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub emissive: Vec3,
+
+    /// Uniform opacity: `1` = opaque, `0` = invisible. Range `[0, 1]`.
+    ///
+    /// A flat blend with no view dependence — the "ghost this object" knob.
+    /// Anything below 1 moves the entity out of the opaque pass and into the
+    /// sorted blended one, where it tests depth but does not write it.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub alpha: f32,
+
+    /// How much light passes *through* the surface instead of scattering off
+    /// it: `0` = opaque, `1` = clear glass. Range `[0, 1]`.
+    ///
+    /// Unlike [`Material::alpha`] this is view-dependent and keeps the
+    /// specular lobe, which is the whole difference between a transparent
+    /// object and a faded one: a water surface seen edge-on reflects the sky
+    /// and hides its bottom, and seen from overhead it does neither. The
+    /// approximation is a Fresnel lerp back toward opaque at grazing angles,
+    /// with the diffuse term scaled by `1 - transmission` (light that went
+    /// through did not come back). There is no refraction and no
+    /// scene-color sampling, so what is behind the surface is not bent or
+    /// tinted by its thickness — see `materials-lighting-design.md`.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub transmission: f32,
+}
+
+impl Material {
+    /// Whether this material draws in the blended pass rather than the opaque
+    /// one. Exactly the pre-M16 opaque path when both fields sit at their
+    /// defaults, which is what keeps every committed baseline bit-exact.
+    pub fn is_transparent(&self) -> bool {
+        self.alpha < 1.0 || self.transmission > 0.0
+    }
 }
 
 impl Default for Material {
@@ -158,6 +190,8 @@ impl Default for Material {
             metallic: 0.0,
             roughness: 0.9,
             emissive: Vec3::ZERO,
+            alpha: 1.0,
+            transmission: 0.0,
         }
     }
 }

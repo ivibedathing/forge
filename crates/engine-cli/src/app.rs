@@ -34,6 +34,10 @@ pub enum Content {
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
+        /// The scene's sky, fog, shadow and MSAA settings. The viewer honors
+        /// them so that what you fly around in is what `engine screenshot`
+        /// pins — the frame rate differs, the picture must not.
+        environment: engine_core::scene::EnvironmentSettings,
         /// The scene's HUD components; refreshed per frame when a simulation
         /// runs (clips and scripts can drive them), static otherwise.
         hud_items: engine_core::scene::HudItems,
@@ -159,6 +163,9 @@ enum Paint {
     Scene {
         renderer: SceneRenderer,
         depth: wgpu::TextureView,
+        /// The multisampled color attachment, when the scene asks for MSAA.
+        /// Recreated with the depth buffer on every resize.
+        msaa: Option<wgpu::TextureView>,
     },
 }
 
@@ -281,12 +288,17 @@ impl ViewerApp {
             }),
 
             (
-                Paint::Scene { renderer, depth },
+                Paint::Scene {
+                    renderer,
+                    depth,
+                    msaa,
+                },
                 Content::Scene {
                     items,
                     camera,
                     camera_model,
                     lights,
+                    environment,
                     hud_items,
                     simulation,
                 },
@@ -423,6 +435,7 @@ impl ViewerApp {
                         queue,
                         ScenePass {
                             target: view,
+                            msaa: msaa.as_ref(),
                             depth,
                             items,
                             particles: &particles,
@@ -431,6 +444,7 @@ impl ViewerApp {
                             camera_right: camera_model.x_axis.truncate(),
                             camera_up: camera_model.y_axis.truncate(),
                             lights: *lights,
+                            environment: *environment,
                             clear: scene_renderer::DEFAULT_CLEAR,
                             hud: canvas.as_ref(),
                         },
@@ -477,11 +491,30 @@ impl ApplicationHandler for ViewerApp {
             Content::Triangle => {
                 Paint::Triangle(Renderer::new(&target.gpu.device, target.format()))
             }
-            Content::Scene { .. } => {
+            Content::Scene { environment, .. } => {
                 let (width, height) = target.size();
+                let samples = environment.samples.max(1);
                 Paint::Scene {
-                    renderer: SceneRenderer::new(&target.gpu.device, target.format()),
-                    depth: scene_renderer::depth_texture(&target.gpu.device, width, height),
+                    renderer: SceneRenderer::with_samples(
+                        &target.gpu.device,
+                        target.format(),
+                        samples,
+                    ),
+                    depth: scene_renderer::depth_texture_multisampled(
+                        &target.gpu.device,
+                        width,
+                        height,
+                        samples,
+                    ),
+                    msaa: (samples > 1).then(|| {
+                        scene_renderer::msaa_color_texture(
+                            &target.gpu.device,
+                            target.format(),
+                            width,
+                            height,
+                            samples,
+                        )
+                    }),
                 }
             }
         };
@@ -517,13 +550,31 @@ impl ApplicationHandler for ViewerApp {
             WindowEvent::Resized(size) => {
                 if let Some(target) = self.target.as_mut() {
                     target.resize(size.width, size.height);
-                    // The depth buffer must track the swapchain size exactly.
-                    if let Some(Paint::Scene { depth, .. }) = self.paint.as_mut() {
-                        *depth = scene_renderer::depth_texture(
+                    // The depth buffer — and the multisampled color target,
+                    // when there is one — must track the swapchain size
+                    // exactly.
+                    if let Some(Paint::Scene {
+                        depth,
+                        msaa,
+                        renderer,
+                    }) = self.paint.as_mut()
+                    {
+                        let samples = renderer.samples();
+                        *depth = scene_renderer::depth_texture_multisampled(
                             &target.gpu.device,
                             size.width,
                             size.height,
+                            samples,
                         );
+                        *msaa = (samples > 1).then(|| {
+                            scene_renderer::msaa_color_texture(
+                                &target.gpu.device,
+                                renderer.format(),
+                                size.width,
+                                size.height,
+                                samples,
+                            )
+                        });
                     }
                 }
             }

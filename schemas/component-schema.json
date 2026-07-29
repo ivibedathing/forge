@@ -262,6 +262,14 @@
             "minItems": 3,
             "type": "array"
           },
+          "alpha": {
+            "default": 1.0,
+            "description": "Uniform opacity: `1` = opaque, `0` = invisible. Range `[0, 1]`.\n\nA flat blend with no view dependence — the \"ghost this object\" knob.\nAnything below 1 moves the entity out of the opaque pass and into the\nsorted blended one, where it tests depth but does not write it.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
           "emissive": {
             "default": [
               0.0,
@@ -290,6 +298,14 @@
           "roughness": {
             "default": 0.8999999761581421,
             "description": "Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.\nRange `[0, 1]`.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "transmission": {
+            "default": 0.0,
+            "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness — see `materials-lighting-design.md`.",
             "format": "float",
             "maximum": 1.0,
             "minimum": 0.0,
@@ -1255,6 +1271,14 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "alpha": {
+                "default": 1.0,
+                "description": "Uniform opacity: `1` = opaque, `0` = invisible. Range `[0, 1]`.\n\nA flat blend with no view dependence — the \"ghost this object\" knob.\nAnything below 1 moves the entity out of the opaque pass and into the\nsorted blended one, where it tests depth but does not write it.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
               "emissive": {
                 "default": [
                   0.0,
@@ -1283,6 +1307,14 @@
               "roughness": {
                 "default": 0.8999999761581421,
                 "description": "Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.\nRange `[0, 1]`.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "transmission": {
+                "default": 0.0,
+                "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness — see `materials-lighting-design.md`.",
                 "format": "float",
                 "maximum": 1.0,
                 "minimum": 0.0,
@@ -2079,6 +2111,93 @@
         ],
         "type": "object"
       },
+      "EnvironmentSettings": {
+        "additionalProperties": false,
+        "description": "The scene-level `environment` block (M16): how this scene is *rendered*,\nas opposed to what is in it.\n\nEvery field defaults to the pre-M16 renderer — no sky, no fog, no shadows,\none sample — so a scene that says nothing about its environment renders\nbyte-identically to before the block existed. That is deliberate and is\nwhat let M16 land without re-blessing baselines it had no business\ntouching: the features are opt-in per scene, in the scene file, because a\nscreenshot has to be reproducible from the file alone (invariant 2).",
+        "properties": {
+          "fog_density": {
+            "default": 0.0,
+            "description": "Exponential-squared distance fog: `1 - exp(-(d * density)^2)`. `0`\ndisables it. Around `0.008` is a light haze at 100 m; `0.05` is thick.\n`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "samples": {
+            "default": 1,
+            "description": "Multisample count for the scene pass: `1` (off) or `4`. The HUD is\ncomposited after the resolve and is never multisampled, so text stays\npixel-exact either way.",
+            "format": "uint32",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "shadow_distance": {
+            "default": 60.0,
+            "description": "How far from the camera the shadow map covers, in meters. The map is a\nfixed resolution, so this trades area against sharpness: a 40 m box is\ncrisp, a 200 m box is blocky. Strictly positive.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "shadows": {
+            "default": false,
+            "description": "Cast shadows from the scene's `DirectionalLight`.",
+            "type": "boolean"
+          },
+          "sky": {
+            "default": false,
+            "description": "Draw a gradient sky behind the scene instead of the flat clear color.",
+            "type": "boolean"
+          },
+          "sky_ground": {
+            "default": [
+              0.1599999964237213,
+              0.1599999964237213,
+              0.17000000178813934
+            ],
+            "description": "Color below the horizon — what a ground plane fades into at distance.\nUsually a darker, less saturated version of the terrain.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sky_horizon": {
+            "default": [
+              0.6200000047683716,
+              0.7099999785423279,
+              0.8199999928474426
+            ],
+            "description": "Sky color at the horizon. This is also the fog color: fog that does\nnot match the sky it fades into reads as a gray wall, and having one\nfield means it cannot be set wrong.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sky_zenith": {
+            "default": [
+              0.1899999976158142,
+              0.3400000035762787,
+              0.6200000047683716
+            ],
+            "description": "Sky color straight overhead. Linear RGB, like every other color in the\nengine — and unclamped above 1, because a sky is a light source and\nclamping it to reflectance range makes noon look like dusk.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "Fragment": {
         "additionalProperties": false,
         "description": "One piece a `Breakable` entity shatters into (M14).\n\n`mesh` follows `Mesh.asset` rules (builtin or relative glTF path).\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model.\n`half_extents` is the fragment's cuboid collider in fragment-local units —\n`scale` scales it, exactly as `Transform.scale` scales a `Collider`.\nCuboid-only fragment colliders are deliberate v1 scope.",
@@ -2207,6 +2326,17 @@
           "$ref": "#/$defs/EntityDef"
         },
         "type": "array"
+      },
+      "environment": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/EnvironmentSettings"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Scene-level rendering settings; absent means the defaults, which are\nthe pre-M16 renderer exactly (M16)."
       },
       "name": {
         "type": "string"

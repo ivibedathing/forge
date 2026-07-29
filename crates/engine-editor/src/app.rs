@@ -417,6 +417,7 @@ impl EditorApp {
         let items = self.frame_items();
         let camera_eye = self.camera.eye();
         let lights = self.doc.lights;
+        let environment = self.doc.environment;
         let viewport = self
             .viewport
             .get_or_insert_with(|| ViewportRenderer::new(render_state));
@@ -429,6 +430,7 @@ impl EditorApp {
             view_projection,
             camera_eye,
             lights,
+            environment,
         );
         ui.painter().image(
             texture_id,

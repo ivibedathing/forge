@@ -32,6 +32,11 @@ pub struct SceneDoc {
     /// Draw list + lights, rebuilt per reload; empty when invalid.
     pub items: Vec<RenderItem>,
     pub lights: ResolvedLights,
+    /// The scene's own sky, fog and shadow settings, so the viewport shows
+    /// what the file says rather than a house style — the editor is a view
+    /// onto the text (invariant 8), and lighting is most of what there is to
+    /// look at.
+    pub environment: engine_core::scene::EnvironmentSettings,
     /// Full `engine validate` output — same path, same codes (principle #6).
     pub diagnostics: Vec<EngineError>,
     pub last_reload: Option<Instant>,
@@ -56,6 +61,7 @@ impl SceneDoc {
                 ambient: None,
             }
             .resolved(),
+            environment: Default::default(),
             diagnostics: Vec::new(),
             last_reload: None,
             notice: None,
@@ -133,6 +139,13 @@ impl SceneDoc {
                     Ok(items) => {
                         self.items = items;
                         self.lights = scene.lights().resolved();
+                        // MSAA is the viewport's own business, not the
+                        // scene's: the sample count is baked into the
+                        // renderer's pipelines and this one is built once.
+                        self.environment = engine_core::scene::EnvironmentSettings {
+                            samples: 1,
+                            ..scene.environment
+                        };
                     }
                     Err(e) => self.diagnostics.push(e),
                 }

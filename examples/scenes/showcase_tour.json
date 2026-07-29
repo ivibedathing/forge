@@ -1,6 +1,16 @@
 {
   "name": "showcase_tour",
   "physics": { "gravity": [0.0, -9.81, 0.0], "timestep_hz": 60 },
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.10, 0.24, 0.58],
+    "sky_horizon": [0.40, 0.54, 0.72],
+    "sky_ground": [0.09, 0.11, 0.09],
+    "fog_density": 0.0045,
+    "shadows": true,
+    "shadow_distance": 72.0,
+    "samples": 4
+  },
   "entities": [
     {
       "name": "Ground",
@@ -251,76 +261,93 @@
       ]
     },
     { "name": "Water00", "components": [
-      { "type": "Transform", "position": [10.35, 0.14, 1.35], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [10.35, 0.14, 1.35], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water01", "components": [
-      { "type": "Transform", "position": [10.35, 0.14, 4.45], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [10.35, 0.14, 4.45], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water02", "components": [
-      { "type": "Transform", "position": [10.35, 0.14, 7.55], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [10.35, 0.14, 7.55], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water03", "components": [
-      { "type": "Transform", "position": [10.35, 0.14, 10.65], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [10.35, 0.14, 10.65], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water10", "components": [
-      { "type": "Transform", "position": [13.45, 0.14, 1.35], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [13.45, 0.14, 1.35], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water11", "components": [
-      { "type": "Transform", "position": [13.45, 0.14, 4.45], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [13.45, 0.14, 4.45], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water12", "components": [
-      { "type": "Transform", "position": [13.45, 0.14, 7.55], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [13.45, 0.14, 7.55], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water13", "components": [
-      { "type": "Transform", "position": [13.45, 0.14, 10.65], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [13.45, 0.14, 10.65], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water20", "components": [
-      { "type": "Transform", "position": [16.55, 0.14, 1.35], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [16.55, 0.14, 1.35], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water21", "components": [
-      { "type": "Transform", "position": [16.55, 0.14, 4.45], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [16.55, 0.14, 4.45], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water22", "components": [
-      { "type": "Transform", "position": [16.55, 0.14, 7.55], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [16.55, 0.14, 7.55], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water23", "components": [
-      { "type": "Transform", "position": [16.55, 0.14, 10.65], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [16.55, 0.14, 10.65], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water30", "components": [
-      { "type": "Transform", "position": [19.65, 0.14, 1.35], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [19.65, 0.14, 1.35], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water31", "components": [
-      { "type": "Transform", "position": [19.65, 0.14, 4.45], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [19.65, 0.14, 4.45], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water32", "components": [
-      { "type": "Transform", "position": [19.65, 0.14, 7.55], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [19.65, 0.14, 7.55], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
     { "name": "Water33", "components": [
-      { "type": "Transform", "position": [19.65, 0.14, 10.65], "scale": [3.25, 0.12, 3.25] },
+      { "type": "Transform", "position": [19.65, 0.14, 10.65], "scale": [3.10, 0.12, 3.10] },
       { "type": "Mesh", "asset": "builtin:cube" },
-      { "type": "Material", "albedo": [0.04, 0.12, 0.22], "metallic": 0.5, "roughness": 0.08 } ] },
+      { "type": "Material", "albedo": [0.03, 0.09, 0.16], "metallic": 0.1, "roughness": 0.05,
+        "transmission": 0.82 } ] },
 
     {
       "name": "IceShelf",
       "components": [
         { "type": "Transform", "position": [15.0, 1.6, -1.6], "scale": [10.0, 3.2, 3.0] },
         { "type": "Mesh", "asset": "builtin:cube" },
-        { "type": "Material", "albedo": [0.52, 0.72, 0.84], "metallic": 0.08, "roughness": 0.10 },
+        { "type": "Material", "albedo": [0.52, 0.72, 0.84], "metallic": 0.05, "roughness": 0.10,
+          "transmission": 0.55 },
         { "type": "Collider", "shape": "trimesh", "asset": "builtin:cube", "layers": ["ground"] }
       ]
     },
@@ -330,7 +357,8 @@
         { "type": "Transform", "position": [21.2, 0.7, 1.2], "rotation": [0.0, 22.0, 6.0],
           "scale": [1.8, 1.4, 1.6] },
         { "type": "Mesh", "asset": "builtin:cube" },
-        { "type": "Material", "albedo": [0.58, 0.77, 0.88], "metallic": 0.06, "roughness": 0.08 }
+        { "type": "Material", "albedo": [0.58, 0.77, 0.88], "metallic": 0.04, "roughness": 0.08,
+          "transmission": 0.62 }
       ]
     },
     {
@@ -357,7 +385,8 @@
         { "type": "Transform", "position": [20.0, 1.8, -3.0], "rotation": [0.0, 0.0, 7.0],
           "scale": [1.2, 3.6, 1.2] },
         { "type": "Mesh", "asset": "builtin:cylinder" },
-        { "type": "Material", "albedo": [0.60, 0.79, 0.90], "metallic": 0.05, "roughness": 0.05 }
+        { "type": "Material", "albedo": [0.60, 0.79, 0.90], "metallic": 0.04, "roughness": 0.05,
+          "transmission": 0.66 }
       ]
     },
     {

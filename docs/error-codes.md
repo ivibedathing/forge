@@ -55,6 +55,7 @@ build fails.
 | `conflicting_tracks` | 1 | two active clips animate the same property of the same entity |
 | `animation_on_dynamic_body` | 1 | a clip animates the Transform of a dynamic RigidBody; make it kinematic |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
+| `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |
