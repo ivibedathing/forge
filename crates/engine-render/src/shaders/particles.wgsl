@@ -10,6 +10,10 @@ struct ParticleFrame {
     // xyz = normalized camera basis vectors; w unused.
     camera_right: vec4<f32>,
     camera_up: vec4<f32>,
+    // xyz = world-space camera position, w = fog density (0 disables fog).
+    camera_pos: vec4<f32>,
+    // rgb = fog color, which is the sky's horizon color; a unused.
+    fog_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: ParticleFrame;
@@ -27,6 +31,10 @@ struct VsOut {
     // The corner in [-1, 1]² — the fragment stage's distance field.
     @location(0) corner: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // Distance from the camera to the sprite's center. Per-vertex is plenty:
+    // a billboard is flat and small, so fog across one is effectively
+    // constant.
+    @location(2) view_distance: f32,
 };
 
 @vertex
@@ -43,6 +51,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.clip = frame.view_proj * vec4(world, 1.0);
     out.corner = corner;
     out.color = in.color;
+    out.view_distance = length(in.pos_size.xyz - frame.camera_pos.xyz);
     return out;
 }
 
@@ -62,5 +71,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if alpha == 0.0 {
         discard;
     }
-    return vec4(in.color.rgb, alpha);
+
+    // Fog (M16), off unless the scene asked for it. Distant smoke that stays
+    // fully saturated while the geometry behind it fades reads as a decal
+    // stuck to the lens; fogging the sprite's color puts it back in the air
+    // with everything else. Only the color is fogged, never the alpha — haze
+    // does not make a puff of smoke thicker.
+    var rgb = in.color.rgb;
+    let density = frame.camera_pos.w;
+    if density > 0.0 {
+        let amount = clamp(1.0 - exp(-pow(in.view_distance * density, 2.0)), 0.0, 1.0);
+        rgb = mix(rgb, frame.fog_color.rgb, amount);
+    }
+    return vec4(rgb, alpha);
 }

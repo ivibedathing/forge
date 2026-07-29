@@ -1328,6 +1328,44 @@ fn the_hud_lands_in_screenshot_pixels() {
 
 // ── HUD components (M12) ───────────────────────────────────────────────
 
+/// The M16 fixture: sky, fog, shadows, 4× MSAA, `Material.alpha` and
+/// `Material.transmission` all in one frame, pinned bit-exactly.
+///
+/// Also the regression test for the property the whole milestone rests on.
+/// Every feature is opt-in through the scene's `environment` block, and a
+/// scene that opts into none of it has to render exactly as it did before the
+/// block existed — which is why none of the eleven pre-M16 baselines had to be
+/// re-blessed. Those baselines are pinned by their own tests above; this one
+/// pins the other side of the contract, that the features do something when
+/// they *are* asked for.
+#[test]
+fn the_m16_environment_fixture_pins_sky_fog_shadows_and_glass() {
+    let scene = repo_path("examples/scenes/verify/m16_environment.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m16_environment.png");
+
+    let validate = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0), "{validate:?}");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
 /// The M12 fixture end to end: the component overlay (all five anchors,
 /// draw order, opacity, glyph coverage) plus the script-driven HudText and
 /// HudRect render bit-exactly against the committed baseline, and the

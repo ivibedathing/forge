@@ -901,6 +901,58 @@ and the script→physics queue boundary.
 
 ---
 
+## M16 — Environment: sky, fog, shadows, MSAA, transparency
+
+**Scene:** `examples/scenes/verify/m16_environment.json` — static, deliberately: every M16
+feature is a property of one *frame*, so nothing here needs a clock. A lit ground plane with two
+casters and a metal sphere, two walls receding to 62 m, a transmissive pool over a visible floor
+with a box half-sunk in it, and a flat-`alpha` panel off to one side.
+
+```bash
+engine validate examples/scenes/verify/m16_environment.json
+engine diff-render examples/scenes/verify/m16_environment.json \
+    examples/scenes/verify/baselines/m16_environment.png
+# → bit-exact (CLI test `the_m16_environment_fixture_pins_sky_fog_shadows_and_glass`)
+
+# Error paths — each its own code, none of them silently accepted:
+#   "samples": 2          → invalid_environment_value  (1 or 4, never rounded)
+#   "fog_density": -1     → invalid_environment_value
+#   "shadow_distance": 0  → invalid_environment_value
+#   "shadow": true        → unknown_field, did_you_mean "shadows"
+#   "sky": "yes"          → invalid_field_type
+```
+
+**The pass condition is as much about what did *not* change.** Every field of the `environment`
+block defaults to off, and a scene without the block must render byte for byte as it did before
+the block existed:
+
+```bash
+# Pre-M16 baselines, unchanged and not re-blessed:
+engine diff-render examples/scenes/verify/m4_lighting.json \
+    examples/scenes/verify/baselines/m4_lighting.png
+engine diff-render examples/scenes/verify/m12_hud.json \
+    examples/scenes/verify/baselines/m12_hud.png --steps 60
+engine diff-render examples/scenes/verify/m13_smoke.json \
+    examples/scenes/verify/baselines/m13_smoke.png --steps 180
+# → 0 diff_pixels each. The showcase tour's six *are* re-blessed, because that scene opts in.
+```
+
+That property is fragile in a way worth writing down: it is not enough for the default path to be
+an *equivalent* expression, it has to be the *same* expression. Whether the compiler may contract
+`a*b + c` into an FMA depends on the surrounding code, and an FMA carries more intermediate
+precision than the pair it replaces — restructuring the M4 lines in `mesh.wgsl` into arithmetic
+that was equal on paper moved `m12_hud.png` by one ULP in one pixel. The lines computing
+`direct` / `ambient` / `base_color` are therefore left exactly as M4 wrote them, ahead of every
+M16 branch.
+
+**What this regresses:** the shadow pass and its texel-snapped ortho fit, the shared sky gradient
+concatenated into two shaders, the MSAA resolve (and the HUD staying single-sampled on the
+resolved target, so glyphs are still pixel-exact), the sorted blended pass and its premultiplied
+output, the scene-level block's hand-written validator, and the bit-exactness of every scene that
+opts into none of it. Pixel-level coverage lives in `engine-render/tests/environment.rs`.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):

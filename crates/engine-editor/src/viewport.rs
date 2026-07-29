@@ -45,6 +45,7 @@ impl ViewportRenderer {
         view_projection: Mat4,
         camera_position: Vec3,
         lights: ResolvedLights,
+        environment: engine_core::scene::EnvironmentSettings,
     ) -> egui::TextureId {
         let (width, height) = (width.max(1), height.max(1));
 
@@ -97,6 +98,7 @@ impl ViewportRenderer {
             &render_state.queue,
             ScenePass {
                 target: &target.view,
+                msaa: None,
                 depth: &target.depth,
                 items,
                 // The editor shows the scene at rest; particles only exist
@@ -107,6 +109,7 @@ impl ViewportRenderer {
                 camera_right: Vec3::X,
                 camera_up: Vec3::Y,
                 lights,
+                environment,
                 clear: scene_renderer::DEFAULT_CLEAR,
                 // The orbit-camera viewport is not the game camera's frame;
                 // screen-anchored HUD elements would be misleading here, so
@@ -216,6 +219,7 @@ pub fn grid_items() -> Vec<RenderItem> {
                 metallic: 0.0,
                 roughness: 1.0,
                 emissive: albedo * 0.15,
+                ..Material::default()
             },
         });
     };

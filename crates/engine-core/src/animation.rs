@@ -230,6 +230,8 @@ pub fn set_field(
                 "metallic" => c.metallic = scalar,
                 "roughness" => c.roughness = scalar,
                 "emissive" => c.emissive = v3,
+                "alpha" => c.alpha = scalar,
+                "transmission" => c.transmission = scalar,
                 _ => return false,
             }
         }

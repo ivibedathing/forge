@@ -71,7 +71,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     }
 
     for key in object.keys() {
-        if key != "name" && key != "entities" && key != "physics" {
+        if key != "name" && key != "entities" && key != "physics" && key != "environment" {
             errors.push(
                 cx.err(
                     codes::UNKNOWN_FIELD,
@@ -79,13 +79,17 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     &format!("/{key}"),
                 )
                 .field(key)
-                .suggest_from(key, ["name", "entities", "physics"]),
+                .suggest_from(key, ["name", "entities", "physics", "environment"]),
             );
         }
     }
 
     if let Some(physics) = object.get("physics") {
         check_physics_block(&cx, physics, &mut errors);
+    }
+
+    if let Some(environment) = object.get("environment") {
+        check_environment_block(&cx, environment, &mut errors);
     }
 
     let entities = match object.get("entities") {
@@ -1863,6 +1867,114 @@ fn check_physics_block(cx: &Cx<'_>, physics: &Value, errors: &mut Vec<EngineErro
     }
 }
 
+/// Validate the scene-level `environment` block (M16), hand-written like
+/// [`check_physics_block`] and for the same reason.
+fn check_environment_block(cx: &Cx<'_>, environment: &Value, errors: &mut Vec<EngineError>) {
+    const COLORS: [&str; 3] = ["sky_zenith", "sky_horizon", "sky_ground"];
+    const FLAGS: [&str; 2] = ["sky", "shadows"];
+    const KNOWN: [&str; 8] = [
+        "sky",
+        "sky_zenith",
+        "sky_horizon",
+        "sky_ground",
+        "fog_density",
+        "shadows",
+        "shadow_distance",
+        "samples",
+    ];
+
+    let Some(object) = environment.as_object() else {
+        errors.push(cx.wrong_type("environment", "object", environment, "/environment"));
+        return;
+    };
+
+    for key in object.keys() {
+        if !KNOWN.contains(&key.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::UNKNOWN_FIELD,
+                    format!("the environment block has no field {key:?}"),
+                    &format!("/environment/{key}"),
+                )
+                .field(key)
+                .suggest_from(key, KNOWN),
+            );
+        }
+    }
+
+    for name in FLAGS {
+        if let Some(value) = object.get(name) {
+            if !value.is_boolean() {
+                errors.push(
+                    cx.wrong_type(name, "boolean", value, &format!("/environment/{name}"))
+                        .field(name),
+                );
+            }
+        }
+    }
+
+    for name in COLORS {
+        if let Some(value) = object.get(name) {
+            let ok = value
+                .as_array()
+                .is_some_and(|items| items.len() == 3 && items.iter().all(Value::is_number));
+            if !ok {
+                errors.push(
+                    cx.wrong_type(name, "array", value, &format!("/environment/{name}"))
+                        .field(name),
+                );
+            }
+        }
+    }
+
+    if let Some(density) = object.get("fog_density") {
+        let valid = density.as_f64().is_some_and(|v| v >= 0.0 && v.is_finite());
+        if !valid {
+            errors.push(
+                cx.err(
+                    codes::INVALID_ENVIRONMENT_VALUE,
+                    format!("environment.fog_density is {density}; it must be a number >= 0"),
+                    "/environment/fog_density",
+                )
+                .field("fog_density"),
+            );
+        }
+    }
+
+    if let Some(distance) = object.get("shadow_distance") {
+        let valid = distance.as_f64().is_some_and(|v| v > 0.0 && v.is_finite());
+        if !valid {
+            errors.push(
+                cx.err(
+                    codes::INVALID_ENVIRONMENT_VALUE,
+                    format!(
+                        "environment.shadow_distance is {distance}; it must be a number greater than 0"
+                    ),
+                    "/environment/shadow_distance",
+                )
+                .field("shadow_distance"),
+            );
+        }
+    }
+
+    // 1 or 4 and nothing between: every other count would need its own set of
+    // pipelines, and a scene asking for 2 should be told so rather than
+    // silently rounded to something it did not write.
+    if let Some(samples) = object.get("samples") {
+        let valid = samples.as_u64().is_some_and(|v| v == 1 || v == 4);
+        if !valid {
+            errors.push(
+                cx.err(
+                    codes::INVALID_ENVIRONMENT_VALUE,
+                    format!("environment.samples is {samples}; it must be 1 or 4"),
+                    "/environment/samples",
+                )
+                .field("samples"),
+            );
+        }
+    }
+}
+
 fn article(word: &str) -> &'static str {
     match word.chars().next() {
         Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
@@ -2662,6 +2774,65 @@ mod tests {
         let errors = validate_source(source, "test.json");
         assert_eq!(errors[0].error, "unknown_field");
         assert_eq!(errors[0].context().unwrap().did_you_mean.as_deref(), Some("gravity"));
+    }
+
+    #[test]
+    fn accepts_a_full_environment_block() {
+        let source = r#"{"name":"s","environment":{
+            "sky":true,"sky_zenith":[0.2,0.3,0.6],"sky_horizon":[0.6,0.7,0.8],
+            "sky_ground":[0.1,0.1,0.1],"fog_density":0.01,
+            "shadows":true,"shadow_distance":80.0,"samples":4},"entities":[]}"#;
+        assert!(codes_of(source).is_empty(), "{:?}", codes_of(source));
+    }
+
+    #[test]
+    fn rejects_unknown_environment_block_fields() {
+        let source = r#"{"name":"s","environment":{"shadow":true},"entities":[]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors[0].error, "unknown_field");
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("shadows")
+        );
+    }
+
+    #[test]
+    fn rejects_environment_values_outside_their_range() {
+        // Only 1 and 4 are real sample counts; 2 is told so rather than rounded.
+        let source = r#"{"name":"s","environment":{"samples":2},"entities":[]}"#;
+        assert_eq!(codes_of(source), ["invalid_environment_value"]);
+
+        let source = r#"{"name":"s","environment":{"fog_density":-1.0},"entities":[]}"#;
+        assert_eq!(codes_of(source), ["invalid_environment_value"]);
+
+        let source = r#"{"name":"s","environment":{"shadow_distance":0.0},"entities":[]}"#;
+        assert_eq!(codes_of(source), ["invalid_environment_value"]);
+    }
+
+    #[test]
+    fn rejects_mistyped_environment_fields() {
+        let source = r#"{"name":"s","environment":{"sky":"yes"},"entities":[]}"#;
+        assert_eq!(codes_of(source), ["invalid_field_type"]);
+
+        let source = r#"{"name":"s","environment":{"sky_zenith":[0.2,0.3]},"entities":[]}"#;
+        assert_eq!(codes_of(source), ["invalid_field_type"]);
+    }
+
+    /// The block reports *every* problem at once, like the rest of validation.
+    #[test]
+    fn reports_all_environment_problems_together() {
+        let source =
+            r#"{"name":"s","environment":{"samples":3,"fog_density":-1,"nope":1},"entities":[]}"#;
+        let mut codes = codes_of(source);
+        codes.sort();
+        assert_eq!(
+            codes,
+            [
+                "invalid_environment_value",
+                "invalid_environment_value",
+                "unknown_field"
+            ]
+        );
     }
 
     #[test]

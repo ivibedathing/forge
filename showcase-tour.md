@@ -17,6 +17,29 @@ engine diff-render examples/scenes/showcase_tour.json \
 
 ## The shape of it
 
+The scene opens with an `environment` block, which is where every M16
+rendering feature is turned on:
+
+```json
+"environment": {
+  "sky": true,
+  "sky_zenith": [0.10, 0.24, 0.58],
+  "sky_horizon": [0.40, 0.54, 0.72],
+  "sky_ground": [0.09, 0.11, 0.09],
+  "fog_density": 0.0045,
+  "shadows": true,
+  "shadow_distance": 72.0,
+  "samples": 4
+}
+```
+
+Every field of that block defaults to off, which is the reason M16 landed
+without re-blessing a single baseline outside this scene: a file that says
+nothing about its environment renders byte for byte as it did before the block
+existed. `sky_horizon` doubles as the fog color deliberately — fog that does
+not match the sky it fades into reads as a grey wall, and one field cannot be
+set inconsistently with itself.
+
 900 steps at 60 Hz — exactly fifteen seconds — split into five 180-step
 stations. `scripts/tour_director.rhai` holds the whole timeline: six camera
 keys, six aim points, the station captions, and the three timed events the
@@ -32,6 +55,10 @@ moving.
 | 360–539 | 03 water and ice | a pond of sixteen tiles on a travelling wave, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | low-roughness metallic PBR, `ParticleEmitter` ×3, scripted transforms |
 | 540–719 | 04 breaking | a boulder rolls into a crate stack, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
 | 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4, `HudText`, `HudRect`, the camera |
+
+Running underneath all five, from the `environment` block rather than from any
+component: a gradient sky with the sun in it, distance fog, sun shadows from
+everything opaque, 4× MSAA, and sky reflected off the metal and the water.
 
 The truck patrols a 27 m ring for the whole fifteen seconds, so no station is
 a still life; `scripts/tour_truck.rhai` is a cruise-control autopilot on the
@@ -81,21 +108,37 @@ than no showcase:
   with scripted rates. Nothing is faked here.
 - **Breaking** is real physics on pre-authored fragments — no runtime fracture,
   which is the settled M14 scope.
-- **Water** is opaque geometry: sixteen overlapping low-roughness, half-metallic
-  tiles that a script moves on a sine wave. There is no transparency, no
-  refraction, no depth fog. It reads as water at a distance and does not hold
-  up close.
-- **Ice** is a pale dielectric with roughness 0.05–0.10. Same story: no
-  transmission, no subsurface.
+- **Water** is sixteen tiles that a script moves on a sine wave, and since M16
+  it is genuinely transmissive: `Material.transmission` at 0.82, so the pond
+  bed and anything in it show through, and the Fresnel term turns the far edge
+  reflective while the near edge stays clear. Still missing: refraction (the
+  bed shows through undistorted) and absorption with depth, so the water is
+  equally clear however deep it is. The tiles now **abut instead of
+  overlapping** — an overlap is invisible between opaque tiles and reads as a
+  grid of seams between transmissive ones, because pixels in the overlap are
+  blended through two surfaces.
+- **Ice** is a pale dielectric at roughness 0.05–0.10 with transmission
+  0.55–0.66. No subsurface scattering and no tinting by thickness, so a thick
+  block is exactly as clear as a thin one.
 - **The animals** are scaled spheres on parametric loops. There is no
   navigation, no steering behaviour, no state machine — scripts have no
   randomness by design, so the variety is sums of sines.
 - **The blast** has no light. Nothing in the engine can flash a light or drive
   a material from a script, so brightness has to be geometry or particles;
   the fireball is particles, which is the better answer anyway.
+- **The sky is a gradient, not a simulation.** Three bands and a sun disc — no
+  clouds, no scattering model, no time of day. Surfaces reflect it, which is
+  what makes the metal and the water read as they do, but nothing else in the
+  world knows it is there beyond the hemispheric tint it puts on
+  `AmbientLight`.
+- **One shadow map, one cascade.** It follows the camera and covers 72 m; past
+  that, shadows fade to lit rather than ending on a line ruled across the
+  ground. Crisp shadows near the camera *and* shadows out to the horizon would
+  need cascades, which M16 does not have.
 
-Alpha and transmission on `Material` is the single upgrade that would move
-this scene the most. `tour_effects.rhai` is where it lands first.
+Refraction, and light that can be driven from a script, are the two upgrades
+that would move this scene most now. `tour_effects.rhai` is where the second
+would land first.
 
 ## Measuring frames
 

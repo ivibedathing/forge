@@ -141,6 +141,10 @@ registry! {
     BREAKABLE_WITHOUT_COLLIDER = "breakable_without_collider", Input,
         "a Breakable sets impulse_threshold but the entity has no Collider to be hit on";
 
+    // ── Environment (M16) ──────────────────────────────────────────────
+    INVALID_ENVIRONMENT_VALUE = "invalid_environment_value", Input,
+        "an environment setting is outside its meaningful range";
+
     // ── Scripting (M10) ────────────────────────────────────────────────
     SCRIPT_PARSE_ERROR = "script_parse_error", Input,
         "a script file does not compile";

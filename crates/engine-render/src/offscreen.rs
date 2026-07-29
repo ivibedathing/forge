@@ -7,7 +7,7 @@
 use engine_core::components::Camera;
 use engine_core::math::Mat4;
 use engine_core::particles::ParticleInstance;
-use engine_core::scene::{HudItems, RenderItem, ResolvedLights};
+use engine_core::scene::{EnvironmentSettings, HudItems, RenderItem, ResolvedLights};
 use engine_core::{EngineError, Result};
 
 use crate::gpu::Gpu;
@@ -47,12 +47,14 @@ impl Image {
 /// from the last step; both composite over the finished frame through one
 /// rasterized overlay, so scenes with nothing to say pay nothing and render
 /// byte-identically to the pre-HUD engine.
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     items: &[RenderItem],
     particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
+    environment: EnvironmentSettings,
     width: u32,
     height: u32,
     hud: &HudItems,
@@ -64,6 +66,7 @@ pub fn render(
         camera,
         camera_model,
         lights,
+        environment,
         width,
         height,
         hud,
@@ -84,6 +87,7 @@ pub fn render_with_adapter(
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
+    environment: EnvironmentSettings,
     width: u32,
     height: u32,
     hud: &HudItems,
@@ -111,9 +115,15 @@ pub fn render_with_adapter(
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let depth = scene_renderer::depth_texture(&gpu.device, width, height);
+    let samples = environment.samples.max(1);
+    let depth = scene_renderer::depth_texture_multisampled(&gpu.device, width, height, samples);
+    // At one sample the scene draws straight into the readback texture, which
+    // is what every pre-MSAA baseline was blessed through.
+    let msaa = (samples > 1).then(|| {
+        scene_renderer::msaa_color_texture(&gpu.device, FORMAT, width, height, samples)
+    });
 
-    let mut renderer = SceneRenderer::new(&gpu.device, FORMAT);
+    let mut renderer = SceneRenderer::with_samples(&gpu.device, FORMAT, samples);
     let view_projection =
         scene_renderer::view_projection(camera, camera_model, width as f32 / height as f32);
 
@@ -126,6 +136,7 @@ pub fn render_with_adapter(
         &gpu.queue,
         scene_renderer::ScenePass {
             target: &view,
+            msaa: msaa.as_ref(),
             depth: &depth,
             items,
             particles,
@@ -134,6 +145,7 @@ pub fn render_with_adapter(
             camera_right: camera_model.x_axis.truncate(),
             camera_up: camera_model.y_axis.truncate(),
             lights,
+            environment,
             clear: scene_renderer::DEFAULT_CLEAR,
             hud: canvas.as_ref(),
         },

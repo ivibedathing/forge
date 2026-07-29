@@ -29,6 +29,11 @@ pub struct SceneFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub physics: Option<PhysicsSettings>,
 
+    /// Scene-level rendering settings; absent means the defaults, which are
+    /// the pre-M16 renderer exactly (M16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<EnvironmentSettings>,
+
     pub entities: Vec<EntityDef>,
 }
 
@@ -45,6 +50,76 @@ pub struct PhysicsSettings {
     /// identically everywhere. `>= 1`.
     #[schemars(range(min = 1))]
     pub timestep_hz: u32,
+}
+
+/// The scene-level `environment` block (M16): how this scene is *rendered*,
+/// as opposed to what is in it.
+///
+/// Every field defaults to the pre-M16 renderer — no sky, no fog, no shadows,
+/// one sample — so a scene that says nothing about its environment renders
+/// byte-identically to before the block existed. That is deliberate and is
+/// what let M16 land without re-blessing baselines it had no business
+/// touching: the features are opt-in per scene, in the scene file, because a
+/// screenshot has to be reproducible from the file alone (invariant 2).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct EnvironmentSettings {
+    /// Draw a gradient sky behind the scene instead of the flat clear color.
+    pub sky: bool,
+
+    /// Sky color straight overhead. Linear RGB, like every other color in the
+    /// engine — and unclamped above 1, because a sky is a light source and
+    /// clamping it to reflectance range makes noon look like dusk.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0)))]
+    pub sky_zenith: Vec3,
+
+    /// Sky color at the horizon. This is also the fog color: fog that does
+    /// not match the sky it fades into reads as a gray wall, and having one
+    /// field means it cannot be set wrong.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0)))]
+    pub sky_horizon: Vec3,
+
+    /// Color below the horizon — what a ground plane fades into at distance.
+    /// Usually a darker, less saturated version of the terrain.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0)))]
+    pub sky_ground: Vec3,
+
+    /// Exponential-squared distance fog: `1 - exp(-(d * density)^2)`. `0`
+    /// disables it. Around `0.008` is a light haze at 100 m; `0.05` is thick.
+    /// `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub fog_density: f32,
+
+    /// Cast shadows from the scene's `DirectionalLight`.
+    pub shadows: bool,
+
+    /// How far from the camera the shadow map covers, in meters. The map is a
+    /// fixed resolution, so this trades area against sharpness: a 40 m box is
+    /// crisp, a 200 m box is blocky. Strictly positive.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub shadow_distance: f32,
+
+    /// Multisample count for the scene pass: `1` (off) or `4`. The HUD is
+    /// composited after the resolve and is never multisampled, so text stays
+    /// pixel-exact either way.
+    #[schemars(range(min = 1, max = 4))]
+    pub samples: u32,
+}
+
+impl Default for EnvironmentSettings {
+    fn default() -> Self {
+        Self {
+            sky: false,
+            // A clear-day rig, used only when `sky` is turned on.
+            sky_zenith: Vec3::new(0.19, 0.34, 0.62),
+            sky_horizon: Vec3::new(0.62, 0.71, 0.82),
+            sky_ground: Vec3::new(0.16, 0.16, 0.17),
+            fog_density: 0.0,
+            shadows: false,
+            shadow_distance: 60.0,
+            samples: 1,
+        }
+    }
 }
 
 impl Default for PhysicsSettings {
@@ -165,6 +240,10 @@ pub struct Scene {
     /// `physics` block) — carried so simulation commands need no re-parse.
     pub physics: PhysicsSettings,
 
+    /// Scene-level rendering settings (defaults when the file has no
+    /// `environment` block), carried for the same reason.
+    pub environment: EnvironmentSettings,
+
     /// Name lookup, mirroring the [`Name`] component so targeting an entity by
     /// name does not require scanning the world.
     by_name: HashMap<String, Entity>,
@@ -202,6 +281,7 @@ impl Scene {
     /// Spawn a parsed scene file into a fresh world.
     pub fn instantiate(file: SceneFile) -> Self {
         let physics = file.physics.unwrap_or_default();
+        let environment = file.environment.unwrap_or_default();
         let mut world = World::new();
         let mut by_name = HashMap::with_capacity(file.entities.len());
 
@@ -220,6 +300,7 @@ impl Scene {
         Self {
             name: file.name,
             physics,
+            environment,
             world,
             by_name,
         }

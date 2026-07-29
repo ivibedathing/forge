@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M13 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, and M14 breaking objects** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M16 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, and M16 environment (sky, fog, shadows, MSAA, transparency)** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -34,6 +34,10 @@ engine list-animations <scene-or-clip> [--schema]
 # physics suspends/drives the chassis and writes the wheel's Transform back (steer/spin/bounce)
 # ParticleEmitter component (M13): seeded deterministic smoke/sparks — cone spray around local
 # -Z, advanced by --steps, rendered as soft alpha-blended billboards; never baked or traced
+# Scene-level "environment" block (M16): {"sky", "sky_zenith"/"sky_horizon"/"sky_ground",
+# "fog_density", "shadows", "shadow_distance", "samples"} — all default off, so a scene that
+# omits it renders byte-identically to the pre-M16 engine. Material gains "alpha" (flat) and
+# "transmission" (Fresnel, keeps specular), which move an entity into the blended pass
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode (keyboard reaches
 #   scripts); draws an FPS readout top-right — viewer-only, never in a headless render
 engine list-components                   # scene + component JSON Schemas (with range constraints)
@@ -396,6 +400,61 @@ corner (`app.rs::with_fps_readout`, averaged over 0.5 s) — wall-clock and ther
 it rides ordinary `HudText`/`HudRect` components appended to the scene's own HUD, and headless
 renders never see it, so nothing reproducible depends on how fast this machine drew.
 
+Environment: sky, fog, shadows, MSAA, transparency (M16). Five renderer features, all reached
+through **one scene-level `environment` block** (`EnvironmentSettings` in `engine-core/src/
+scene.rs`, hand-validated like `physics` by `check_environment_block`, new code
+`invalid_environment_value`) plus two new `Material` fields. **Every one of them defaults to off,
+and that is the design, not a convenience**: eleven baselines were blessed before any of this
+existed and not one had to be re-blessed — a scene with no `environment` block renders byte for
+byte as it did before the block did. Fields: `sky` + `sky_zenith`/`sky_horizon`/`sky_ground`,
+`fog_density`, `shadows` + `shadow_distance`, `samples` (1 or 4; anything else is a validation
+error rather than a silent round). `sky_horizon` **is** the fog color — one field, so it cannot be
+set inconsistently with the sky it fades into.
+
+- **Shadows** are a single directional map (2048², `shadow.wgsl`, depth-only, no fragment stage,
+  reusing the mesh pass's object+frame uniforms so casting costs no extra upload). The ortho box is
+  fitted along the camera's view direction, and its center is **snapped to whole texels** — without
+  that, moving the camera slides the sampling grid across the world and every shadow edge crawls,
+  which reads as a bug rather than as low resolution. Casters are drawn **front-face-culled** so
+  the map records each caster's far side, which is a better peeling margin than any constant bias.
+  3×3 PCF over a `LessEqual` comparison sampler with linear filtering (hardware PCF, so each tap is
+  already a bilinear blend of four tests), slope-scaled bias, and a fade to lit at the box edge.
+  Transparent geometry does not cast. One cascade only — no crisp-near-*and*-far.
+- **Sky** is a fullscreen triangle drawn first with `depth_compare: Always` and depth writes off,
+  evaluated per pixel from an unprojected view ray (per-vertex would visibly bend the horizon).
+  The gradient lives in `shaders/sky_common.wgsl` and is **concatenated onto both `sky.wgsl` and
+  `mesh.wgsl`** at pipeline build (`with_sky_common`) — WGSL has no `#include`, and the mesh pass
+  reflects this exact sky off metal and water, so a second copy of the curve would drift.
+- **Reflected sky and hemispheric ambient**, both gated on `sky`. Ambient is modulated by a
+  ground↔zenith lerp normalized **per channel** against the two bands' mean, so `AmbientLight`
+  keeps meaning what it says and only the color *balance* tracks the normal. Normalizing against
+  mean *luminance* instead is the obvious alternative and is wrong: a saturated sky then triples
+  the blue channel and every up-facing surface goes blue-grey. The specular environment term uses
+  **roughness-capped Schlick** (`max(1 - roughness, f0)`, not 1) — uncapped, grazing Fresnel turns
+  matte ground into a sheet of sky, since a ground plane is seen at grazing incidence nearly
+  everywhere.
+- **MSAA** is `samples` on the scene pipelines plus a resolve; the HUD pass stays single-sampled on
+  the resolved target, so glyphs are still pixel-exact. `SceneRenderer::with_samples` bakes the
+  count into the pipelines, so it belongs to the renderer, not the frame.
+- **Transparency** is `Material.alpha` (flat, view-independent — the "ghost this" knob) and
+  `Material.transmission` (view-dependent, keeps the specular lobe, scales diffuse by
+  `1 - transmission`). `Material::is_transparent` routes those into a second blended pass, sorted
+  back-to-front with an entity-name tiebreak, depth-tested but not depth-writing, and the shader
+  emits **premultiplied** color for them so a clear surface keeps its highlight and its sky
+  reflection instead of losing them to a low alpha. No refraction and no scene-color sampling.
+
+**The bit-exactness of the default path is load-bearing and fragile.** The four lines computing
+`direct`/`ambient`/`base_color` in `mesh.wgsl` are the M4 originals, computed from immutable
+bindings ahead of every M16 branch, and every new feature hangs off one combined `if`. That is
+stricter than "an equivalent expression" on purpose: whether the compiler may contract `a*b + c`
+into an FMA depends on the code around it, and an FMA carries more intermediate precision than the
+pair it replaces. Restructuring those lines into arithmetic that is *equal on paper* moved
+`m12_hud.png` by one ULP in one pixel. Leave them alone. Verified by
+`engine-render/tests/environment.rs` (six GPU-skipping pixel tests: shadowing only ever darkens,
+sky runs blue upward, fog grows with distance, blending shows what is behind, MSAA leaves covered
+interiors exact, and an absent block equals an all-defaults one) and fixture
+`verify/m16_environment.json` + baseline, pinned by a CLI test.
+
 Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
 with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,
@@ -404,10 +463,11 @@ by hand with `diff-render`, not by a CLI test). **Its growth contract is a test*
 `repo_contracts.rs::showcase_tour_uses_every_component_the_engine_has` fails on any schema
 component the tour does not use, so a new component's commit adds an entity here — there is no
 allowlist, deliberately. Station 04 fires all three `Breakable` triggers in one run (collision at
-~585, `break_entity` at 601, `explode` at 636). What is real: particles, physics, fragments. What
-is faked and named as such in the doc: water (opaque low-roughness tiles on a scripted sine wave —
-no transparency), ice (pale dielectric, no transmission), animals (scaled spheres on parametric
-loops). `Material` alpha/transmission is the upgrade that would move this scene most.
+~585, `break_entity` at 601, `explode` at 636). What is real: particles, physics, fragments, and
+since M16 the water and ice (real `Material.transmission`, not opaque stand-ins). What is still
+faked and named as such in the doc: animals (scaled spheres on parametric loops), the sky (a
+gradient, not scattering), and the blast (no light — nothing can drive a light from a script).
+Refraction and script-driven lights are the upgrades that would move this scene most now.
 **Building it found a physics bug** now fixed and regression-tested: priming the broad-phase BVH
 before the first step (vehicle worlds did this so wheel rays hit ground on step 0) consumed the
 pair events, and rapier's `NarrowPhase::register_pairs` is private — so every collider **already
@@ -522,7 +582,8 @@ error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ �
 lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ →
 ~~M8 physics~~ → ~~M9 animation (A0–A1)~~ → ~~M10 scripting~~ — **the roadmap is complete.**
 Remaining deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF +
-GPU skinning, and the M5-era deferrals (--fix, watch mode).
+GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16 — refraction and
+scene-color sampling for transmissive materials, shadow cascades, and lights a script can drive.
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

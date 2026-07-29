@@ -69,6 +69,7 @@ fn draw_frames(gpu: &Gpu, renderer: &mut SceneRenderer, items: &[RenderItem], fr
             &gpu.queue,
             ScenePass {
                 target: &view,
+                msaa: None,
                 depth: &depth,
                 items,
                 particles: &[],
@@ -77,6 +78,7 @@ fn draw_frames(gpu: &Gpu, renderer: &mut SceneRenderer, items: &[RenderItem], fr
                 camera_right: Vec3::X,
                 camera_up: Vec3::Y,
                 lights,
+                environment: Default::default(),
                 clear: scene_renderer::DEFAULT_CLEAR,
                 hud: None,
             },

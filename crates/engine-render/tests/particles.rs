@@ -51,6 +51,7 @@ fn render(particles: &[ParticleInstance]) -> Image {
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),
+        scene.environment,
         SIZE,
         SIZE,
         &scene.hud_items(),

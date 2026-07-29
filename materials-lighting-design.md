@@ -261,10 +261,40 @@ Step 3 as experienced by an agent looking at two PNGs is the milestone.
   nothing and prevents a schema break later.
 - **Multiple / point / spot lights:** the component union and validation make adding them cheap;
   the uniform layout would grow a light array. Not needed to prove the concept.
-- **Shadows:** the largest lighting-legibility gap left after M4 — unshadowed objects visually
-  float above the ground plane. A single directional shadow map is the natural M4.5-or-later
-  follow-up, decided then, not now.
-- **Tone mapping / HDR emissive / IBL:** revisit only when clamping demonstrably hurts.
+- ~~**Shadows:**~~ **done in M16** — a single directional map, exactly the follow-up sketched
+  here. The prediction held: unshadowed objects really were visually floating, and grounding them
+  is the largest readability change the renderer has had.
+- ~~**IBL:**~~ **partly done in M16** — there is no image-based lighting and no prefiltered
+  environment map, but when a scene draws a sky, surfaces reflect that sky's gradient and the
+  ambient term is modulated by the sky hemisphere. That covers what IBL was wanted for here
+  (metal and water that do not read as dark plastic) without an asset pipeline.
+- **Tone mapping / HDR emissive:** still deferred, and clamping still has not demonstrably hurt.
+  Note that M16 strengthens the case rather than weakening it: sky colors are deliberately
+  unclamped above 1 because a sky is a light source, so there is more range being thrown away at
+  the end than there was.
+
+## 10a. Transparency (M16)
+
+`Material` gained two fields, and they are deliberately *two*:
+
+- `alpha` is a flat, view-independent blend — the "ghost this object" knob, the one to reach for
+  to see through something while debugging.
+- `transmission` is view-dependent and keeps the specular lobe. It scales diffuse by
+  `1 - transmission` (light that went through did not scatter back off the surface) and lerps
+  opacity back toward opaque at grazing angles through Fresnel. That Fresnel behavior is the whole
+  difference between a transparent object and a merely faded one: water seen edge-on reflects the
+  sky and hides its bottom, and seen from overhead it does neither.
+
+Anything with `alpha < 1` or `transmission > 0` draws in a second pass, sorted back-to-front,
+depth-tested but not depth-writing. The shader emits **premultiplied** color for those materials
+so the specular highlight and the reflected sky survive being blended at low alpha — attenuating
+them along with the diffuse is the obvious implementation, and it loses the reflection exactly
+where a clear surface should be at its most reflective.
+
+Not done, and worth naming: **no refraction and no scene-color sampling.** What is behind a
+transmissive surface is neither bent nor tinted by how much material it passed through, so a thick
+block of ice is exactly as clear as a thin one. Sorting is per object by origin distance, so two
+interpenetrating transparent objects can still blend in the wrong order.
 
 ## 11. Test plan
 
