@@ -194,8 +194,28 @@ copied. One lighting implementation, two compilations of it, and eighteen scene/
 verified byte-identical against `main`.
 
 The cost is one extra pipeline object and a pipeline switch — once per frame, since terrain draws in
-one run at the end of the opaque pass. Both pipelines write depth and neither blends, so where in
-that pass they draw cannot change a pixel.
+one run at the **front** of the opaque pass.
+
+That "front" was "end" until the tour was rendered twenty times in a row and came back as two
+different PNGs. **A 200k-triangle ground patch as the last draw of an MSAA render pass is not
+bit-reproducible on Metal.** The elimination went: the `--trace` and the `--bake` are identical, so
+it is not the simulation; a *baked* scene at `--steps 0` flakes too, so it needs no simulation at
+all; the shadow map and the resolved depth copy come back bit-identical, so it is not the shadow
+pass and not the geometry's depth at sample 0; the draw order and the particle instance list are
+identical, so it is not CPU ordering. At `samples: 1` it is stable. So what varies is which surface
+wins MSAA samples 1–3, and only where the patch meets other geometry inside a pixel — ~24 pixels,
+max channel delta 6.
+
+Any draw after the terrain removes it: drawing the ground first, splitting its index range into two
+`draw_indexed` calls, or re-drawing one small mesh behind it each render the same bytes 20 runs out
+of 20. Ground first is the one that is also right on its own terms — everything in a scene stands
+*on* the terrain, so a contact surface exactly coplanar with it should tie in favour of the object,
+which is what drawing the object second under `Less` gives. It is not free of consequence: it moved
+~170 pixels of the tour where props sit flush on the ground, and no pixel at all of the 21 baselines
+without terrain, `m22_terrain.png` among them.
+
+Where in the pass terrain draws therefore *does* change a pixel, which the first draft of this
+section claimed it could not. The claim was true of the depth test and false of the machine.
 
 ## 5. Collision: the trimesh path already exists
 
