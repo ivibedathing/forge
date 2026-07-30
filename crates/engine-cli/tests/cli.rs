@@ -1542,6 +1542,85 @@ fn the_m17_fire_fixture_pins_additive_flame_and_firelight() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ── trees (M18) ────────────────────────────────────────────────────────
+
+/// The M18 fixture: six procedural trees — two broadleaves differing only in
+/// `seed`, a whorled conifer, a leafless snag, a scrub, and the no-randomness
+/// diagram tree — pinned bit-exactly.
+///
+/// Randomness and a pinned PNG are the two halves of the same promise: a tree
+/// is *varied* (the twins are visibly different trees) and *reproducible* (the
+/// same file grows the same mesh, on this machine, forever). The generator's
+/// RNG is spelled out in-repo for exactly this reason, so no dependency
+/// upgrade can reshape a forest.
+///
+/// The second half needs no GPU and pins the two ways a Tree can be authored
+/// wrong: geometry it does not own, and geometry too big to grow.
+#[test]
+fn the_m18_tree_fixture_pins_seeded_procedural_growth() {
+    let scene = repo_path("examples/scenes/verify/m18_trees.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m18_trees.png");
+
+    let validate = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0), "{validate:?}");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+    } else {
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+    }
+
+    // A Tree *is* the entity's geometry, so a Mesh beside it would be a second
+    // opinion about what the entity looks like.
+    let clash = scene_file(
+        "tree-with-mesh",
+        r#"{"name":"clash","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Oak","components":[
+                {"type":"Tree"},
+                {"type":"Mesh","asset":"builtin:cube"}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&clash).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["tree_with_mesh", "validation_failed"]
+    );
+
+    // Branching is exponential, so a plausible-looking edit can ask for a
+    // billion vertices. It gets a located error rather than a hung render.
+    let huge = scene_file(
+        "tree-too-complex",
+        r#"{"name":"huge","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Oak","components":[
+                {"type":"Tree","levels":4,"branches":12,"sides":16,"segments":12}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&huge).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["tree_too_complex", "validation_failed"]
+    );
+}
+
 // ── collision (M12) ────────────────────────────────────────────────────
 
 /// End to end: a dynamic box drops onto a trimesh ground (geometry borrowed

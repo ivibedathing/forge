@@ -17,6 +17,7 @@ pub mod mesh;
 pub mod particles;
 pub mod scene;
 pub mod schema;
+pub mod tree;
 pub mod validate;
 
 pub use error::{EngineError, Result};

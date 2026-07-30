@@ -1064,6 +1064,239 @@ impl Default for ParticleEmitter {
     }
 }
 
+/// What hangs on a tree's outermost branches.
+///
+/// NOTE: leave these variants undocumented, like [`ParticleBlend`]'s — a doc
+/// comment on a variant turns the schema into oneOf/const and blinds the
+/// validation walk's closed-vocabulary check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TreeLeaf {
+    #[default]
+    Blade,
+    Cluster,
+    None,
+}
+
+/// A procedurally generated tree (M18): trunk, recursive branches, and leaves,
+/// grown from a `seed` into geometry the renderer draws like any other mesh.
+///
+/// The tree is built in entity-local space with its **base at the origin,
+/// growing along +Y**, so `"position": [x, 0, z]` plants it on flat ground and
+/// `Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`
+/// rather than accompanying one (`tree_with_mesh`): the component *is* the
+/// geometry.
+///
+/// # Two draws, two materials
+///
+/// A tree needs bark and foliage, and one `Material` cannot be both. The
+/// entity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]
+/// and [`Tree::leaf_roughness`], and are always opaque and non-metallic. That
+/// last part is a constraint, not an oversight: every leaf of one tree is a
+/// single mesh, and the blended pass sorts whole draws, so translucent leaves
+/// could not be sorted against each other and would visibly z-fight.
+///
+/// # Randomness
+///
+/// Everything jittered is drawn from a private xorshift seeded by `seed`,
+/// consumed in a fixed order (a branch draws its own wander, then recurses into
+/// its children in index order, then scatters its leaves), so two trees that
+/// differ only in `seed` are different trees and the *same* tree is the same
+/// mesh forever — which is what lets a forest sit under a pinned baseline.
+/// `jitter` is the master dial for how much variation there is at all; `0`
+/// grows a rigid diagram of a tree.
+///
+/// # Cost
+///
+/// Vertices scale as `(branches · whorl)^levels · segments · sides`, and a
+/// tree that would blow past the budget is a validation error
+/// (`tree_too_complex`) rather than a hang. `levels: 2` with the default
+/// branching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per
+/// distinct parameter set and is cached, so a forest of nine trees is nine
+/// meshes no matter how many frames render.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tree {
+    /// Seeds every random draw. Two trees with the same parameters and
+    /// different seeds are different trees; the same seed always regrows the
+    /// same tree.
+    pub seed: u32,
+
+    /// Trunk length in meters, before `Transform.scale`. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub height: f32,
+
+    /// Trunk radius at the ground, in meters, before `Transform.scale`. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub trunk_radius: f32,
+
+    /// How many generations of branches hang off the trunk. `0` is a bare
+    /// pole; `2` reads as a tree; `3` is a good hero tree; `4` is expensive.
+    /// `[0, 4]`.
+    #[schemars(range(min = 0, max = 4))]
+    pub levels: u32,
+
+    /// Attachment points spaced along each parent branch. `[0, 16]`.
+    #[schemars(range(min = 0, max = 16))]
+    pub branches: u32,
+
+    /// Branches emitted at each attachment point **on the trunk**, spread
+    /// evenly around it. `1` (default) gives the alternate, spiralling
+    /// arrangement of most broadleaf trees; `4`–`5` gives the whorls of a
+    /// conifer, where a ring of limbs leaves the trunk at one height.
+    ///
+    /// Deeper levels are always alternate, which is both what a real conifer's
+    /// limbs carry and what keeps the geometry finite — a whorl compounding at
+    /// every level multiplies the tree by itself. `[1, 8]`.
+    #[schemars(range(min = 1, max = 8))]
+    pub whorl: u32,
+
+    /// Angle in degrees between a child branch and its parent at the
+    /// attachment. Small angles sweep up (poplar), large ones reach out
+    /// (oak) or hang down (spruce, with negative `tropism`). `[0, 180]`.
+    #[schemars(range(min = 0.0, max = 180.0))]
+    pub branch_angle: f32,
+
+    /// Degrees of rotation around the parent between successive attachment
+    /// points. The default is the golden angle, which is what real phyllotaxis
+    /// converges on and what stops branches from stacking into visible rows.
+    pub branch_twist: f32,
+
+    /// Fraction of a branch's length that carries no children — the bare
+    /// trunk under the crown. `[0, 1)`.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub branch_start: f32,
+
+    /// Child length as a fraction of its parent's. `(0, 2]`.
+    #[schemars(extend("exclusiveMinimum" = 0.0), range(max = 2.0))]
+    pub length_ratio: f32,
+
+    /// How much shorter children get toward the parent's tip, `[0, 1]`: `0`
+    /// makes every child the same length (a round crown), `0.8` makes the top
+    /// ones stubs (the cone of a conifer).
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub length_falloff: f32,
+
+    /// Child radius as a fraction of the parent's radius where it attaches.
+    /// `(0, 1]`.
+    #[schemars(extend("exclusiveMinimum" = 0.0), range(max = 1.0))]
+    pub radius_ratio: f32,
+
+    /// Radius at a branch's tip as a fraction of its base. `[0, 1]`; small
+    /// values give the sharp taper of a young shoot.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub taper: f32,
+
+    /// Extra radius at the very foot of the trunk, as a fraction: `0.4` makes
+    /// the base 40% wider than the trunk above it. Root flare is most of what
+    /// says "grown" rather than "placed", and it is at eye level. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub flare: f32,
+
+    /// Degrees of random wander per meter of branch. This is the gnarl: `0`
+    /// grows perfectly straight poles, `8` is a healthy tree, `25` is an old
+    /// olive. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub crook: f32,
+
+    /// Degrees per meter that a branch curves toward the sky as it grows.
+    /// Positive lifts tips toward the light (most trees), negative lets
+    /// gravity droop them (spruce, willow). This is what makes branches curve
+    /// rather than point.
+    ///
+    /// It does not apply to the trunk, whose line is [`Tree::crook`] alone: a
+    /// negative tropism on the trunk is unstable — a degree of crook tips it
+    /// off vertical and the bend then compounds until the tree grows sideways.
+    pub tropism: f32,
+
+    /// How much every jittered quantity — branch length, radius, angle, leaf
+    /// placement — varies, as a fraction. `[0, 1)`; `0` is a diagram.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub jitter: f32,
+
+    /// Radial sides of a branch tube. `[3, 16]`; `5`–`6` is plenty, since bark
+    /// silhouettes read from the branching, not the cross-section.
+    #[schemars(range(min = 3, max = 16))]
+    pub sides: u32,
+
+    /// Lengthwise segments per branch — how finely a branch can curve. `[1, 16]`.
+    #[schemars(range(min = 1, max = 16))]
+    pub segments: u32,
+
+    /// What hangs on the outermost branches: `"blade"` (a folded leaf, the
+    /// default), `"cluster"` (a foliage blob — cheaper per unit of cover, and
+    /// what conifer sprays and distant trees want), or `"none"` for a bare
+    /// winter or dead tree.
+    pub leaf: TreeLeaf,
+
+    /// Length of one leaf, or diameter of one cluster, in meters. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub leaf_size: f32,
+
+    /// Leaves scattered along each outermost branch. `[0, 64]`; `0` is
+    /// equivalent to `"leaf": "none"`.
+    #[schemars(range(min = 0, max = 64))]
+    pub leaves_per_branch: u32,
+
+    /// Foliage albedo, linear RGB in `[0, 1]` — the leaves' half of the tree's
+    /// appearance, the entity's `Material` being the bark's.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub leaf_color: Vec3,
+
+    /// Foliage roughness, `[0, 1]`. Leaves are waxy, not matte: a little
+    /// specular is what separates them from felt.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub leaf_roughness: f32,
+}
+
+impl Default for Tree {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            height: 6.0,
+            trunk_radius: 0.16,
+            levels: 2,
+            branches: 5,
+            whorl: 1,
+            branch_angle: 48.0,
+            // The golden angle: 360° / φ².
+            branch_twist: 137.5,
+            branch_start: 0.35,
+            length_ratio: 0.62,
+            length_falloff: 0.35,
+            radius_ratio: 0.6,
+            taper: 0.12,
+            flare: 0.4,
+            crook: 8.0,
+            tropism: 8.0,
+            jitter: 0.25,
+            sides: 6,
+            segments: 5,
+            leaf: TreeLeaf::Blade,
+            leaf_size: 0.3,
+            leaves_per_branch: 6,
+            leaf_color: Vec3::new(0.09, 0.26, 0.08),
+            leaf_roughness: 0.75,
+        }
+    }
+}
+
+impl Tree {
+    /// The leaves' surface, assembled from the foliage fields. Opaque and
+    /// non-metallic by construction — see the type's note on why leaves cannot
+    /// be transparent.
+    pub fn leaf_material(&self) -> Material {
+        Material {
+            albedo: self.leaf_color,
+            metallic: 0.0,
+            roughness: self.leaf_roughness,
+            emissive: Vec3::ZERO,
+            alpha: 1.0,
+            transmission: 0.0,
+        }
+    }
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -1134,6 +1367,7 @@ components!(
     HudText,
     HudRect,
     ParticleEmitter,
+    Tree,
 );
 
 #[cfg(test)]
@@ -1225,7 +1459,8 @@ mod tests {
                 "Wheel",
                 "HudText",
                 "HudRect",
-                "ParticleEmitter"
+                "ParticleEmitter",
+                "Tree"
             ]
         );
     }

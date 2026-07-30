@@ -1,0 +1,111 @@
+{
+  "name": "m18_trees",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.10, 0.24, 0.58],
+    "sky_horizon": [0.55, 0.66, 0.78],
+    "sky_ground": [0.10, 0.12, 0.09],
+    "fog_density": 0.004,
+    "shadows": true,
+    "shadow_distance": 46.0,
+    "samples": 4
+  },
+  "entities": [
+    {
+      "name": "Eye",
+      "components": [
+        { "type": "Transform", "position": [1.0, 5.0, 19.0], "rotation": [-9.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 52.0, "active": true }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-40.0, 34.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.96, 0.88], "intensity": 2.6 }
+      ]
+    },
+    {
+      "name": "Fill",
+      "components": [
+        { "type": "AmbientLight", "color": [0.55, 0.68, 0.85], "intensity": 0.35 }
+      ]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "scale": [90.0, 1.0, 90.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.14, 0.20, 0.11], "roughness": 0.95 }
+      ]
+    },
+
+    {
+      "name": "Broadleaf",
+      "components": [
+        { "type": "Transform", "position": [-6.5, 0.0, 0.0] },
+        { "type": "Tree", "seed": 7, "height": 5.8, "trunk_radius": 0.26, "levels": 3,
+          "branches": 5, "branch_angle": 58.0, "branch_start": 0.30, "length_ratio": 0.66,
+          "length_falloff": 0.30, "tropism": 16.0, "crook": 11.0, "jitter": 0.35,
+          "taper": 0.10, "leaf_size": 0.24, "leaves_per_branch": 13,
+          "leaf_color": [0.08, 0.25, 0.08] },
+        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "BroadleafTwin",
+      "components": [
+        { "type": "Transform", "position": [-1.6, 0.0, -3.4] },
+        { "type": "Tree", "seed": 8, "height": 5.8, "trunk_radius": 0.26, "levels": 3,
+          "branches": 5, "branch_angle": 58.0, "branch_start": 0.30, "length_ratio": 0.66,
+          "length_falloff": 0.30, "tropism": 16.0, "crook": 11.0, "jitter": 0.35,
+          "taper": 0.10, "leaf_size": 0.24, "leaves_per_branch": 13,
+          "leaf_color": [0.08, 0.25, 0.08] },
+        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Conifer",
+      "components": [
+        { "type": "Transform", "position": [3.2, 0.0, 0.4] },
+        { "type": "Tree", "seed": 11, "height": 9.0, "trunk_radius": 0.21, "levels": 1,
+          "branches": 13, "whorl": 5, "branch_start": 0.08, "branch_angle": 95.0,
+          "length_ratio": 0.30, "length_falloff": 0.88, "tropism": -16.0, "crook": 6.0,
+          "jitter": 0.3, "taper": 0.08, "leaf": "cluster", "leaf_size": 0.26,
+          "leaves_per_branch": 13, "leaf_color": [0.05, 0.16, 0.07] },
+        { "type": "Material", "albedo": [0.17, 0.11, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "DeadSnag",
+      "components": [
+        { "type": "Transform", "position": [8.6, 0.0, -1.0], "rotation": [0.0, 40.0, 0.0] },
+        { "type": "Tree", "seed": 3, "height": 6.0, "trunk_radius": 0.19, "levels": 3,
+          "branches": 3, "branch_angle": 46.0, "branch_start": 0.34, "length_ratio": 0.58,
+          "tropism": 14.0, "crook": 13.0, "jitter": 0.45, "taper": 0.05, "leaf": "none" },
+        { "type": "Material", "albedo": [0.30, 0.26, 0.21], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Scrub",
+      "components": [
+        { "type": "Transform", "position": [1.4, 0.0, 5.6] },
+        { "type": "Tree", "seed": 21, "height": 1.0, "trunk_radius": 0.06, "levels": 2,
+          "branches": 5, "branch_angle": 62.0, "branch_start": 0.10, "length_ratio": 0.7,
+          "tropism": 20.0, "crook": 14.0, "jitter": 0.4, "leaf_size": 0.16,
+          "leaves_per_branch": 11, "leaf_color": [0.13, 0.31, 0.09] },
+        { "type": "Material", "albedo": [0.22, 0.16, 0.10], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Diagram",
+      "components": [
+        { "type": "Transform", "position": [-10.5, 0.0, 3.0] },
+        { "type": "Tree", "seed": 5, "height": 3.4, "trunk_radius": 0.13, "levels": 2,
+          "branches": 5, "whorl": 1, "jitter": 0.0, "crook": 0.0, "tropism": 0.0,
+          "flare": 0.0, "leaf": "none", "sides": 8 },
+        { "type": "Material", "albedo": [0.34, 0.28, 0.22], "roughness": 0.6 }
+      ]
+    }
+  ]
+}

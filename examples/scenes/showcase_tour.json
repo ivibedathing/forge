@@ -43,99 +43,108 @@
     },
 
     {
-      "name": "Trunk1",
+      "name": "OakEast",
       "components": [
-        { "type": "Transform", "position": [-16.5, 1.7, -12.5], "scale": [0.55, 3.4, 0.55] },
-        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Transform", "position": [-11.0, 0.0, -13.6] },
+        { "type": "Tree", "seed": 7, "height": 5.8, "trunk_radius": 0.26, "levels": 3,
+          "branches": 5, "branch_angle": 58.0, "branch_start": 0.30, "length_ratio": 0.66,
+          "length_falloff": 0.30, "tropism": 16.0, "crook": 11.0, "jitter": 0.35,
+          "taper": 0.10, "leaf_size": 0.27, "leaves_per_branch": 14,
+          "leaf_color": [0.08, 0.25, 0.08] },
         { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
       ]
     },
     {
-      "name": "Foliage1",
+      "name": "OakWest",
       "components": [
-        { "type": "Transform", "position": [-16.5, 4.5, -12.5], "scale": [2.0, 2.3, 2.0] },
-        { "type": "Mesh", "asset": "builtin:sphere" },
-        { "type": "Material", "albedo": [0.07, 0.24, 0.09], "roughness": 0.9 }
-      ]
-    },
-    {
-      "name": "Trunk2",
-      "components": [
-        { "type": "Transform", "position": [-11.0, 1.4, -14.0], "scale": [0.5, 2.8, 0.5] },
-        { "type": "Mesh", "asset": "builtin:cylinder" },
-        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
-      ]
-    },
-    {
-      "name": "Foliage2",
-      "components": [
-        { "type": "Transform", "position": [-11.0, 3.8, -14.0], "scale": [1.7, 2.0, 1.7] },
-        { "type": "Mesh", "asset": "builtin:sphere" },
-        { "type": "Material", "albedo": [0.09, 0.28, 0.10], "roughness": 0.9 }
-      ]
-    },
-    {
-      "name": "Trunk3",
-      "components": [
-        { "type": "Transform", "position": [-15.0, 1.9, -6.5], "scale": [0.6, 3.8, 0.6] },
-        { "type": "Mesh", "asset": "builtin:cylinder" },
-        { "type": "Material", "albedo": [0.18, 0.12, 0.06], "roughness": 0.95 }
-      ]
-    },
-    {
-      "name": "Foliage3",
-      "components": [
-        { "type": "Transform", "position": [-15.0, 5.0, -6.5], "scale": [2.2, 2.5, 2.2] },
-        { "type": "Mesh", "asset": "builtin:sphere" },
-        { "type": "Material", "albedo": [0.06, 0.22, 0.08], "roughness": 0.9 }
-      ]
-    },
-    {
-      "name": "Trunk4",
-      "components": [
-        { "type": "Transform", "position": [-9.5, 1.3, -8.0], "scale": [0.45, 2.6, 0.45] },
-        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Transform", "position": [-16.5, 0.0, -12.5], "rotation": [0.0, 74.0, 0.0] },
+        { "type": "Tree", "seed": 23, "height": 5.2, "trunk_radius": 0.23, "levels": 3,
+          "branches": 5, "branch_angle": 62.0, "branch_start": 0.28, "length_ratio": 0.64,
+          "length_falloff": 0.35, "tropism": 13.0, "crook": 14.0, "jitter": 0.4,
+          "taper": 0.10, "leaf_size": 0.26, "leaves_per_branch": 14,
+          "leaf_color": [0.10, 0.27, 0.07] },
         { "type": "Material", "albedo": [0.21, 0.14, 0.08], "roughness": 0.95 }
       ]
     },
     {
-      "name": "Foliage4",
+      "name": "Birch",
       "components": [
-        { "type": "Transform", "position": [-9.5, 3.5, -8.0], "scale": [1.6, 1.9, 1.6] },
-        { "type": "Mesh", "asset": "builtin:sphere" },
-        { "type": "Material", "albedo": [0.10, 0.30, 0.11], "roughness": 0.9 }
+        { "type": "Transform", "position": [-15.0, 0.0, -6.5], "rotation": [0.0, 210.0, 0.0] },
+        { "type": "Tree", "seed": 41, "height": 6.4, "trunk_radius": 0.15, "levels": 3,
+          "branches": 4, "branch_angle": 44.0, "branch_start": 0.42, "length_ratio": 0.60,
+          "length_falloff": 0.25, "tropism": 9.0, "crook": 7.0, "jitter": 0.3,
+          "taper": 0.12, "flare": 0.2, "leaf_size": 0.22, "leaves_per_branch": 15,
+          "leaf_color": [0.14, 0.31, 0.09] },
+        { "type": "Material", "albedo": [0.62, 0.60, 0.55], "roughness": 0.85 }
       ]
     },
     {
-      "name": "Trunk5",
+      "name": "SpruceTall",
       "components": [
-        { "type": "Transform", "position": [-19.0, 1.6, -8.5], "scale": [0.52, 3.2, 0.52] },
-        { "type": "Mesh", "asset": "builtin:cylinder" },
-        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
+        { "type": "Transform", "position": [-20.5, 0.0, -9.0] },
+        { "type": "Tree", "seed": 11, "height": 8.6, "trunk_radius": 0.21, "levels": 1,
+          "branches": 13, "whorl": 5, "branch_start": 0.08, "branch_angle": 95.0,
+          "length_ratio": 0.30, "length_falloff": 0.88, "tropism": -16.0, "crook": 6.0,
+          "jitter": 0.3, "taper": 0.08, "leaf": "cluster", "leaf_size": 0.26,
+          "leaves_per_branch": 13, "leaf_color": [0.05, 0.16, 0.07] },
+        { "type": "Material", "albedo": [0.17, 0.11, 0.07], "roughness": 0.95 }
       ]
     },
     {
-      "name": "Foliage5",
+      "name": "SpruceShort",
       "components": [
-        { "type": "Transform", "position": [-19.0, 4.3, -8.5], "scale": [1.9, 2.2, 1.9] },
-        { "type": "Mesh", "asset": "builtin:sphere" },
-        { "type": "Material", "albedo": [0.08, 0.26, 0.09], "roughness": 0.9 }
+        { "type": "Transform", "position": [-7.6, 0.0, -12.5], "rotation": [0.0, 130.0, 0.0] },
+        { "type": "Tree", "seed": 12, "height": 5.6, "trunk_radius": 0.17, "levels": 1,
+          "branches": 11, "whorl": 5, "branch_start": 0.06, "branch_angle": 92.0,
+          "length_ratio": 0.32, "length_falloff": 0.86, "tropism": -14.0, "crook": 6.0,
+          "jitter": 0.32, "taper": 0.08, "leaf": "cluster", "leaf_size": 0.24,
+          "leaves_per_branch": 12, "leaf_color": [0.06, 0.18, 0.08] },
+        { "type": "Material", "albedo": [0.17, 0.11, 0.07], "roughness": 0.95 }
       ]
     },
     {
-      "name": "Trunk6",
+      "name": "SprucePit",
       "components": [
-        { "type": "Transform", "position": [-7.5, 1.5, -12.5], "scale": [0.5, 3.0, 0.5] },
-        { "type": "Mesh", "asset": "builtin:cylinder" },
-        { "type": "Material", "albedo": [0.19, 0.12, 0.07], "roughness": 0.95 }
+        { "type": "Transform", "position": [-9.5, 0.0, -7.6], "rotation": [0.0, 300.0, 0.0] },
+        { "type": "Tree", "seed": 13, "height": 7.0, "trunk_radius": 0.19, "levels": 1,
+          "branches": 12, "whorl": 4, "branch_start": 0.10, "branch_angle": 98.0,
+          "length_ratio": 0.29, "length_falloff": 0.9, "tropism": -18.0, "crook": 5.0,
+          "jitter": 0.28, "taper": 0.08, "leaf": "cluster", "leaf_size": 0.25,
+          "leaves_per_branch": 12, "leaf_color": [0.05, 0.17, 0.09] },
+        { "type": "Material", "albedo": [0.16, 0.11, 0.07], "roughness": 0.95 }
       ]
     },
     {
-      "name": "Foliage6",
+      "name": "DeadSnag",
       "components": [
-        { "type": "Transform", "position": [-7.5, 4.1, -12.5], "scale": [1.8, 2.1, 1.8] },
-        { "type": "Mesh", "asset": "builtin:sphere" },
-        { "type": "Material", "albedo": [0.07, 0.25, 0.09], "roughness": 0.9 }
+        { "type": "Transform", "position": [-22.5, 0.0, -13.5] },
+        { "type": "Tree", "seed": 3, "height": 5.6, "trunk_radius": 0.20, "levels": 3,
+          "branches": 3, "branch_angle": 46.0, "branch_start": 0.34, "length_ratio": 0.58,
+          "length_falloff": 0.3, "tropism": 14.0, "crook": 13.0, "jitter": 0.45,
+          "taper": 0.05, "leaf": "none" },
+        { "type": "Material", "albedo": [0.30, 0.26, 0.21], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "ScrubA",
+      "components": [
+        { "type": "Transform", "position": [-13.0, 0.0, -10.2] },
+        { "type": "Tree", "seed": 21, "height": 0.95, "trunk_radius": 0.055, "levels": 2,
+          "branches": 5, "branch_angle": 62.0, "branch_start": 0.10, "length_ratio": 0.7,
+          "tropism": 20.0, "crook": 14.0, "jitter": 0.4, "leaf_size": 0.17,
+          "leaves_per_branch": 12, "leaf_color": [0.13, 0.31, 0.09] },
+        { "type": "Material", "albedo": [0.22, 0.16, 0.10], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "ScrubB",
+      "components": [
+        { "type": "Transform", "position": [-18.0, 0.0, -5.2], "rotation": [0.0, 95.0, 0.0] },
+        { "type": "Tree", "seed": 22, "height": 1.25, "trunk_radius": 0.065, "levels": 2,
+          "branches": 6, "branch_angle": 58.0, "branch_start": 0.08, "length_ratio": 0.68,
+          "tropism": 22.0, "crook": 16.0, "jitter": 0.45, "leaf_size": 0.18,
+          "leaves_per_branch": 11, "leaf_color": [0.11, 0.29, 0.08] },
+        { "type": "Material", "albedo": [0.23, 0.17, 0.11], "roughness": 0.95 }
       ]
     },
 

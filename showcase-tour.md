@@ -50,7 +50,7 @@ moving.
 
 | steps | station | what is on screen | systems |
 |-------|---------|-------------------|---------|
-| 0–179 | 01 forest | six trees, four critters running loops, the glTF monolith, its animated beacon | `Mesh` (builtin + glTF), `Material`, `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
+| 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — four critters running loops, the glTF monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), `Material`, `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
 | 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
 | 360–539 | 03 water and ice | a pond of sixteen tiles on a travelling wave, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | low-roughness metallic PBR, `ParticleEmitter` ×3, scripted transforms |
 | 540–719 | 04 breaking | a boulder rolls into a crate stack, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
@@ -59,6 +59,15 @@ moving.
 Running underneath all five, from the `environment` block rather than from any
 component: a gradient sky with the sun in it, distance fog, sun shadows from
 everything opaque, 4× MSAA, and sky reflected off the metal and the water.
+
+The forest is nine `Tree` components and no meshes (M18). Each is a seed and a
+species recipe — broadleaf, conifer, snag, scrub — so the two oaks are the same
+species and visibly different individuals, which is the thing twelve
+cylinder-and-sphere entities could not do however they were placed. The station
+is framed around what the component gives for free: the snag is bare structure
+where the branching is legible, the spruces stand behind at 7–8.6 m so the
+whorled limbs read against the sky, and the scrubs are one-meter trees at the
+front to show that the model scales rather than special-casing a bush.
 
 The truck patrols a 27 m ring for the whole fifteen seconds, so no station is
 a still life; `scripts/tour_truck.rhai` is a cruise-control autopilot on the
@@ -128,6 +137,13 @@ than no showcase:
 - **Ice** is a pale dielectric at roughness 0.05–0.10 with transmission
   0.55–0.66. No subsurface scattering and no tinting by thickness, so a thick
   block is exactly as clear as a thin one.
+- **The trees are real geometry** as of M18 — swept tubes on wandering
+  polylines, recursively branched, with taper and a root flare, and a seed per
+  tree so no two are the same individual. What is missing is surface: there is
+  no bark texture and no leaf texture (the engine has neither), so bark is a
+  flat brown dielectric and a leaf is a folded blade that gets its variation
+  from shading alone. No wind, no LOD, and no collision — you can walk the
+  truck through a trunk.
 - **The animals** are scaled spheres on parametric loops. There is no
   navigation, no steering behaviour, no state machine — scripts have no
   randomness by design, so the variety is sums of sines.
@@ -146,9 +162,9 @@ than no showcase:
   ground. Crisp shadows near the camera *and* shadows out to the horizon would
   need cascades, which M16 does not have.
 
-Refraction, and light that can be driven from a script, are the two upgrades
-that would move this scene most now. `tour_effects.rhai` is where the second
-would land first.
+Refraction is the upgrade that would move this scene most now; textured bark
+and alpha-cut leaves are what would move the forest most, and both are the same
+missing feature — the renderer has no texture-mapped materials yet.
 
 ## Measuring frames
 

@@ -227,6 +227,8 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
 
         let mut seen_types: Vec<String> = Vec::new();
         let mut has_mesh = false;
+        let mut mesh_path: Option<String> = None;
+        let mut tree_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
         let mut has_transform = false;
         let mut scale = glam::Vec3::ONE;
@@ -277,6 +279,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
             if type_name == "Mesh" {
                 has_mesh = true;
+                mesh_path = Some(component_path.clone());
+            }
+            if type_name == "Tree" {
+                tree_path = Some(component_path.clone());
             }
             if type_name == "Material" {
                 material_paths.push(component_path.clone());
@@ -491,9 +497,31 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
+        // ── Tree entity checks (M18) ──────────────────────────────────
+        //
+        // A `Tree` *is* the entity's geometry. Carrying a `Mesh` as well would
+        // draw both at one transform, which is never what an author means and
+        // has no defined winner — the same reasoning as `wheel_with_physics`.
+        if let (Some(path), true) = (&tree_path, has_mesh) {
+            errors.push(
+                cx.err(
+                    codes::TREE_WITH_MESH,
+                    format!(
+                        "entity {name:?} has both a Tree and a Mesh; a Tree generates \
+                         the entity's geometry, so the two would draw on top of each \
+                         other — split them into two entities"
+                    ),
+                    mesh_path.as_deref().unwrap_or(path),
+                )
+                .entity(name)
+                .component("Tree"),
+            );
+        }
+
         // Legal but almost certainly wrong: dead data from editing the wrong
-        // entity. A warning, because rendering it is well-defined.
-        if !has_mesh {
+        // entity. A warning, because rendering it is well-defined. A `Tree`
+        // counts as geometry here — the entity's Material is its bark.
+        if !has_mesh && tree_path.is_none() {
             for material_path in material_paths {
                 errors.push(
                     cx.err(
@@ -1219,6 +1247,32 @@ fn check_component(
         // Every emitter constraint is a schema range; the simulation reads
         // whatever validated, so there is nothing semantic left to check.
         ComponentData::ParticleEmitter(_) => {}
+
+        // Every individual tree field is in range by the time we get here, and
+        // the combination can still be absurd: branching is exponential, so
+        // one more level is the whole scene's geometry again. Refusing to grow
+        // it names a number the author can act on, where growing it means a
+        // command that looks like it hung.
+        ComponentData::Tree(ref tree) => {
+            let vertices = crate::tree::vertex_count(tree);
+            if vertices > crate::tree::MAX_TREE_VERTICES {
+                errors.push(
+                    cx.err(
+                        codes::TREE_TOO_COMPLEX,
+                        format!(
+                            "this Tree would generate {vertices} vertices, over the \
+                             {} the engine will grow; lower \"levels\", \"branches\", \
+                             \"whorl\", \"sides\", or \"segments\"",
+                            crate::tree::MAX_TREE_VERTICES
+                        ),
+                        component_path,
+                    )
+                    .entity(entity)
+                    .component("Tree")
+                    .field("levels"),
+                );
+            }
+        }
 
         // Fragment mesh references resolve like `Mesh.asset` (existence,
         // extension, relative path); fragment collider dimensions are
@@ -2729,6 +2783,51 @@ mod tests {
         let bare = good.replace(r#"{"type":"Transform"},
                 {"type":"Wheel""#, r#"{"type":"Wheel""#);
         assert_eq!(codes_of(&bare), ["missing_transform"]);
+    }
+
+    #[test]
+    fn a_tree_is_the_entitys_geometry_and_carries_its_own_material() {
+        // The happy path, and the thing that makes a Tree different from every
+        // other component: a Material with no Mesh next to it is *not* the
+        // unused_material warning here, because the Material is the bark.
+        let good = r#"{"name":"s","entities":[
+            {"name":"Oak","components":[
+                {"type":"Transform","position":[0.0,0.0,0.0]},
+                {"type":"Tree","seed":3,"levels":2},
+                {"type":"Material","albedo":[0.2,0.14,0.09]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(good), Vec::<&str>::new());
+
+        // A Tree and a Mesh on one entity would draw both at one transform.
+        let doubled = good.replace(
+            r#"{"type":"Tree""#,
+            r#"{"type":"Mesh","asset":"builtin:cube"},{"type":"Tree""#,
+        );
+        assert_eq!(codes_of(&doubled), ["tree_with_mesh"]);
+
+        // Branching is exponential, so the combination of in-range fields can
+        // still be absurd; refusing names a number rather than hanging.
+        let huge = good.replace(
+            r#""seed":3,"levels":2"#,
+            r#""seed":3,"levels":4,"branches":12,"whorl":6,"sides":12,"segments":8"#,
+        );
+        let errors = validate_source(&huge, "test.json");
+        assert_eq!(errors[0].error, "tree_too_complex");
+        assert!(
+            errors[0].message.contains("vertices"),
+            "the error should name the number: {}",
+            errors[0].message
+        );
+
+        // Typos in the closed leaf vocabulary get a suggestion like any other.
+        let typo = good.replace(r#""levels":2"#, r#""levels":2,"leaf":"cluser""#);
+        let errors = validate_source(&typo, "test.json");
+        assert_eq!(errors[0].error, "invalid_field_type");
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("cluster")
+        );
     }
 
     #[test]
