@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use engine_core::formatter::{self, AddComponent, AddEntity, RemoveComponent, SetComponentField};
-use engine_core::scene::{RenderItem, ResolvedLights};
+use engine_core::scene::{RenderItem, ResolvedLights, WaterItem};
 use engine_core::{EngineError, Scene, SceneFile};
 
 /// How often the file is re-read. Well under the "reflects within a second"
@@ -31,6 +31,10 @@ pub struct SceneDoc {
     pub raw: Option<serde_json::Value>,
     /// Draw list + lights, rebuilt per reload; empty when invalid.
     pub items: Vec<RenderItem>,
+    /// Water surfaces, rebuilt with `items` (M18). The viewport shows them at
+    /// **time 0**, like it shows particles not at all: the editor draws the
+    /// scene at rest, and the rest pose of a wave is a defined, static shape.
+    pub water: Vec<WaterItem>,
     pub lights: ResolvedLights,
     /// The scene's own sky, fog and shadow settings, so the viewport shows
     /// what the file says rather than a house style — the editor is a view
@@ -56,6 +60,7 @@ impl SceneDoc {
             file: None,
             raw: None,
             items: Vec::new(),
+            water: Vec::new(),
             lights: engine_core::scene::LightRig {
                 sun: None,
                 ambient: None,
@@ -110,6 +115,7 @@ impl SceneDoc {
                 .file(&self.display)];
                 self.file = None;
                 self.items.clear();
+                self.water.clear();
             }
         }
     }
@@ -133,12 +139,14 @@ impl SceneDoc {
         self.raw = serde_json::from_str(&self.source).ok();
 
         self.items.clear();
+        self.water.clear();
         if self.is_valid() {
             if let Ok(scene) = Scene::from_source(&self.source, &self.display) {
                 let assets = engine_assets::AssetServer::for_scene(&self.path);
                 match scene.render_items(&assets) {
                     Ok(items) => {
                         self.items = items;
+                        self.water = scene.water_items();
                         self.lights = scene.lights().resolved();
                         // MSAA is the viewport's own business, not the
                         // scene's: the sample count is baked into the

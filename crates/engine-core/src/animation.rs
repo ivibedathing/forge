@@ -397,6 +397,30 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "Water" => {
+            let Ok(mut c) = world.get::<&mut Water>(entity) else {
+                return false;
+            };
+            match field {
+                // `segments` and `waves` are absent on purpose. The first is an
+                // integer (this function animates numbers, and retessellating
+                // per frame would defeat the cached grid); the second is an
+                // array of objects, which is a shape clips cannot express — a
+                // rising sea is a clip on `detail` and `crest_foam`, or a
+                // script writing the surface's fields.
+                "detail" => c.detail = scalar,
+                "detail_scale" => c.detail_scale = scalar,
+                "roughness" => c.roughness = scalar,
+                "shallow_color" => c.shallow_color = v3,
+                "deep_color" => c.deep_color = v3,
+                "depth_fade" => c.depth_fade = scalar,
+                "opacity" => c.opacity = scalar,
+                "crest_foam" => c.crest_foam = scalar,
+                "shore_foam" => c.shore_foam = scalar,
+                "foam_color" => c.foam_color = v3,
+                _ => return false,
+            }
+        }
         _ => return false,
     }
     true
@@ -855,7 +879,8 @@ mod tests {
                 {"type":"Wheel","vehicle":"E"},
                 {"type":"HudText","text":"x"},
                 {"type":"HudRect","size":[1.0,1.0]},
-                {"type":"ParticleEmitter"}
+                {"type":"ParticleEmitter"},
+                {"type":"Water"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

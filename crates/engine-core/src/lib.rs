@@ -18,6 +18,7 @@ pub mod particles;
 pub mod scene;
 pub mod schema;
 pub mod validate;
+pub mod water;
 
 pub use error::{EngineError, Result};
 pub use scene::{Scene, SceneFile};

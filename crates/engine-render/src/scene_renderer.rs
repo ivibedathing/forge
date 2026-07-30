@@ -25,11 +25,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use engine_core::components::{Camera, ParticleBlend, MAX_POINT_LIGHTS};
+use engine_core::components::{Camera, ParticleBlend, Water, MAX_POINT_LIGHTS};
 use engine_core::math::{Mat4, Vec3};
 use engine_core::mesh::MeshData;
 use engine_core::particles::ParticleInstance;
-use engine_core::scene::{EnvironmentSettings, RenderItem, ResolvedLights};
+use engine_core::scene::{EnvironmentSettings, RenderItem, ResolvedLights, WaterItem};
+use engine_core::water::MAX_WAVES;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -85,6 +86,33 @@ struct PointLightUniform {
     position_range: [f32; 4],
     /// rgb = color premultiplied by intensity; w is padding.
     color: [f32; 4],
+}
+
+/// Per-surface water data, matching WGSL `WaterUniform` (M18).
+///
+/// The waves ride in the same uniform as the surface's optics rather than in a
+/// storage buffer: eight of them is the component's documented cap, so the
+/// array is small, fixed, and costs one write per surface per frame.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct WaterUniform {
+    /// World → clip. Waves displace in **world** space, so unlike a mesh this
+    /// cannot be a premultiplied MVP.
+    view_proj: [[f32; 4]; 4],
+    model: [[f32; 4]; 4],
+    /// rgb = shallow color, w = detail strength.
+    shallow_detail: [f32; 4],
+    /// rgb = deep color, w = depth fade in metres.
+    deep_fade: [f32; 4],
+    /// rgb = foam color, w = shore foam width in metres.
+    foam: [f32; 4],
+    /// x = roughness, y = opacity, z = crest foam, w = detail cell size.
+    params: [f32; 4],
+    /// x = wave count, y = time in seconds; z and w are padding.
+    clock: [f32; 4],
+    /// Two vec4s per wave, [`MAX_WAVES`] of them: `(dir.x, dir.z, amplitude, k)`
+    /// then `(q, omega, 0, 0)`. Packed by [`pack_waves`].
+    waves: [[f32; 4]; MAX_WAVES * 2],
 }
 
 /// Per-pass particle data, matching WGSL `ParticleFrame`.
@@ -153,6 +181,81 @@ struct HudTarget {
     placement: wgpu::Buffer,
     width: u32,
     height: u32,
+}
+
+/// The opaque pass's depth, copied where the water pass can read it (M18).
+///
+/// A pass cannot sample the depth attachment it is testing against, so the
+/// frame gains a fullscreen copy between the opaque geometry and the water:
+/// `Depth32Float` (possibly multisampled) → single-sampled `R32Float`. Water is
+/// the only thing that reads it, so it is allocated the first time a scene has
+/// any, and resized when the target does.
+struct SceneDepth {
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    width: u32,
+    height: u32,
+}
+
+impl SceneDepth {
+    fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("scene-depth-copy"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // R32Float, not a depth format: this is read with `textureLoad` as
+            // an ordinary float, and depth formats cannot be sampled that way.
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scene-depth-copy"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+        Self {
+            view,
+            bind_group,
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+
+    /// The copy for a target of this size, reallocated when the size changes.
+    /// Exact rather than grow-only: the shader converts pixel coordinates to
+    /// UVs with this texture's own dimensions, so a stale larger copy would
+    /// read the wrong pixels rather than merely waste memory.
+    fn ensure<'a>(
+        slot: &'a mut Option<Self>,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        width: u32,
+        height: u32,
+    ) -> &'a Self {
+        let fits = slot
+            .as_ref()
+            .is_some_and(|held| held.width == width.max(1) && held.height == height.max(1));
+        if !fits {
+            *slot = Some(Self::new(device, layout, width, height));
+        }
+        slot.as_ref().expect("just ensured")
+    }
 }
 
 /// Resolution of the directional shadow map, in texels on a side.
@@ -230,7 +333,14 @@ pub struct ScenePass<'a> {
     /// Must match the sample count of the color attachment actually drawn
     /// into — see [`depth_texture_multisampled`].
     pub depth: &'a wgpu::TextureView,
+    /// The target's dimensions in pixels. Needed because a `TextureView` cannot
+    /// be asked its size, and the water pass allocates a depth copy to match.
+    pub target_size: [u32; 2],
     pub items: &'a [RenderItem],
+    /// Water surfaces (M18), drawn with the blended geometry and sorted among
+    /// it. Pass `&[]` for a scene with no water, which is then rendered by
+    /// exactly the passes that existed before water did.
+    pub water: &'a [WaterItem],
     /// Particle billboards, drawn after the meshes (alpha-blended, depth-read
     /// only). Pass `&[]` when nothing simulates particles.
     pub particles: &'a [ParticleInstance],
@@ -246,6 +356,11 @@ pub struct ScenePass<'a> {
     /// defaults off, in which case this draws exactly what it drew before the
     /// block existed.
     pub environment: EnvironmentSettings,
+    /// Scene time in seconds — the reproducible clock, never wall clock: the
+    /// `--time` flag if the command took one, otherwise `steps × dt`. Water is
+    /// its only consumer, and a frame with no water never reads it, which is
+    /// why an unchanged scene renders identically whatever this says.
+    pub time: f32,
     /// Used only when `environment.sky` is off; the sky pass overwrites every
     /// pixel it would have set.
     pub clear: wgpu::Color,
@@ -262,6 +377,11 @@ pub struct SceneRenderer {
     transparent_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
+    water_pipeline: wgpu::RenderPipeline,
+    depth_resolve_pipeline: wgpu::RenderPipeline,
+    water_layout: wgpu::BindGroupLayout,
+    scene_depth_layout: wgpu::BindGroupLayout,
+    depth_source_layout: wgpu::BindGroupLayout,
     particle_pipeline: wgpu::RenderPipeline,
     /// Same shader and same instance buffer as `particle_pipeline`, blending
     /// additively — for `ParticleEmitter.blend: "additive"` (fire, sparks).
@@ -286,6 +406,17 @@ pub struct SceneRenderer {
     /// Distance between consecutive object uniforms: the struct size rounded
     /// up to the device's dynamic-offset alignment.
     object_stride: u64,
+    /// The same arrangement for water surfaces, which carry a different (and
+    /// much larger) uniform.
+    water_objects: Option<Uniforms>,
+    water_stride: u64,
+    /// The opaque depth copy the water pass reads, allocated on the first frame
+    /// that has any water in it and resized with the target.
+    scene_depth: Option<SceneDepth>,
+    /// Bind group naming the *source* depth attachment for the resolve pass.
+    /// Rebuilt whenever the depth view changes, which is every frame in the
+    /// viewer (the swapchain hands out a new one) and once in a screenshot.
+    depth_source: Option<wgpu::BindGroup>,
     particle_instances: Option<wgpu::Buffer>,
     particle_uniform: Uniforms,
     /// One cached texture per overlay canvas, reused across frames.
@@ -481,6 +612,42 @@ impl SceneRenderer {
             Self::shadow_pipeline(device, &object_layout, &frame_layout, &vertex_layouts[..1]);
         let sky_pipeline = Self::sky_pipeline(device, &frame_layout, format, multisample);
 
+        // Water (M18). Its own uniform, its own shader, the mesh pass's frame
+        // and shadow bindings, plus the resolved scene depth at group 3.
+        let water_layout = uniform_layout(
+            "water-uniforms",
+            Some(std::mem::size_of::<WaterUniform>() as u64),
+        );
+        let scene_depth_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("scene-depth"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    // Read with `textureLoad`: no sampler, so nothing filters
+                    // depth across a silhouette.
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let water_pipeline = Self::water_pipeline(
+            device,
+            &water_layout,
+            &frame_layout,
+            &shadow_layout,
+            &scene_depth_layout,
+            // Position only: the grid's stored normals are the flat ones, and
+            // the real normal comes from the wave derivatives.
+            &vertex_layouts[..1],
+            format,
+            multisample,
+        );
+        let (depth_resolve_pipeline, depth_source_layout) =
+            Self::depth_resolve_pipeline(device, samples);
+
         let (hud_pipeline, hud_layout) = Self::hud_pipeline(device, format);
 
         let particle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -618,11 +785,19 @@ impl SceneRenderer {
 
         let shadow_placeholder = ShadowMap::new(device, &shadow_layout, 1);
 
+        let water_stride =
+            std::mem::size_of::<WaterUniform>().next_multiple_of(alignment as usize) as u64;
+
         Self {
             pipeline,
             transparent_pipeline,
             shadow_pipeline,
             sky_pipeline,
+            water_pipeline,
+            depth_resolve_pipeline,
+            water_layout,
+            scene_depth_layout,
+            depth_source_layout,
             particle_pipeline,
             additive_particle_pipeline,
             object_layout,
@@ -637,6 +812,10 @@ impl SceneRenderer {
             frame_uniform,
             objects: None,
             object_stride,
+            water_objects: None,
+            water_stride,
+            scene_depth: None,
+            depth_source: None,
             particle_instances: None,
             particle_uniform,
             hud_targets: Vec::new(),
@@ -758,6 +937,156 @@ impl SceneRenderer {
         })
     }
 
+    /// The water pass (M18): the blended twin of the mesh pipeline in how it
+    /// composites, and nothing like it in what it draws.
+    ///
+    /// Two departures worth naming. It is **not culled**, because a water
+    /// surface is a single sheet with no inside: back-face culling would delete
+    /// it the moment a camera dipped below the waterline, and the fragment
+    /// shader flips the normal toward the viewer instead. And like the
+    /// transparent mesh pipeline it tests depth without writing it — two water
+    /// surfaces at different heights have to blend, and a surface that wrote
+    /// depth would also occlude the particles of its own spray.
+    #[allow(clippy::too_many_arguments)]
+    fn water_pipeline(
+        device: &wgpu::Device,
+        water_layout: &wgpu::BindGroupLayout,
+        frame_layout: &wgpu::BindGroupLayout,
+        shadow_layout: &wgpu::BindGroupLayout,
+        scene_depth_layout: &wgpu::BindGroupLayout,
+        vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
+        format: wgpu::TextureFormat,
+        multisample: wgpu::MultisampleState,
+    ) -> wgpu::RenderPipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("water-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("shaders/water.wgsl"))),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("water-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(water_layout),
+                Some(frame_layout),
+                Some(shadow_layout),
+                Some(scene_depth_layout),
+            ],
+            immediate_size: 0,
+        });
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("water-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: vertex_layouts,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    /// The depth copy pass (M18): one fullscreen triangle turning the opaque
+    /// pass's depth attachment into something the water shader can read.
+    ///
+    /// The source's binding type must match its sample count, and the shader
+    /// text is patched accordingly — which is fine here because the sample count
+    /// is baked into the renderer already (`with_samples`).
+    fn depth_resolve_pipeline(
+        device: &wgpu::Device,
+        samples: u32,
+    ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+        let multisampled = samples > 1;
+        let source_type = if multisampled {
+            "texture_depth_multisampled_2d"
+        } else {
+            "texture_depth_2d"
+        };
+        let source = include_str!("shaders/depth_resolve.wgsl")
+            .replace("SOURCE_TEXTURE_TYPE", source_type);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("depth-resolve-shader"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let source_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("depth-resolve-source"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled,
+                },
+                count: None,
+            }],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("depth-resolve-layout"),
+            bind_group_layouts: &[Some(&source_layout)],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("depth-resolve-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::R32Float,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::RED,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            // The copy target is single-sampled however many samples the scene
+            // draws with, so this pass is never multisampled.
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        (pipeline, source_layout)
+    }
+
     /// The HUD overlay blit (M12): fullscreen triangle, no vertex buffers, no
     /// sampler (`textureLoad` — the canvas is 1:1 with target pixels, so
     /// nothing filters a glyph edge), straight-alpha blend over the lit scene.
@@ -861,7 +1190,9 @@ impl SceneRenderer {
             target,
             msaa,
             depth,
+            target_size,
             items,
+            water,
             particles,
             view_projection,
             camera_position,
@@ -869,6 +1200,7 @@ impl SceneRenderer {
             camera_up,
             lights,
             environment,
+            time,
             clear,
             hud,
         } = pass;
@@ -967,23 +1299,73 @@ impl SceneRenderer {
             queue.write_buffer(&objects.buffer, 0, &object_bytes);
         }
 
+        // Water surfaces: their grids join the same geometry cache (one upload
+        // per tessellation for the life of the run, since `surface_grid` hands
+        // back the same `Arc` every frame), and their uniforms the same
+        // one-buffer-addressed-by-dynamic-offset arrangement.
+        let water_keys: Vec<usize> = water
+            .iter()
+            .map(|item| self.upload_mesh(device, &item.mesh))
+            .collect();
+        if !water.is_empty() {
+            let stride = self.water_stride as usize;
+            let mut water_bytes = vec![0u8; stride * water.len()];
+            for (index, item) in water.iter().enumerate() {
+                let uniform = water_uniform(item, view_projection, time);
+                let at = index * stride;
+                water_bytes[at..at + std::mem::size_of::<WaterUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(&uniform));
+            }
+            let objects = Uniforms::ensure(
+                &mut self.water_objects,
+                device,
+                &self.water_layout,
+                "water-uniforms",
+                water_bytes.len() as u64,
+                Some(std::mem::size_of::<WaterUniform>() as u64),
+            );
+            queue.write_buffer(&objects.buffer, 0, &water_bytes);
+        }
+
         // Split the draw list by blend mode. Opaque keeps file order (it is
         // depth-tested, so order does not matter and stability is worth more);
-        // transparent sorts back-to-front, because blending does not commute.
-        // The tiebreak on entity name keeps two surfaces at the same distance
-        // — the water tiles of the showcase pond, say — in an order that does
-        // not depend on how the world happened to iterate.
+        // everything blended sorts back-to-front, because blending does not
+        // commute. The tiebreak on entity name keeps two surfaces at the same
+        // distance in an order that does not depend on how the world happened
+        // to iterate.
+        //
+        // Water sorts in the *same* list as the transparent meshes rather than
+        // in a pass of its own: an ice block floating in a pond is transparent
+        // geometry inside a water surface, and two separate passes would fix
+        // which of the two always draws over the other.
         let opaque: Vec<usize> = (0..items.len())
             .filter(|&i| !items[i].material.is_transparent())
             .collect();
-        let mut transparent: Vec<usize> = (0..items.len())
+        let mut blended: Vec<Blended> = (0..items.len())
             .filter(|&i| items[i].material.is_transparent())
+            .map(Blended::Mesh)
+            .chain((0..water.len()).map(Blended::Water))
             .collect();
-        transparent.sort_by(|&a, &b| {
-            let da = (items[a].model.w_axis.truncate() - camera_position).length_squared();
-            let db = (items[b].model.w_axis.truncate() - camera_position).length_squared();
-            db.total_cmp(&da)
-                .then_with(|| items[a].entity.cmp(&items[b].entity))
+        let sort_key = |entry: &Blended| -> (f32, &str) {
+            match *entry {
+                Blended::Mesh(i) => (
+                    (items[i].model.w_axis.truncate() - camera_position).length_squared(),
+                    items[i].entity.as_str(),
+                ),
+                // A surface's centre stands in for the whole sheet, which is
+                // the same approximation the meshes use and is wrong in the
+                // same way: two overlapping *large* transparent things sort by
+                // their origins, not per pixel.
+                Blended::Water(i) => (
+                    (water[i].model.w_axis.truncate() - camera_position).length_squared(),
+                    water[i].entity.as_str(),
+                ),
+            }
+        };
+        blended.sort_by(|a, b| {
+            let (da, na) = sort_key(a);
+            let (db, nb) = sort_key(b);
+            db.total_cmp(&da).then_with(|| na.cmp(nb))
         });
 
         // Translucent billboards sort back-to-front (blending is order
@@ -1141,12 +1523,44 @@ impl SceneRenderer {
             None => (target, None),
         };
 
+        // Water splits the frame in two: the opaque geometry has to be finished
+        // and its depth readable before the water can absorb what is behind it.
+        // A scene with no water keeps the single pass it always had — same
+        // attachments, same load and store ops, same draws — which is what
+        // keeps every baseline blessed before this milestone bit-exact.
+        let water_present = !water.is_empty();
+        if water_present {
+            SceneDepth::ensure(
+                &mut self.scene_depth,
+                device,
+                &self.scene_depth_layout,
+                target_size[0],
+                target_size[1],
+            );
+            // The source view changes every frame in the viewer (a new
+            // swapchain-sized depth texture on resize) and cannot be compared
+            // for identity, so this bind group is rebuilt rather than cached.
+            // It is one small allocation per frame, against the per-entity
+            // churn M15 removed.
+            self.depth_source = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("depth-resolve-source"),
+                layout: &self.depth_source_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(depth),
+                }],
+            }));
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: color_view,
-                    resolve_target,
+                    // With water the resolve happens at the end of the *water*
+                    // pass instead, so the multisampled color survives to be
+                    // drawn into again.
+                    resolve_target: if water_present { None } else { resolve_target },
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
@@ -1157,7 +1571,11 @@ impl SceneRenderer {
                     view: depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
+                        store: if water_present {
+                            wgpu::StoreOp::Store
+                        } else {
+                            wgpu::StoreOp::Discard
+                        },
                     }),
                     stencil_ops: None,
                 }),
@@ -1199,37 +1617,74 @@ impl SceneRenderer {
                 for &index in &opaque {
                     draw(&mut pass, index);
                 }
-
-                // Blended geometry after every opaque surface has written
-                // depth, so it is occluded by what is in front of it, and
-                // back-to-front among itself.
-                if !transparent.is_empty() {
-                    pass.set_pipeline(&self.transparent_pipeline);
-                    for &index in &transparent {
-                        draw(&mut pass, index);
-                    }
-                }
             }
 
-            // Particles last, over the whole scene, inside the same pass so
-            // they test against the depth the meshes just wrote.
-            if particle_count > 0 {
-                let instances = self.particle_instances.as_ref().expect("just written");
-                pass.set_bind_group(0, &self.particle_uniform.bind_group, &[]);
-                pass.set_vertex_buffer(0, instances.slice(..));
-                // Alpha first, additive after: a flame reads as glowing
-                // *through* the smoke above it, which is what firelight
-                // scattering in that smoke actually looks like. A scene with no
-                // additive emitter issues exactly the one draw it always did.
-                if alpha_particles > 0 {
-                    pass.set_pipeline(&self.particle_pipeline);
-                    pass.draw(0..6, 0..alpha_particles);
-                }
-                if particle_count > alpha_particles {
-                    pass.set_pipeline(&self.additive_particle_pipeline);
-                    pass.draw(0..6, alpha_particles..particle_count);
-                }
+            // Blended geometry after every opaque surface has written depth, so
+            // it is occluded by what is in front of it, and back-to-front among
+            // itself. With water in the scene this waits for the second pass,
+            // where the depth behind the water is readable.
+            if !water_present {
+                self.draw_blended(&mut pass, &blended, &keys, &water_keys, shadows);
+                self.draw_particles(&mut pass, particle_count, alpha_particles);
             }
+        }
+
+        if water_present {
+            let scene_depth = self.scene_depth.as_ref().expect("ensured above");
+            {
+                let mut resolve = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("depth-resolve-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &scene_depth.view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            // Every pixel is written, so the load is discarded
+                            // rather than cleared.
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                resolve.set_pipeline(&self.depth_resolve_pipeline);
+                resolve.set_bind_group(0, self.depth_source.as_ref().expect("ensured above"), &[]);
+                resolve.draw(0..3, 0..1);
+            }
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("water-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color_view,
+                    resolve_target,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            let shadows = match (environment.shadows, &self.shadow_map) {
+                (true, Some(map)) => map,
+                _ => &self.shadow_placeholder,
+            };
+            self.draw_blended(&mut pass, &blended, &keys, &water_keys, shadows);
+            self.draw_particles(&mut pass, particle_count, alpha_particles);
         }
 
         if !hud_canvases.is_empty() {
@@ -1269,6 +1724,101 @@ impl SceneRenderer {
         let frame_index = self.frame_index;
         self.meshes
             .retain(|_, mesh| frame_index - mesh.last_used < MESH_CACHE_LIFETIME);
+    }
+
+    /// Draw the blended list — transparent meshes and water surfaces
+    /// interleaved, back-to-front.
+    ///
+    /// Switching between the two pipelines re-binds groups 1 and 2 because
+    /// their pipeline layouts differ (water has a fourth group), and a pipeline
+    /// change with an incompatible layout invalidates what was bound. Tracking
+    /// the previous kind keeps that to one switch per run of same-kind items,
+    /// which for every scene that exists today is one switch or none.
+    fn draw_blended(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        blended: &[Blended],
+        keys: &[usize],
+        water_keys: &[usize],
+        shadows: &ShadowMap,
+    ) {
+        let mut current: Option<bool> = None;
+        for entry in blended {
+            match *entry {
+                Blended::Mesh(index) => {
+                    let Some(objects) = &self.objects else { continue };
+                    if current != Some(false) {
+                        pass.set_pipeline(&self.transparent_pipeline);
+                        pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                        pass.set_bind_group(2, &shadows.bind_group, &[]);
+                        current = Some(false);
+                    }
+                    let mesh = &self.meshes[&keys[index]];
+                    pass.set_bind_group(
+                        0,
+                        &objects.bind_group,
+                        &[(index as u64 * self.object_stride) as u32],
+                    );
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+                Blended::Water(index) => {
+                    let (Some(surfaces), Some(scene_depth)) =
+                        (&self.water_objects, &self.scene_depth)
+                    else {
+                        continue;
+                    };
+                    if current != Some(true) {
+                        pass.set_pipeline(&self.water_pipeline);
+                        pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                        pass.set_bind_group(2, &shadows.bind_group, &[]);
+                        pass.set_bind_group(3, &scene_depth.bind_group, &[]);
+                        current = Some(true);
+                    }
+                    let mesh = &self.meshes[&water_keys[index]];
+                    pass.set_bind_group(
+                        0,
+                        &surfaces.bind_group,
+                        &[(index as u64 * self.water_stride) as u32],
+                    );
+                    // One vertex buffer: the wave derivatives are the normal.
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+            }
+        }
+    }
+
+    /// Draw the particle billboards, last of everything: they test against the
+    /// depth the meshes wrote and blend over whatever is already there,
+    /// including the water.
+    fn draw_particles(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        particle_count: u32,
+        alpha_particles: u32,
+    ) {
+        if particle_count == 0 {
+            return;
+        }
+        let instances = self.particle_instances.as_ref().expect("just written");
+        pass.set_bind_group(0, &self.particle_uniform.bind_group, &[]);
+        pass.set_vertex_buffer(0, instances.slice(..));
+        // Alpha first, additive after: a flame reads as glowing *through* the
+        // smoke above it, which is what firelight scattering in that smoke
+        // actually looks like. A scene with no additive emitter issues exactly
+        // the one draw it always did.
+        if alpha_particles > 0 {
+            pass.set_pipeline(&self.particle_pipeline);
+            pass.draw(0..6, 0..alpha_particles);
+        }
+        if particle_count > alpha_particles {
+            pass.set_pipeline(&self.additive_particle_pipeline);
+            pass.draw(0..6, alpha_particles..particle_count);
+        }
     }
 
     /// Upload `geometry` if this is the first time it has been seen, and
@@ -1445,6 +1995,57 @@ impl HudTarget {
     }
 }
 
+/// One entry in the back-to-front blended list: an index into the draw list's
+/// transparent meshes, or into its water surfaces.
+#[derive(Clone, Copy)]
+enum Blended {
+    Mesh(usize),
+    Water(usize),
+}
+
+/// Pack one surface's shading parameters and waves for the water shader.
+///
+/// The wave packing is where the file's units become the shader's: `wavelength`
+/// becomes the wavenumber `k = 2π/λ`, `speed` becomes the angular frequency
+/// `ω = speed·k`, and `steepness` becomes Gerstner's `Q = steepness/(k·A)`.
+///
+/// That last conversion is the one worth stating, because it is what makes the
+/// validation rule true: with `Q` scaled this way, the horizontal Jacobian
+/// contributed by a wave is exactly its `steepness`, so a total steepness of 1
+/// is precisely the point where the surface starts folding through itself.
+/// Dividing by the wave *count* as well — the form most references give — would
+/// leave the same file looking calmer as waves were added to it.
+fn water_uniform(item: &WaterItem, view_projection: Mat4, time: f32) -> WaterUniform {
+    let w: &Water = &item.water;
+    let mut waves = [[0.0f32; 4]; MAX_WAVES * 2];
+    let count = w.waves.len().min(MAX_WAVES);
+
+    for (slot, wave) in w.waves.iter().take(count).enumerate() {
+        let direction = engine_core::water::wave_direction(wave.direction);
+        let k = std::f32::consts::TAU / wave.wavelength.max(1e-4);
+        // A wave with no amplitude has no crests to gather toward, so its Q is
+        // 0 rather than a division by zero.
+        let q = if wave.amplitude > 0.0 {
+            wave.steepness / (k * wave.amplitude)
+        } else {
+            0.0
+        };
+        waves[slot * 2] = [direction.x, direction.y, wave.amplitude, k];
+        waves[slot * 2 + 1] = [q, wave.speed * k, 0.0, 0.0];
+    }
+
+    WaterUniform {
+        view_proj: view_projection.to_cols_array_2d(),
+        model: item.model.to_cols_array_2d(),
+        shallow_detail: w.shallow_color.extend(w.detail).to_array(),
+        deep_fade: w.deep_color.extend(w.depth_fade).to_array(),
+        foam: w.foam_color.extend(w.shore_foam).to_array(),
+        params: [w.roughness, w.opacity, w.crest_foam, w.detail_scale],
+        clock: [count as f32, time, 0.0, 0.0],
+        waves,
+    }
+}
+
 /// Prepend the shared sky gradient to a shader source.
 ///
 /// WGSL has no `#include` and wgpu has no preprocessor, so the sky pass and
@@ -1548,7 +2149,13 @@ pub fn depth_texture_multisampled(
             sample_count: samples.max(1),
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // TEXTURE_BINDING because the water pass copies this depth into a
+            // sampleable texture (M18). Declaring the usage costs a frame with
+            // no water nothing — the copy pass only runs when there is water to
+            // absorb with — and it means no caller has to know whether the
+            // scene it is about to draw has any.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
         .create_view(&wgpu::TextureViewDescriptor::default())

@@ -234,6 +234,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut collider: Option<(crate::components::Collider, String)> = None;
         let mut wheel_path: Option<String> = None;
         let mut breakable_threshold: Option<String> = None;
+        let mut water: Option<(crate::components::Water, String)> = None;
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
@@ -304,6 +305,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     if b.impulse_threshold.is_some() {
                         breakable_threshold = Some(component_path);
                     }
+                }
+                Some(ComponentData::Water(w)) => {
+                    water = Some((w, component_path));
                 }
                 _ => {}
             }
@@ -491,9 +495,71 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
+        // ── Water surface checks (M18) ────────────────────────────────
+        if let Some((water, path)) = &water {
+            // A `Water` entity generates its own grid and shades it with its
+            // own fields, so a `Mesh` or `Material` beside it is a second,
+            // silently ignored answer to what this surface is — invariant 2's
+            // hidden state in miniature. An error rather than a warning
+            // because the two authorings look identical in the file and
+            // nothing in the render tells you which one lost.
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::WATER_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a Water component and also {extras}; \
+                             water generates its own surface (sized by Transform.scale) \
+                             and carries its own colours — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Water"),
+                );
+            }
+
+            // The Gerstner constraint. Past a total steepness of 1 the surface
+            // folds through itself: crests curl into loops, normals invert, and
+            // the render looks like a shader bug rather than like the number
+            // being slightly too high. Refusing is the `make_car_track.py`
+            // move — check what the formula cannot represent, and say so with
+            // the arithmetic in the message.
+            let total: f32 = water.waves.iter().map(|w| w.steepness).sum();
+            if total > 1.0 {
+                let parts: Vec<String> = water
+                    .waves
+                    .iter()
+                    .map(|w| format!("{}", w.steepness))
+                    .collect();
+                errors.push(
+                    cx.err(
+                        codes::WATER_WAVES_SELF_INTERSECT,
+                        format!(
+                            "entity {name:?} sums wave steepness to {total} ({}); \
+                             at more than 1 the surface folds through itself and the \
+                             crests curl into loops — scale the steepness values down",
+                            parts.join(" + ")
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Water")
+                    .field("waves"),
+                );
+            }
+        }
+
         // Legal but almost certainly wrong: dead data from editing the wrong
-        // entity. A warning, because rendering it is well-defined.
-        if !has_mesh {
+        // entity. A warning, because rendering it is well-defined. A Water
+        // entity's Material is already a hard error above, so it does not also
+        // collect this.
+        if !has_mesh && water.is_none() {
             for material_path in material_paths {
                 errors.push(
                     cx.err(
@@ -1050,6 +1116,12 @@ fn check_component(
         ComponentData::AmbientLight(_) => checked.ambient_light = true,
         ComponentData::PointLight(_) => checked.point_light = true,
         ComponentData::Material(_) => {}
+
+        // Water's own fields are fully covered by the schema walk (ranges,
+        // `maxItems` on the wave list); what is left is cross-component and
+        // cross-wave, and lives with the entity checks that can see the whole
+        // entity.
+        ComponentData::Water(_) => {}
 
         // The flat Collider struct keeps the file walkable; which fields each
         // shape requires and forbids is semantic, checked here (design §5).
@@ -2882,6 +2954,107 @@ mod tests {
             ]}
         ]}"#;
         assert!(validate_source(source, "test.json").is_empty());
+    }
+
+    #[test]
+    fn a_water_entity_owns_its_surface_alone() {
+        // A Mesh or a Material beside Water is a second answer to what this
+        // surface is, and the render only ever honours one of them.
+        let with_mesh = r#"{"name":"s","entities":[
+            {"name":"Pond","components":[
+                {"type":"Transform"},
+                {"type":"Water"},
+                {"type":"Mesh","asset":"builtin:plane"}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(with_mesh), ["water_with_mesh"]);
+
+        // A Material alone is the same error — and *not* the `unused_material`
+        // warning, which would be a confusing second thing to read about one
+        // mistake.
+        let with_material = r#"{"name":"s","entities":[
+            {"name":"Pond","components":[
+                {"type":"Transform"},
+                {"type":"Water"},
+                {"type":"Material","albedo":[0.1,0.2,0.3]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(with_material), ["water_with_mesh"]);
+
+        // Water on its own, with nothing else to say: valid, and a flat
+        // reflective surface is exactly what it means.
+        let alone = r#"{"name":"s","entities":[
+            {"name":"Pond","components":[
+                {"type":"Transform","scale":[10.0,1.0,10.0]},
+                {"type":"Water"}
+            ]}
+        ]}"#;
+        assert!(validate_source(alone, "test.json").is_empty());
+    }
+
+    #[test]
+    fn rejects_waves_that_would_fold_the_surface() {
+        // Gerstner's constraint, and the one number an author cannot infer from
+        // a single wave: each is legal, the sum is not.
+        let source = r#"{"name":"s","entities":[
+            {"name":"Sea","components":[
+                {"type":"Transform"},
+                {"type":"Water","waves":[
+                    {"wavelength":6.0,"amplitude":0.4,"steepness":0.7},
+                    {"wavelength":2.0,"amplitude":0.2,"steepness":0.5}
+                ]}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(
+            errors.iter().map(|e| e.error).collect::<Vec<_>>(),
+            ["water_waves_self_intersect"]
+        );
+        // The message has to carry the arithmetic: the author needs to know
+        // which numbers to scale, not merely that something is too steep.
+        assert!(errors[0].message.contains("1.2"), "{}", errors[0].message);
+        assert!(
+            errors[0].message.contains("0.7 + 0.5"),
+            "{}",
+            errors[0].message
+        );
+
+        // Exactly 1 is the boundary and is allowed: it is the point where the
+        // surface first has a vertical tangent, not where it folds.
+        let boundary = source.replace("0.5}", "0.3}");
+        assert!(validate_source(&boundary, "test.json").is_empty());
+    }
+
+    #[test]
+    fn the_wave_list_is_capped_by_the_schema() {
+        // The cap lives in two places — `water::MAX_WAVES` sizes the shader's
+        // uniform array, `#[schemars(length(max = ...))]` rejects the scene —
+        // and they have to be the same number, or a scene would validate and
+        // then silently lose waves at the pipeline.
+        let schema = crate::schema::component_schema();
+        let water = schema["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["properties"]["type"]["const"] == "Water")
+            .expect("Water is a published component");
+        assert_eq!(
+            water["properties"]["waves"]["maxItems"].as_u64(),
+            Some(crate::water::MAX_WAVES as u64),
+            "the published cap must match the one the renderer packs for"
+        );
+
+        let one = r#"{"wavelength":2.0,"amplitude":0.1,"steepness":0.05}"#;
+        let waves = vec![one; crate::water::MAX_WAVES + 1].join(",");
+        let source = format!(
+            r#"{{"name":"s","entities":[
+                {{"name":"Sea","components":[
+                    {{"type":"Transform"}},
+                    {{"type":"Water","waves":[{waves}]}}
+                ]}}
+            ]}}"#
+        );
+        assert_eq!(codes_of(&source), ["value_out_of_range"]);
     }
 
     #[test]
