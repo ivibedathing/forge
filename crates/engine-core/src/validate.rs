@@ -241,6 +241,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut has_mesh = false;
         let mut mesh_path: Option<String> = None;
         let mut tree_path: Option<String> = None;
+        let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
         let mut has_transform = false;
         let mut scale = glam::Vec3::ONE;
@@ -326,6 +327,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 }
                 Some(ComponentData::Water(w)) => {
                     water = Some((w, component_path));
+                }
+                Some(ComponentData::Cloud(_)) => {
+                    cloud_path = Some(component_path);
                 }
                 _ => {}
             }
@@ -534,6 +538,36 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             );
         }
 
+        // ── Cloud entity checks (M20) ─────────────────────────────────
+        //
+        // A `Cloud` grows the entity's geometry and shades it with its own
+        // fields, so a `Mesh` or a `Material` beside it is a second, silently
+        // ignored answer to what this entity is — `water_with_mesh`'s reasoning,
+        // and an error for the same reason: the two authorings look identical in
+        // the file and nothing in the render says which one lost.
+        if let Some(path) = &cloud_path {
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::CLOUD_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a Cloud component and also {extras}; \
+                             a Cloud grows its own geometry (sized by Transform.scale) \
+                             and carries its own colours — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Cloud"),
+                );
+            }
+        }
+
         // ── Water surface checks (M18) ────────────────────────────────
         if let Some((water, path)) = &water {
             // A `Water` entity generates its own grid and shades it with its
@@ -597,9 +631,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         // Legal but almost certainly wrong: dead data from editing the wrong
         // entity. A warning, because rendering it is well-defined. A `Tree`
         // counts as geometry here — the entity's Material is its bark. A Water
-        // entity's Material is already a hard error above, so it does not also
-        // collect this.
-        if !has_mesh && tree_path.is_none() && water.is_none() {
+        // or Cloud entity's Material is already a hard error above, so it does
+        // not also collect this: one mistake, one diagnostic.
+        if !has_mesh && tree_path.is_none() && water.is_none() && cloud_path.is_none() {
             for material_path in material_paths {
                 errors.push(
                     cx.err(
@@ -1407,6 +1441,32 @@ fn check_component(
                     )
                     .entity(entity)
                     .component("Tree")
+                    .field("levels"),
+                );
+            }
+        }
+
+        // Lobes are exponential in `levels` exactly as branches are, and the
+        // ceiling is reachable by one keystroke: `levels: 3, children: 8` at 32
+        // base lobes is 18,720 lobes. Refusing names a number the author can
+        // act on; growing it is a command that looks like it hung.
+        ComponentData::Cloud(ref cloud) => {
+            let vertices = crate::cloud::vertex_count(cloud);
+            if vertices > crate::cloud::MAX_CLOUD_VERTICES {
+                errors.push(
+                    cx.err(
+                        codes::CLOUD_TOO_COMPLEX,
+                        format!(
+                            "this Cloud would generate {vertices} vertices ({} lobes), \
+                             over the {} the engine will grow; lower \"levels\", \
+                             \"children\", \"lobes\", or \"detail\"",
+                            crate::cloud::lobe_count(cloud),
+                            crate::cloud::MAX_CLOUD_VERTICES
+                        ),
+                        component_path,
+                    )
+                    .entity(entity)
+                    .component("Cloud")
                     .field("levels"),
                 );
             }

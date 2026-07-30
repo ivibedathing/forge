@@ -612,6 +612,7 @@ fn diff_render(
     let (actual, adapter) = engine_render::offscreen::render_with_adapter(
         &items,
         &scene.water_items(),
+        &scene.cloud_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
@@ -789,6 +790,7 @@ fn filmstrip(
         let rendered = engine_render::offscreen::render(
             &items,
             &scene.water_items(),
+            &scene.cloud_items(),
             &[],
             &camera,
             camera_transform.matrix(),
@@ -921,6 +923,7 @@ fn screenshot(
     let image = engine_render::offscreen::render(
         &items,
         &scene.water_items(),
+        &scene.cloud_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
@@ -966,6 +969,7 @@ fn run_scene(
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
     let water = scene.water_items();
+    let clouds = scene.cloud_items();
     // The *base* values: the viewer folds daylight onto these every frame
     // against its own fixed-step clock, so what it stores is the scene as
     // authored, not the scene at one instant.
@@ -1033,6 +1037,7 @@ fn run_scene(
         Content::Scene {
             items,
             water,
+            clouds,
             camera,
             camera_model: camera_transform.matrix(),
             lights,

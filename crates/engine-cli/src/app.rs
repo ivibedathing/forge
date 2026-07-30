@@ -35,6 +35,10 @@ pub enum Content {
         /// simulation runs — a script can move a surface — and static
         /// otherwise, exactly like `items`.
         water: Vec<engine_core::scene::WaterItem>,
+        /// The scene's clouds (M20), refreshed on the same terms. Their
+        /// drift runs on the simulated clock below, so a viewer session and
+        /// a screenshot at the same step show the same sky.
+        clouds: Vec<engine_core::scene::CloudItem>,
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
@@ -304,6 +308,7 @@ impl ViewerApp {
                 Content::Scene {
                     items,
                     water,
+                    clouds,
                     camera,
                     camera_model,
                     lights,
@@ -408,6 +413,7 @@ impl ViewerApp {
                         *items = fresh;
                     }
                     *water = sim.scene.water_items();
+                    *clouds = sim.scene.cloud_items();
                     *hud_items = sim.scene.hud_items();
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
@@ -470,6 +476,7 @@ impl ViewerApp {
                             target_size: [width, height],
                             items,
                             water,
+                            clouds,
                             particles: &particles,
                             view_projection,
                             camera_position: camera_model.w_axis.truncate(),

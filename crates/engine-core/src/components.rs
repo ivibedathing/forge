@@ -1492,6 +1492,171 @@ impl Default for Water {
     }
 }
 
+/// A cloud: a cumulus, a raft of stratocumulus, a storm anvil, a torn wisp.
+///
+/// A recipe rather than a mesh reference, like [`Tree`] — the engine grows it
+/// into a cluster of lobes, each of which grows smaller lobes on itself, seeded
+/// so two clouds with the same parameters and different seeds are different
+/// clouds. The entity owns that geometry, sized by `Transform.scale` like a
+/// water surface, so a `Cloud` entity carries **no** `Mesh` and **no**
+/// `Material` (`cloud_with_mesh`). A cloud is not a GGX surface: what a
+/// `Material` describes, `color` / `shade_color` / `density` / `feather`
+/// describe instead.
+///
+/// Non-uniform scale is the normal case, not an edge case — `scale: [24, 12,
+/// 24]` is what makes a cumulus wider than it is tall, and it oblates the lobes
+/// with it.
+///
+/// Shading is three cheap stand-ins for multiple scattering, none of which is
+/// volumetric: wrapped diffuse between `shade_color` and `color`, a forward-
+/// scattering silver lining when the camera looks toward the sun, and an alpha
+/// that fades toward each lobe's own silhouette. Clouds do not cast shadows
+/// (the engine has one shadow cascade and it is fitted to the camera, not to a
+/// cloud at altitude) and are not lit by `PointLight`s.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Cloud {
+    /// Seeds every random draw. Two clouds with the same parameters and
+    /// different seeds are different clouds; the same seed always regrows the
+    /// same cloud.
+    pub seed: u32,
+
+    /// Lobes in the base cluster, spread over the footprint on a golden-angle
+    /// spiral. `[1, 32]`; a handful reads as one cumulus, a dozen or more as a
+    /// raft.
+    #[schemars(range(min = 1, max = 32))]
+    pub lobes: u32,
+
+    /// Generations of smaller lobes piled on the base ones. `[0, 3]`: `0` is a
+    /// cluster of plain spheres, `2` reads as cauliflower, `3` is expensive.
+    #[schemars(range(min = 0, max = 3))]
+    pub levels: u32,
+
+    /// Lobes grown on each lobe of the previous generation. `[0, 8]`.
+    #[schemars(range(min = 0, max = 8))]
+    pub children: u32,
+
+    /// Diameter of a base lobe as a fraction of the cloud's own size, `(0, 1]`.
+    /// Large values give a few fat billows, small ones a curdled texture.
+    #[schemars(extend("exclusiveMinimum" = 0.0), range(max = 1.0))]
+    pub lobe_size: f32,
+
+    /// Child lobe radius as a fraction of its parent's, `(0, 1]`. This is the
+    /// dial that makes the silhouette detailed at more than one scale — at 1
+    /// every lobe is the same size and the cloud reads as popcorn.
+    #[schemars(extend("exclusiveMinimum" = 0.0), range(max = 1.0))]
+    pub lobe_ratio: f32,
+
+    /// How much the cloud sits on a flat base, `[0, 1]`. `0` is a puffball with
+    /// lobes scattered through its whole box; `1` seats every lobe on the base
+    /// plane and folds what hangs below onto it.
+    ///
+    /// A cumulus has a flat bottom because condensation begins at one altitude,
+    /// which is why every fair-weather cloud in a field shares a base — it is
+    /// the cheapest of this component's cues and one of the most legible.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub flatten: f32,
+
+    /// How strongly child lobes are biased toward the sky, `[0, 1]`. A cumulus
+    /// is a convection cell: its detail is on top, where the air is still
+    /// rising, and its underside is smooth. At `0` children scatter in every
+    /// direction and the cloud reads as a sea urchin.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub rise: f32,
+
+    /// Smooth radial distortion of each lobe, as a fraction of its radius.
+    /// `[0, 1)`; a little is what stops a lobe from reading as a ball.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub wobble: f32,
+
+    /// How much every jittered quantity — lobe radius, placement, child size —
+    /// varies, as a fraction. `[0, 1)`; `0` is a diagram.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub jitter: f32,
+
+    /// Icosphere subdivisions per lobe: 12, 42, 162 or 642 vertices. `[0, 3]`.
+    /// This is the quality dial, and `2` is plenty for anything at cloud
+    /// distance.
+    #[schemars(range(min = 0, max = 3))]
+    pub detail: u32,
+
+    /// How opaque the cloud is where it is thickest, `[0, 1]`. Lobes do not
+    /// write depth, so overlapping ones accumulate — which is a cheap stand-in
+    /// for optical depth, and why a wisp wants a much lower value than a storm.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub density: f32,
+
+    /// How crisp the cloud's edges are, `[0, 8]`. Alpha follows
+    /// `1 - (1 - facing)^feather` as the surface turns away from the camera, so
+    /// **higher is crisper** and low values are wispy: 1 fades the whole
+    /// surface proportionally, 3 keeps the body opaque and thins only the last
+    /// few degrees before the silhouette.
+    ///
+    /// It is doing two jobs. A real cloud's silhouette is where it thins out,
+    /// not where its geometry stops — and the same fade is what hides the
+    /// boundaries *between* two interpenetrating lobes, since each of them
+    /// vanishes exactly where its surface turns away.
+    #[schemars(range(min = 0.0, max = 8.0))]
+    pub feather: f32,
+
+    /// Linear RGB of the sunlit side. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// Linear RGB of the self-shadowed side, each component `[0, 1]`.
+    ///
+    /// Blue-grey rather than grey by default, and that is the point: the
+    /// underside of a cloud is lit by the sky above it, not by the sun it is
+    /// hiding from. Darkening this toward slate is most of what makes a storm.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub shade_color: Vec3,
+
+    /// World-space metres per second the cloud travels, evaluated against the
+    /// scene clock (`--time`, else `steps / timestep_hz`) — so a drifting sky
+    /// is as reproducible as a wave, and a script is not needed to move it.
+    ///
+    /// The cloud's *shape* never changes with time. Regenerating lobes per
+    /// frame would mint a new mesh every frame and defeat the renderer's upload
+    /// cache; in this engine, generated geometry is made once.
+    #[schemars(with = "[f32; 3]")]
+    pub drift: Vec3,
+
+    /// Metres after which a drifting cloud recycles to where it started. `>= 0`;
+    /// `0` (the default) lets it drift away for good.
+    ///
+    /// Wrapping *teleports* the cloud, so it wants to be wider than the view or
+    /// far enough out that fog has already eaten it before it jumps.
+    #[schemars(range(min = 0.0))]
+    pub drift_wrap: f32,
+}
+
+impl Default for Cloud {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            lobes: 6,
+            levels: 2,
+            children: 3,
+            lobe_size: 0.42,
+            lobe_ratio: 0.55,
+            // Absent is off, as everywhere else in the engine: a bare
+            // `{"type": "Cloud"}` is a puffball, and a flat base is asked for
+            // by name.
+            flatten: 0.0,
+            rise: 0.35,
+            wobble: 0.12,
+            jitter: 0.3,
+            detail: 2,
+            density: 0.9,
+            feather: 3.0,
+            color: Vec3::new(1.0, 0.98, 0.95),
+            shade_color: Vec3::new(0.42, 0.46, 0.58),
+            drift: Vec3::ZERO,
+            drift_wrap: 0.0,
+        }
+    }
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -1564,6 +1729,7 @@ components!(
     ParticleEmitter,
     Tree,
     Water,
+    Cloud,
 );
 
 #[cfg(test)]
@@ -1657,7 +1823,8 @@ mod tests {
                 "HudRect",
                 "ParticleEmitter",
                 "Tree",
-                "Water"
+                "Water",
+                "Cloud"
             ]
         );
     }
