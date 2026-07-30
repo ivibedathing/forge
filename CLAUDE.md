@@ -792,7 +792,7 @@ from memory. winit is pinned to the **0.30** stable line; 0.31 is still beta.
 ## Verification
 
 **Run the CLI as `bin/engine`, not `cargo run -p engine-cli --`.** The shim checks whether any
-source is newer than the binary (a find, ~0.15s), rebuilds only then, and execs; cargo's freshness
+source is newer than the binary (a find, ~0.02s warm), rebuilds only then, and execs; cargo's freshness
 walk over this workspace costs ~8s *warm* on every call, which is the difference between a loop
 worth running and one worth avoiding. Arguments pass through untouched and stdout stays clean, so
 `docs/cli-contract.md` describes the shim exactly as it describes the binary; a rebuild that fails
