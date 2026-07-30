@@ -36,6 +36,7 @@ fn render_at(source: &str, time: f32) -> Image {
     offscreen::render(
         &items,
         &scene.water_items(),
+        &scene.cloud_items(),
         &scene.road_items(),
         &[],
         &camera,

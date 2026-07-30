@@ -397,6 +397,35 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        // A clip on a tree parameter regrows the tree's mesh every step it
+        // changes — legal, deterministic, and not free. `seed`, `levels`,
+        // `branches`, `whorl`, `sides`, `segments`, `leaves_per_branch`, and
+        // `leaf` are absent for the usual reason: integers and string enums
+        // are not numbers this function can interpolate into.
+        "Tree" => {
+            let Ok(mut c) = world.get::<&mut Tree>(entity) else {
+                return false;
+            };
+            match field {
+                "height" => c.height = scalar,
+                "trunk_radius" => c.trunk_radius = scalar,
+                "branch_angle" => c.branch_angle = scalar,
+                "branch_twist" => c.branch_twist = scalar,
+                "branch_start" => c.branch_start = scalar,
+                "length_ratio" => c.length_ratio = scalar,
+                "length_falloff" => c.length_falloff = scalar,
+                "radius_ratio" => c.radius_ratio = scalar,
+                "taper" => c.taper = scalar,
+                "flare" => c.flare = scalar,
+                "crook" => c.crook = scalar,
+                "tropism" => c.tropism = scalar,
+                "jitter" => c.jitter = scalar,
+                "leaf_size" => c.leaf_size = scalar,
+                "leaf_color" => c.leaf_color = v3,
+                "leaf_roughness" => c.leaf_roughness = scalar,
+                _ => return false,
+            }
+        }
         "Water" => {
             let Ok(mut c) = world.get::<&mut Water>(entity) else {
                 return false;
@@ -421,27 +450,58 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        // A clip on a cloud's *shape* regrows its lobes every step it changes,
+        // which is legal, deterministic and not free — the shading fields below
+        // are uniforms and cost nothing. `seed`, `lobes`, `levels`, `children`
+        // and `detail` are absent for the usual reason: integers are not
+        // numbers this function can interpolate into.
+        "Cloud" => {
+            let Ok(mut c) = world.get::<&mut Cloud>(entity) else {
+                return false;
+            };
+            match field {
+                "lobe_size" => c.lobe_size = scalar,
+                "lobe_ratio" => c.lobe_ratio = scalar,
+                "flatten" => c.flatten = scalar,
+                "rise" => c.rise = scalar,
+                "wobble" => c.wobble = scalar,
+                "jitter" => c.jitter = scalar,
+                "density" => c.density = scalar,
+                "feather" => c.feather = scalar,
+                "color" => c.color = v3,
+                "shade_color" => c.shade_color = v3,
+                "drift" => c.drift = v3,
+                "drift_wrap" => c.drift_wrap = scalar,
+                _ => return false,
+            }
+        }
+        "Terrain" => {
+            let Ok(mut c) = world.get::<&mut Terrain>(entity) else {
+                return false;
+            };
+            match field {
+                // Appearance only. The shape fields are listed in
+                // `NOT_ANIMATABLE` and never reach here — regenerating the
+                // surface every frame is not something a clip should be able to
+                // ask for by accident.
+                "texture_scale" => c.texture_scale = scalar,
+                "color_variation" => c.color_variation = scalar,
+                "bump" => c.bump = scalar,
+                _ => return false,
+            }
+        }
         "Road" => {
             let Ok(mut c) = world.get::<&mut Road>(entity) else {
                 return false;
             };
             match field {
-                // `points`, `closed` and `markings` are absent for the reason
-                // `Water.waves` is: an array of objects, a bool and a nested
-                // object are shapes a numeric clip cannot express.
+                // Appearance only, for terrain's reason: a road's *shape*
+                // fields are in `NOT_ANIMATABLE`. `points`, `closed` and
+                // `markings` never arrive here at all — an array of objects, a
+                // bool and a nested object are shapes a numeric clip cannot
+                // express, the same as `Water.waves`.
                 //
-                // The geometry fields below *are* settable, because the drift
-                // test's rule is that a validated clip must never silently do
-                // nothing. They are expensive when animated: the ribbon is
-                // regenerated and re-uploaded on every frame the value changes,
-                // where the colour fields are read per pixel and cost nothing.
-                // Widening a road over time is a legitimate thing to ask for;
-                // doing it every frame is a thing to know about.
-                "width" => c.width = scalar,
-                "shoulder" => c.shoulder = scalar,
-                "skirt" => c.skirt = scalar,
-                "segment_length" => c.segment_length = scalar,
-                "segment_angle" => c.segment_angle = scalar,
+                // Repainting a road *is* free: these four are read per pixel.
                 "roughness" => c.roughness = scalar,
                 "color" => c.color = v3,
                 "shoulder_color" => c.shoulder_color = v3,
@@ -454,9 +514,44 @@ pub fn set_field(
     true
 }
 
+/// Numeric fields that are nonetheless not animatable, and why.
+///
+/// A terrain's *shape* is generated on the CPU and cached as one `Arc<MeshData>`
+/// per distinct patch, which the renderer in turn keys its uploaded vertex
+/// buffers on (M15). A clip driving one of these would mint a new surface every
+/// frame: a full regeneration (a 256² patch is 330 000 noise evaluations), a new
+/// GPU upload, and — because the renderer holds an idle entry for 240 frames —
+/// hundreds of megabytes of vertex buffers for a scene that looks like it is
+/// merely undulating.
+///
+/// Refusing is better than paying that quietly. Because `field_shape` is the one
+/// gate, a clip aimed here fails validation with `unknown_property` and a
+/// `did_you_mean` naming the fields that *do* animate, rather than silently
+/// doing nothing — which is exactly what the drift test in this module exists to
+/// prevent. Terrain's appearance (`texture_scale`, `color_variation`, `bump`)
+/// animates freely; it costs nothing but a uniform.
+const NOT_ANIMATABLE: &[(&str, &str)] = &[
+    ("Terrain", "height"),
+    ("Terrain", "feature_scale"),
+    ("Terrain", "persistence"),
+    ("Terrain", "warp"),
+    // A road's shape is generated and `Arc`-cached exactly like a terrain
+    // patch's, so animating one of these would mint a new ribbon — and a new
+    // GPU upload, and a new trimesh collider — every frame it changed.
+    ("Road", "width"),
+    ("Road", "shoulder"),
+    ("Road", "skirt"),
+    ("Road", "segment_length"),
+    ("Road", "segment_angle"),
+];
+
 /// Whether a field is vector-shaped in the published schema (3-element
 /// array). Used by clip validation for `type_mismatch`.
 fn field_shape(schema: &serde_json::Value, component: &str, field: &str) -> Option<bool> {
+    if NOT_ANIMATABLE.contains(&(component, field)) {
+        return None;
+    }
+
     let variant = schema["oneOf"]
         .as_array()?
         .iter()
@@ -908,7 +1003,10 @@ mod tests {
                 {"type":"HudText","text":"x"},
                 {"type":"HudRect","size":[1.0,1.0]},
                 {"type":"ParticleEmitter"},
+                {"type":"Tree"},
                 {"type":"Water"},
+                {"type":"Cloud"},
+                {"type":"Terrain"},
                 {"type":"Road"}
             ]}
         ]}"#;

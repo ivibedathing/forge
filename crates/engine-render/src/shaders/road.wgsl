@@ -1,4 +1,4 @@
-// Road shading and markings (M19).
+// Road shading and markings (M23).
 //
 // The geometry is one continuous ribbon — asphalt, shoulders and the
 // embankment skirt are the same triangles — and every marking on it is

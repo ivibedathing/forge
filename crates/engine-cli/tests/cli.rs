@@ -1206,7 +1206,7 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     // across the line onto lap 4, with three completed timed laps behind it
     // (last 63.70 s, best 59.47 s — a lap of this circuit is around a minute).
     // These strings are golden the way traces are: a drivetrain, geometry or
-    // timing change shows up here first. They moved in M19 because the road
+    // timing change shows up here first. They moved in M23 because the road
     // did: the car now drives a continuous ribbon instead of 207 plates, so it
     // carries speed through corners the plate road scrubbed off.
     assert_eq!(
@@ -1542,6 +1542,200 @@ fn the_m17_fire_fixture_pins_additive_flame_and_firelight() {
 
     std::fs::remove_file(&baked_path).ok();
     std::fs::remove_dir_all(&dir).ok();
+}
+
+// ── trees (M23) ────────────────────────────────────────────────────────
+
+/// The M23 fixture: six procedural trees — two broadleaves differing only in
+/// `seed`, a whorled conifer, a leafless snag, a scrub, and the no-randomness
+/// diagram tree — pinned bit-exactly.
+///
+/// Randomness and a pinned PNG are the two halves of the same promise: a tree
+/// is *varied* (the twins are visibly different trees) and *reproducible* (the
+/// same file grows the same mesh, on this machine, forever). The generator's
+/// RNG is spelled out in-repo for exactly this reason, so no dependency
+/// upgrade can reshape a forest.
+///
+/// The second half needs no GPU and pins the two ways a Tree can be authored
+/// wrong: geometry it does not own, and geometry too big to grow.
+#[test]
+fn the_m19_tree_fixture_pins_seeded_procedural_growth() {
+    let scene = repo_path("examples/scenes/verify/m19_trees.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m19_trees.png");
+
+    let validate = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0), "{validate:?}");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+    } else {
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+    }
+
+    // A Tree *is* the entity's geometry, so a Mesh beside it would be a second
+    // opinion about what the entity looks like.
+    let clash = scene_file(
+        "tree-with-mesh",
+        r#"{"name":"clash","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Oak","components":[
+                {"type":"Tree"},
+                {"type":"Mesh","asset":"builtin:cube"}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&clash).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["tree_with_mesh", "validation_failed"]
+    );
+
+    // Branching is exponential, so a plausible-looking edit can ask for a
+    // billion vertices. It gets a located error rather than a hung render.
+    let huge = scene_file(
+        "tree-too-complex",
+        r#"{"name":"huge","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Oak","components":[
+                {"type":"Tree","levels":4,"branches":12,"sides":16,"segments":12}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&huge).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["tree_too_complex", "validation_failed"]
+    );
+}
+
+// ── clouds (M20) ───────────────────────────────────────────────────────
+
+/// The M20 fixture: seven procedural clouds — two cumulus differing only in
+/// `seed`, a stratocumulus raft, a storm anvil, a torn wisp, a drifting cloud,
+/// and the no-randomness diagram cloud — pinned bit-exactly at `--steps 120`.
+///
+/// The baseline pins three things at once that are easy to break separately: a
+/// cloud is *varied* (the twins are visibly different clouds) and *reproducible*
+/// (the same file grows the same lobes forever, since the RNG is spelled out
+/// in-repo), and `drift` runs on the reproducible clock rather than on wall
+/// time, which is what lets a moving sky sit under a baseline at all. The clock
+/// is pinned from both directions below, exactly as M18 pins water's.
+///
+/// The rest needs no GPU and pins the two ways a Cloud can be authored wrong:
+/// geometry it does not own, and geometry too big to grow.
+#[test]
+fn the_m20_cloud_fixture_pins_seeded_clouds_and_their_clock() {
+    let scene = repo_path("examples/scenes/verify/m20_clouds.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m20_clouds.png");
+
+    let validate = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0), "{validate:?}");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+    } else {
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+
+        // 120 steps at the scene's 60 Hz *is* two seconds: the two flags name
+        // the same instant, and the renderer has one clock.
+        let by_time = engine()
+            .arg("diff-render")
+            .arg(&scene)
+            .arg(&baseline)
+            .args(["--time", "2.0"])
+            .output()
+            .unwrap();
+        assert_eq!(by_time.status.code(), Some(0), "{by_time:?}");
+        let report: serde_json::Value =
+            serde_json::from_str(stdout_of(&by_time).trim()).unwrap();
+        assert_eq!(
+            report["diff_pixels"], 0,
+            "--time 2.0 must render the same sky as --steps 120 at 60 Hz: {report}"
+        );
+
+        // And a scene that says nothing about time renders its clouds where the
+        // file put them, which is a *different* picture — otherwise the two
+        // assertions above would pass for the trivial reason that nothing drifts.
+        let at_rest = engine()
+            .arg("diff-render")
+            .arg(&scene)
+            .arg(&baseline)
+            .output()
+            .unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(stdout_of(&at_rest).trim()).unwrap();
+        assert_eq!(
+            report["pass"], false,
+            "a cloud at t=0 should not match a baseline blessed at t=2: {report}"
+        );
+    }
+
+    // A Cloud *is* the entity's geometry and carries its own colours, so a Mesh
+    // or a Material beside it is a second, silently ignored opinion.
+    let clash = scene_file(
+        "cloud-with-mesh",
+        r#"{"name":"clash","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Cumulus","components":[
+                {"type":"Cloud"},
+                {"type":"Material"}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&clash).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["cloud_with_mesh", "validation_failed"]
+    );
+
+    // Lobes are exponential in `levels`, so a plausible-looking edit can ask
+    // for millions of vertices. It gets a located error naming a real number,
+    // rather than a render that looks like it hung.
+    let huge = scene_file(
+        "cloud-too-complex",
+        r#"{"name":"huge","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Storm","components":[
+                {"type":"Cloud","lobes":32,"levels":3,"children":8,"detail":3}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&huge).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["cloud_too_complex", "validation_failed"]
+    );
 }
 
 // ── collision (M12) ────────────────────────────────────────────────────
@@ -2110,6 +2304,28 @@ fn the_showcase_tour_keeps_its_crates_on_the_ground() {
 
     // Five seconds in, long before anything is meant to move, the stack is
     // still standing where the file put it.
+    //
+    // Measured against each body's *authored* height rather than a world
+    // constant. Since M22 the ground is terrain, so "resting" is a different
+    // number for every entity and a fixed floor would only be pinning where
+    // this particular hillside happens to sit — the claim is that nothing sank
+    // through whatever it was standing on.
+    let authored: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&scene).unwrap()).unwrap();
+    let authored_y = |name: &str| -> f64 {
+        authored["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == name)
+            .and_then(|e| e["components"].as_array())
+            .unwrap()
+            .iter()
+            .find(|c| c["type"] == "Transform")
+            .and_then(|t| t["position"][1].as_f64())
+            .unwrap_or_else(|| panic!("{name} has no authored height"))
+    };
+
     let resting: Vec<serde_json::Value> = trace
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
@@ -2121,9 +2337,11 @@ fn the_showcase_tour_keeps_its_crates_on_the_ground() {
             .find(|l| l["entity"] == name)
             .unwrap_or_else(|| panic!("{name} left the trace entirely"));
         let y = row["position"][1].as_f64().unwrap();
+        let start = authored_y(name);
         assert!(
-            y > 0.2,
-            "{name} sank to y={y} — a resting body lost its ground contact"
+            y > start - 0.3,
+            "{name} sank to y={y} from an authored {start} — \
+             a resting body lost its ground contact"
         );
     }
 }
@@ -2199,7 +2417,218 @@ fn the_m18_water_fixture_pins_waves_depth_and_foam() {
     );
 }
 
-/// The M19 fixture: a closed circuit as one `Road` entity — asphalt, shoulders,
+/// M21: one scene file, five times of day.
+///
+/// The fixture runs a 24-second day (`day_length: 24.0`), so an hour is a
+/// second and step `hour * 60` at 60 Hz is that hour — which is why the
+/// baselines are named for the clock and not for a step count. Five renders
+/// from *one* file is the point: the day is a pure function of the clock, so
+/// there is nothing to author per time of day.
+///
+/// The lamp is what makes the night baselines more than a dark picture. Its
+/// `PointLight` starts at intensity 0 and `scripts/m21_lamp.rhai` raises it off
+/// `world.sun_altitude()`, so the two night frames are lit by something that
+/// read the clock. That also means these renders need `--steps` rather than
+/// `--time`: scripts run on the step loop, and a `--time` render never steps.
+#[test]
+fn the_m21_daylight_fixture_pins_a_whole_day_from_one_file() {
+    let scene = repo_path("examples/scenes/verify/m21_daylight.json");
+
+    let validate = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0), "{validate:?}");
+
+    // (label, steps) — night, sunrise, noon, sunset, night again.
+    for (label, steps) in [
+        ("0200", "120"),
+        ("0630", "390"),
+        ("1200", "720"),
+        ("1830", "1110"),
+        ("2200", "1320"),
+    ] {
+        let baseline = repo_path(&format!(
+            "examples/scenes/verify/baselines/m21_daylight_{label}.png"
+        ));
+        let diff = engine()
+            .arg("diff-render")
+            .arg(&scene)
+            .arg(&baseline)
+            .args(["--steps", steps])
+            .output()
+            .unwrap();
+        if !diff.status.success() {
+            let stderr = String::from_utf8_lossy(&diff.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "diff-render failed for a non-GPU reason at {label}: {stderr}"
+            );
+            eprintln!("skipping render pin: no usable GPU on this machine");
+            return;
+        }
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "at {label}: {report}");
+        assert_eq!(report["diff_pixels"], 0, "at {label}: {report}");
+    }
+
+    // The times have to actually differ, or the five assertions above would
+    // all pass for the trivial reason that the clock is ignored.
+    let noon = repo_path("examples/scenes/verify/baselines/m21_daylight_1200.png");
+    let at_night = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&noon)
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&at_night).trim()).unwrap();
+    assert_eq!(
+        report["pass"], false,
+        "02:00 must not match a baseline blessed at noon: {report}"
+    );
+}
+
+/// M21: the two ways a scene can disagree with its own daylight block.
+///
+/// GPU-free, so it runs everywhere the rest of the suite's validation tests do.
+#[test]
+fn daylight_owns_the_sun_and_says_so() {
+    // Two owners of one sun (invariant 8).
+    let clash = scene_file(
+        "daylight-and-sun",
+        r#"{"name":"clash","daylight":{},"entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Sun","components":[
+                {"type":"Transform","rotation":[-40.0,0.0,0.0]},
+                {"type":"DirectionalLight"}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&clash).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["daylight_and_directional_light", "validation_failed"]
+    );
+
+    // An authored sky under `drives_sky` is a warning, not a failure — the
+    // scene still renders, it just renders the day's colors.
+    let overridden = scene_file(
+        "daylight-overrides-sky",
+        r#"{"name":"warn",
+            "daylight":{},
+            "environment":{"sky":true,"sky_zenith":[0.1,0.2,0.3]},
+            "entities":[
+                {"name":"Cam","components":[{"type":"Camera","active":true}]}
+            ]}"#,
+    );
+    let output = engine().arg("validate").arg(&overridden).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "a warning must not fail: {output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["daylight_overrides_sky"]
+    );
+
+    // ...and --strict promotes it, like every other warning.
+    let strict = engine()
+        .arg("validate")
+        .arg(&overridden)
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(strict.status.code(), Some(1), "{strict:?}");
+}
+/// M22's fixture: a landscape with relief, a generated surface material, a
+/// trimesh collider taken from that same surface, and props standing on it.
+///
+/// The render pins the whole path at once — the CPU height field, the local
+/// normals the shader lights it by, slope- and height-selected layers, the
+/// detail noise, and the fact that terrain reaches all of this through the mesh
+/// pipeline (so it takes the sun, the shadow map, the sky ambient and the fog
+/// with it).
+///
+/// The rest is what makes such a pin possible. Terrain is a pure function of the
+/// file: unlike water it does not move with the clock, so the *same* baseline
+/// has to match whether the scene is asked for at step 0 or step 120 — every
+/// pixel that differs between those two is the ball falling, not the ground
+/// drifting. And the collider has to come from the surface: the dropped sphere
+/// is authored in mid-air, so if terrain were invisible to physics it would fall
+/// through the world and out of frame.
+#[test]
+fn the_m22_terrain_fixture_pins_relief_layers_and_collision() {
+    let scene = repo_path("examples/scenes/verify/m22_terrain.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m22_terrain.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+
+    // The ball has to land *on* the ground rather than through it, which is the
+    // one claim a picture of a hillside cannot make on its own: the collider is
+    // generated from the same height field the renderer draws.
+    let simulate = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    assert_eq!(simulate.status.code(), Some(0), "{simulate:?}");
+
+    let trace_dir =
+        std::env::temp_dir().join(format!("engine-m22-{}", std::process::id()));
+    std::fs::create_dir_all(&trace_dir).unwrap();
+    let trace_path = trace_dir.join("terrain.jsonl");
+    let traced = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "120"])
+        .arg("--trace")
+        .arg(&trace_path)
+        .output()
+        .unwrap();
+    assert_eq!(traced.status.code(), Some(0), "{traced:?}");
+
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(&trace_path)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let ball = rows
+        .iter()
+        .rev()
+        .find(|row| row["entity"] == "Dropped")
+        .expect("the dropped sphere should appear in the trace");
+    let y = ball["position"][1].as_f64().unwrap();
+
+    // It starts at y = 2.0 over ground about 4 m below it. Landing *on* the
+    // hillside puts it near -3.8; still up at 2 means gravity never ran, and
+    // far below the ground means the trimesh collider was never built from the
+    // terrain and it fell through the world.
+    assert!(
+        y > -5.0,
+        "the ball fell through the terrain — it ended at y = {y}: {ball}"
+    );
+    assert!(
+        y < -2.0,
+        "the ball never fell — it ended at y = {y}: {ball}"
+    );
+}
+
+/// The M23 fixture: a closed circuit as one `Road` entity — asphalt, shoulders,
 /// an embankment, edge lines, a dashed centre line fitted to the lap, kerbs on
 /// the two corners tight enough to ask for them, and a start line at `v = 0`.
 ///
@@ -2215,14 +2644,14 @@ fn the_m18_water_fixture_pins_waves_depth_and_foam() {
 /// `FIX_INTERNAL_EDGES` and a body resting on coplanar triangles was flung
 /// sideways by an edge contact.
 #[test]
-fn the_m19_road_fixture_pins_markings_and_a_drivable_surface() {
-    let scene = repo_path("examples/scenes/verify/m19_road.json");
-    let baseline = repo_path("examples/scenes/verify/baselines/m19_road.png");
+fn the_m23_road_fixture_pins_markings_and_a_drivable_surface() {
+    let scene = repo_path("examples/scenes/verify/m23_road.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m23_road.png");
 
     // Physics first: it needs no GPU, so it runs on every machine. Bake next
     // to the scene so relative asset paths keep resolving.
     let bake = repo_path(&format!(
-        "examples/scenes/verify/.m19-bake-test-{}.json",
+        "examples/scenes/verify/.m23-bake-test-{}.json",
         std::process::id()
     ));
     let simulated = engine()

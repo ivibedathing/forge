@@ -1,4 +1,4 @@
-//! Roads (M19): turning a polygon of corners into a continuous drivable
+//! Roads (M23): turning a polygon of corners into a continuous drivable
 //! ribbon, and the surface coordinates its markings are painted in.
 //!
 //! A [`Road`] is authored as a closed or open polygon whose vertices carry a

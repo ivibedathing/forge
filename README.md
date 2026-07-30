@@ -43,10 +43,26 @@ git clone https://github.com/ivibedathing/forge
 cd forge
 
 cargo build
-cargo run -p engine-cli -- validate examples/scenes/demo_scene.json
-cargo run -p engine-cli -- screenshot examples/scenes/demo_scene.json --out /tmp/demo.png
+bin/engine validate examples/scenes/demo_scene.json
+bin/engine screenshot examples/scenes/demo_scene.json --out /tmp/demo.png
 
 cargo test --workspace
+```
+
+`bin/engine` is the CLI without cargo's tax: it checks whether any source is
+newer than the binary (~0.02s warm), rebuilds only if so, and execs. `cargo run -p
+engine-cli --` spends ~8s on freshness checking before every single call, warm
+— which is nothing once and is most of a milestone across the hundreds of
+validate/screenshot/diff-render calls the loop actually makes. Arguments pass
+through untouched, so the contract in `docs/cli-contract.md` describes both.
+
+`bin/verify-baselines` re-diffs every committed baseline against the scene and
+flags that produce it, from the manifest in `examples/scenes/verify/baselines.json`:
+
+```bash
+bin/verify-baselines                      # check them all, NDJSON out, exit 1 on drift
+bin/verify-baselines --filter m19         # one milestone
+bin/verify-baselines --bless --filter m19 # re-bless, after an intended change
 ```
 
 `cargo test --workspace` is the real check, not `cargo build`: the render tests draw offscreen and

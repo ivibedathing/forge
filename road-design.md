@@ -1,4 +1,4 @@
-# Road design (M19)
+# Road design (M23)
 
 Circuits, streets and mountain passes: what a road *is* in a scene file, how it becomes a
 continuous drivable surface, and how its markings learn the shape of the track.
@@ -100,7 +100,10 @@ Geometry comes from the component, so a `Collider` on a road entity needs no `as
 ```
 
 The collider is still an ordinary component, because friction, restitution and collision layers are
-ordinary data and a road that owned them would be a second place to look. `trimesh` on a **fixed**
+ordinary data and a road that owned them would be a second place to look. It is built with parry's
+`FIX_INTERNAL_EDGES`, which is what stops a body resting on the ribbon from eventually catching an
+edge between two coplanar triangles and being flung sideways — and it is applied to road geometry
+only, because switching it on for every trimesh in the engine moves an existing terrain baseline. `trimesh` on a **fixed**
 body is the supported case (M12's `trimesh_on_dynamic_body` still applies — a road is not a falling
 object).
 

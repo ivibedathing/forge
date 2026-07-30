@@ -1,0 +1,211 @@
+{
+  "name": "m21_daylight",
+  "daylight": {
+    "time_of_day": 0.0,
+    "day_length": 24.0,
+    "sun_elevation": 58.0,
+    "sun_azimuth": 12.0,
+    "moon_elevation": 44.0
+  },
+  "environment": {
+    "sky": true,
+    "fog_density": 0.005,
+    "shadows": true,
+    "shadow_distance": 70.0,
+    "samples": 4
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "components": [
+        { "type": "Transform", "position": [0.0, 3.6, 19.0], "rotation": [-9.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 55.0, "near": 0.1, "far": 400.0, "active": true }
+      ]
+    },
+    {
+      "name": "GroundFar",
+      "components": [
+        { "type": "Transform", "position": [0.0, -0.4, -36.0], "scale": [90.0, 0.8, 48.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.28, 0.31, 0.19], "roughness": 0.94 }
+      ]
+    },
+    {
+      "name": "GroundNear",
+      "components": [
+        { "type": "Transform", "position": [0.0, -0.4, 23.0], "scale": [90.0, 0.8, 34.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.28, 0.31, 0.19], "roughness": 0.94 }
+      ]
+    },
+    {
+      "name": "GroundLeft",
+      "components": [
+        { "type": "Transform", "position": [-29.5, -0.4, -3.0], "scale": [31.0, 0.8, 18.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.28, 0.31, 0.19], "roughness": 0.94 }
+      ]
+    },
+    {
+      "name": "GroundRight",
+      "components": [
+        { "type": "Transform", "position": [28.5, -0.4, -3.0], "scale": [33.0, 0.8, 18.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.28, 0.31, 0.19], "roughness": 0.94 }
+      ]
+    },
+    {
+      "name": "PondBed",
+      "components": [
+        { "type": "Transform", "position": [-1.0, -2.4, -3.0], "scale": [26.0, 2.4, 18.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.3, 0.26, 0.18], "roughness": 0.92 }
+      ]
+    },
+    {
+      "name": "Pond",
+      "components": [
+        { "type": "Transform", "position": [-1.0, -0.05, -3.0], "scale": [26.0, 1.0, 18.0] },
+        {
+          "type": "Water",
+          "segments": 160,
+          "waves": [{ "direction": 14.0, "wavelength": 6.0, "amplitude": 0.055, "steepness": 0.34, "speed": 1.7 }, { "direction": -52.0, "wavelength": 2.8, "amplitude": 0.026, "steepness": 0.26, "speed": 1.2 }, { "direction": 68.0, "wavelength": 1.3, "amplitude": 0.01, "steepness": 0.15, "speed": 0.8 }],
+          "detail": 0.5,
+          "detail_scale": 0.6,
+          "roughness": 0.07,
+          "shallow_color": [0.1, 0.24, 0.24],
+          "deep_color": [0.008, 0.04, 0.07],
+          "depth_fade": 2.0,
+          "opacity": 0.94,
+          "crest_foam": 0.26,
+          "shore_foam": 0.32,
+          "foam_color": [0.86, 0.9, 0.92]
+        }
+      ]
+    },
+    {
+      "name": "OakLeft",
+      "components": [
+        { "type": "Transform", "position": [-8.2, 0.0, -16.5] },
+        {
+          "type": "Tree",
+          "seed": 21,
+          "height": 6.4,
+          "trunk_radius": 0.29,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 56.0,
+          "branch_start": 0.32,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 11.0,
+          "jitter": 0.35,
+          "taper": 0.1,
+          "leaf_size": 0.25,
+          "leaves_per_branch": 13,
+          "leaf_color": [0.09, 0.24, 0.08]
+        },
+        { "type": "Material", "albedo": [0.21, 0.15, 0.1], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "OakRight",
+      "components": [
+        { "type": "Transform", "position": [9.4, 0.0, -15.0], "rotation": [0.0, 74.0, 0.0] },
+        {
+          "type": "Tree",
+          "seed": 34,
+          "height": 5.7,
+          "trunk_radius": 0.26,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.65,
+          "length_falloff": 0.3,
+          "tropism": 16.0,
+          "crook": 12.0,
+          "jitter": 0.38,
+          "taper": 0.1,
+          "leaf_size": 0.23,
+          "leaves_per_branch": 12,
+          "leaf_color": [0.1, 0.26, 0.09]
+        },
+        { "type": "Material", "albedo": [0.22, 0.16, 0.11], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "SpruceBack",
+      "components": [
+        { "type": "Transform", "position": [1.0, 0.0, -26.0] },
+        {
+          "type": "Tree",
+          "seed": 5,
+          "height": 8.2,
+          "trunk_radius": 0.24,
+          "levels": 2,
+          "branches": 7,
+          "branch_angle": 74.0,
+          "branch_start": 0.18,
+          "length_ratio": 0.42,
+          "length_falloff": 0.42,
+          "whorl": 5,
+          "tropism": -7.0,
+          "crook": 5.0,
+          "jitter": 0.22,
+          "taper": 0.16,
+          "leaf": "cluster",
+          "leaf_size": 0.34,
+          "leaves_per_branch": 5,
+          "leaf_color": [0.06, 0.17, 0.1]
+        },
+        { "type": "Material", "albedo": [0.18, 0.13, 0.09], "roughness": 0.92 }
+      ]
+    },
+    {
+      "name": "LampPost",
+      "components": [
+        { "type": "Transform", "position": [5.6, 1.85, 6.4], "scale": [0.16, 3.7, 0.16] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.13, 0.13, 0.14], "roughness": 0.6, "metallic": 0.7 }
+      ]
+    },
+    {
+      "name": "LampHead",
+      "components": [
+        { "type": "Transform", "position": [5.6, 3.85, 6.4], "scale": [0.42, 0.42, 0.42] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        {
+          "type": "Material",
+          "albedo": [0.9, 0.86, 0.7],
+          "roughness": 0.35,
+          "emissive": [0.34, 0.27, 0.15]
+        },
+        { "type": "PointLight", "color": [1.0, 0.83, 0.52], "intensity": 0.0, "range": 22.0 },
+        { "type": "Script", "source": "scripts/m21_lamp.rhai" }
+      ]
+    },
+    {
+      "name": "Boulder",
+      "components": [
+        { "type": "Transform", "position": [-4.2, -0.1, 7.6], "scale": [1.5, 1.05, 1.35] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.32, 0.31, 0.29], "roughness": 0.82 }
+      ]
+    },
+    {
+      "name": "Wall",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-10.5, 0.9, 9.5],
+          "rotation": [0.0, 8.0, 0.0],
+          "scale": [5.4, 1.8, 0.5]
+        },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.44, 0.41, 0.36], "roughness": 0.88 }
+      ]
+    }
+  ]
+}

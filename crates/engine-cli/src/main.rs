@@ -586,7 +586,7 @@ fn load_scene(path: &PathBuf) -> Result<Scene> {
     })
 }
 
-/// `engine road-centerline` — publish a road's sampled centerline (M19).
+/// `engine road-centerline` — publish a road's sampled centerline (M23).
 ///
 /// The road's geometry is generated from its polygon of corners, and anything
 /// placed *along* it — a guardrail, a sign, a start light — needs the same
@@ -700,17 +700,20 @@ fn diff_render(
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
+    let render_time = scene_time(time, steps, &scene);
+    let (lights, environment) = scene.resolved_at(render_time);
 
     let (actual, adapter) = engine_render::offscreen::render_with_adapter(
         &items,
         &scene.water_items(),
+        &scene.cloud_items(),
         &scene.road_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
-        scene.lights().resolved(),
-        scene.environment,
-        scene_time(time, steps, &scene),
+        lights,
+        environment,
+        render_time,
         baseline.width,
         baseline.height,
         &scene.hud_items(),
@@ -872,19 +875,23 @@ fn filmstrip(
         };
         engine_core::animation::apply_all(&mut scene, &players, t);
         let items = scene.render_items(&assets)?;
+        let (lights, environment) = scene.resolved_at(t);
         // Filmstrip samples animation time only; particles advance with
         // --steps, which filmstrip does not take, so none are drawn. Water is
         // a pure function of time rather than of stepping, so it *does* move
         // across the strip — a filmstrip of a lake is a filmstrip of its waves.
+        // Daylight is a pure function of time for the same reason, which is
+        // what makes `--start 0 --end 24` a whole day on one sheet.
         let rendered = engine_render::offscreen::render(
             &items,
             &scene.water_items(),
+            &scene.cloud_items(),
             &scene.road_items(),
             &[],
             &camera,
             camera_transform.matrix(),
-            scene.lights().resolved(),
-            scene.environment,
+            lights,
+            environment,
             t,
             tile_width,
             tile_height,
@@ -1006,17 +1013,20 @@ fn screenshot(
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
     let drawn = items.len();
+    let render_time = scene_time(time, steps, &scene);
+    let (lights, environment) = scene.resolved_at(render_time);
 
     let image = engine_render::offscreen::render(
         &items,
         &scene.water_items(),
+        &scene.cloud_items(),
         &scene.road_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
-        scene.lights().resolved(),
-        scene.environment,
-        scene_time(time, steps, &scene),
+        lights,
+        environment,
+        render_time,
         width,
         height,
         &scene.hud_items(),
@@ -1056,9 +1066,14 @@ fn run_scene(
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
     let water = scene.water_items();
+    let clouds = scene.cloud_items();
+    // The *base* values: the viewer folds daylight onto these every frame
+    // against its own fixed-step clock, so what it stores is the scene as
+    // authored, not the scene at one instant.
     let roads = scene.road_items();
     let lights = scene.lights().resolved();
     let environment = scene.environment;
+    let daylight = scene.daylight.clone();
     let hud_items = scene.hud_items();
     let title = format!("engine — {}", scene.name);
 
@@ -1067,7 +1082,12 @@ fn run_scene(
     // clock running to have steps to record against).
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
     let scripts =
-        engine_script::ScriptHost::build(&scene.world, &scene_path, scene.physics.timestep_hz)?;
+        engine_script::ScriptHost::build(
+            &scene.world,
+            &scene_path,
+            scene.physics.timestep_hz,
+            scene.daylight.clone(),
+        )?;
     let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
     let has_emitters =
         engine_core::particles::ParticleSystem::scene_has_emitters(&scene.world);
@@ -1115,11 +1135,13 @@ fn run_scene(
         Content::Scene {
             items,
             water,
+            clouds,
             roads,
             camera,
             camera_model: camera_transform.matrix(),
             lights,
             environment,
+            daylight,
             hud_items,
             simulation,
         },

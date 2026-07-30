@@ -35,7 +35,11 @@ pub enum Content {
         /// simulation runs — a script can move a surface — and static
         /// otherwise, exactly like `items`.
         water: Vec<engine_core::scene::WaterItem>,
-        /// The scene's roads (M19). Refreshed with `water` for the same
+        /// The scene's clouds (M20), refreshed on the same terms. Their
+        /// drift runs on the simulated clock below, so a viewer session and
+        /// a screenshot at the same step show the same sky.
+        clouds: Vec<engine_core::scene::CloudItem>,
+        /// The scene's roads (M23). Refreshed with `water` for the same
         /// reason: a script can move or repaint one.
         roads: Vec<engine_core::scene::RoadItem>,
         camera: Camera,
@@ -45,6 +49,10 @@ pub enum Content {
         /// them so that what you fly around in is what `engine screenshot`
         /// pins — the frame rate differs, the picture must not.
         environment: engine_core::scene::EnvironmentSettings,
+        /// The scene's day/night block, or `None`. Kept as *settings* rather
+        /// than as resolved values because the viewer re-folds it every frame
+        /// against the fixed-step clock — a cycling day has to actually move.
+        daylight: Option<engine_core::daylight::DaylightSettings>,
         /// The scene's HUD components; refreshed per frame when a simulation
         /// runs (clips and scripts can drive them), static otherwise.
         hud_items: engine_core::scene::HudItems,
@@ -303,11 +311,13 @@ impl ViewerApp {
                 Content::Scene {
                     items,
                     water,
+                    clouds,
                     roads,
                     camera,
                     camera_model,
                     lights,
                     environment,
+                    daylight,
                     hud_items,
                     simulation,
                 },
@@ -407,6 +417,7 @@ impl ViewerApp {
                         *items = fresh;
                     }
                     *water = sim.scene.water_items();
+                    *clouds = sim.scene.cloud_items();
                     *roads = sim.scene.road_items();
                     *hud_items = sim.scene.hud_items();
                     // Scripts may drive the camera entity (a chase camera);
@@ -431,6 +442,16 @@ impl ViewerApp {
                         sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32
                     })
                     .unwrap_or(0.0);
+                // Daylight runs on that same clock, for the same reason water
+                // does: the viewer must show what a screenshot at this step
+                // number would show. Re-folded every frame so a cycling day
+                // moves, and a no-op when the scene has no daylight block.
+                let (lights, environment) = engine_core::scene::apply_daylight(
+                    daylight.as_ref(),
+                    simulated_time,
+                    *lights,
+                    *environment,
+                );
                 let (width, height) = target.size();
                 let view_projection = scene_renderer::view_projection(
                     camera,
@@ -460,14 +481,15 @@ impl ViewerApp {
                             target_size: [width, height],
                             items,
                             water,
+                            clouds,
                             roads,
                             particles: &particles,
                             view_projection,
                             camera_position: camera_model.w_axis.truncate(),
                             camera_right: camera_model.x_axis.truncate(),
                             camera_up: camera_model.y_axis.truncate(),
-                            lights: *lights,
-                            environment: *environment,
+                            lights,
+                            environment,
                             // The viewer's water runs on the *simulated* clock,
                             // not on wall time: whole fixed steps taken since
                             // load. Flying around a lake for a minute and then

@@ -147,12 +147,25 @@ registry! {
     INVALID_ENVIRONMENT_VALUE = "invalid_environment_value", Input,
         "an environment setting is outside its meaningful range";
 
+    // ── Daylight (M21) ─────────────────────────────────────────────────
+    INVALID_DAYLIGHT_VALUE = "invalid_daylight_value", Input,
+        "a daylight setting is outside its meaningful range";
+    DAYLIGHT_PALETTE_INVALID = "daylight_palette_invalid", Input,
+        "a daylight palette needs at least two keyframes with strictly increasing hours";
+    DAYLIGHT_AND_DIRECTIONAL_LIGHT = "daylight_and_directional_light", Input,
+        "daylight drives the sun, so the scene may not also author a DirectionalLight";
+
     // ── Water (M18) ────────────────────────────────────────────────────
     WATER_WITH_MESH = "water_with_mesh", Input,
         "a Water entity owns its own surface; it may not also have a Mesh or a Material";
     WATER_WAVES_SELF_INTERSECT = "water_waves_self_intersect", Input,
         "the sum of Water wave steepness exceeds 1, which folds the surface through itself";
 
+    // ── Terrain (M22) ──────────────────────────────────────────────────
+    TERRAIN_WITH_MESH = "terrain_with_mesh", Input,
+        "a Terrain entity owns its own surface; it may not also have a Mesh or a Material";
+    TERRAIN_LAYER_RANGE_INVERTED = "terrain_layer_range_inverted", Input,
+        "a Terrain layer's height or slope range runs backwards, so it covers nothing";
     // ── Roads (M19) ────────────────────────────────────────────────────
     ROAD_WITH_MESH = "road_with_mesh", Input,
         "a Road entity owns its own surface; it may not also have a Mesh or a Material";
@@ -181,6 +194,18 @@ registry! {
     WHEEL_WITH_PHYSICS = "wheel_with_physics", Input,
         "a Wheel entity may not have its own RigidBody or Collider; the chassis owns all collision";
 
+    // ── Trees (M19) ────────────────────────────────────────────────────
+    TREE_WITH_MESH = "tree_with_mesh", Input,
+        "an entity may not have both a Tree and a Mesh; a Tree is the entity's geometry";
+    TREE_TOO_COMPLEX = "tree_too_complex", Input,
+        "a Tree's parameters would generate more vertices than the engine will grow";
+
+    // ── Clouds (M20) ───────────────────────────────────────────────────
+    CLOUD_WITH_MESH = "cloud_with_mesh", Input,
+        "a Cloud entity owns its own geometry; it may not also have a Mesh or a Material";
+    CLOUD_TOO_COMPLEX = "cloud_too_complex", Input,
+        "a Cloud's parameters would generate more vertices than the engine will grow";
+
     // ── Input (M11) ────────────────────────────────────────────────────
     INPUT_UNREADABLE = "input_unreadable", Input,
         "the input timeline file could not be read";
@@ -199,6 +224,8 @@ registry! {
         "warning: a Transform.scale axis of 0 renders invisibly or degenerate";
     UNKNOWN_COLLISION_LAYER = "unknown_collision_layer", Input,
         "warning: collides_with names a layer no collider is a member of";
+    DAYLIGHT_OVERRIDES_SKY = "daylight_overrides_sky", Input,
+        "warning: daylight computes the sky and ambient, so the authored ones are never read";
 
     // ── Scene semantics at command time ───────────────────────────────
     SCENE_UNREADABLE = "scene_unreadable", Input,

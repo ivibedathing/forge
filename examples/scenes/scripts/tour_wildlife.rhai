@@ -31,7 +31,10 @@ fn step(world, step) {
         // Four hops per circuit-radian: the bounce is what reads as "running"
         // on a shape this small at this distance.
         let hop = abs(sin(a * 4.0)) * 0.22;
-        let y = rest[i] + hop;
+        // The ground is terrain now, so a resting height is a height *above the
+        // ground*, not a world coordinate — ask where the ground is. A critter
+        // on a fixed y walks through the hills instead of over them.
+        let y = world.terrain_height("Ground", x, z) + rest[i] + hop;
         world.set_position(names[i], x, y, z);
 
         // Face where the next moment puts them. look_at keeps the horizon

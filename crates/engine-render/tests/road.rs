@@ -1,4 +1,4 @@
-//! Pixel-level tests for M19 roads.
+//! Pixel-level tests for M23 roads.
 //!
 //! Same shape as `water.rs`: render a small scene offscreen through the real
 //! screenshot path, assert on the bytes, and skip cleanly on a machine with no
@@ -37,6 +37,7 @@ fn render(source: &str) -> Image {
     offscreen::render(
         &items,
         &scene.water_items(),
+        &scene.cloud_items(),
         &scene.road_items(),
         &[],
         &camera,

@@ -16,6 +16,7 @@ use crate::components::{
     AmbientLight, Camera, ComponentData, DirectionalLight, HudRect, HudText, Name, PointLight,
     Transform, MAX_POINT_LIGHTS,
 };
+use crate::daylight::DaylightSettings;
 use crate::error::{EngineError, Result};
 use crate::validate;
 
@@ -34,6 +35,12 @@ pub struct SceneFile {
     /// the pre-M16 renderer exactly (M16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentSettings>,
+
+    /// The day/night block (M21) — a sibling of `physics` and `environment`,
+    /// not a field inside either. Absent means the pre-M21 engine exactly:
+    /// nothing computes a sky, and the lights are whatever the entities say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daylight: Option<DaylightSettings>,
 
     pub entities: Vec<EntityDef>,
 }
@@ -154,6 +161,19 @@ pub struct RenderItem {
     pub mesh: std::sync::Arc<crate::mesh::MeshData>,
     pub model: glam::Mat4,
     pub material: crate::components::Material,
+    /// Set when this item is a [`Terrain`](crate::components::Terrain) patch
+    /// (M22), which shades itself per pixel from its layers rather than from
+    /// `material`.
+    ///
+    /// Terrain rides the mesh draw list instead of getting its own the way water
+    /// does, and the difference between the two is the reason: water *shades*
+    /// differently — reflection, absorption, foam — while terrain is an ordinary
+    /// opaque lit surface that happens to compute its own albedo and roughness.
+    /// Sharing the list gives it shadows, fog, MSAA, the hemispheric sky ambient
+    /// and point lights (the tour's campfire has to light the ground it stands
+    /// on) with no second copy of any of them, and hands the editor's picking
+    /// and selection a surface they already know how to handle.
+    pub terrain: Option<crate::components::Terrain>,
 }
 
 /// One water surface, with its geometry resolved and its transform flattened
@@ -176,7 +196,22 @@ pub struct WaterItem {
     pub water: crate::components::Water,
 }
 
-/// One road, with its geometry generated and its transform flattened (M19) —
+/// One cloud, with its geometry grown and its transform flattened (M20) — a
+/// [`WaterItem`] for the sky, and separate from [`RenderItem`] for the same
+/// reason: a cloud has no `Material`, and its own pipeline reads fields no mesh
+/// has.
+#[derive(Debug, Clone)]
+pub struct CloudItem {
+    /// The source entity's stable name (invariant 4).
+    pub entity: String,
+    /// The grown lobe cluster, shared across frames — see
+    /// [`crate::cloud::mesh_for`].
+    pub mesh: std::sync::Arc<crate::mesh::MeshData>,
+    pub model: glam::Mat4,
+    pub cloud: crate::components::Cloud,
+}
+
+/// One road, with its geometry generated and its transform flattened (M23) —
 /// [`WaterItem`]'s sibling, and separate from [`RenderItem`] for the same
 /// reasons: a road has no `Material`, its shading is its own pipeline, and
 /// folding it into the draw list would hand every consumer of that list
@@ -313,6 +348,58 @@ impl LightRig {
     }
 }
 
+/// Fold a day into a scene's lights and environment.
+///
+/// A free function rather than a method because the viewer does not keep a
+/// `Scene` in its render content — it holds the resolved values and re-folds
+/// them every frame against the fixed-step clock. Both paths must agree
+/// exactly, so there is one implementation and no second copy to drift.
+///
+/// `settings` of `None` returns its inputs untouched. That is not a
+/// convenience: it is what makes a scene with no `daylight` block render
+/// byte-identically to the pre-M21 engine, because it is literally the same
+/// values flowing on through the same code.
+pub fn apply_daylight(
+    settings: Option<&DaylightSettings>,
+    time: f32,
+    lights: ResolvedLights,
+    environment: EnvironmentSettings,
+) -> (ResolvedLights, EnvironmentSettings) {
+    let Some(settings) = settings else {
+        return (lights, environment);
+    };
+
+    let day = settings.evaluate(time);
+    let mut lights = lights;
+    let mut environment = environment;
+
+    if settings.drives_sun {
+        // Validation rejects an authored `DirectionalLight` alongside
+        // `drives_sun`, so there is no second owner to reconcile with: the sun
+        // is whatever the day says it is.
+        lights.sun_direction = day.light_direction;
+        lights.sun_color = day.light_color;
+    }
+
+    if settings.drives_sky {
+        environment.sky_zenith = day.sky_zenith;
+        environment.sky_horizon = day.sky_horizon;
+        environment.sky_ground = day.sky_ground;
+        // Ambient rides with the sky rather than with the sun: it *is* the
+        // sky's contribution, which is why M16 gates hemispheric ambient on
+        // `sky` in the first place. A scene keeping its own `AmbientLight`
+        // sets `drives_sky: false`.
+        lights.ambient = day.ambient;
+    }
+
+    // The palette scales the scene's authored density rather than replacing
+    // it, so a scene with `fog_density: 0` stays clear all day however misty
+    // the palette's dawn is.
+    environment.fog_density *= day.fog_scale;
+
+    (lights, environment)
+}
+
 /// A scene loaded into an ECS world.
 pub struct Scene {
     pub name: String,
@@ -324,7 +411,15 @@ pub struct Scene {
 
     /// Scene-level rendering settings (defaults when the file has no
     /// `environment` block), carried for the same reason.
+    ///
+    /// These are what the scene *authored*. When a `daylight` block is
+    /// present it computes some of them, so the values a frame actually
+    /// renders with come from [`Scene::resolved_at`] — not from here.
     pub environment: EnvironmentSettings,
+
+    /// The day/night block (M21), or `None` for a scene that has no opinion
+    /// about the time of day. `None` is the pre-M21 engine exactly.
+    pub daylight: Option<DaylightSettings>,
 
     /// Name lookup, mirroring the [`Name`] component so targeting an entity by
     /// name does not require scanning the world.
@@ -364,6 +459,7 @@ impl Scene {
     pub fn instantiate(file: SceneFile) -> Self {
         let physics = file.physics.unwrap_or_default();
         let environment = file.environment.unwrap_or_default();
+        let daylight = file.daylight;
         let mut world = World::new();
         let mut by_name = HashMap::with_capacity(file.entities.len());
 
@@ -383,9 +479,29 @@ impl Scene {
             name: file.name,
             physics,
             environment,
+            daylight,
             world,
             by_name,
         }
+    }
+
+    /// The lights and environment to render with at `time` seconds of scene
+    /// time — the pair every render path should ask for instead of reading
+    /// `lights().resolved()` and `environment` separately.
+    ///
+    /// With no `daylight` block this returns exactly those two values,
+    /// untouched, which is what makes the absent-block path byte-identical to
+    /// the pre-M21 engine: same values, same types, same code downstream.
+    ///
+    /// With one, the day is evaluated and folded in according to `drives_sun`
+    /// and `drives_sky` (design §6).
+    pub fn resolved_at(&self, time: f32) -> (ResolvedLights, EnvironmentSettings) {
+        apply_daylight(
+            self.daylight.as_ref(),
+            time,
+            self.lights().resolved(),
+            self.environment,
+        )
     }
 
     /// Look up an entity by its stable name.
@@ -507,10 +623,107 @@ impl Scene {
                 mesh: data,
                 model: transform.matrix(),
                 material,
+                terrain: None,
             });
         }
 
+        // Trees carry their geometry instead of referencing it (M23), and one
+        // tree is two draws: bark under the entity's own `Material`, leaves
+        // under the tree's foliage fields. Both items keep the entity's name,
+        // so picking and selection resolve a tree back to one place in the
+        // file like anything else.
+        for (entity, tree) in self
+            .world
+            .query::<(Entity, &crate::components::Tree)>()
+            .iter()
+        {
+            let grown = crate::tree::meshes_for(tree);
+            let model = self.transform_of(entity).matrix();
+            let name = self
+                .world
+                .get::<&Name>(entity)
+                .map(|n| n.0.clone())
+                .unwrap_or_default();
+            let bark = self
+                .world
+                .get::<&crate::components::Material>(entity)
+                .map(|m| *m)
+                .unwrap_or_default();
+
+            items.push(RenderItem {
+                entity: name.clone(),
+                mesh: grown.bark,
+                model,
+                material: bark,
+                terrain: None,
+            });
+            if let Some(leaves) = grown.leaves {
+                items.push(RenderItem {
+                    entity: name,
+                    mesh: leaves,
+                    model,
+                    material: tree.leaf_material(),
+                    terrain: None,
+                });
+            }
+        }
+        items.extend(self.terrain_items());
+
         Ok(items)
+    }
+
+    /// Terrain patches, as draw items with their surfaces generated (M22).
+    ///
+    /// Takes no [`MeshSource`](crate::mesh::MeshSource) and cannot fail — a
+    /// patch's geometry is generated from its own fields, like water's — and the
+    /// surface comes back as a cached `Arc`, so the renderer uploads each patch
+    /// once for the life of the run however many frames pass.
+    ///
+    /// Sorted by entity name, so the draw list does not depend on how hecs
+    /// happened to lay out archetypes.
+    pub fn terrain_items(&self) -> Vec<RenderItem> {
+        let mut items: Vec<RenderItem> = self
+            .world
+            .query::<(Entity, &crate::components::Terrain)>()
+            .iter()
+            .map(|(entity, terrain)| {
+                let transform = self.transform_of(entity);
+                RenderItem {
+                    entity: self
+                        .world
+                        .get::<&Name>(entity)
+                        .map(|n| n.0.clone())
+                        .unwrap_or_default(),
+                    mesh: crate::terrain::surface_grid(
+                        terrain,
+                        glam::Vec2::new(transform.position.x, transform.position.z),
+                        glam::Vec2::new(transform.scale.x, transform.scale.z),
+                    ),
+                    model: transform.matrix(),
+                    // Opaque, non-metallic, unlit-by-emission: everything the
+                    // layers do not decide. `albedo` and `roughness` here are
+                    // what a terrain with no layers at all would use, and the
+                    // shader replaces both the moment there is one.
+                    material: crate::components::Material::default(),
+                    terrain: Some(terrain.clone()),
+                }
+            })
+            .collect();
+        items.sort_by(|a, b| a.entity.cmp(&b.entity));
+        items
+    }
+
+    /// The height of a terrain patch at a world XZ position, in world metres
+    /// (M22) — what `world.terrain_height` and prop placement resolve through.
+    ///
+    /// `None` when the entity does not exist or has no `Terrain`. Applies the
+    /// patch's own Y and `Transform.scale.y`, so the answer is a world
+    /// coordinate a caller can assign to a position directly.
+    pub fn terrain_height(&self, name: &str, x: f32, z: f32) -> Option<f32> {
+        let entity = self.entity(name)?;
+        let terrain = self.world.get::<&crate::components::Terrain>(entity).ok()?;
+        let transform = self.transform_of(entity);
+        Some(transform.position.y + transform.scale.y * crate::terrain::height_at(&terrain, x, z))
     }
 
     /// Flatten the world's water surfaces into a draw list (M18).
@@ -543,7 +756,41 @@ impl Scene {
         items
     }
 
-    /// Flatten the world's roads into a draw list (M19).
+    /// Flatten the world's clouds into a draw list (M20).
+    ///
+    /// Takes no [`MeshSource`](crate::mesh::MeshSource) and cannot fail, like
+    /// [`water_items`](Self::water_items): a cloud's geometry is grown, not
+    /// loaded, and comes back as a cached `Arc` so the renderer uploads each
+    /// distinct cloud once for the life of the run.
+    ///
+    /// Time is deliberately absent. `drift` is applied in the vertex stage from
+    /// the frame's own clock, which is what keeps this a pure function of the
+    /// file — and keeps the grown mesh's `Arc` identity stable across frames,
+    /// which the renderer's upload cache depends on.
+    ///
+    /// Sorted by entity name, for the reason the lights and the water surfaces
+    /// are: a fixed order that does not depend on hecs' archetype layout.
+    pub fn cloud_items(&self) -> Vec<CloudItem> {
+        let mut items: Vec<CloudItem> = self
+            .world
+            .query::<(Entity, &crate::components::Cloud)>()
+            .iter()
+            .map(|(entity, cloud)| CloudItem {
+                entity: self
+                    .world
+                    .get::<&Name>(entity)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default(),
+                mesh: crate::cloud::mesh_for(cloud),
+                model: self.transform_of(entity).matrix(),
+                cloud: cloud.clone(),
+            })
+            .collect();
+        items.sort_by(|a, b| a.entity.cmp(&b.entity));
+        items
+    }
+
+    /// Flatten the world's roads into a draw list (M23).
     ///
     /// Takes no [`MeshSource`](crate::mesh::MeshSource) for water's reason: a
     /// road's geometry is generated from its own component, not loaded, so this

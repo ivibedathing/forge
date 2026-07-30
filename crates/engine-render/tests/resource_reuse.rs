@@ -36,6 +36,7 @@ fn item(mesh: &Arc<MeshData>, x: f32) -> RenderItem {
         mesh: Arc::clone(mesh),
         model: Mat4::from_translation(Vec3::new(x, 0.0, -4.0)),
         material: Material::default(),
+        terrain: None,
     }
 }
 
@@ -75,6 +76,7 @@ fn draw_frames(gpu: &Gpu, renderer: &mut SceneRenderer, items: &[RenderItem], fr
                 target_size: [SIZE, SIZE],
                 items,
                 water: &[],
+                clouds: &[],
                 roads: &[],
                 particles: &[],
                 view_projection: Mat4::IDENTITY,
