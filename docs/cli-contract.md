@@ -1,7 +1,17 @@
 # The CLI contract
 
 How the `engine` binary talks to whoever runs it. The contract is: **an agent
-can operate every command with `jq` and `$?` alone.** Everything below is
+can operate every command with `jq` and `$?` alone.**
+
+Run it as `bin/engine` — a shim that rebuilds only when a source is newer than
+the binary and then execs it, passing arguments through untouched and writing
+nothing to stdout. Everything below therefore describes the shim exactly as it
+describes the binary. The one addition it makes is at the boundary: a rebuild
+that fails to compile is reported as a single `cargo_error` object on stderr
+carrying rustc's diagnostic, exit 2 — the invocation-or-environment class,
+because the tool itself could not be built, which says nothing about the scene
+you asked it to render. `engine build` is where a compile error becomes proper
+per-diagnostic NDJSON with file, line, and machine-applicable fixes. Everything below is
 pinned by the integration suite in `crates/engine-cli/tests/cli.rs` and the
 golden snapshot in `crates/engine-core/tests/validation_corpus.rs`; a change
 that breaks a rule here fails the build before it ships.

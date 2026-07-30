@@ -791,6 +791,31 @@ from memory. winit is pinned to the **0.30** stable line; 0.31 is still beta.
 
 ## Verification
 
+**Run the CLI as `bin/engine`, not `cargo run -p engine-cli --`.** The shim checks whether any
+source is newer than the binary (a find, ~0.15s), rebuilds only then, and execs; cargo's freshness
+walk over this workspace costs ~8s *warm* on every call, which is the difference between a loop
+worth running and one worth avoiding. Arguments pass through untouched and stdout stays clean, so
+`docs/cli-contract.md` describes the shim exactly as it describes the binary; a rebuild that fails
+comes back as one `cargo_error` line on stderr, exit 2. Default profile is **debug**, matching how
+baselines are blessed. `ENGINE_PROFILE=release bin/engine …` when you want speed over comparability.
+
+**`bin/verify-baselines` is "look at the PNGs" as one command.** Every committed baseline is listed
+in `examples/scenes/verify/baselines.json` with the scene and flags that reproduce it — a mapping
+that previously lived only in prose here, in `milestone-verification-scenes.md`, and hardcoded in
+`cli.rs`, so the full sweep and the A/B check were reassembled by hand each time.
+`repo_contracts.rs::every_committed_baseline_is_listed_in_the_manifest` fails on any baseline
+missing from it. NDJSON out, exit 1 on drift, `--filter` to scope, `--bless` to re-bless (from the
+debug binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other binary>` to
+run the A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are
+checked too, GPU-free. Cataloguing this surfaced that **15 of the 26 baselines are pinned by no
+test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`, both `m10`, `m11_lap`, `m13_smoke`,
+`m14_break`, and all six `showcase_*`) — the sweep is their only check, and its first run found
+`m14_break.png` still carrying the 1-pixel drift M17 recorded as pre-existing. `m11_lap.png` is
+the one to be careful about when reading older notes: the lap CLI test pins the *drive* — the
+positions, the elevation, the parked HUD strings — and names the PNG in a comment, but nothing
+diff-renders it. The three repeated rituals are
+skills in `.claude/skills/`: `verify-baselines`, `ab-check`, `milestone`.
+
 `cargo test --workspace` is the real check, not `cargo build`. `crates/engine-render/tests/
 headless_render.rs` renders offscreen and asserts on pixel values, because "the window opened and
 did not crash" does not distinguish a working renderer from a culled triangle or a shader that

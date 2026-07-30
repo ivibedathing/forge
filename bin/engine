@@ -1,0 +1,71 @@
+#!/bin/sh
+# The `engine` binary, without cargo's tax on every call.
+#
+# `cargo run -p engine-cli -- <args>` spends ~8s walking the workspace for
+# freshness before it hands over, warm, on this machine. The built binary
+# answers the same `validate` in ~0.02s. That difference is only noise on a
+# one-off command; across the hundreds of validate/screenshot/diff-render
+# calls a milestone takes, it is the difference between a loop that is free
+# to run and one worth avoiding.
+#
+# So: check staleness ourselves (a find over the sources, ~0.15s), rebuild
+# only when something actually changed, and exec the binary. Arguments are
+# passed through untouched, and nothing is written to stdout, so the CLI
+# contract in docs/cli-contract.md still describes exactly what a caller
+# sees.
+#
+#   bin/engine validate examples/scenes/demo_scene.json
+#   ENGINE_PROFILE=release bin/engine screenshot scene.json --out /tmp/f.png
+#
+# Default profile is **debug**, matching how baselines are blessed: a
+# release build's sin_cos moves three pixels of m19_trees.png (see CLAUDE.md,
+# M19). Renders that must compare against a committed baseline come from the
+# debug binary.
+
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+profile=${ENGINE_PROFILE:-debug}
+
+case "$profile" in
+    debug) build_flags='' ;;
+    release) build_flags='--release' ;;
+    *)
+        printf '{"error":"invalid_invocation","message":"ENGINE_PROFILE must be debug or release, got %s"}\n' \
+            "$profile" >&2
+        exit 2
+        ;;
+esac
+
+bin="$root/target/$profile/engine"
+
+# Stale when the binary is missing, or when any source the binary is built
+# from is newer than it. Shaders count: they are include_str!'d into the
+# render crate, so a .wgsl edit changes the binary's behaviour.
+stale=yes
+if [ -x "$bin" ]; then
+    newer=$(
+        find "$root/crates" "$root/Cargo.toml" "$root/Cargo.lock" -type f \
+            \( -name '*.rs' -o -name '*.wgsl' -o -name '*.toml' -o -name '*.lock' \) \
+            -newer "$bin" -print 2>/dev/null | head -n 1
+    )
+    [ -z "$newer" ] && stale=no
+fi
+
+if [ "$stale" = yes ]; then
+    # Cargo's own output is prose, and stderr here belongs to the NDJSON
+    # protocol — so capture it and re-emit a failure as one JSON object.
+    if ! log=$(cd "$root" && cargo build -q -p engine-cli $build_flags 2>&1); then
+        printf '%s\n' "$log" | tail -n 40 | awk '
+            BEGIN { printf "{\"error\":\"cargo_error\",\"message\":\"rebuild failed before running; " }
+            # \000 in a bracket range matches every position on BWK awk, so
+            # control characters are handled one at a time, not as a class.
+            { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "  ");
+              gsub(/\r/, ""); printf "%s\\n", $0 }
+            END { print "\"}" }
+        ' >&2
+        exit 2
+    fi
+fi
+
+exec "$bin" "$@"
