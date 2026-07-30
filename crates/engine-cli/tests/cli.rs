@@ -1177,7 +1177,7 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
 
     // Mid-drive, high side: out at the far east of the circuit, up near the
     // crest at the end of the Kemmel climb.
-    let (high_bake, _) = bake_at("2000", "high.json");
+    let (high_bake, _) = bake_at("1800", "high.json");
     let high = baked_position(&high_bake, "Car");
     assert!(high[0] > 60.0, "mid-drive the car is on the far side: {high:?}");
     assert!(high[1] > 7.0, "and up on the high part of the circuit: {high:?}");
@@ -1185,7 +1185,7 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     // Mid-drive, low side: down at Stavelot, the bottom of the map. The same
     // recording reaching both is what makes the elevation real rather than
     // decorative — the car drove up there and back down on its suspension.
-    let (low_bake, _) = bake_at("7200", "low.json");
+    let (low_bake, _) = bake_at("6600", "low.json");
     let low = baked_position(&low_bake, "Car");
     assert!(low[1] < 2.5, "the drive descends to the low point too: {low:?}");
     assert!(
@@ -1195,24 +1195,26 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
 
     // After three laps and the braking phase: stopped on the pit straight,
     // a few meters past the start line it just crossed.
-    let (end_bake, report) = bake_at("11988", "end.json");
+    let (end_bake, report) = bake_at("11634", "end.json");
     let end = baked_position(&end_bake, "Car");
-    let (dx, dz) = (end[0] - -65.80, end[2] - -37.74);
+    let (dx, dz) = (end[0] - -65.78, end[2] - -37.36);
     let distance = (dx * dx + dz * dz).sqrt();
     assert!(distance < 8.0, "the drive must park by the start line: {end:?}");
-    assert!(end[2] < -37.74, "having crossed it, not stopped short: {end:?}");
+    assert!(end[2] < -37.36, "having crossed it, not stopped short: {end:?}");
 
     // The script's HUD is part of the pinned record: parked (speed 0), just
     // across the line onto lap 4, with three completed timed laps behind it
-    // (last 64.37 s, best 64.15 s — a lap of this circuit is over a minute).
+    // (last 63.70 s, best 59.47 s — a lap of this circuit is around a minute).
     // These strings are golden the way traces are: a drivetrain, geometry or
-    // timing change shows up here first.
+    // timing change shows up here first. They moved in M23 because the road
+    // did: the car now drives a continuous ribbon instead of 207 plates, so it
+    // carries speed through corners the plate road scrubbed off.
     assert_eq!(
         report["hud"],
         serde_json::json!([
             "SPEED 0 KM/H",
-            "LAP 4   TIME 3.25",
-            "LAST 64.37   BEST 64.15"
+            "LAP 4   TIME 3.42",
+            "LAST 63.70   BEST 59.47"
         ]),
         "{report}"
     );
@@ -2624,4 +2626,94 @@ fn the_m22_terrain_fixture_pins_relief_layers_and_collision() {
         y < -2.0,
         "the ball never fell — it ended at y = {y}: {ball}"
     );
+}
+
+/// The M23 fixture: a closed circuit as one `Road` entity — asphalt, shoulders,
+/// an embankment, edge lines, a dashed centre line fitted to the lap, kerbs on
+/// the two corners tight enough to ask for them, and a start line at `v = 0`.
+///
+/// The render half pins the whole new path at once: the generated ribbon, the
+/// surface coordinates its markings are painted in, the kerb spans the CPU
+/// hands the shader, and a road drawn in the opaque pass casting a shadow
+/// through the unchanged shadow pipeline.
+///
+/// The rest is the claim that matters more than the picture: **the road is a
+/// surface a thing can rest on**. The fixture drops a ball on it, and the ball
+/// has to be found sitting on the asphalt — not on the grass 34 m away, which
+/// is where it ended up before mesh colliders were given
+/// `FIX_INTERNAL_EDGES` and a body resting on coplanar triangles was flung
+/// sideways by an edge contact.
+#[test]
+fn the_m23_road_fixture_pins_markings_and_a_drivable_surface() {
+    let scene = repo_path("examples/scenes/verify/m23_road.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m23_road.png");
+
+    // Physics first: it needs no GPU, so it runs on every machine. Bake next
+    // to the scene so relative asset paths keep resolving.
+    let bake = repo_path(&format!(
+        "examples/scenes/verify/.m23-bake-test-{}.json",
+        std::process::id()
+    ));
+    let simulated = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "180"])
+        .arg("--bake")
+        .arg(&bake)
+        .output()
+        .unwrap();
+    assert_eq!(simulated.status.code(), Some(0), "{simulated:?}");
+
+    let baked: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&bake).unwrap()).unwrap();
+    let _ = std::fs::remove_file(&bake);
+    let ball = baked["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Ball")
+        .expect("the fixture has a Ball");
+    let position = ball["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["type"] == "Transform")
+        .and_then(|t| t["position"].as_array())
+        .expect("a baked Transform")
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect::<Vec<f64>>();
+
+    // Dropped at (-34, 6, 0) onto a road whose surface is 0.2 m up there, with
+    // a 0.7 m ball: resting means y ≈ 0.9, and *staying where it landed* means
+    // x and z have not run away.
+    assert!(
+        (position[1] - 0.9).abs() < 0.05,
+        "the ball should rest on the road surface at y ≈ 0.9, found {position:?}"
+    );
+    assert!(
+        (position[0] + 34.0).abs() < 0.5 && position[2].abs() < 0.5,
+        "the ball should stay where it landed; a body flung along an internal \
+         edge ends up off the road entirely: {position:?}"
+    );
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "180"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
 }

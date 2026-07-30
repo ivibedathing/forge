@@ -34,6 +34,7 @@ fn render(source: &str) -> Image {
         &items,
         &scene.water_items(),
         &scene.cloud_items(),
+        &scene.road_items(),
         &[],
         &camera,
         camera_transform.matrix(),

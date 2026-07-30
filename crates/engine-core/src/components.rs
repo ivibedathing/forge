@@ -1888,6 +1888,284 @@ impl Default for TerrainLayer {
     }
 }
 
+/// One authored point on a road's centerline.
+///
+/// The road is a **polygon with corner radii**, not a spline: a closed polygon
+/// returns to its own first vertex and its exterior angles sum to exactly one
+/// turn, so position and heading close without solving anything. Nothing here
+/// carries a heading, deliberately — a heading is derived, and a stored one can
+/// be edited into disagreeing with the points on either side of it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RoadPoint {
+    /// Where the centerline passes, in the entity's local space. `y` is the
+    /// road *surface* height there; the profile between points is a monotone
+    /// cubic through these, so the grade turns over smoothly and never
+    /// overshoots an authored height.
+    #[schemars(with = "[f32; 3]")]
+    pub position: Vec3,
+
+    /// Radius of the arc rounding this corner, in metres. `>= 0`.
+    ///
+    /// `0` is a sharp vertex — mitred, which is exactly right for a point that
+    /// is not really a turn (a start line partway along a straight) and wrong
+    /// for one that is: past
+    /// [`MAX_SHARP_TURN_DEGREES`](crate::road::MAX_SHARP_TURN_DEGREES) of turn
+    /// the mitre folds back through the road and validation refuses it.
+    ///
+    /// The two arcs meeting on one edge have to fit on it, which is the other
+    /// thing a polygon cannot guarantee (`road_corner_does_not_fit`).
+    #[schemars(range(min = 0.0))]
+    pub radius: f32,
+}
+
+impl Default for RoadPoint {
+    fn default() -> Self {
+        Self {
+            position: Vec3::ZERO,
+            radius: 0.0,
+        }
+    }
+}
+
+/// What is painted on a road, and where.
+///
+/// Every marking is computed per pixel from the road's surface coordinates —
+/// `u`, metres from the centerline across the road, and `v`, metres along it —
+/// rather than built as geometry laid on the asphalt. That is what makes a line
+/// follow every curve and grade for free, keeps a dash the same length in
+/// metres through a hairpin as on a straight, and means paint can never
+/// z-fight: it is not a surface on a surface, it is the same pixel shaded
+/// differently.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RoadMarkings {
+    /// Linear RGB of the paint — the edge lines, the centre line, the start
+    /// line, and the white half of a kerb. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// Width of the line down each edge of the asphalt, in metres. `0` is no
+    /// edge line. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub edge_width: f32,
+
+    /// Gap between the asphalt's edge and the outside of the edge line, in
+    /// metres. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub edge_inset: f32,
+
+    /// Width of the centre line, in metres. `0` (the default) is no centre
+    /// line, which is what a race circuit wants. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub center_width: f32,
+
+    /// Length of one painted dash in the centre line, in metres. `0` makes it
+    /// solid. `>= 0`.
+    ///
+    /// On a **closed** road the dash period is snapped to a whole number of
+    /// repeats around the lap, so the pattern meets itself exactly at the seam
+    /// instead of leaving a short dash there. The ratio of dash to gap is what
+    /// is preserved, not their absolute lengths.
+    #[schemars(range(min = 0.0))]
+    pub center_dash: f32,
+
+    /// Unpainted gap between dashes, in metres. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub center_gap: f32,
+
+    /// Corners with a radius at or under this get a kerb on the **inside** of
+    /// the turn, in metres. `0` (the default) is no kerbs. `>= 0`.
+    ///
+    /// Which corners are tight enough, and which side of the road is the inside
+    /// of the turn, are facts about the plan-view geometry that per-pixel code
+    /// cannot know, so they are computed once and handed to the shader as spans
+    /// — at most [`MAX_ROAD_KERBS`](crate::road::MAX_ROAD_KERBS) of them.
+    #[schemars(range(min = 0.0))]
+    pub kerb_max_radius: f32,
+
+    /// How far a kerb reaches out from the asphalt edge, in metres. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub kerb_width: f32,
+
+    /// Length of one red or white kerb stripe, in metres. `> 0`.
+    ///
+    /// Fitted per corner to a whole number of stripes, so a kerb begins and
+    /// ends on a stripe boundary rather than on a sliver.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub kerb_stripe: f32,
+
+    /// Linear RGB of the red half of a kerb; the other half is `color`. Each
+    /// component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub kerb_color: Vec3,
+
+    /// Paint a line across the road.
+    ///
+    /// Painted rather than built, which matters more here than anywhere else: a
+    /// start line with any real height is a wall the car is parked against at
+    /// step 0.
+    pub start_line: bool,
+
+    /// Where that line goes: metres along the centerline from the road's first
+    /// point. `>= 0`, and past the end of a closed road it wraps.
+    ///
+    /// A position rather than "wherever the polygon starts", because the two
+    /// are different jobs: the polygon's first point is a *corner*, chosen by
+    /// the shape of the circuit, and a start line belongs partway down a
+    /// straight. Splitting a straight with an extra point to move the line
+    /// would be geometry surgery in service of paint — and on a short straight
+    /// it fails outright, because the neighbouring corner's arc already covers
+    /// the place the line wanted to be. `engine road-centerline` is how a
+    /// generator turns "here, in world space" into this number.
+    #[schemars(range(min = 0.0))]
+    pub start_line_at: f32,
+
+    /// Width of that line along the road, in metres. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub start_line_width: f32,
+}
+
+impl Default for RoadMarkings {
+    fn default() -> Self {
+        Self {
+            color: Vec3::new(0.88, 0.88, 0.88),
+            edge_width: 0.14,
+            edge_inset: 0.10,
+            // Absent means off, as everywhere else: a bare road gets edge lines
+            // and nothing else, and every marking past that is asked for.
+            center_width: 0.0,
+            center_dash: 3.0,
+            center_gap: 6.0,
+            kerb_max_radius: 0.0,
+            kerb_width: 0.9,
+            kerb_stripe: 1.4,
+            kerb_color: Vec3::new(0.80, 0.10, 0.08),
+            start_line: false,
+            start_line_at: 0.0,
+            start_line_width: 0.7,
+        }
+    }
+}
+
+/// A road: a circuit, a street, a mountain pass.
+///
+/// The entity owns its surface geometry — one continuous ribbon generated from
+/// the centerline — so a `Road` entity carries **no** `Mesh` and no `Material`
+/// (`road_with_mesh`), the same rule [`Water`] follows and for the same reason.
+///
+/// Asphalt, shoulders and the embankment skirt are all the **same** triangles.
+/// That is not a saving, it is the point: road and shoulder as two surfaces at
+/// slightly different heights build a ledge along the asphalt edge, and a wheel
+/// that drops off it wedges against the step and stops the car dead. There is
+/// no seam between segments either, because consecutive cross-sections share
+/// their vertices.
+///
+/// Physics reads the same mesh: a `Collider` with `"shape": "trimesh"` on a
+/// road entity needs no `asset` and no `Mesh`, because the road is the
+/// geometry. Friction and collision layers stay on the `Collider`, where every
+/// other surface in the engine keeps them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Road {
+    /// The centerline, corner by corner, in the order they are driven. At
+    /// least two points; a closed road needs at least three.
+    #[schemars(length(max = 256))]
+    pub points: Vec<RoadPoint>,
+
+    /// Join the last point back to the first. A closed road is a circuit: the
+    /// polygon's exterior angles sum to one turn, so it shuts without a solver.
+    pub closed: bool,
+
+    /// Width of the asphalt, edge to edge, in metres. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub width: f32,
+
+    /// Drivable shoulder each side of the asphalt, in metres. `>= 0`.
+    ///
+    /// Part of the same surface, not a second one — see the note above about
+    /// ledges.
+    #[schemars(range(min = 0.0))]
+    pub shoulder: f32,
+
+    /// How far the embankment drops below the road's outer edge, in metres.
+    /// `>= 0`.
+    ///
+    /// This is what stops an elevated road from floating. Set it deeper than
+    /// the road ever climbs and it simply disappears under the ground plane
+    /// wherever the road is low.
+    #[schemars(range(min = 0.0))]
+    pub skirt: f32,
+
+    /// Longest a straight segment may be before the road is cut again, in
+    /// metres. `>= 0.25`.
+    #[schemars(range(min = 0.25))]
+    pub segment_length: f32,
+
+    /// Most degrees of arc one segment may cover through a corner. `>= 0.5`.
+    ///
+    /// This is the resolution knob that matters: a corner cut every 5° is
+    /// smooth to drive and to look at, and the cost is linear in the road's
+    /// length rather than quadratic like a grid's.
+    #[schemars(range(min = 0.5))]
+    pub segment_angle: f32,
+
+    /// Linear RGB of the asphalt. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// Surface roughness, `[0, 1]`, meaning what `Material.roughness` means.
+    /// Asphalt is nearly matte; wet asphalt is not.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub roughness: f32,
+
+    /// Linear RGB of the shoulder each side of the asphalt. Each component
+    /// `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub shoulder_color: Vec3,
+
+    /// Linear RGB of the embankment below the shoulder. Each component
+    /// `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub bank_color: Vec3,
+
+    /// What is painted on it.
+    pub markings: RoadMarkings,
+}
+
+impl Default for Road {
+    fn default() -> Self {
+        Self {
+            // A 20 m straight running down the engine's forward axis, so a bare
+            // `{"type": "Road"}` is a road — the same courtesy `{"type":
+            // "Water"}` does, and the difference between adding the component
+            // in the editor and seeing a road, or adding it and seeing
+            // `road_too_few_points`.
+            points: vec![
+                RoadPoint {
+                    position: Vec3::ZERO,
+                    radius: 0.0,
+                },
+                RoadPoint {
+                    position: Vec3::new(0.0, 0.0, -20.0),
+                    radius: 0.0,
+                },
+            ],
+            closed: false,
+            width: 7.0,
+            shoulder: 1.5,
+            skirt: 0.6,
+            segment_length: 2.0,
+            segment_angle: 5.0,
+            color: Vec3::new(0.09, 0.09, 0.10),
+            roughness: 0.92,
+            shoulder_color: Vec3::new(0.17, 0.20, 0.14),
+            bank_color: Vec3::new(0.20, 0.17, 0.13),
+            markings: RoadMarkings::default(),
+        }
+    }
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -1962,6 +2240,7 @@ components!(
     Water,
     Cloud,
     Terrain,
+    Road,
 );
 
 #[cfg(test)]
@@ -2057,7 +2336,8 @@ mod tests {
                 "Tree",
                 "Water",
                 "Cloud",
-                "Terrain"
+                "Terrain",
+                "Road"
             ]
         );
     }

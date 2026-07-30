@@ -8,7 +8,8 @@ use engine_core::components::Camera;
 use engine_core::math::Mat4;
 use engine_core::particles::ParticleInstance;
 use engine_core::scene::{
-    CloudItem, EnvironmentSettings, HudItems, RenderItem, ResolvedLights, WaterItem,
+    CloudItem, EnvironmentSettings, HudItems, RenderItem, ResolvedLights, RoadItem,
+    WaterItem,
 };
 use engine_core::{EngineError, Result};
 
@@ -54,6 +55,7 @@ pub fn render(
     items: &[RenderItem],
     water: &[WaterItem],
     clouds: &[CloudItem],
+    roads: &[RoadItem],
     particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
@@ -69,6 +71,7 @@ pub fn render(
         items,
         water,
         clouds,
+        roads,
         particles,
         camera,
         camera_model,
@@ -93,6 +96,7 @@ pub fn render_with_adapter(
     items: &[RenderItem],
     water: &[WaterItem],
     clouds: &[CloudItem],
+    roads: &[RoadItem],
     particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
@@ -155,6 +159,7 @@ pub fn render_with_adapter(
             items,
             water,
             clouds,
+            roads,
             particles,
             view_projection,
             camera_position: camera_model.w_axis.truncate(),

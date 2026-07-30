@@ -734,19 +734,20 @@ The pass condition is the M11 thesis — *interactive never means unverifiable*:
 ```bash
 engine validate examples/scenes/car_track.json
 # Replay the drive headlessly; the car must come back to the start line:
-engine simulate examples/scenes/car_track.json --steps 11988 \
+engine simulate examples/scenes/car_track.json --steps 11634 \
     --input examples/scenes/car_track_lap.input.jsonl --bake /tmp/lap.json
-# → Car stopped a few meters past the line at [-65.8, ~5.3, -37.7], speed 0.
+# → Car stopped a few meters past the line at [-62.8, ~6.4, -43.6], speed 0.
 #   The same replay is sampled mid-drive at two places (CLI test): out east
-#   above y=7 near the crest, and down at Stavelot below y=2.5 — one
+#   above y=7 near the crest (step 1800), and down at Stavelot below y=2.5
+#   (step 6600) — one
 #   recording that climbs and descends is what makes the elevation real.
 engine diff-render examples/scenes/car_track.json \
-    examples/scenes/verify/baselines/m11_lap.png --steps 11988 \
+    examples/scenes/verify/baselines/m11_lap.png --steps 11634 \
     --input examples/scenes/car_track_lap.input.jsonl
 # → bit-exact; a recorded drive is a pinnable render like any other pose.
 #   The baseline includes the script's HUD overlay (speedometer + lap
 #   timer, M11.6): the parked car reads SPEED 0 KM/H, LAP 4,
-#   LAST 64.37 / BEST 64.15 — the simulate report carries the same lines
+#   LAST 63.70 / BEST 59.47 — the simulate report carries the same lines
 #   as "hud", so the timing is also asserted without a GPU
 engine run-scene examples/scenes/car_track.json   # the playable version
 ```
@@ -828,7 +829,7 @@ which is the visible proof that the emitter's position is sampled per step, not 
 
 ```bash
 engine diff-render examples/scenes/car_track.json \
-    examples/scenes/verify/baselines/m11_lap.png --steps 11988 \
+    examples/scenes/verify/baselines/m11_lap.png --steps 11634 \
     --input examples/scenes/car_track_lap.input.jsonl
 # → bit-exact, smoke and all: a stochastic effect on a recorded drive is
 #   still a pinnable render. m11_lap.png was re-blessed when the exhaust
@@ -1159,6 +1160,40 @@ four in `validate.rs`, two at the CLI.
 `Sky` entities became a `daylight` block. No other baseline moved — an A/B between the merge-base
 binary and the worktree's over 15 scenes × 5 step counts (75 combinations) was byte-identical,
 which is the check that actually settles it.
+---
+
+## M23 — Roads: `verify/m23_road.json`
+
+A closed circuit as one `Road` entity, over grass, with a ball dropped on it. One scene exercises
+everything the milestone added: the ribbon swept from a polygon of corners, the monotone-cubic
+height profile, asphalt/shoulder/embankment as one surface, edge lines and a dashed centre line
+painted from the road's own surface coordinates, kerbs on the two corners tight enough to ask for
+them, a start line placed by arc length, sun shadows landing on and cast by the road, and a trimesh
+collider that is the same triangles that are drawn.
+
+```bash
+cd examples/scenes
+engine validate verify/m23_road.json
+engine simulate verify/m23_road.json --steps 180 --bake /tmp/rest.json
+engine diff-render verify/m23_road.json verify/baselines/m23_road.png --steps 180
+engine road-centerline verify/m23_road.json | head -c 200
+```
+
+**Pass condition:** `"pass": true` with `diff_pixels: 0`, and the baked `Ball` resting at
+y ≈ 0.9 within half a metre of where it was dropped. The second half is the one that matters more:
+a body that lands on a triangle mesh and then departs sideways at 5 m/s is what an unfixed internal
+edge looks like, and it is silent in a screenshot. Both are pinned by
+`the_m23_road_fixture_pins_markings_and_a_drivable_surface` in the CLI suite.
+
+**What this regresses:** the corner fillets and the closed ring, the surface coordinates (`u`
+across, `v` along) and every marking painted from them, kerb spans and side selection, dash-period
+fitting, the road pipeline's place in the opaque pass, roads in the shadow pass through the
+unchanged shadow pipeline, the UV upload added to the mesh cache for every mesh, and
+`FIX_INTERNAL_EDGES` on trimesh colliders.
+
+**The bit-exactness half** is the A/B between binaries, as in M17 and M18 — a road-less scene must
+render byte for byte as it did, which includes every scene with a trimesh collider in it, since
+`FIX_INTERNAL_EDGES` is scoped to road geometry precisely so that stays true.
 
 ---
 
@@ -1177,6 +1212,7 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 | M10 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M17 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M19 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M23 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)

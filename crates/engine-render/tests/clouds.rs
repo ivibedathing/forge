@@ -36,6 +36,7 @@ fn render_at(source: &str, time: f32) -> Image {
         &items,
         &scene.water_items(),
         &scene.cloud_items(),
+        &scene.road_items(),
         &[],
         &camera,
         camera_transform.matrix(),

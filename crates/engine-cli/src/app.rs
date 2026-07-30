@@ -39,6 +39,9 @@ pub enum Content {
         /// drift runs on the simulated clock below, so a viewer session and
         /// a screenshot at the same step show the same sky.
         clouds: Vec<engine_core::scene::CloudItem>,
+        /// The scene's roads (M23). Refreshed with `water` for the same
+        /// reason: a script can move or repaint one.
+        roads: Vec<engine_core::scene::RoadItem>,
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
@@ -309,6 +312,7 @@ impl ViewerApp {
                     items,
                     water,
                     clouds,
+                    roads,
                     camera,
                     camera_model,
                     lights,
@@ -414,6 +418,7 @@ impl ViewerApp {
                     }
                     *water = sim.scene.water_items();
                     *clouds = sim.scene.cloud_items();
+                    *roads = sim.scene.road_items();
                     *hud_items = sim.scene.hud_items();
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
@@ -477,6 +482,7 @@ impl ViewerApp {
                             items,
                             water,
                             clouds,
+                            roads,
                             particles: &particles,
                             view_projection,
                             camera_position: camera_model.w_axis.truncate(),

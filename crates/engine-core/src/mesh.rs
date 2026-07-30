@@ -19,9 +19,11 @@ use crate::error::{EngineError, Result};
 /// CPU-side geometry, ready to upload.
 ///
 /// Positions, normals, and uvs are parallel arrays of the same length;
-/// `indices` refers into them. UVs are carried from M3 so glTF files load them
-/// once; nothing samples a texture until M4.
-#[derive(Debug, Clone, PartialEq)]
+/// `indices` refers into them. UVs were carried from M3 so glTF files loaded
+/// them once and nothing read them; since M23 they reach the GPU, where a
+/// road's are the surface coordinates its markings are painted in. Still no
+/// texture samples anything.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct MeshData {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,

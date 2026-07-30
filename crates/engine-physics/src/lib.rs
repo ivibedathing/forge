@@ -17,7 +17,8 @@ use std::sync::Mutex;
 
 use engine_core::components::{
     BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent,
-    Name, RigidBody as RigidBodyData, Terrain as TerrainData, Transform, Wheel as WheelData,
+    Name, RigidBody as RigidBodyData, Road, Terrain as TerrainData, Transform,
+    Wheel as WheelData,
 };
 use engine_core::mesh::MeshSource;
 use engine_core::scene::PhysicsSettings;
@@ -223,7 +224,7 @@ impl PhysicsWorld {
 
         // Deterministic build order: hecs iteration order is stable for a
         // freshly spawned world, and every simulate run spawns fresh.
-        for (entity, name, transform, body, collider, mesh, terrain, breakable) in world
+        for (entity, name, transform, body, collider, mesh, terrain, breakable, road) in world
             .query::<(
                 Entity,
                 &Name,
@@ -233,6 +234,7 @@ impl PhysicsWorld {
                 Option<&MeshComponent>,
                 Option<&TerrainData>,
                 Option<&Breakable>,
+                Option<&Road>,
             )>()
             .iter()
         {
@@ -297,6 +299,7 @@ impl PhysicsWorld {
                     &physics.name_of[&entity],
                     mesh.map(|m| m.asset.as_str()),
                     terrain,
+                    road,
                     meshes,
                     &layer_bits,
                     break_threshold.is_some(),
@@ -460,12 +463,13 @@ impl PhysicsWorld {
 
         if let Some(collider) = collider {
             // Spawned entities (fragments) carry cuboid colliders with no
-            // mesh shapes and no layers, so builtin meshes and an empty
-            // layer table cover every caller.
+            // mesh shapes, no terrain, no roads and no layers, so builtin
+            // meshes and an empty layer table cover every caller.
             let built = build_collider(
                 collider,
                 transform,
                 name,
+                None,
                 None,
                 None,
                 &engine_core::mesh::BuiltinAssets,
@@ -891,6 +895,9 @@ fn build_collider(
     entity: &str,
     entity_mesh: Option<&str>,
     terrain: Option<&TerrainData>,
+    // `road` is the entity's Road when it has one: a mesh-shaped collider with
+    // no asset, no Mesh and no Terrain takes the road's generated ribbon (M23).
+    road: Option<&Road>,
     meshes: &dyn MeshSource,
     layer_bits: &HashMap<String, Group>,
     force_events: bool,
@@ -925,24 +932,33 @@ fn build_collider(
         }
         ColliderShapeKind::Trimesh | ColliderShapeKind::ConvexHull => {
             // Geometry comes from the explicit asset, else the entity's own
-            // Mesh, else — M22 — its Terrain, which generates a surface rather
-            // than loading one. That last case is how ground becomes collidable
-            // without a mesh file duplicating what the renderer already draws,
-            // and it uses the same `height_at` the CPU shares with placement.
-            let (asset, mesh) = match (collider.asset.as_deref().or(entity_mesh), terrain) {
-                (Some(asset), _) => (
+            // Mesh, else a surface the entity *generates*: its Terrain (M22) or
+            // its Road (M23). Those last two are how ground and asphalt become
+            // collidable without a mesh file duplicating what the renderer
+            // already draws — and, for a road, they are what makes the surface
+            // driven and the surface drawn impossible to author apart.
+            let (asset, mesh, from_road) = match (collider.asset.as_deref().or(entity_mesh), terrain, road)
+            {
+                (Some(asset), _, _) => (
                     asset.to_string(),
                     meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
+                    false,
                 ),
-                (None, Some(terrain)) => (
+                (None, Some(terrain), _) => (
                     "the entity's Terrain".to_string(),
                     engine_core::terrain::surface_grid(
                         terrain,
                         glam::Vec2::new(transform.position.x, transform.position.z),
                         glam::Vec2::new(scale.x, scale.z),
                     ),
+                    false,
                 ),
-                (None, None) => {
+                (None, None, Some(road)) => (
+                    format!("the Road on {entity:?}"),
+                    engine_core::road::surface(road).mesh.clone(),
+                    true,
+                ),
+                (None, None, None) => {
                     return Err(shape_bug(entity, "mesh collider with no asset in reach"))
                 }
             };
@@ -959,7 +975,30 @@ fn build_collider(
                         .chunks_exact(3)
                         .map(|t| [t[0], t[1], t[2]])
                         .collect();
-                    ColliderBuilder::trimesh(vertices, indices).map_err(|e| {
+                    // `FIX_INTERNAL_EDGES` on a road's own surface (M23), and
+                    // this is not a tuning preference. Without it a body
+                    // resting on a triangle mesh eventually contacts an edge
+                    // *between* two coplanar triangles, takes a contact normal
+                    // along that edge rather than off the surface, and is flung
+                    // sideways — a ball parked on the M23 fixture sat still for
+                    // two seconds and then left the road at 4.8 m/s. The flag
+                    // implies `MERGE_DUPLICATE_VERTICES`, which also welds the
+                    // crease vertices a road's surface and skirt do not share.
+                    //
+                    // **Only** road-generated geometry, deliberately. Every
+                    // other trimesh keeps the flags it has had since M12,
+                    // because turning this on for all of them moves an existing
+                    // baseline: the ball in `verify/m22_terrain.json` comes to
+                    // rest ~20 cm away, which is 1339 pixels of a fixture this
+                    // milestone has no business touching. Terrain has the same
+                    // latent bug and should probably take the same flag — as
+                    // its own change, with its own re-blessed baseline.
+                    let flags = if from_road {
+                        rapier3d::geometry::TriMeshFlags::FIX_INTERNAL_EDGES
+                    } else {
+                        rapier3d::geometry::TriMeshFlags::empty()
+                    };
+                    ColliderBuilder::trimesh_with_flags(vertices, indices, flags).map_err(|e| {
                         EngineError::new(
                             codes::INVALID_SHAPE_DIMENSION,
                             format!(

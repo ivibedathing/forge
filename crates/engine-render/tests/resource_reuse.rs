@@ -77,6 +77,7 @@ fn draw_frames(gpu: &Gpu, renderer: &mut SceneRenderer, items: &[RenderItem], fr
                 items,
                 water: &[],
                 clouds: &[],
+                roads: &[],
                 particles: &[],
                 view_projection: Mat4::IDENTITY,
                 camera_position: Vec3::ZERO,

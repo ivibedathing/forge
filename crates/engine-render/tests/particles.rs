@@ -50,6 +50,7 @@ fn render(particles: &[ParticleInstance]) -> Image {
         &items,
         &scene.water_items(),
         &scene.cloud_items(),
+        &scene.road_items(),
         particles,
         &camera,
         camera_transform.matrix(),

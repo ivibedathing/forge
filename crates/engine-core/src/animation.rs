@@ -490,6 +490,25 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "Road" => {
+            let Ok(mut c) = world.get::<&mut Road>(entity) else {
+                return false;
+            };
+            match field {
+                // Appearance only, for terrain's reason: a road's *shape*
+                // fields are in `NOT_ANIMATABLE`. `points`, `closed` and
+                // `markings` never arrive here at all — an array of objects, a
+                // bool and a nested object are shapes a numeric clip cannot
+                // express, the same as `Water.waves`.
+                //
+                // Repainting a road *is* free: these four are read per pixel.
+                "roughness" => c.roughness = scalar,
+                "color" => c.color = v3,
+                "shoulder_color" => c.shoulder_color = v3,
+                "bank_color" => c.bank_color = v3,
+                _ => return false,
+            }
+        }
         _ => return false,
     }
     true
@@ -516,6 +535,14 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     ("Terrain", "feature_scale"),
     ("Terrain", "persistence"),
     ("Terrain", "warp"),
+    // A road's shape is generated and `Arc`-cached exactly like a terrain
+    // patch's, so animating one of these would mint a new ribbon — and a new
+    // GPU upload, and a new trimesh collider — every frame it changed.
+    ("Road", "width"),
+    ("Road", "shoulder"),
+    ("Road", "skirt"),
+    ("Road", "segment_length"),
+    ("Road", "segment_angle"),
 ];
 
 /// Whether a field is vector-shaped in the published schema (3-element
@@ -979,7 +1006,8 @@ mod tests {
                 {"type":"Tree"},
                 {"type":"Water"},
                 {"type":"Cloud"},
-                {"type":"Terrain"}
+                {"type":"Terrain"},
+                {"type":"Road"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

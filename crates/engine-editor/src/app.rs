@@ -431,6 +431,7 @@ impl EditorApp {
             &items,
             &self.doc.water,
             &self.doc.clouds,
+            &self.doc.roads,
             view_projection,
             camera_eye,
             lights,

@@ -96,6 +96,7 @@ engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine filmstrip <scene.json> --out strip.png [--start/--end/--frames/--columns]
 engine list-animations <scene-or-clip> [--schema]
 engine build [--check]                       # --check: type-check only, ~half the time
+engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 engine list-components                       # scene + component JSON Schemas
 engine info                                  # selected GPU adapter
 ```
@@ -254,6 +255,19 @@ held. `engine run-scene` is the play mode — the keyboard feeds the same
 held-set live, and `--record-input <f>` writes a timeline line whenever the
 held set changes, so a human play session becomes a committable artifact that
 `--input` replays exactly: record once, regression-test forever.
+
+`engine road-centerline` prints one object: the road's `entity`, `length`,
+`width`, `shoulder`, `closed`, and its sampled `points` — each with a world
+`position`, a unit `forward` in the XZ plane, and `v`, the metres along the
+centerline that the road's markings are painted in. It exists because a `Road`
+generates its geometry from a polygon of corners, and anything placed *along*
+that road (a guardrail, a sign, a start line) needs the samples the ribbon was
+actually built from; re-deriving them in a generator is how two implementations
+of one curve begin to disagree about where the road is. `examples/scenes/
+make_car_track.py` is the worked example: it writes the road, asks where it
+went, and writes the scene again with the barriers on it. With no `--entity`
+the scene must contain exactly one road; naming one that is not there is
+`entity_not_found` with a `did_you_mean`.
 
 `schemas/component-schema.json` (from `engine list-components`) carries the
 same numeric range constraints `engine validate` enforces, so third-party

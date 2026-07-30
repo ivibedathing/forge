@@ -161,8 +161,8 @@ fn step(world, step) {
     // *starts on* the line, and parking jitter could re-cross it, so a
     // crossing only counts after 300 steps (5 s) of lap — a real lap here
     // takes well over half a minute.
-    let line_z = -37.74;
-    let line_x = -65.80;
+    let line_z = -37.36;
+    let line_x = -65.78;
 
     let prev_z = world.state("lap_prev_z", line_z);
     let lap = world.state("lap", 1);

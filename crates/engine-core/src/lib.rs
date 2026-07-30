@@ -17,6 +17,7 @@ pub mod input;
 pub mod lineindex;
 pub mod mesh;
 pub mod particles;
+pub mod road;
 pub mod scene;
 pub mod schema;
 pub mod terrain;

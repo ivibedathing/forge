@@ -211,6 +211,22 @@ pub struct CloudItem {
     pub cloud: crate::components::Cloud,
 }
 
+/// One road, with its geometry generated and its transform flattened (M23) —
+/// [`WaterItem`]'s sibling, and separate from [`RenderItem`] for the same
+/// reasons: a road has no `Material`, its shading is its own pipeline, and
+/// folding it into the draw list would hand every consumer of that list
+/// (picking, selection, the shadow pass) a case it does not want.
+#[derive(Debug, Clone)]
+pub struct RoadItem {
+    /// The source entity's stable name (invariant 4).
+    pub entity: String,
+    /// The generated ribbon, plus the marking layout the shader cannot derive
+    /// per pixel. Shared across frames — see [`crate::road::surface`].
+    pub surface: std::sync::Arc<crate::road::RoadSurface>,
+    pub model: glam::Mat4,
+    pub road: crate::components::Road,
+}
+
 /// The scene's screen-space overlay, extracted as plain data in draw order
 /// (M12): `rects` under `texts`, each in scene-file order. An empty overlay
 /// means no HUD pass runs at all, so pre-M12 scenes render byte-identically.
@@ -768,6 +784,35 @@ impl Scene {
                 mesh: crate::cloud::mesh_for(cloud),
                 model: self.transform_of(entity).matrix(),
                 cloud: cloud.clone(),
+            })
+            .collect();
+        items.sort_by(|a, b| a.entity.cmp(&b.entity));
+        items
+    }
+
+    /// Flatten the world's roads into a draw list (M23).
+    ///
+    /// Takes no [`MeshSource`](crate::mesh::MeshSource) for water's reason: a
+    /// road's geometry is generated from its own component, not loaded, so this
+    /// cannot fail — and the ribbon comes back as a cached `Arc`, so a road
+    /// that is not being edited uploads once for the life of the run.
+    ///
+    /// Sorted by entity name, so a road's place in the frame does not depend on
+    /// how hecs happened to lay out archetypes.
+    pub fn road_items(&self) -> Vec<RoadItem> {
+        let mut items: Vec<RoadItem> = self
+            .world
+            .query::<(Entity, &crate::components::Road)>()
+            .iter()
+            .map(|(entity, road)| RoadItem {
+                entity: self
+                    .world
+                    .get::<&Name>(entity)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default(),
+                surface: crate::road::surface(road),
+                model: self.transform_of(entity).matrix(),
+                road: road.clone(),
             })
             .collect();
         items.sort_by(|a, b| a.entity.cmp(&b.entity));

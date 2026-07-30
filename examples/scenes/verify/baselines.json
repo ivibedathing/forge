@@ -107,7 +107,7 @@
    "scene": "examples/scenes/car_track.json",
    "args": [
     "--steps",
-    "11988",
+    "11634",
     "--input",
     "examples/scenes/car_track_lap.input.jsonl"
    ],
@@ -276,6 +276,18 @@
    "width": 640,
    "height": 360,
    "milestone": "M22",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m23_road.png",
+   "scene": "examples/scenes/verify/m23_road.json",
+   "args": [
+    "--steps",
+    "180"
+   ],
+   "width": 800,
+   "height": 450,
+   "milestone": "M23",
    "pinned_by": "cli.rs"
   },
   {

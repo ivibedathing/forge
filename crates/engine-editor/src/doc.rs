@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use engine_core::formatter::{self, AddComponent, AddEntity, RemoveComponent, SetComponentField};
-use engine_core::scene::{CloudItem, RenderItem, ResolvedLights, WaterItem};
+use engine_core::scene::{CloudItem, RenderItem, ResolvedLights, RoadItem, WaterItem};
 use engine_core::{EngineError, Scene, SceneFile};
 
 /// How often the file is re-read. Well under the "reflects within a second"
@@ -38,6 +38,10 @@ pub struct SceneDoc {
     /// Clouds (M20). Unlike particles these exist at rest, so the viewport
     /// shows them — a cloud is scene content, not simulation state.
     pub clouds: Vec<CloudItem>,
+    /// Roads, rebuilt with `items` (M23). Unlike water and particles a road has
+    /// no time in it at all — the ribbon a screenshot shows is the ribbon the
+    /// editor shows.
+    pub roads: Vec<RoadItem>,
     pub lights: ResolvedLights,
     /// The scene's own sky, fog and shadow settings, so the viewport shows
     /// what the file says rather than a house style â the editor is a view
@@ -65,6 +69,7 @@ impl SceneDoc {
             items: Vec::new(),
             water: Vec::new(),
             clouds: Vec::new(),
+            roads: Vec::new(),
             lights: engine_core::scene::LightRig {
                 sun: None,
                 ambient: None,
@@ -121,6 +126,7 @@ impl SceneDoc {
                 self.items.clear();
                 self.water.clear();
                 self.clouds.clear();
+                self.roads.clear();
             }
         }
     }
@@ -146,6 +152,7 @@ impl SceneDoc {
         self.items.clear();
         self.water.clear();
         self.clouds.clear();
+        self.roads.clear();
         if self.is_valid() {
             if let Ok(scene) = Scene::from_source(&self.source, &self.display) {
                 let assets = engine_assets::AssetServer::for_scene(&self.path);
@@ -162,6 +169,8 @@ impl SceneDoc {
                         // gizmo for a sun the file does not aim.
                         let (lights, environment) = scene.resolved_at(0.0);
                         self.lights = lights;
+                        self.roads = scene.road_items();
+                        self.lights = scene.lights().resolved();
                         // MSAA is the viewport's own business, not the
                         // scene's: the sample count is baked into the
                         // renderer's pipelines and this one is built once.

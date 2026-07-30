@@ -212,6 +212,20 @@ enum Command {
         strict: bool,
     },
 
+    /// Print a Road's sampled centerline: where the road is, which way it
+    /// faces, and how far along that is.
+    ///
+    /// What anything *furnishing* a road needs — guardrails, signs, start
+    /// lights. Publishing it is what stops a generator from re-implementing
+    /// the sampler and drifting out of agreement with the ribbon it decorates.
+    RoadCenterline {
+        scene: PathBuf,
+        /// Which road, when the scene has more than one. Defaults to the only
+        /// one; with several, naming one is required.
+        #[arg(long)]
+        entity: Option<String>,
+    },
+
     /// Print the component and scene JSON Schemas.
     ListComponents,
 
@@ -328,6 +342,7 @@ fn main() {
             input,
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
+        Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
         Command::ListComponents => {
             print!("{}", engine_core::schema::canonical_json());
             Ok(())
@@ -571,6 +586,85 @@ fn load_scene(path: &PathBuf) -> Result<Scene> {
     })
 }
 
+/// `engine road-centerline` — publish a road's sampled centerline (M23).
+///
+/// The road's geometry is generated from its polygon of corners, and anything
+/// placed *along* it — a guardrail, a sign, a start light — needs the same
+/// samples the ribbon was built from. Re-deriving them in a generator is how
+/// two implementations of one curve start disagreeing about where the road is,
+/// so the engine publishes the one it actually used.
+///
+/// The transform is applied, so the positions are world space.
+fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
+    let scene = load_scene(&scene_path)?;
+    let roads = scene.road_items();
+
+    let road = match (&entity, roads.len()) {
+        (Some(name), _) => roads
+            .iter()
+            .find(|item| item.entity == *name)
+            .ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {name:?} with a Road component"),
+                )
+                .entity(name)
+                .file(scene_path.display().to_string())
+                .suggest_from(name, roads.iter().map(|item| item.entity.as_str()))
+            })?,
+        (None, 1) => &roads[0],
+        (None, 0) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                "scene has no entity with a Road component",
+            )
+            .file(scene_path.display().to_string()))
+        }
+        (None, _) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                format!(
+                    "scene has {} roads ({}); name one with --entity",
+                    roads.len(),
+                    roads
+                        .iter()
+                        .map(|item| item.entity.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .file(scene_path.display().to_string()))
+        }
+    };
+
+    let points: Vec<serde_json::Value> = road
+        .surface
+        .centerline
+        .iter()
+        .map(|point| {
+            let world = road.model.transform_point3(point.position);
+            serde_json::json!({
+                "position": [world.x, world.y, world.z],
+                "forward": [point.direction.x, point.direction.y],
+                "v": point.v,
+            })
+        })
+        .collect();
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "entity": road.entity,
+            "length": road.surface.length,
+            "width": road.road.width,
+            "shoulder": road.road.shoulder,
+            "closed": road.road.closed,
+            "points": points,
+        })
+    );
+    Ok(())
+}
+
 /// `engine diff-render` — render the scene at the baseline's dimensions and
 /// compare. The report goes to stdout on *both* pass and fail (a documented
 /// exception to "nothing on stdout on failure": a failing run still tells
@@ -613,6 +707,7 @@ fn diff_render(
         &items,
         &scene.water_items(),
         &scene.cloud_items(),
+        &scene.road_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
@@ -791,6 +886,7 @@ fn filmstrip(
             &items,
             &scene.water_items(),
             &scene.cloud_items(),
+            &scene.road_items(),
             &[],
             &camera,
             camera_transform.matrix(),
@@ -924,6 +1020,7 @@ fn screenshot(
         &items,
         &scene.water_items(),
         &scene.cloud_items(),
+        &scene.road_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
@@ -973,6 +1070,7 @@ fn run_scene(
     // The *base* values: the viewer folds daylight onto these every frame
     // against its own fixed-step clock, so what it stores is the scene as
     // authored, not the scene at one instant.
+    let roads = scene.road_items();
     let lights = scene.lights().resolved();
     let environment = scene.environment;
     let daylight = scene.daylight.clone();
@@ -1038,6 +1136,7 @@ fn run_scene(
             items,
             water,
             clouds,
+            roads,
             camera,
             camera_model: camera_transform.matrix(),
             lights,
