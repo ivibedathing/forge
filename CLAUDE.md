@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M18 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, and M18 water** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M21 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, M19 procedural trees, M20 procedural clouds, and M21 day/night** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
-that is a live writable *view* onto the file. Verified by 170+ tests including offscreen pixel
+that is a live writable *view* onto the file. Verified by 200+ tests including offscreen pixel
 readback and an end-to-end CLI suite, and by the verification fixtures from
 `milestone-verification-scenes.md` (`verify/m4_lighting.json` diff-renders bit-exactly against
 `verify/baselines/m4_lighting.png`; `verify/m5_broken.json` is committed **broken** and must
@@ -40,6 +40,15 @@ engine list-animations <scene-or-clip> [--schema]
 # PointLight component (M17): local light, inverse-square windowed at "range", up to 8 per
 #   scene; no shadows. Scripts drive any light's intensity/color (world.set_light_intensity /
 #   set_light_color), which is what lets a fire light the ground it stands on
+# Tree component (M19): a recipe, not a mesh — seeded procedural trunk/branches/leaves grown
+#   on load; carries no Mesh (tree_with_mesh), and the entity's Material is its bark
+# Cloud component (M20): a recipe too — a seeded cluster of icosphere lobes, each growing
+#   smaller lobes on itself, sized by Transform.scale; carries no Mesh and no Material
+#   (cloud_with_mesh), shades through its own clouds.wgsl, and "drift" moves it on the same
+#   reproducible clock water uses
+# Scene-level "daylight" block (M21): the time of day as one number — sun/moon arc,
+#   an eight-keyframe color palette, ambient, sky bands, and a fog *scale*; absent means
+#   the pre-M21 engine byte for byte. Scripts read world.time_of_day()/sun_altitude()
 # Water component (M18): a body of water — the entity carries no Mesh and no Material, the
 #   component owns a tessellated grid ("segments") sized by Transform.scale, Gerstner "waves"
 #   displaced in the vertex stage, per-pixel detail ripples, depth-based absorption between
@@ -520,6 +529,41 @@ both, `cmp` the PNGs. Doing that here found a 1-pixel `m14_break.png` diff that 
 two builds. Fixture `verify/m17_fire.json` + `scripts/m17_fire.rhai` + baseline at `--steps 240`,
 pinned by a CLI test that also bakes and revalidates the run.
 
+Trees (M19, design in `tree-design.md`). The `Tree` component is a **recipe, not a mesh
+reference**: `engine-core/src/tree.rs` grows it into two meshes — bark (drawn with the entity's own
+`Material`) and leaves (drawn with `Tree::leaf_material`, from `leaf_color`/`leaf_roughness`) — so
+one entity emits two `RenderItem`s under one name, and `unused_material` knows a tree's Material is
+its bark. A branch is a polyline that wanders: each of `segments` steps adds a random `crook` and
+a tube of `sides` faces is swept along it, tapering on a **power curve** (`t^1.6`, since linear
+draws a carrot), with a quadratic root flare over the bottom fifth of the trunk. Children attach
+past `branch_start`, spun by `branch_twist` per point (137.5°, the golden angle — a whole-number
+division stacks branches into visible rows) and started 70% inside the parent's radius so the
+tubes interpenetrate instead of needing a union. Ring orientation is carried by **parallel
+transport**; rebuilding a perpendicular from a world axis spins the tube wherever a branch aligns
+with it. Leaves are `blade` (a midrib with two wings folded down, emitted twice for both faces —
+the fold is what gives a canopy texture when the engine has no leaf textures), `cluster` (a
+stretched octahedron, for conifer sprays), or `none`. **Three model rules came out of looking at
+renders, and all three are now multi-seed tests**: `whorl` applies to the **trunk only** (compounding
+it is quadratic — a plausible spruce hit 175,898 vertices — and botanically wrong); `tropism`
+applies at **depth > 0 only** and clamps against overshoot (at depth 0 it is unstable: a degree of
+crook gives a negative tropism something to amplify, and the first pine grew sideways); and the
+trunk gives back 30% of its accumulated lean every segment, because **a random walk with nothing
+pulling on it drifts** and which seeds toppled was pure luck. Determinism is the M13 discipline
+again — one private xorshift written out in-repo so no dependency upgrade can reshape a forest —
+except that jitter helpers always consume a draw even at `jitter: 0`, since no tree baseline
+predates any tree field. `tree::vertex_count` is exact (not an estimate) and validation refuses
+anything over `MAX_TREE_VERTICES` (100k) with `tree_too_complex` before allocating, because a hung
+render with no output is the worst failure an agent loop can hit. `meshes_for` caches on the
+component's **exact field bits** (26 words, compared not hashed) and must return the same `Arc` —
+M15's upload cache keys on `Arc` identity. There is no species enum: a species is a set of
+parameters, tabulated in the design doc. Fixture `verify/m19_trees.json` + baseline (twins
+differing only in `seed`, plus a zero-randomness `Diagram` tree), pinned by a CLI test that also
+pins `tree_with_mesh` and `tree_too_complex`. **Tree baselines are per build profile as well as
+per adapter** — a release build's `sin_cos` routines move 3 pixels of `m19_trees.png` by one
+channel step (measured; Rust does not contract floats, so this is libm, not FMA), so bless from
+the debug binary `cargo test` runs. Every pre-tree fixture is profile-insensitive; the constraint
+arrives with CPU-generated geometry.
+
 Water (M18, design in `water-design.md`). The tour's pond was sixteen `builtin:cube` tiles a script
 bobbed on a shared sine: every tile translated rigidly, so the surface normal was straight up
 everywhere at every moment, there was nothing for the sun or sky to catch, the seams showed, and
@@ -576,7 +620,8 @@ baseline at `--steps 120`, pinned by a CLI test. The bit-exactness of the sevent
 baselines was checked the way this repo has learned to check it — an A/B between binaries built at
 `main` and here, fifteen scene/step combinations, all byte-identical.
 
-Terrain (M19, design in `terrain-design.md`). Ground was `builtin:plane` scaled to 200 m with one
+<<<<<<< HEAD
+Terrain (M22, design in `terrain-design.md`). Ground was `builtin:plane` scaled to 200 m with one
 albedo — two triangles and one colour, so the sun struck all 40 000 m² at the same angle and the eye
 read it as a backdrop rather than a place. The `Terrain` component replaces it, and **there is no
 flat ground in the repo's scenes any more**.
@@ -630,9 +675,122 @@ patches sharing a description meet seamlessly; `Transform.scale.y` multiplies th
 
 Verified by `engine-render/tests/terrain.rs` (six GPU-skipping pixel tests, including
 `a_flat_single_layer_patch_is_exactly_a_painted_plane`, which pins the shading path against
-`builtin:plane` at `segments: 1`) and fixture `verify/m19_terrain.json` + baseline at `--steps 120`,
+`builtin:plane` at `segments: 1`) and fixture `verify/m22_terrain.json` + baseline at `--steps 120`,
 pinned by a CLI test that also proves the dropped sphere lands *on* the ground. The eighteen earlier
 scene/step combinations were A/B'd against `main` and are byte-identical.
+=======
+Clouds (M20, design in `cloud-design.md`). The `Cloud` component is M19's premise applied to the
+sky: a **recipe, not a mesh reference**. `engine-core/src/cloud.rs` grows it into one mesh — a
+golden-angle spiral of icosphere lobes over the footprint, each growing `children` smaller lobes
+biased upward by `rise`, buried 45% of their own radius so the surfaces interpenetrate (M19's join,
+for M19's reason), radially displaced by `wobble`, and folded onto a base plane by `flatten`. The
+entity carries **no `Mesh` and no `Material`** (`cloud_with_mesh`) and is sized by `Transform.scale`
+like a water surface; non-uniform scale is the normal case, which is what oblates the lobes.
+Determinism, the exact `vertex_count` + `cloud_too_complex` budget (100k), and `Arc`-identity
+caching are M19's, transposed — except that the cache key covers the **eleven geometry fields
+only**, since colour and density are uniforms that cannot move a vertex. **Cloud baselines are per
+build profile as well as per adapter**, like tree baselines: bless from the debug binary.
+
+Rendering is `shaders/clouds.wgsl`, a new pipeline (not a `Material` branch) duplicating
+`FrameUniform` and the fog term rather than touching `mesh.wgsl`, with `sky_common.wgsl` prepended
+so a cloud's underside is lit by the sky drawn behind it. Clouds join the existing back-to-front
+`Blended` list beside water and transparent meshes, depth-tested but **not** depth-writing, so
+overlapping lobes accumulate alpha as a stand-in for optical depth; culling is **off** for this
+pipeline alone, because a cloud has no inside and would vanish the moment a camera entered one.
+`drift` (m/s) is applied in the **vertex stage** from `ScenePass.time` — not folded into the model
+matrix — which is what keeps `Scene::cloud_items` a pure function of the file and the grown mesh's
+`Arc` stable across frames; the shape never evolves with time, for the reason trees have no wind.
+No shadows cast (one cascade, fitted to the camera, does not reach a cloud at altitude), no point
+lights, no volumetrics.
+
+**Four things the renders changed, and all four are easy to reintroduce by "simplifying" it:**
+vertex normals are bent **55% from each lobe's centre toward the cloud's** (`BODY_NORMAL`), without
+which every lobe draws its own terminator and the cluster reads as a bag of marbles; the height
+profile's rise is capped at 0.8 lobe *diameters* (`DOME_STACK`), without which the middle lobe
+floats clear of the ring around it — the consequence being that how far a cloud fills a tall box is
+set by `lobe_size`, not by stretching a fixed lobe count to reach; alpha is
+`density · (1 - (1 - facing)^feather)` and **not** `facing^feather`, since the proportional form
+turns a cloud seen from below translucent all over (this inverted `feather`'s sense: higher is now
+*crisper*); and the sun reaches the shadowed side at a `THROUGH_SCATTER` fraction (0.3) with the
+diffuse curve left **linear**, because applying it in full saturates a white cloud everywhere and
+sharpening the curve instead — the obvious fix — turns a storm cloud into grey rock. Fixture
+`verify/m20_clouds.json` + baseline at `--steps 120`, pinned by a CLI test that also pins
+`cloud_with_mesh` and `cloud_too_complex`; seven GPU-skipping pixel tests in
+`engine-render/tests/clouds.rs`. The no-pixel-moved claim was settled the usual way — an A/B
+between binaries, twenty scene/step combinations against `main` including all five hours of the
+M21 daylight fixture, all byte-identical.
+
+Day and night (M21, design in `daylight-design.md`). Every scene was pinned at whatever hour its
+author typed, and moving one to dusk meant hand-editing six colors and keeping them consistent.
+`daylight` makes them one number.
+
+**It is a pure CPU function, and that is the whole design.** `engine-core/src/daylight.rs` maps
+`(DaylightSettings, time) -> Daylight`, and `scene::apply_daylight` folds that onto the
+`ResolvedLights` and `EnvironmentSettings` the renderer was going to receive anyway. **No WGSL
+changed, no new uniform, no new pass — `SceneRenderer::draw` takes exactly the types it took
+before.** So M16's untouchable four lines in `mesh.wgsl` cannot be tripped, the whole system is
+GPU-free and unconditionally testable like `particles.rs` and `tree.rs`, and everything downstream
+tracks for free: shadows follow the sun because they always followed the `DirectionalLight`, fog
+recolors at sunset because fog *is* `sky_horizon`, and water reflects a dusk sky because
+`water.wgsl` already reflects whatever the sky uniform says.
+
+`daylight` is a **top-level sibling of `physics` and `environment`**, not a field inside it — it is
+clock-driven and it *produces* environment values, and a `Vec` palette inside `EnvironmentSettings`
+would cost that type its `Copy` and put a clone in the per-frame path. It rides the same clock water
+does (`--time T`, else `steps / timestep_hz`), and **`day_length: 0` (the default) freezes the day**:
+most scenes want a dial, not motion, and a frozen day is reproducible with no `--time` at all.
+`day_length: 24.0` makes an hour a second, which is what the fixture uses.
+
+- **The arc** is artistic with a physical shape: `sun_elevation` (noon altitude) and `sun_azimuth`
+  (noon bearing) replace latitude, date, and axial tilt. **Sunrise is 06:00 and sunset 18:00 at
+  every elevation** — refusing to move them with the season is what makes an 18:00 keyframe *the*
+  sunset keyframe in every scene. Derived once so it is not rediscovered: a noon sun toward −Z makes
+  −Z south, so the sun **rises toward −X and sets toward +X**.
+- **The moon** rides the same arc twelve hours out of phase with its own elevation, color, and
+  intensity. There is still one directional light: **it *is* the dominant body**, direction, color
+  and intensity, with no summing. The bodies swap where their luminances are equal, so brightness is
+  continuous by construction and only hue and direction shift — at the moment there is least light
+  to notice it by. Summing instead would send an orange sunset from the moon's side of the sky for
+  all of twilight; crossfading the direction would aim the light where neither body is. The
+  handoff's invisibility is a **property of the palette**, and a test walks the day at one-minute
+  resolution asserting exactly two swaps, each under 0.08 luminance — brighten the dusk keyframes
+  and it fails, correctly.
+- **The palette** is eight keyframes, all nine fields required (a half-specified keyframe fading to
+  black is worse than an error), interpolated linearly in linear RGB and **wrapping across
+  midnight**. **The noon keyframe is exactly the M16 clear-day defaults**, so the model and every
+  hand-authored scene agree at the one hour anyone can check. Sun intensity lives in the table
+  rather than falling out of `sin(altitude)` because a sunset's redness and its dimness are one
+  decision. **Fog is a `fog_scale` multiplier on the authored `fog_density`**, never an absolute —
+  a scene with `fog_density: 0` stays clear all day, and a daylight block can never switch fog on in
+  a scene that never asked for any.
+- **Ownership.** `drives_sun` (default on) synthesizes the sun, and an authored `DirectionalLight`
+  beside it is `daylight_and_directional_light` — two owners of one sun is what invariant 8 exists
+  to prevent. `drives_sky` (default on) computes the three bands **and the ambient** (ambient *is*
+  the sky's contribution, which is why M16 gates hemispheric ambient on `sky`); authoring either
+  anyway is the `daylight_overrides_sky` warning, `unused_material`-style, naming the fix.
+- **The horizon-sun shadow bug**, which day/night is the first thing to reach: a sun on the horizon
+  casts shadows of unbounded length and one just below it casts them *upward*. `clamp_shadow_
+  elevation` in `scene_renderer.rs` floors the direction used for the **shadow matrix** at 5° while
+  the lighting direction keeps going. Above 5° it returns its input unchanged, which is why it costs
+  every pre-M21 baseline nothing (measured: every shadow-casting fixture aims its sun 24°–33° up).
+- **Scripts** get exactly two read-only getters, `world.time_of_day()` and `world.sun_altitude()`,
+  evaluated once per step from `step * dt`. Turning them into light is the M17 API unchanged — which
+  is why there is no `auto_on` field on `PointLight`. There is deliberately **no setter**: a
+  script-settable clock is hidden state (invariant 2), so "sleep until dawn" is named as not-done
+  rather than smuggled in. Asking a scene with no `daylight` block for the time is a runtime error,
+  not a plausible noon.
+
+Fixture `verify/m21_daylight.json` + `scripts/m21_lamp.rhai` and **five baselines from one file** at
+`--steps 120/390/720/1110/1320` (02:00, 06:30, noon, 18:30, 22:00), pinned by a CLI test that also
+asserts 02:00 does *not* match the noon baseline. `--steps` and not `--time` because the lamp is
+script-driven and scripts run on the step loop. Bless from the **debug** binary (M19's rule — the
+fixture has trees). Not here: a sun disc or a directional horizon glow (so a sunset reddens the whole
+sky evenly — the natural next commit, in `sky_common.wgsl` on its own branch after the untouchable
+lines), stars, clouds, real astronomy, moon shadows, and script-driven `Material.emissive` — which
+the fixture's lamp globe wanted and is a gap this milestone surfaced rather than created.
+**The A/B settled the no-pixel-moved claim**: merge-base binary vs the worktree's, 15 scenes × 5
+step counts = 75 combinations, all byte-identical.
+>>>>>>> main
 
 Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
@@ -641,17 +799,28 @@ truck}.rhai`) and six 640×360 baselines (`verify/baselines/showcase_*.png`, per
 by hand with `diff-render`, not by a CLI test). **Its growth contract is a test**:
 `repo_contracts.rs::showcase_tour_uses_every_component_the_engine_has` fails on any schema
 component the tour does not use, so a new component's commit adds an entity here — there is no
-allowlist, deliberately. Station 04 fires all three `Breakable` triggers in one run (collision at
+allowlist, deliberately. M21 added `showcase_tour_uses_every_scene_block_the_format_has` beside it,
+since `daylight` is a block and the component walk could never have seen it missing; M21 also put
+the first hole in the component contract's premise, because `drives_sun` makes `DirectionalLight` a
+validation error and two components stopped being addable. That exemption is *computed* from the
+validation rule, not listed, so it evaporates if the tour stops driving the sun. Station 04 fires all three `Breakable` triggers in one run (collision at
 ~585, `break_entity` at 601, `explode` at 636). What is real: particles, physics, fragments, the ice
 (real `Material.transmission`, not an opaque stand-in), since M17 the campfire — layered additive
 flame, turbulent smoke, streaked embers, and a `PointLight` the tour's effects script flickers off
-the same signal that drives the emission rates — and since M18 the pond, one `Water` entity where
+the same signal that drives the emission rates — since M18 the pond, one `Water` entity where
 sixteen script-bobbed cube tiles used to be (the wave loop is gone from `tour_effects.rhai`, and the
-`PondBed` under it was retuned at the same time: absorption has nothing to reveal over a black bed).
-What is still faked and named as such in the doc: animals (scaled spheres on parametric loops) and
-the sky (a gradient, not scattering). The blast at station 04 still emits no light, which is now a
-wiring job rather than a missing feature. Refraction is the upgrade that would move this scene most
-now, and water is its loudest customer.
+`PondBed` under it was retuned at the same time: absorption has nothing to reveal over a black bed)
+— and since M19 the forest, nine `Tree` components (two oaks, a birch, three spruces, a snag, two
+scrubs) where twelve cylinder-and-sphere entities used to be, which cost all six showcase baselines
+a re-bless and no other baseline anything. M20 adds four `Cloud` entities and re-blessed the same
+six: the tour's cameras are all ground-level and aimed *down* at their subjects, so the clouds ride
+the horizon rather than filling the sky — visible at stations 02 and 03 and absent from 01. A
+sky-facing beat, or the sky-dome cloud layer of `cloud-design.md` §9, is what would change that. What is still faked and named as such in the doc:
+animals (scaled spheres on parametric loops) and the sky (a gradient, not scattering). The blast at
+station 04 still emits no light, which is now a wiring job rather than a missing feature.
+Refraction is the upgrade that would move this scene most now, and water is its loudest customer;
+textured bark and alpha-cut leaves are what would move the forest most, and both need the same
+missing feature.
 **Building it found a physics bug** now fixed and regression-tested: priming the broad-phase BVH
 before the first step (vehicle worlds did this so wheel rays hit ground on step 0) consumed the
 pair events, and rapier's `NarrowPhase::register_pairs` is private — so every collider **already
@@ -766,10 +935,12 @@ error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ �
 lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ →
 ~~M8 physics~~ → ~~M9 animation (A0–A1)~~ → ~~M10 scripting~~ — **the roadmap is complete.**
 Remaining deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF +
-GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17/M18 — refraction and
-scene-color sampling for transmissive materials (water's loudest missing feature), planar
-reflections, shadow cascades, shadows from point lights, spot lights, a CPU wave evaluator and
-buoyancy, and a light on the tour's explosion (~~lights a script can drive~~ landed in M17).
+GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17/M18/M19/M20 — refraction
+and scene-color sampling for transmissive materials (water's loudest missing feature), planar
+reflections, shadow cascades (which is also what cloud shadows need), shadows from point lights,
+spot lights, a CPU wave evaluator and buoyancy, a light on the tour's explosion (~~lights a script
+can drive~~ landed in M17), a sky-dome cloud layer for cirrus and overcast, and texture-mapped
+materials — bark and alpha-cut leaves are the same missing feature — plus tree LOD and wind.
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

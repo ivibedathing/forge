@@ -50,7 +50,7 @@ moving.
 
 | steps | station | what is on screen | systems |
 |-------|---------|-------------------|---------|
-| 0–179 | 01 forest | six trees, four critters running loops, the glTF monolith, its animated beacon | `Mesh` (builtin + glTF), `Material`, `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
+| 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — four critters running loops, the glTF monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), `Material`, `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
 | 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
 | 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
 | 540–719 | 04 breaking | a boulder rolls into a crate stack, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
@@ -59,6 +59,15 @@ moving.
 Running underneath all five, from the `environment` block rather than from any
 component: a gradient sky with the sun in it, distance fog, sun shadows from
 everything opaque, 4× MSAA, and sky reflected off the metal and the water.
+
+The forest is nine `Tree` components and no meshes (M19). Each is a seed and a
+species recipe — broadleaf, conifer, snag, scrub — so the two oaks are the same
+species and visibly different individuals, which is the thing twelve
+cylinder-and-sphere entities could not do however they were placed. The station
+is framed around what the component gives for free: the snag is bare structure
+where the branching is legible, the spruces stand behind at 7–8.6 m so the
+whorled limbs read against the sky, and the scrubs are one-meter trees at the
+front to show that the model scales rather than special-casing a bush.
 
 The truck patrols a 27 m ring for the whole fifteen seconds, so no station is
 a still life; `scripts/tour_truck.rhai` is a cruise-control autopilot on the
@@ -93,6 +102,20 @@ to be the test that breaks on the commit that adds a component, and the fix
 is to add an entity that uses it — there is no allowlist, because an
 allowlist is how a contract like this quietly stops meaning anything.
 
+**And every scene-level block.**
+`repo_contracts.rs::showcase_tour_uses_every_scene_block_the_format_has` is the
+same contract one level up, added in M21 because `daylight` is a top-level
+block rather than a component and the component walk would never have noticed
+it missing.
+
+M21 also put the first hole in the component contract's premise. `daylight`
+with `drives_sun` makes a `DirectionalLight` a *validation error*, so the tour
+cannot carry one — two components stopped being addable. The exemption is
+computed from that same validation rule rather than declared as a list, so it
+disappears by itself if the tour ever stops driving the sun, and the test
+asserts the converse too. If a future feature makes another component
+mutually exclusive, extend it the same way: derive, never enumerate.
+
 When a system is bigger than one component — a renderer feature, a shader
 path, a whole subsystem — it does not trip that test, so add it here by hand
 and say so in the table above. A sixth station is cheap: extend `eyes`,
@@ -106,6 +129,13 @@ than no showcase:
 
 - **Fire, smoke, sparks, spray, frost, blast, dust** are real: `ParticleEmitter`
   with scripted rates. Nothing is faked here.
+- **The time of day is real** as of M21. The tour has no `DirectionalLight` and
+  no `AmbientLight` at all: its `daylight` block synthesizes the sun, the
+  ambient, and the sky from one number, and `day_length: 300.0` drifts the
+  15-second run from 16:18 to 17:38 — late afternoon into golden hour, so the
+  light warms and the shadows lengthen while the camera moves. What is faked is
+  unchanged and now more visible: the sky is still a gradient with no idea where
+  the sun is, so the sunset reddens all of it evenly and there is no disc.
 - **The campfire casts real light** as of M17. `FireLight` is a `PointLight`, and
   `tour_effects.rhai` drives its intensity, color, and height from the same
   flicker-times-breath signal that drives the flame's emission rates and the coal
@@ -131,6 +161,13 @@ than no showcase:
   0.55–0.66, and the floating blocks are sorted into the same back-to-front
   list as the water they sit in. No subsurface scattering and no tinting by
   thickness, so a thick block is exactly as clear as a thin one.
+- **The trees are real geometry** as of M19 — swept tubes on wandering
+  polylines, recursively branched, with taper and a root flare, and a seed per
+  tree so no two are the same individual. What is missing is surface: there is
+  no bark texture and no leaf texture (the engine has neither), so bark is a
+  flat brown dielectric and a leaf is a folded blade that gets its variation
+  from shading alone. No wind, no LOD, and no collision — you can walk the
+  truck through a trunk.
 - **The animals** are scaled spheres on parametric loops. There is no
   navigation, no steering behaviour, no state machine — scripts have no
   randomness by design, so the variety is sums of sines.
@@ -139,19 +176,31 @@ than no showcase:
   steps from `tour_director.rhai` (which already fires the explosion), would do
   it; the fireball is particles either way, which is the better answer for the
   bulk of the effect.
-- **The sky is a gradient, not a simulation.** Three bands and a sun disc — no
-  clouds, no scattering model, no time of day. Surfaces reflect it, which is
-  what makes the metal and the water read as they do, but nothing else in the
-  world knows it is there beyond the hemispheric tint it puts on
-  `AmbientLight`.
+- **The clouds are real geometry** as of M20 — four `Cloud` entities, seeded
+  clusters of lobes growing smaller lobes on themselves, with flat cumulus
+  bases and a slow `drift` on the scene clock. What they are not is
+  *positioned to be seen*: every station's camera sits at head height and aims
+  **down** at its subject, so the clouds ride the horizon — a corner of one at
+  station 02, a sliver above the title bar at 03, and nothing at all at 01.
+  They are placed to be found rather than to dominate, and a sky-facing beat is
+  what would change that.
+- **The sky behind them is still a gradient, not a simulation.** Three bands
+  and a sun disc — no scattering model, no time of day, and no high cloud (the
+  M20 component makes objects, not a dome). Surfaces reflect the gradient,
+  which is what makes the metal and the water read as they do, and they do not
+  reflect the clouds: a cumulus over the pond is not in the pond.
 - **One shadow map, one cascade.** It follows the camera and covers 72 m; past
   that, shadows fade to lit rather than ending on a line ruled across the
   ground. Crisp shadows near the camera *and* shadows out to the horizon would
   need cascades, which M16 does not have.
 
-Refraction, and light that can be driven from a script, are the two upgrades
-that would move this scene most now. `tour_effects.rhai` is where the second
-would land first.
+Refraction is the upgrade that would move this scene most now, and the water is
+its loudest customer. For the forest it is textured bark and alpha-cut leaves —
+the same missing feature seen from the other side, since the renderer has no
+texture-mapped materials at all yet. For the sky it is the cloud *layer* of
+`cloud-design.md` §9: overcast and cirrus belong to the dome, would ride into
+the water reflection for free through `sky_common.wgsl`, and unlike the cloud
+objects would be visible from a camera that never looks up.
 
 ## Measuring frames
 

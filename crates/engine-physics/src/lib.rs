@@ -925,7 +925,7 @@ fn build_collider(
         }
         ColliderShapeKind::Trimesh | ColliderShapeKind::ConvexHull => {
             // Geometry comes from the explicit asset, else the entity's own
-            // Mesh, else — M19 — its Terrain, which generates a surface rather
+            // Mesh, else — M22 — its Terrain, which generates a surface rather
             // than loading one. That last case is how ground becomes collidable
             // without a mesh file duplicating what the renderer already draws,
             // and it uses the same `height_at` the CPU shares with placement.

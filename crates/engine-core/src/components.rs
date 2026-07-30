@@ -1064,6 +1064,223 @@ impl Default for ParticleEmitter {
     }
 }
 
+/// What hangs on a tree's outermost branches.
+///
+/// NOTE: leave these variants undocumented, like [`ParticleBlend`]'s — a doc
+/// comment on a variant turns the schema into oneOf/const and blinds the
+/// validation walk's closed-vocabulary check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TreeLeaf {
+    #[default]
+    Blade,
+    Cluster,
+    None,
+}
+
+/// A procedurally generated tree (M19): trunk, recursive branches, and leaves,
+/// grown from a `seed` into geometry the renderer draws like any other mesh.
+///
+/// The tree is built in entity-local space with its **base at the origin,
+/// growing along +Y**, so `"position": [x, 0, z]` plants it on flat ground and
+/// `Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`
+/// rather than accompanying one (`tree_with_mesh`): the component *is* the
+/// geometry.
+///
+/// # Two draws, two materials
+///
+/// A tree needs bark and foliage, and one `Material` cannot be both. The
+/// entity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]
+/// and [`Tree::leaf_roughness`], and are always opaque and non-metallic. That
+/// last part is a constraint, not an oversight: every leaf of one tree is a
+/// single mesh, and the blended pass sorts whole draws, so translucent leaves
+/// could not be sorted against each other and would visibly z-fight.
+///
+/// # Randomness
+///
+/// Everything jittered is drawn from a private xorshift seeded by `seed`,
+/// consumed in a fixed order (a branch draws its own wander, then recurses into
+/// its children in index order, then scatters its leaves), so two trees that
+/// differ only in `seed` are different trees and the *same* tree is the same
+/// mesh forever — which is what lets a forest sit under a pinned baseline.
+/// `jitter` is the master dial for how much variation there is at all; `0`
+/// grows a rigid diagram of a tree.
+///
+/// # Cost
+///
+/// Vertices scale as `(branches · whorl)^levels · segments · sides`, and a
+/// tree that would blow past the budget is a validation error
+/// (`tree_too_complex`) rather than a hang. `levels: 2` with the default
+/// branching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per
+/// distinct parameter set and is cached, so a forest of nine trees is nine
+/// meshes no matter how many frames render.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tree {
+    /// Seeds every random draw. Two trees with the same parameters and
+    /// different seeds are different trees; the same seed always regrows the
+    /// same tree.
+    pub seed: u32,
+
+    /// Trunk length in meters, before `Transform.scale`. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub height: f32,
+
+    /// Trunk radius at the ground, in meters, before `Transform.scale`. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub trunk_radius: f32,
+
+    /// How many generations of branches hang off the trunk. `0` is a bare
+    /// pole; `2` reads as a tree; `3` is a good hero tree; `4` is expensive.
+    /// `[0, 4]`.
+    #[schemars(range(min = 0, max = 4))]
+    pub levels: u32,
+
+    /// Attachment points spaced along each parent branch. `[0, 16]`.
+    #[schemars(range(min = 0, max = 16))]
+    pub branches: u32,
+
+    /// Branches emitted at each attachment point **on the trunk**, spread
+    /// evenly around it. `1` (default) gives the alternate, spiralling
+    /// arrangement of most broadleaf trees; `4`–`5` gives the whorls of a
+    /// conifer, where a ring of limbs leaves the trunk at one height.
+    ///
+    /// Deeper levels are always alternate, which is both what a real conifer's
+    /// limbs carry and what keeps the geometry finite — a whorl compounding at
+    /// every level multiplies the tree by itself. `[1, 8]`.
+    #[schemars(range(min = 1, max = 8))]
+    pub whorl: u32,
+
+    /// Angle in degrees between a child branch and its parent at the
+    /// attachment. Small angles sweep up (poplar), large ones reach out
+    /// (oak) or hang down (spruce, with negative `tropism`). `[0, 180]`.
+    #[schemars(range(min = 0.0, max = 180.0))]
+    pub branch_angle: f32,
+
+    /// Degrees of rotation around the parent between successive attachment
+    /// points. The default is the golden angle, which is what real phyllotaxis
+    /// converges on and what stops branches from stacking into visible rows.
+    pub branch_twist: f32,
+
+    /// Fraction of a branch's length that carries no children — the bare
+    /// trunk under the crown. `[0, 1)`.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub branch_start: f32,
+
+    /// Child length as a fraction of its parent's. `(0, 2]`.
+    #[schemars(extend("exclusiveMinimum" = 0.0), range(max = 2.0))]
+    pub length_ratio: f32,
+
+    /// How much shorter children get toward the parent's tip, `[0, 1]`: `0`
+    /// makes every child the same length (a round crown), `0.8` makes the top
+    /// ones stubs (the cone of a conifer).
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub length_falloff: f32,
+
+    /// Child radius as a fraction of the parent's radius where it attaches.
+    /// `(0, 1]`.
+    #[schemars(extend("exclusiveMinimum" = 0.0), range(max = 1.0))]
+    pub radius_ratio: f32,
+
+    /// Radius at a branch's tip as a fraction of its base. `[0, 1]`; small
+    /// values give the sharp taper of a young shoot.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub taper: f32,
+
+    /// Extra radius at the very foot of the trunk, as a fraction: `0.4` makes
+    /// the base 40% wider than the trunk above it. Root flare is most of what
+    /// says "grown" rather than "placed", and it is at eye level. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub flare: f32,
+
+    /// Degrees of random wander per meter of branch. This is the gnarl: `0`
+    /// grows perfectly straight poles, `8` is a healthy tree, `25` is an old
+    /// olive. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub crook: f32,
+
+    /// Degrees per meter that a branch curves toward the sky as it grows.
+    /// Positive lifts tips toward the light (most trees), negative lets
+    /// gravity droop them (spruce, willow). This is what makes branches curve
+    /// rather than point.
+    ///
+    /// It does not apply to the trunk, whose line is [`Tree::crook`] alone: a
+    /// negative tropism on the trunk is unstable — a degree of crook tips it
+    /// off vertical and the bend then compounds until the tree grows sideways.
+    pub tropism: f32,
+
+    /// How much every jittered quantity — branch length, radius, angle, leaf
+    /// placement — varies, as a fraction. `[0, 1)`; `0` is a diagram.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub jitter: f32,
+
+    /// Radial sides of a branch tube. `[3, 16]`; `5`–`6` is plenty, since bark
+    /// silhouettes read from the branching, not the cross-section.
+    #[schemars(range(min = 3, max = 16))]
+    pub sides: u32,
+
+    /// Lengthwise segments per branch — how finely a branch can curve. `[1, 16]`.
+    #[schemars(range(min = 1, max = 16))]
+    pub segments: u32,
+
+    /// What hangs on the outermost branches: `"blade"` (a folded leaf, the
+    /// default), `"cluster"` (a foliage blob — cheaper per unit of cover, and
+    /// what conifer sprays and distant trees want), or `"none"` for a bare
+    /// winter or dead tree.
+    pub leaf: TreeLeaf,
+
+    /// Length of one leaf, or diameter of one cluster, in meters. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub leaf_size: f32,
+
+    /// Leaves scattered along each outermost branch. `[0, 64]`; `0` is
+    /// equivalent to `"leaf": "none"`.
+    #[schemars(range(min = 0, max = 64))]
+    pub leaves_per_branch: u32,
+
+    /// Foliage albedo, linear RGB in `[0, 1]` — the leaves' half of the tree's
+    /// appearance, the entity's `Material` being the bark's.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub leaf_color: Vec3,
+
+    /// Foliage roughness, `[0, 1]`. Leaves are waxy, not matte: a little
+    /// specular is what separates them from felt.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub leaf_roughness: f32,
+}
+
+impl Default for Tree {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            height: 6.0,
+            trunk_radius: 0.16,
+            levels: 2,
+            branches: 5,
+            whorl: 1,
+            branch_angle: 48.0,
+            // The golden angle: 360° / φ².
+            branch_twist: 137.5,
+            branch_start: 0.35,
+            length_ratio: 0.62,
+            length_falloff: 0.35,
+            radius_ratio: 0.6,
+            taper: 0.12,
+            flare: 0.4,
+            crook: 8.0,
+            tropism: 8.0,
+            jitter: 0.25,
+            sides: 6,
+            segments: 5,
+            leaf: TreeLeaf::Blade,
+            leaf_size: 0.3,
+            leaves_per_branch: 6,
+            leaf_color: Vec3::new(0.09, 0.26, 0.08),
+            leaf_roughness: 0.75,
+        }
+    }
+}
+
 /// One travelling wave in a [`Water`] surface's sum.
 ///
 /// Gerstner rather than a sine: a Gerstner wave moves each point of the surface
@@ -1121,6 +1338,22 @@ impl Default for Wave {
             amplitude: 0.06,
             steepness: 0.4,
             speed: 1.2,
+        }
+    }
+}
+
+impl Tree {
+    /// The leaves' surface, assembled from the foliage fields. Opaque and
+    /// non-metallic by construction — see the type's note on why leaves cannot
+    /// be transparent.
+    pub fn leaf_material(&self) -> Material {
+        Material {
+            albedo: self.leaf_color,
+            metallic: 0.0,
+            roughness: self.leaf_roughness,
+            emissive: Vec3::ZERO,
+            alpha: 1.0,
+            transmission: 0.0,
         }
     }
 }
@@ -1259,8 +1492,173 @@ impl Default for Water {
     }
 }
 
+/// A cloud: a cumulus, a raft of stratocumulus, a storm anvil, a torn wisp.
+///
+/// A recipe rather than a mesh reference, like [`Tree`] — the engine grows it
+/// into a cluster of lobes, each of which grows smaller lobes on itself, seeded
+/// so two clouds with the same parameters and different seeds are different
+/// clouds. The entity owns that geometry, sized by `Transform.scale` like a
+/// water surface, so a `Cloud` entity carries **no** `Mesh` and **no**
+/// `Material` (`cloud_with_mesh`). A cloud is not a GGX surface: what a
+/// `Material` describes, `color` / `shade_color` / `density` / `feather`
+/// describe instead.
+///
+/// Non-uniform scale is the normal case, not an edge case — `scale: [24, 12,
+/// 24]` is what makes a cumulus wider than it is tall, and it oblates the lobes
+/// with it.
+///
+/// Shading is three cheap stand-ins for multiple scattering, none of which is
+/// volumetric: wrapped diffuse between `shade_color` and `color`, a forward-
+/// scattering silver lining when the camera looks toward the sun, and an alpha
+/// that fades toward each lobe's own silhouette. Clouds do not cast shadows
+/// (the engine has one shadow cascade and it is fitted to the camera, not to a
+/// cloud at altitude) and are not lit by `PointLight`s.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Cloud {
+    /// Seeds every random draw. Two clouds with the same parameters and
+    /// different seeds are different clouds; the same seed always regrows the
+    /// same cloud.
+    pub seed: u32,
+
+    /// Lobes in the base cluster, spread over the footprint on a golden-angle
+    /// spiral. `[1, 32]`; a handful reads as one cumulus, a dozen or more as a
+    /// raft.
+    #[schemars(range(min = 1, max = 32))]
+    pub lobes: u32,
+
+    /// Generations of smaller lobes piled on the base ones. `[0, 3]`: `0` is a
+    /// cluster of plain spheres, `2` reads as cauliflower, `3` is expensive.
+    #[schemars(range(min = 0, max = 3))]
+    pub levels: u32,
+
+    /// Lobes grown on each lobe of the previous generation. `[0, 8]`.
+    #[schemars(range(min = 0, max = 8))]
+    pub children: u32,
+
+    /// Diameter of a base lobe as a fraction of the cloud's own size, `(0, 1]`.
+    /// Large values give a few fat billows, small ones a curdled texture.
+    #[schemars(extend("exclusiveMinimum" = 0.0), range(max = 1.0))]
+    pub lobe_size: f32,
+
+    /// Child lobe radius as a fraction of its parent's, `(0, 1]`. This is the
+    /// dial that makes the silhouette detailed at more than one scale — at 1
+    /// every lobe is the same size and the cloud reads as popcorn.
+    #[schemars(extend("exclusiveMinimum" = 0.0), range(max = 1.0))]
+    pub lobe_ratio: f32,
+
+    /// How much the cloud sits on a flat base, `[0, 1]`. `0` is a puffball with
+    /// lobes scattered through its whole box; `1` seats every lobe on the base
+    /// plane and folds what hangs below onto it.
+    ///
+    /// A cumulus has a flat bottom because condensation begins at one altitude,
+    /// which is why every fair-weather cloud in a field shares a base — it is
+    /// the cheapest of this component's cues and one of the most legible.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub flatten: f32,
+
+    /// How strongly child lobes are biased toward the sky, `[0, 1]`. A cumulus
+    /// is a convection cell: its detail is on top, where the air is still
+    /// rising, and its underside is smooth. At `0` children scatter in every
+    /// direction and the cloud reads as a sea urchin.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub rise: f32,
+
+    /// Smooth radial distortion of each lobe, as a fraction of its radius.
+    /// `[0, 1)`; a little is what stops a lobe from reading as a ball.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub wobble: f32,
+
+    /// How much every jittered quantity — lobe radius, placement, child size —
+    /// varies, as a fraction. `[0, 1)`; `0` is a diagram.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub jitter: f32,
+
+    /// Icosphere subdivisions per lobe: 12, 42, 162 or 642 vertices. `[0, 3]`.
+    /// This is the quality dial, and `2` is plenty for anything at cloud
+    /// distance.
+    #[schemars(range(min = 0, max = 3))]
+    pub detail: u32,
+
+    /// How opaque the cloud is where it is thickest, `[0, 1]`. Lobes do not
+    /// write depth, so overlapping ones accumulate — which is a cheap stand-in
+    /// for optical depth, and why a wisp wants a much lower value than a storm.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub density: f32,
+
+    /// How crisp the cloud's edges are, `[0, 8]`. Alpha follows
+    /// `1 - (1 - facing)^feather` as the surface turns away from the camera, so
+    /// **higher is crisper** and low values are wispy: 1 fades the whole
+    /// surface proportionally, 3 keeps the body opaque and thins only the last
+    /// few degrees before the silhouette.
+    ///
+    /// It is doing two jobs. A real cloud's silhouette is where it thins out,
+    /// not where its geometry stops — and the same fade is what hides the
+    /// boundaries *between* two interpenetrating lobes, since each of them
+    /// vanishes exactly where its surface turns away.
+    #[schemars(range(min = 0.0, max = 8.0))]
+    pub feather: f32,
+
+    /// Linear RGB of the sunlit side. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// Linear RGB of the self-shadowed side, each component `[0, 1]`.
+    ///
+    /// Blue-grey rather than grey by default, and that is the point: the
+    /// underside of a cloud is lit by the sky above it, not by the sun it is
+    /// hiding from. Darkening this toward slate is most of what makes a storm.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub shade_color: Vec3,
+
+    /// World-space metres per second the cloud travels, evaluated against the
+    /// scene clock (`--time`, else `steps / timestep_hz`) — so a drifting sky
+    /// is as reproducible as a wave, and a script is not needed to move it.
+    ///
+    /// The cloud's *shape* never changes with time. Regenerating lobes per
+    /// frame would mint a new mesh every frame and defeat the renderer's upload
+    /// cache; in this engine, generated geometry is made once.
+    #[schemars(with = "[f32; 3]")]
+    pub drift: Vec3,
+
+    /// Metres after which a drifting cloud recycles to where it started. `>= 0`;
+    /// `0` (the default) lets it drift away for good.
+    ///
+    /// Wrapping *teleports* the cloud, so it wants to be wider than the view or
+    /// far enough out that fog has already eaten it before it jumps.
+    #[schemars(range(min = 0.0))]
+    pub drift_wrap: f32,
+}
+
+impl Default for Cloud {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            lobes: 6,
+            levels: 2,
+            children: 3,
+            lobe_size: 0.42,
+            lobe_ratio: 0.55,
+            // Absent is off, as everywhere else in the engine: a bare
+            // `{"type": "Cloud"}` is a puffball, and a flat base is asked for
+            // by name.
+            flatten: 0.0,
+            rise: 0.35,
+            wobble: 0.12,
+            jitter: 0.3,
+            detail: 2,
+            density: 0.9,
+            feather: 3.0,
+            color: Vec3::new(1.0, 0.98, 0.95),
+            shade_color: Vec3::new(0.42, 0.46, 0.58),
+            drift: Vec3::ZERO,
+            drift_wrap: 0.0,
+        }
+    }
+}
+
 /// A patch of ground: displaced terrain with a procedurally shaded surface
-/// (M19).
+/// (M22).
 ///
 /// The entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns
 /// both, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is
@@ -1560,7 +1958,9 @@ components!(
     HudText,
     HudRect,
     ParticleEmitter,
+    Tree,
     Water,
+    Cloud,
     Terrain,
 );
 
@@ -1654,7 +2054,9 @@ mod tests {
                 "HudText",
                 "HudRect",
                 "ParticleEmitter",
+                "Tree",
                 "Water",
+                "Cloud",
                 "Terrain"
             ]
         );

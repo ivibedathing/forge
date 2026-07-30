@@ -71,7 +71,12 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     }
 
     for key in object.keys() {
-        if key != "name" && key != "entities" && key != "physics" && key != "environment" {
+        if key != "name"
+            && key != "entities"
+            && key != "physics"
+            && key != "environment"
+            && key != "daylight"
+        {
             errors.push(
                 cx.err(
                     codes::UNKNOWN_FIELD,
@@ -79,7 +84,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     &format!("/{key}"),
                 )
                 .field(key)
-                .suggest_from(key, ["name", "entities", "physics", "environment"]),
+                .suggest_from(
+                    key,
+                    ["name", "entities", "physics", "environment", "daylight"],
+                ),
             );
         }
     }
@@ -90,6 +98,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
 
     if let Some(environment) = object.get("environment") {
         check_environment_block(&cx, environment, &mut errors);
+    }
+
+    if let Some(daylight) = object.get("daylight") {
+        check_daylight_block(&cx, daylight, object.get("environment"), &mut errors);
     }
 
     let entities = match object.get("entities") {
@@ -227,6 +239,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
 
         let mut seen_types: Vec<String> = Vec::new();
         let mut has_mesh = false;
+        let mut mesh_path: Option<String> = None;
+        let mut tree_path: Option<String> = None;
+        let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
         let mut has_transform = false;
         let mut scale = glam::Vec3::ONE;
@@ -279,6 +294,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
             if type_name == "Mesh" {
                 has_mesh = true;
+                mesh_path = Some(component_path.clone());
+            }
+            if type_name == "Tree" {
+                tree_path = Some(component_path.clone());
             }
             if type_name == "Material" {
                 material_paths.push(component_path.clone());
@@ -309,6 +328,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 }
                 Some(ComponentData::Water(w)) => {
                     water = Some((w, component_path));
+                }
+                Some(ComponentData::Cloud(_)) => {
+                    cloud_path = Some(component_path);
                 }
                 Some(ComponentData::Terrain(t)) => {
                     terrain = Some((t, component_path));
@@ -388,7 +410,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 crate::components::ColliderShapeKind::Trimesh
                     | crate::components::ColliderShapeKind::ConvexHull
             );
-            // Terrain counts as geometry to borrow (M19): a `trimesh` collider
+            // Terrain counts as geometry to borrow (M22): a `trimesh` collider
             // on a terrain patch with no asset takes the generated surface,
             // which is how ground is collidable without a duplicate mesh file.
             if mesh_shape && collider_data.asset.is_none() && !has_mesh && terrain.is_none() {
@@ -502,6 +524,57 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
+        // ── Tree entity checks (M19) ──────────────────────────────────
+        //
+        // A `Tree` *is* the entity's geometry. Carrying a `Mesh` as well would
+        // draw both at one transform, which is never what an author means and
+        // has no defined winner — the same reasoning as `wheel_with_physics`.
+        if let (Some(path), true) = (&tree_path, has_mesh) {
+            errors.push(
+                cx.err(
+                    codes::TREE_WITH_MESH,
+                    format!(
+                        "entity {name:?} has both a Tree and a Mesh; a Tree generates \
+                         the entity's geometry, so the two would draw on top of each \
+                         other — split them into two entities"
+                    ),
+                    mesh_path.as_deref().unwrap_or(path),
+                )
+                .entity(name)
+                .component("Tree"),
+            );
+        }
+
+        // ── Cloud entity checks (M20) ─────────────────────────────────
+        //
+        // A `Cloud` grows the entity's geometry and shades it with its own
+        // fields, so a `Mesh` or a `Material` beside it is a second, silently
+        // ignored answer to what this entity is — `water_with_mesh`'s reasoning,
+        // and an error for the same reason: the two authorings look identical in
+        // the file and nothing in the render says which one lost.
+        if let Some(path) = &cloud_path {
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::CLOUD_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a Cloud component and also {extras}; \
+                             a Cloud grows its own geometry (sized by Transform.scale) \
+                             and carries its own colours — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Cloud"),
+                );
+            }
+        }
+
         // ── Water surface checks (M18) ────────────────────────────────
         if let Some((water, path)) = &water {
             // A `Water` entity generates its own grid and shades it with its
@@ -562,7 +635,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
-        // ── Terrain checks (M19) ─────────────────────────────────────────
+        // ── Terrain checks (M22) ─────────────────────────────────────────
         if let Some((terrain, path)) = &terrain {
             // Same rule as water, for the same reason: the patch generates its
             // own surface and paints it from its own layers, so a Mesh or a
@@ -622,10 +695,16 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         }
 
         // Legal but almost certainly wrong: dead data from editing the wrong
-        // entity. A warning, because rendering it is well-defined. A Water or
-        // Terrain entity's Material is already a hard error above, so it does
-        // not also collect this.
-        if !has_mesh && water.is_none() && terrain.is_none() {
+        // entity. A warning, because rendering it is well-defined. A `Tree`
+        // counts as geometry here — the entity's Material is its bark. A Water
+        // or Cloud entity's Material is already a hard error above, so it does
+        // not also collect this: one mistake, one diagnostic.
+        if !has_mesh
+            && tree_path.is_none()
+            && water.is_none()
+            && cloud_path.is_none()
+            && terrain.is_none()
+        {
             for material_path in material_paths {
                 errors.push(
                     cx.err(
@@ -695,6 +774,60 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 .component(component)
                 .candidates(names),
             );
+        }
+    }
+
+    // ── Daylight ownership (M21) ───────────────────────────────────────
+    // Two owners of one sun is what invariant 8 exists to prevent: a rotation
+    // in a text file that is silently ignored, or silently overwritten, is a
+    // value that does not mean what it says.
+    if let Some(daylight) = object.get("daylight").and_then(Value::as_object) {
+        let drives_sun = daylight
+            .get("drives_sun")
+            .map_or(true, |v| v.as_bool().unwrap_or(true));
+
+        if drives_sun {
+            for (name, path) in &directional_lights {
+                errors.push(
+                    cx.err(
+                        codes::DAYLIGHT_AND_DIRECTIONAL_LIGHT,
+                        format!(
+                            "entity {name:?} has a DirectionalLight, but the scene's daylight \
+                             block drives the sun; remove the light, or set \
+                             daylight.drives_sun to false to keep aiming it by hand"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("DirectionalLight"),
+                );
+            }
+        }
+
+        let drives_sky = daylight
+            .get("drives_sky")
+            .map_or(true, |v| v.as_bool().unwrap_or(true));
+
+        // The other half of `daylight_overrides_sky`: ambient rides with the
+        // sky, so an authored AmbientLight is unread for the same reason the
+        // authored band colors are.
+        if drives_sky {
+            for (name, path) in &ambient_lights {
+                errors.push(
+                    cx.err(
+                        codes::DAYLIGHT_OVERRIDES_SKY,
+                        format!(
+                            "entity {name:?} has an AmbientLight, but daylight computes the \
+                             ambient term from its palette; set daylight.drives_sky to false \
+                             to keep this one"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("AmbientLight")
+                    .warning(),
+                );
+            }
         }
     }
 
@@ -1362,6 +1495,58 @@ fn check_component(
         // Every emitter constraint is a schema range; the simulation reads
         // whatever validated, so there is nothing semantic left to check.
         ComponentData::ParticleEmitter(_) => {}
+
+        // Every individual tree field is in range by the time we get here, and
+        // the combination can still be absurd: branching is exponential, so
+        // one more level is the whole scene's geometry again. Refusing to grow
+        // it names a number the author can act on, where growing it means a
+        // command that looks like it hung.
+        ComponentData::Tree(ref tree) => {
+            let vertices = crate::tree::vertex_count(tree);
+            if vertices > crate::tree::MAX_TREE_VERTICES {
+                errors.push(
+                    cx.err(
+                        codes::TREE_TOO_COMPLEX,
+                        format!(
+                            "this Tree would generate {vertices} vertices, over the \
+                             {} the engine will grow; lower \"levels\", \"branches\", \
+                             \"whorl\", \"sides\", or \"segments\"",
+                            crate::tree::MAX_TREE_VERTICES
+                        ),
+                        component_path,
+                    )
+                    .entity(entity)
+                    .component("Tree")
+                    .field("levels"),
+                );
+            }
+        }
+
+        // Lobes are exponential in `levels` exactly as branches are, and the
+        // ceiling is reachable by one keystroke: `levels: 3, children: 8` at 32
+        // base lobes is 18,720 lobes. Refusing names a number the author can
+        // act on; growing it is a command that looks like it hung.
+        ComponentData::Cloud(ref cloud) => {
+            let vertices = crate::cloud::vertex_count(cloud);
+            if vertices > crate::cloud::MAX_CLOUD_VERTICES {
+                errors.push(
+                    cx.err(
+                        codes::CLOUD_TOO_COMPLEX,
+                        format!(
+                            "this Cloud would generate {vertices} vertices ({} lobes), \
+                             over the {} the engine will grow; lower \"levels\", \
+                             \"children\", \"lobes\", or \"detail\"",
+                            crate::cloud::lobe_count(cloud),
+                            crate::cloud::MAX_CLOUD_VERTICES
+                        ),
+                        component_path,
+                    )
+                    .entity(entity)
+                    .component("Cloud")
+                    .field("levels"),
+                );
+            }
+        }
 
         // Fragment mesh references resolve like `Mesh.asset` (existence,
         // extension, relative path); fragment collider dimensions are
@@ -2151,6 +2336,324 @@ fn check_environment_block(cx: &Cx<'_>, environment: &Value, errors: &mut Vec<En
     }
 }
 
+/// The scene-level `daylight` block (M21), hand-validated like `physics` and
+/// `environment` rather than walked from the schema.
+///
+/// `environment` comes in so the `daylight_overrides_sky` warning can see
+/// whether the scene also authored sky colors that nothing will read.
+fn check_daylight_block(
+    cx: &Cx<'_>,
+    daylight: &Value,
+    environment: Option<&Value>,
+    errors: &mut Vec<EngineError>,
+) {
+    const FLAGS: [&str; 2] = ["drives_sun", "drives_sky"];
+    const KNOWN: [&str; 10] = [
+        "time_of_day",
+        "day_length",
+        "sun_elevation",
+        "sun_azimuth",
+        "moon_elevation",
+        "moon_color",
+        "moon_intensity",
+        "drives_sun",
+        "drives_sky",
+        "palette",
+    ];
+
+    let Some(object) = daylight.as_object() else {
+        errors.push(cx.wrong_type("daylight", "object", daylight, "/daylight"));
+        return;
+    };
+
+    for key in object.keys() {
+        if !KNOWN.contains(&key.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::UNKNOWN_FIELD,
+                    format!("the daylight block has no field {key:?}"),
+                    &format!("/daylight/{key}"),
+                )
+                .field(key)
+                .suggest_from(key, KNOWN),
+            );
+        }
+    }
+
+    for name in FLAGS {
+        if let Some(value) = object.get(name) {
+            if !value.is_boolean() {
+                errors.push(
+                    cx.wrong_type(name, "boolean", value, &format!("/daylight/{name}"))
+                        .field(name),
+                );
+            }
+        }
+    }
+
+    // (field, low, high, low is exclusive, high is exclusive, prose)
+    let ranges: [(&str, f64, f64, bool, bool, &str); 6] = [
+        ("time_of_day", 0.0, 24.0, false, true, "hours in [0, 24)"),
+        ("day_length", 0.0, f64::INFINITY, false, false, "a number >= 0"),
+        ("sun_elevation", 0.0, 90.0, true, false, "degrees in (0, 90]"),
+        ("sun_azimuth", f64::NEG_INFINITY, f64::INFINITY, false, false, "a finite number of degrees"),
+        ("moon_elevation", 0.0, 90.0, true, false, "degrees in (0, 90]"),
+        ("moon_intensity", 0.0, f64::INFINITY, false, false, "a number >= 0"),
+    ];
+
+    for (name, low, high, low_exclusive, high_exclusive, prose) in ranges {
+        let Some(value) = object.get(name) else {
+            continue;
+        };
+        let ok = value.as_f64().is_some_and(|v| {
+            v.is_finite()
+                && (if low_exclusive { v > low } else { v >= low })
+                && (if high_exclusive { v < high } else { v <= high })
+        });
+        if !ok {
+            errors.push(
+                cx.err(
+                    codes::INVALID_DAYLIGHT_VALUE,
+                    format!("daylight.{name} is {value}; it must be {prose}"),
+                    &format!("/daylight/{name}"),
+                )
+                .field(name),
+            );
+        }
+    }
+
+    if let Some(color) = object.get("moon_color") {
+        check_daylight_color(cx, color, "moon_color", "/daylight/moon_color", true, errors);
+    }
+
+    if let Some(palette) = object.get("palette") {
+        check_daylight_palette(cx, palette, errors);
+    }
+
+    // A scene that authored sky bands and left `drives_sky` on has written
+    // values nothing will ever read — the `unused_material` precedent, and the
+    // fix (`drives_sky: false`) goes in the message.
+    let drives_sky = object
+        .get("drives_sky")
+        .map_or(true, |v| v.as_bool().unwrap_or(true));
+    if drives_sky {
+        let authored: Vec<&str> = environment
+            .and_then(Value::as_object)
+            .map(|env| {
+                ["sky_zenith", "sky_horizon", "sky_ground"]
+                    .into_iter()
+                    .filter(|band| env.contains_key(*band))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if !authored.is_empty() {
+            errors.push(
+                cx.err(
+                    codes::DAYLIGHT_OVERRIDES_SKY,
+                    format!(
+                        "daylight computes the sky, so environment.{} {} never read; \
+                         set daylight.drives_sky to false to keep the authored colors",
+                        authored.join(", environment."),
+                        if authored.len() == 1 { "is" } else { "are" },
+                    ),
+                    "/daylight/drives_sky",
+                )
+                .field("drives_sky")
+                .candidates(authored)
+                .warning(),
+            );
+        }
+    }
+}
+
+/// A linear-RGB triple in a hand-validated block. `clamped` distinguishes a
+/// chromaticity (`[0, 1]`) from a sky band, which is a light source and is
+/// deliberately unbounded above.
+fn check_daylight_color(
+    cx: &Cx<'_>,
+    value: &Value,
+    field: &str,
+    path: &str,
+    clamped: bool,
+    errors: &mut Vec<EngineError>,
+) {
+    let Some(items) = value.as_array().filter(|items| items.len() == 3) else {
+        errors.push(cx.wrong_type(field, "array", value, path).field(field));
+        return;
+    };
+
+    for (channel, item) in items.iter().enumerate() {
+        let ok = item
+            .as_f64()
+            .is_some_and(|v| v.is_finite() && v >= 0.0 && (!clamped || v <= 1.0));
+        if !ok {
+            errors.push(
+                cx.err(
+                    codes::INVALID_DAYLIGHT_VALUE,
+                    format!(
+                        "{field}[{channel}] is {item}; it must be a number in {}",
+                        if clamped { "[0, 1]" } else { "[0, ∞)" }
+                    ),
+                    &format!("{path}/{channel}"),
+                )
+                .field(field),
+            );
+        }
+    }
+}
+
+/// The palette table: at least two keyframes, strictly increasing hours, and
+/// every field of every keyframe present.
+///
+/// Requiring all nine fields is deliberate — a half-specified keyframe
+/// silently interpolating toward black is a worse failure than being told to
+/// finish it.
+fn check_daylight_palette(cx: &Cx<'_>, palette: &Value, errors: &mut Vec<EngineError>) {
+    const COLORS: [&str; 4] = ["sun_color", "ambient_color", "sky_zenith", "sky_ground"];
+    const REQUIRED: [&str; 9] = [
+        "hour",
+        "sun_color",
+        "sun_intensity",
+        "ambient_color",
+        "ambient_intensity",
+        "sky_zenith",
+        "sky_horizon",
+        "sky_ground",
+        "fog_scale",
+    ];
+
+    let Some(keys) = palette.as_array() else {
+        errors.push(cx.wrong_type("palette", "array", palette, "/daylight/palette"));
+        return;
+    };
+
+    if keys.len() < 2 {
+        errors.push(
+            cx.err(
+                codes::DAYLIGHT_PALETTE_INVALID,
+                format!(
+                    "daylight.palette holds {} keyframe(s); it needs at least 2, \
+                     because a day is interpolated between them",
+                    keys.len()
+                ),
+                "/daylight/palette",
+            )
+            .field("palette"),
+        );
+        return;
+    }
+
+    let mut previous_hour: Option<f64> = None;
+
+    for (index, key) in keys.iter().enumerate() {
+        let key_path = format!("/daylight/palette/{index}");
+
+        let Some(object) = key.as_object() else {
+            errors.push(cx.wrong_type("palette", "object", key, &key_path));
+            continue;
+        };
+
+        for name in REQUIRED {
+            if !object.contains_key(name) {
+                errors.push(
+                    cx.err(
+                        codes::MISSING_FIELD,
+                        format!("daylight palette keyframe {index} has no {name:?}"),
+                        &key_path,
+                    )
+                    .field(name),
+                );
+            }
+        }
+
+        for key_name in object.keys() {
+            if !REQUIRED.contains(&key_name.as_str()) {
+                errors.push(
+                    cx.err(
+                        codes::UNKNOWN_FIELD,
+                        format!("a daylight palette keyframe has no field {key_name:?}"),
+                        &format!("{key_path}/{key_name}"),
+                    )
+                    .field(key_name)
+                    .suggest_from(key_name, REQUIRED),
+                );
+            }
+        }
+
+        for name in COLORS.into_iter().chain(["sky_horizon"]) {
+            if let Some(color) = object.get(name) {
+                // Sky bands are light sources and are unbounded above; the
+                // sun and ambient carry their magnitude in an intensity, so
+                // their colors are chromaticities in [0, 1].
+                let clamped = name == "sun_color" || name == "ambient_color";
+                check_daylight_color(
+                    cx,
+                    color,
+                    name,
+                    &format!("{key_path}/{name}"),
+                    clamped,
+                    errors,
+                );
+            }
+        }
+
+        for name in ["sun_intensity", "ambient_intensity", "fog_scale"] {
+            if let Some(value) = object.get(name) {
+                let ok = value.as_f64().is_some_and(|v| v.is_finite() && v >= 0.0);
+                if !ok {
+                    errors.push(
+                        cx.err(
+                            codes::INVALID_DAYLIGHT_VALUE,
+                            format!("palette keyframe {index}: {name} is {value}; it must be >= 0"),
+                            &format!("{key_path}/{name}"),
+                        )
+                        .field(name),
+                    );
+                }
+            }
+        }
+
+        let Some(hour) = object.get("hour") else {
+            continue;
+        };
+        let Some(hour) = hour
+            .as_f64()
+            .filter(|v| v.is_finite() && (0.0..24.0).contains(v))
+        else {
+            errors.push(
+                cx.err(
+                    codes::INVALID_DAYLIGHT_VALUE,
+                    format!("palette keyframe {index}: hour is {hour}; it must be in [0, 24)"),
+                    &format!("{key_path}/hour"),
+                )
+                .field("hour"),
+            );
+            continue;
+        };
+
+        // Sorted, because the table wraps: an unsorted palette has no
+        // well-defined "next keyframe" and would interpolate backwards
+        // through the day rather than failing.
+        if let Some(previous) = previous_hour {
+            if hour <= previous {
+                errors.push(
+                    cx.err(
+                        codes::DAYLIGHT_PALETTE_INVALID,
+                        format!(
+                            "palette keyframe {index} is at hour {hour}, not after the \
+                             previous keyframe's {previous}; hours must strictly increase"
+                        ),
+                        &format!("{key_path}/hour"),
+                    )
+                    .field("hour"),
+                );
+            }
+        }
+        previous_hour = Some(hour);
+    }
+}
+
 fn article(word: &str) -> &'static str {
     match word.chars().next() {
         Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
@@ -2875,6 +3378,51 @@ mod tests {
     }
 
     #[test]
+    fn a_tree_is_the_entitys_geometry_and_carries_its_own_material() {
+        // The happy path, and the thing that makes a Tree different from every
+        // other component: a Material with no Mesh next to it is *not* the
+        // unused_material warning here, because the Material is the bark.
+        let good = r#"{"name":"s","entities":[
+            {"name":"Oak","components":[
+                {"type":"Transform","position":[0.0,0.0,0.0]},
+                {"type":"Tree","seed":3,"levels":2},
+                {"type":"Material","albedo":[0.2,0.14,0.09]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(good), Vec::<&str>::new());
+
+        // A Tree and a Mesh on one entity would draw both at one transform.
+        let doubled = good.replace(
+            r#"{"type":"Tree""#,
+            r#"{"type":"Mesh","asset":"builtin:cube"},{"type":"Tree""#,
+        );
+        assert_eq!(codes_of(&doubled), ["tree_with_mesh"]);
+
+        // Branching is exponential, so the combination of in-range fields can
+        // still be absurd; refusing names a number rather than hanging.
+        let huge = good.replace(
+            r#""seed":3,"levels":2"#,
+            r#""seed":3,"levels":4,"branches":12,"whorl":6,"sides":12,"segments":8"#,
+        );
+        let errors = validate_source(&huge, "test.json");
+        assert_eq!(errors[0].error, "tree_too_complex");
+        assert!(
+            errors[0].message.contains("vertices"),
+            "the error should name the number: {}",
+            errors[0].message
+        );
+
+        // Typos in the closed leaf vocabulary get a suggestion like any other.
+        let typo = good.replace(r#""levels":2"#, r#""levels":2,"leaf":"cluser""#);
+        let errors = validate_source(&typo, "test.json");
+        assert_eq!(errors[0].error, "invalid_field_type");
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("cluster")
+        );
+    }
+
+    #[test]
     fn enforces_per_shape_collider_fields() {
         let source = r#"{"name":"s","entities":[
             {"name":"A","components":[
@@ -3061,6 +3609,146 @@ mod tests {
             ]}
         ]}"#;
         assert!(validate_source(alone, "test.json").is_empty());
+    }
+
+    // ── Daylight (M21) ─────────────────────────────────────────────
+
+    #[test]
+    fn daylight_and_an_authored_sun_are_two_owners_of_one_thing() {
+        // Invariant 8: a rotation in a text file that is silently ignored, or
+        // silently overwritten, is a value that does not mean what it says.
+        let both = r#"{"name":"s","daylight":{},"entities":[
+            {"name":"Sun","components":[
+                {"type":"Transform","rotation":[-40.0,0.0,0.0]},
+                {"type":"DirectionalLight"}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(both), ["daylight_and_directional_light"]);
+
+        // `drives_sun: false` is the escape hatch, and it makes the same
+        // scene legal — daylight then paints the sky and leaves the sun alone.
+        let hand_aimed = r#"{"name":"s","daylight":{"drives_sun":false},"entities":[
+            {"name":"Sun","components":[
+                {"type":"Transform","rotation":[-40.0,0.0,0.0]},
+                {"type":"DirectionalLight"}
+            ]}
+        ]}"#;
+        assert!(validate_source(hand_aimed, "test.json").is_empty());
+
+        // And daylight with no light entities at all is the ordinary case:
+        // the block *is* the sun.
+        let alone = r#"{"name":"s","daylight":{"time_of_day":7.25},"entities":[]}"#;
+        assert!(validate_source(alone, "test.json").is_empty());
+    }
+
+    #[test]
+    fn authored_sky_under_daylight_warns_rather_than_failing() {
+        // The `unused_material` precedent: a value nothing reads is worth
+        // saying out loud, but it is not a broken scene.
+        let source = r#"{"name":"s",
+            "daylight":{},
+            "environment":{"sky":true,"sky_zenith":[0.1,0.2,0.3]},
+            "entities":[]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].error, "daylight_overrides_sky");
+        assert!(errors[0].is_warning(), "this must not fail the scene");
+
+        // An AmbientLight is unread for the same reason, and says so.
+        let ambient = r#"{"name":"s","daylight":{},"entities":[
+            {"name":"Sky","components":[{"type":"AmbientLight"}]}
+        ]}"#;
+        let errors = validate_source(ambient, "test.json");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].error, "daylight_overrides_sky");
+        assert!(errors[0].is_warning());
+
+        // `drives_sky: false` silences both, because then they are read.
+        let kept = r#"{"name":"s",
+            "daylight":{"drives_sky":false},
+            "environment":{"sky":true,"sky_zenith":[0.1,0.2,0.3]},
+            "entities":[
+                {"name":"Sky","components":[{"type":"AmbientLight"}]}
+            ]}"#;
+        assert!(validate_source(kept, "test.json").is_empty());
+    }
+
+    #[test]
+    fn daylight_values_are_range_checked() {
+        for (field, value) in [
+            ("time_of_day", "24.0"),   // the hour is [0, 24), open at the top
+            ("time_of_day", "-1.0"),
+            ("day_length", "-5.0"),
+            ("sun_elevation", "0.0"),  // (0, 90]: a sun that never rises
+            ("sun_elevation", "91.0"),
+            ("moon_elevation", "0.0"),
+            ("moon_intensity", "-0.1"),
+        ] {
+            let source = format!(
+                r#"{{"name":"s","daylight":{{"{field}":{value}}},"entities":[]}}"#
+            );
+            assert_eq!(
+                codes_of(&source),
+                ["invalid_daylight_value"],
+                "daylight.{field} = {value} should have been rejected"
+            );
+        }
+
+        // A typo'd field gets a suggestion, not a silent default.
+        let typo = r#"{"name":"s","daylight":{"time_of_dey":6.0},"entities":[]}"#;
+        let errors = validate_source(typo, "test.json");
+        assert_eq!(errors[0].error, "unknown_field");
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("time_of_day")
+        );
+    }
+
+    #[test]
+    fn a_palette_must_be_sorted_and_complete() {
+        // Nine fields, all required: a half-specified keyframe silently
+        // interpolating toward black is a worse failure than being told to
+        // finish it.
+        let full = |hour: &str| {
+            format!(
+                r#"{{"hour":{hour},"sun_color":[1,1,1],"sun_intensity":1.0,
+                     "ambient_color":[1,1,1],"ambient_intensity":0.2,
+                     "sky_zenith":[0.2,0.3,0.6],"sky_horizon":[0.6,0.7,0.8],
+                     "sky_ground":[0.1,0.1,0.1],"fog_scale":1.0}}"#
+            )
+        };
+
+        let sorted = format!(
+            r#"{{"name":"s","daylight":{{"palette":[{},{}]}},"entities":[]}}"#,
+            full("6.0"),
+            full("18.0")
+        );
+        assert!(validate_source(&sorted, "test.json").is_empty());
+
+        // Out of order: the table wraps, so an unsorted one has no
+        // well-defined "next keyframe" and would run backwards through the day.
+        let unsorted = format!(
+            r#"{{"name":"s","daylight":{{"palette":[{},{}]}},"entities":[]}}"#,
+            full("18.0"),
+            full("6.0")
+        );
+        assert_eq!(codes_of(&unsorted), ["daylight_palette_invalid"]);
+
+        // One keyframe is not a day.
+        let lonely = format!(
+            r#"{{"name":"s","daylight":{{"palette":[{}]}},"entities":[]}}"#,
+            full("12.0")
+        );
+        assert_eq!(codes_of(&lonely), ["daylight_palette_invalid"]);
+
+        // A missing field is located, not defaulted.
+        let partial = format!(
+            r#"{{"name":"s","daylight":{{"palette":[{{"hour":6.0}},{}]}},"entities":[]}}"#,
+            full("18.0")
+        );
+        let errors = validate_source(&partial, "test.json");
+        assert!(errors.iter().all(|e| e.error == "missing_field"));
+        assert_eq!(errors.len(), 8, "eight of the nine fields are absent");
     }
 
     #[test]

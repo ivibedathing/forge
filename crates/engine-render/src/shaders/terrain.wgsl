@@ -1,4 +1,4 @@
-// Terrain shading (M19): the generative material system, spliced into the mesh
+// Terrain shading (M22): the generative material system, spliced into the mesh
 // shader at pipeline build.
 //
 // **`mesh.wgsl` is not edited, and that is the whole point.** Terrain is an
@@ -113,7 +113,7 @@ struct TerrainSurface {
 };
 
 // A terrain pixel's material and normal. Returns what it was handed when this
-// draw is not terrain, which is every draw the engine made before M19.
+// draw is not terrain, which is every draw the engine made before M22.
 fn terrain_surface(
     world_position: vec3<f32>,
     n: vec3<f32>,

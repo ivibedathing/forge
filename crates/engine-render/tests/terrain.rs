@@ -1,4 +1,4 @@
-//! Pixel-level tests for M19 terrain.
+//! Pixel-level tests for M22 terrain.
 //!
 //! Same shape as `water.rs` and `environment.rs`: render a small scene offscreen
 //! through the real screenshot path, assert on the bytes, and skip cleanly on a
@@ -37,6 +37,7 @@ fn render(source: &str) -> Image {
     offscreen::render(
         &items,
         &scene.water_items(),
+        &scene.cloud_items(),
         &[],
         &camera,
         camera_transform.matrix(),
@@ -317,7 +318,7 @@ fn a_scene_with_no_terrain_is_untouched_by_the_terrain_path() {
         return;
     }
 
-    // M19 grew the object uniform and put a branch in the middle of `fs_main`.
+    // M22 grew the object uniform and put a branch in the middle of `fs_main`.
     // Eighteen milestones of committed baselines say neither may move a pixel of
     // an ordinary mesh. This is the cheap in-repo half of that check; the whole
     // one is an A/B between binaries built at `main` and here.

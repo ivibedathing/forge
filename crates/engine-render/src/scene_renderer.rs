@@ -29,7 +29,7 @@ use engine_core::components::{Camera, ParticleBlend, Terrain, Water, MAX_POINT_L
 use engine_core::math::{Mat4, Vec3};
 use engine_core::mesh::MeshData;
 use engine_core::particles::ParticleInstance;
-use engine_core::scene::{EnvironmentSettings, RenderItem, ResolvedLights, WaterItem};
+use engine_core::scene::{CloudItem, EnvironmentSettings, RenderItem, ResolvedLights, WaterItem};
 use engine_core::terrain::MAX_TERRAIN_LAYERS;
 use engine_core::water::MAX_WAVES;
 
@@ -49,7 +49,7 @@ struct ObjectUniform {
     /// x = alpha, y = transmission; z and w are padding.
     surface: [f32; 4],
 
-    /// Terrain shading (M19): x = live layer count (0 for every other draw,
+    /// Terrain shading (M22): x = live layer count (0 for every other draw,
     /// which is the branch that keeps this free), y = texture scale in metres,
     /// z = colour variation, w = bump.
     ///
@@ -144,6 +144,27 @@ struct WaterUniform {
     /// Two vec4s per wave, [`MAX_WAVES`] of them: `(dir.x, dir.z, amplitude, k)`
     /// then `(q, omega, 0, 0)`. Packed by [`pack_waves`].
     waves: [[f32; 4]; MAX_WAVES * 2],
+}
+
+/// Per-cloud data, matching WGSL `CloudUniform` (M20).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct CloudUniform {
+    /// World → clip. Drift displaces in **world** space, so unlike a mesh this
+    /// cannot be a premultiplied MVP.
+    view_proj: [[f32; 4]; 4],
+    model: [[f32; 4]; 4],
+    /// Inverse-transpose of `model`: non-uniform scale is the normal case for a
+    /// cloud, since that is what makes one wider than it is tall.
+    normal_matrix: [[f32; 4]; 4],
+    /// rgb = sunlit color, w = density.
+    color_density: [f32; 4],
+    /// rgb = self-shadowed color, w = feather exponent.
+    shade_feather: [f32; 4],
+    /// xyz = drift in m/s, w = wrap distance in metres (0 = never wrap).
+    drift_wrap: [f32; 4],
+    /// x = scene time in seconds; y, z and w are padding.
+    params: [f32; 4],
 }
 
 /// Per-pass particle data, matching WGSL `ParticleFrame`.
@@ -372,6 +393,10 @@ pub struct ScenePass<'a> {
     /// it. Pass `&[]` for a scene with no water, which is then rendered by
     /// exactly the passes that existed before water did.
     pub water: &'a [WaterItem],
+    /// Clouds (M20), drawn with the blended geometry and sorted among it. Pass
+    /// `&[]` for a scene with no clouds, which is then rendered by exactly the
+    /// draws that existed before clouds did.
+    pub clouds: &'a [CloudItem],
     /// Particle billboards, drawn after the meshes (alpha-blended, depth-read
     /// only). Pass `&[]` when nothing simulates particles.
     pub particles: &'a [ParticleInstance],
@@ -407,14 +432,16 @@ pub struct SceneRenderer {
     /// with `alpha < 1` or `transmission > 0`.
     transparent_pipeline: wgpu::RenderPipeline,
     /// `pipeline` with the terrain material generator spliced into its shader
-    /// (M19) — see `with_terrain` for why this is a separate module rather than
+    /// (M22) — see `with_terrain` for why this is a separate module rather than
     /// a branch inside the shared one.
     terrain_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     water_pipeline: wgpu::RenderPipeline,
+    cloud_pipeline: wgpu::RenderPipeline,
     depth_resolve_pipeline: wgpu::RenderPipeline,
     water_layout: wgpu::BindGroupLayout,
+    cloud_layout: wgpu::BindGroupLayout,
     scene_depth_layout: wgpu::BindGroupLayout,
     depth_source_layout: wgpu::BindGroupLayout,
     particle_pipeline: wgpu::RenderPipeline,
@@ -445,6 +472,10 @@ pub struct SceneRenderer {
     /// much larger) uniform.
     water_objects: Option<Uniforms>,
     water_stride: u64,
+    /// And again for clouds (M20), which need neither the scene depth nor the
+    /// shadow map and so carry the smallest uniform of the three.
+    cloud_objects: Option<Uniforms>,
+    cloud_stride: u64,
     /// The opaque depth copy the water pass reads, allocated on the first frame
     /// that has any water in it and resized with the target.
     scene_depth: Option<SceneDepth>,
@@ -602,7 +633,7 @@ impl SceneRenderer {
             cache: None,
         });
 
-        // The terrain twin of the mesh pipeline (M19): identical in every
+        // The terrain twin of the mesh pipeline (M22): identical in every
         // respect except its shader module, which is `mesh.wgsl` with the
         // generative material spliced in by `with_terrain`.
         //
@@ -731,6 +762,23 @@ impl SceneRenderer {
             format,
             multisample,
         );
+        // Clouds (M20). Its own uniform and shader, the mesh pass's frame
+        // binding, and nothing else: no shadow map (the engine has one cascade
+        // and it belongs to the ground) and no scene depth (a cloud is not
+        // absorbing what is behind it).
+        let cloud_layout = uniform_layout(
+            "cloud-uniforms",
+            Some(std::mem::size_of::<CloudUniform>() as u64),
+        );
+        let cloud_pipeline = Self::cloud_pipeline(
+            device,
+            &cloud_layout,
+            &frame_layout,
+            &vertex_layouts,
+            format,
+            multisample,
+        );
+
         let (depth_resolve_pipeline, depth_source_layout) =
             Self::depth_resolve_pipeline(device, samples);
 
@@ -873,6 +921,8 @@ impl SceneRenderer {
 
         let water_stride =
             std::mem::size_of::<WaterUniform>().next_multiple_of(alignment as usize) as u64;
+        let cloud_stride =
+            std::mem::size_of::<CloudUniform>().next_multiple_of(alignment as usize) as u64;
 
         Self {
             pipeline,
@@ -881,8 +931,10 @@ impl SceneRenderer {
             shadow_pipeline,
             sky_pipeline,
             water_pipeline,
+            cloud_pipeline,
             depth_resolve_pipeline,
             water_layout,
+            cloud_layout,
             scene_depth_layout,
             depth_source_layout,
             particle_pipeline,
@@ -901,6 +953,8 @@ impl SceneRenderer {
             object_stride,
             water_objects: None,
             water_stride,
+            cloud_objects: None,
+            cloud_stride,
             scene_depth: None,
             depth_source: None,
             particle_instances: None,
@@ -1062,6 +1116,73 @@ impl SceneRenderer {
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("water-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: vertex_layouts,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    /// The cloud pass (M20): blended like the water pass, and culled like
+    /// neither of the others.
+    ///
+    /// **Culling is off**, and that is load-bearing twice over. A cloud has no
+    /// inside, so back-face culling would delete it the instant the camera flew
+    /// into one; and the far wall of every lobe is what the near wall is being
+    /// blended *over*, which is the accumulation standing in for thickness.
+    ///
+    /// Depth is tested but never written, like every other blended thing here.
+    /// Two clouds have to blend rather than the nearer one masking the farther,
+    /// and a cloud that wrote depth would occlude the sky's own reflection in
+    /// the water below it.
+    fn cloud_pipeline(
+        device: &wgpu::Device,
+        cloud_layout: &wgpu::BindGroupLayout,
+        frame_layout: &wgpu::BindGroupLayout,
+        vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
+        format: wgpu::TextureFormat,
+        multisample: wgpu::MultisampleState,
+    ) -> wgpu::RenderPipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cloud-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("shaders/clouds.wgsl"))),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cloud-pipeline-layout"),
+            bind_group_layouts: &[Some(cloud_layout), Some(frame_layout)],
+            immediate_size: 0,
+        });
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cloud-pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -1280,6 +1401,7 @@ impl SceneRenderer {
             target_size,
             items,
             water,
+            clouds,
             particles,
             view_projection,
             camera_position,
@@ -1428,6 +1550,34 @@ impl SceneRenderer {
             queue.write_buffer(&objects.buffer, 0, &water_bytes);
         }
 
+        // Clouds: the same arrangement again. Their lobe clusters join the
+        // geometry cache (one upload per distinct cloud for the life of the
+        // run, since `cloud::mesh_for` hands back the same `Arc` every frame —
+        // drift is a shader-side translation precisely so that stays true).
+        let cloud_keys: Vec<usize> = clouds
+            .iter()
+            .map(|item| self.upload_mesh(device, &item.mesh))
+            .collect();
+        if !clouds.is_empty() {
+            let stride = self.cloud_stride as usize;
+            let mut cloud_bytes = vec![0u8; stride * clouds.len()];
+            for (index, item) in clouds.iter().enumerate() {
+                let uniform = cloud_uniform(item, view_projection, time);
+                let at = index * stride;
+                cloud_bytes[at..at + std::mem::size_of::<CloudUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(&uniform));
+            }
+            let objects = Uniforms::ensure(
+                &mut self.cloud_objects,
+                device,
+                &self.cloud_layout,
+                "cloud-uniforms",
+                cloud_bytes.len() as u64,
+                Some(std::mem::size_of::<CloudUniform>() as u64),
+            );
+            queue.write_buffer(&objects.buffer, 0, &cloud_bytes);
+        }
+
         // Split the draw list by blend mode. Opaque keeps file order (it is
         // depth-tested, so order does not matter and stability is worth more);
         // everything blended sorts back-to-front, because blending does not
@@ -1446,6 +1596,7 @@ impl SceneRenderer {
             .filter(|&i| items[i].material.is_transparent())
             .map(Blended::Mesh)
             .chain((0..water.len()).map(Blended::Water))
+            .chain((0..clouds.len()).map(Blended::Cloud))
             .collect();
         let sort_key = |entry: &Blended| -> (f32, &str) {
             match *entry {
@@ -1460,6 +1611,16 @@ impl SceneRenderer {
                 Blended::Water(i) => (
                     (water[i].model.w_axis.truncate() - camera_position).length_squared(),
                     water[i].entity.as_str(),
+                ),
+                // Clouds sort by their origin like everything else here, and a
+                // cloud is large, so two overlapping ones sort as wholes rather
+                // than per pixel. That is the same approximation the meshes and
+                // the water make, and clouds are the case where it is most
+                // forgiving: two of them at similar distance are both nearly
+                // the same colour.
+                Blended::Cloud(i) => (
+                    (clouds[i].model.w_axis.truncate() - camera_position).length_squared(),
+                    clouds[i].entity.as_str(),
                 ),
             }
         };
@@ -1745,7 +1906,7 @@ impl SceneRenderer {
             // itself. With water in the scene this waits for the second pass,
             // where the depth behind the water is readable.
             if !water_present {
-                self.draw_blended(&mut pass, &blended, &keys, &water_keys, shadows);
+                self.draw_blended(&mut pass, &blended, &keys, &water_keys, &cloud_keys, shadows);
                 self.draw_particles(&mut pass, particle_count, alpha_particles);
             }
         }
@@ -1804,7 +1965,7 @@ impl SceneRenderer {
                 (true, Some(map)) => map,
                 _ => &self.shadow_placeholder,
             };
-            self.draw_blended(&mut pass, &blended, &keys, &water_keys, shadows);
+            self.draw_blended(&mut pass, &blended, &keys, &water_keys, &cloud_keys, shadows);
             self.draw_particles(&mut pass, particle_count, alpha_particles);
         }
 
@@ -1850,29 +2011,31 @@ impl SceneRenderer {
     /// Draw the blended list — transparent meshes and water surfaces
     /// interleaved, back-to-front.
     ///
-    /// Switching between the two pipelines re-binds groups 1 and 2 because
-    /// their pipeline layouts differ (water has a fourth group), and a pipeline
-    /// change with an incompatible layout invalidates what was bound. Tracking
-    /// the previous kind keeps that to one switch per run of same-kind items,
-    /// which for every scene that exists today is one switch or none.
+    /// Switching between the pipelines re-binds their groups, because the three
+    /// pipeline layouts differ (water has a fourth group, clouds have only
+    /// two) and a pipeline change with an incompatible layout invalidates what
+    /// was bound. Tracking the previous kind keeps that to one switch per run
+    /// of same-kind items.
     fn draw_blended(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         blended: &[Blended],
         keys: &[usize],
         water_keys: &[usize],
+        cloud_keys: &[usize],
         shadows: &ShadowMap,
     ) {
-        let mut current: Option<bool> = None;
+        // 0 = transparent mesh, 1 = water, 2 = cloud.
+        let mut current: Option<u8> = None;
         for entry in blended {
             match *entry {
                 Blended::Mesh(index) => {
                     let Some(objects) = &self.objects else { continue };
-                    if current != Some(false) {
+                    if current != Some(0) {
                         pass.set_pipeline(&self.transparent_pipeline);
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
                         pass.set_bind_group(2, &shadows.bind_group, &[]);
-                        current = Some(false);
+                        current = Some(0);
                     }
                     let mesh = &self.meshes[&keys[index]];
                     pass.set_bind_group(
@@ -1891,12 +2054,12 @@ impl SceneRenderer {
                     else {
                         continue;
                     };
-                    if current != Some(true) {
+                    if current != Some(1) {
                         pass.set_pipeline(&self.water_pipeline);
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
                         pass.set_bind_group(2, &shadows.bind_group, &[]);
                         pass.set_bind_group(3, &scene_depth.bind_group, &[]);
-                        current = Some(true);
+                        current = Some(1);
                     }
                     let mesh = &self.meshes[&water_keys[index]];
                     pass.set_bind_group(
@@ -1906,6 +2069,24 @@ impl SceneRenderer {
                     );
                     // One vertex buffer: the wave derivatives are the normal.
                     pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+                Blended::Cloud(index) => {
+                    let Some(objects) = &self.cloud_objects else { continue };
+                    if current != Some(2) {
+                        pass.set_pipeline(&self.cloud_pipeline);
+                        pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                        current = Some(2);
+                    }
+                    let mesh = &self.meshes[&cloud_keys[index]];
+                    pass.set_bind_group(
+                        0,
+                        &objects.bind_group,
+                        &[(index as u64 * self.cloud_stride) as u32],
+                    );
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
@@ -2117,14 +2298,35 @@ impl HudTarget {
 }
 
 /// One entry in the back-to-front blended list: an index into the draw list's
-/// transparent meshes, or into its water surfaces.
+/// transparent meshes, its water surfaces, or its clouds.
 #[derive(Clone, Copy)]
 enum Blended {
     Mesh(usize),
     Water(usize),
+    Cloud(usize),
 }
 
-/// Pack a terrain's layer table for the mesh shader (M19), zeroed for every
+/// Pack one cloud's shading parameters for the cloud shader (M20).
+///
+/// Everything here is a straight copy out of the component. The only thing
+/// worth naming is what is *absent*: no time is folded into the model matrix,
+/// because `drift` is applied in the vertex stage instead — which is what keeps
+/// `Scene::cloud_items` a pure function of the file and the grown mesh's `Arc`
+/// stable across frames, so the renderer uploads each cloud once.
+fn cloud_uniform(item: &CloudItem, view_projection: Mat4, time: f32) -> CloudUniform {
+    let c = &item.cloud;
+    CloudUniform {
+        view_proj: view_projection.to_cols_array_2d(),
+        model: item.model.to_cols_array_2d(),
+        normal_matrix: item.model.inverse().transpose().to_cols_array_2d(),
+        color_density: c.color.extend(c.density).to_array(),
+        shade_feather: c.shade_color.extend(c.feather).to_array(),
+        drift_wrap: c.drift.extend(c.drift_wrap).to_array(),
+        params: [time, 0.0, 0.0, 0.0],
+    }
+}
+
+/// Pack a terrain's layer table for the mesh shader (M22), zeroed for every
 /// other draw.
 ///
 /// Slope arrives in degrees and stays in degrees: the shader compares it against
@@ -2219,7 +2421,7 @@ fn with_sky_common(source: &str) -> std::borrow::Cow<'static, str> {
     std::borrow::Cow::Owned(combined)
 }
 
-/// The mesh shader with terrain's generative material spliced in (M19).
+/// The mesh shader with terrain's generative material spliced in (M22).
 ///
 /// Terrain is lit exactly like a mesh — the same GGX lobe, shadow lookup, sky
 /// ambient, point lights and fog — so it shares `mesh.wgsl` rather than
@@ -2229,7 +2431,7 @@ fn with_sky_common(source: &str) -> std::borrow::Cow<'static, str> {
 /// and putting the branch inline moved one pixel by one unit in each of three
 /// committed fixtures (see `shaders/terrain.wgsl`).
 ///
-/// So the file on disk stays the pre-M19 one, the plain mesh pipeline compiles
+/// So the file on disk stays the pre-M22 one, the plain mesh pipeline compiles
 /// it unchanged — byte-identical by construction, not by measurement — and this
 /// builds the terrain variant by two anchored substitutions. Both anchors are
 /// asserted: if `mesh.wgsl` is ever reworded, this fails loudly at startup
@@ -2267,7 +2469,7 @@ fn with_terrain(source: &str) -> std::borrow::Cow<'static, str> {
         UNIFORM_TAIL,
         "    // x = alpha, y = transmission; z and w unused.\n\
          \x20   surface: vec4<f32>,\n\
-         \x20   // Terrain (M19), appended at the end so every field above keeps\n\
+         \x20   // Terrain (M22), appended at the end so every field above keeps\n\
          \x20   // the offset the shader already reads it from. x = live layer\n\
          \x20   // count, y = texture scale in metres, z = colour variation,\n\
          \x20   // w = bump.\n\
@@ -2453,6 +2655,51 @@ fn camera_forward(view_projection: Mat4) -> Vec3 {
     (unproject(1.0) - unproject(0.0)).normalize_or_zero()
 }
 
+/// How close to the horizon the *shadow* direction is allowed to get, in
+/// degrees. Not a scene field, and not applied to the lighting direction.
+///
+/// See [`clamp_shadow_elevation`].
+const MIN_SHADOW_ELEVATION_DEGREES: f32 = 5.0;
+
+/// Push a light direction down to at least [`MIN_SHADOW_ELEVATION_DEGREES`]
+/// below horizontal, for shadow-map fitting only.
+///
+/// A sun on the horizon casts shadows of unbounded length, and one a hair
+/// below it casts them *upward* — the ground shadowing itself from beneath.
+/// Neither is a problem the ortho fit or a depth bias can solve, because
+/// neither is a precision failure: the geometry really is that shape. M21's
+/// day/night system reaches those angles twice a day, where before M21 no
+/// scene ever did (every shadow-casting fixture in the repo aims its sun
+/// 24°–33° up).
+///
+/// So the shadow direction stops descending near the horizon while the
+/// direction that *lights* the scene keeps going. It is a lie, and it is told
+/// at the moment when direct light is nearly gone and the shadows it would
+/// have cast are far too long and faint to read. Doing it here rather than in
+/// the scene format keeps it out of the file: an author should not have to
+/// know the renderer has a floor.
+///
+/// Above the floor this returns its input unchanged, which is why it costs
+/// every pre-M21 baseline nothing.
+fn clamp_shadow_elevation(travel: Vec3) -> Vec3 {
+    // `travel` points the way the light goes, so a descending sun has
+    // negative Y and "elevation" is `-travel.y`.
+    let floor = MIN_SHADOW_ELEVATION_DEGREES.to_radians().sin();
+    if travel.y <= -floor {
+        return travel;
+    }
+
+    let horizontal = Vec3::new(travel.x, 0.0, travel.z);
+    let Some(bearing) = horizontal.try_normalize() else {
+        // Straight up or straight down: there is no bearing to preserve, and
+        // straight down is already past the floor.
+        return Vec3::NEG_Y;
+    };
+
+    let elevation = MIN_SHADOW_ELEVATION_DEGREES.to_radians();
+    (bearing * elevation.cos() - Vec3::Y * elevation.sin()).normalize()
+}
+
 /// Fit the sun's orthographic frustum around the part of the world the camera
 /// can see, and return world → light clip.
 ///
@@ -2479,7 +2726,7 @@ fn light_view_projection(
     let center = camera_position + camera_forward(view_projection) * radius;
 
     let travel = if sun_direction.length_squared() > 1e-12 {
-        sun_direction.normalize()
+        clamp_shadow_elevation(sun_direction.normalize())
     } else {
         Vec3::NEG_Y
     };

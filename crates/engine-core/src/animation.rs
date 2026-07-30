@@ -397,6 +397,35 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        // A clip on a tree parameter regrows the tree's mesh every step it
+        // changes — legal, deterministic, and not free. `seed`, `levels`,
+        // `branches`, `whorl`, `sides`, `segments`, `leaves_per_branch`, and
+        // `leaf` are absent for the usual reason: integers and string enums
+        // are not numbers this function can interpolate into.
+        "Tree" => {
+            let Ok(mut c) = world.get::<&mut Tree>(entity) else {
+                return false;
+            };
+            match field {
+                "height" => c.height = scalar,
+                "trunk_radius" => c.trunk_radius = scalar,
+                "branch_angle" => c.branch_angle = scalar,
+                "branch_twist" => c.branch_twist = scalar,
+                "branch_start" => c.branch_start = scalar,
+                "length_ratio" => c.length_ratio = scalar,
+                "length_falloff" => c.length_falloff = scalar,
+                "radius_ratio" => c.radius_ratio = scalar,
+                "taper" => c.taper = scalar,
+                "flare" => c.flare = scalar,
+                "crook" => c.crook = scalar,
+                "tropism" => c.tropism = scalar,
+                "jitter" => c.jitter = scalar,
+                "leaf_size" => c.leaf_size = scalar,
+                "leaf_color" => c.leaf_color = v3,
+                "leaf_roughness" => c.leaf_roughness = scalar,
+                _ => return false,
+            }
+        }
         "Water" => {
             let Ok(mut c) = world.get::<&mut Water>(entity) else {
                 return false;
@@ -421,6 +450,31 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        // A clip on a cloud's *shape* regrows its lobes every step it changes,
+        // which is legal, deterministic and not free — the shading fields below
+        // are uniforms and cost nothing. `seed`, `lobes`, `levels`, `children`
+        // and `detail` are absent for the usual reason: integers are not
+        // numbers this function can interpolate into.
+        "Cloud" => {
+            let Ok(mut c) = world.get::<&mut Cloud>(entity) else {
+                return false;
+            };
+            match field {
+                "lobe_size" => c.lobe_size = scalar,
+                "lobe_ratio" => c.lobe_ratio = scalar,
+                "flatten" => c.flatten = scalar,
+                "rise" => c.rise = scalar,
+                "wobble" => c.wobble = scalar,
+                "jitter" => c.jitter = scalar,
+                "density" => c.density = scalar,
+                "feather" => c.feather = scalar,
+                "color" => c.color = v3,
+                "shade_color" => c.shade_color = v3,
+                "drift" => c.drift = v3,
+                "drift_wrap" => c.drift_wrap = scalar,
+                _ => return false,
+            }
+        }
         "Terrain" => {
             let Ok(mut c) = world.get::<&mut Terrain>(entity) else {
                 return false;
@@ -441,8 +495,6 @@ pub fn set_field(
     true
 }
 
-/// Whether a field is vector-shaped in the published schema (3-element
-/// array). Used by clip validation for `type_mismatch`.
 /// Numeric fields that are nonetheless not animatable, and why.
 ///
 /// A terrain's *shape* is generated on the CPU and cached as one `Arc<MeshData>`
@@ -466,6 +518,8 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     ("Terrain", "warp"),
 ];
 
+/// Whether a field is vector-shaped in the published schema (3-element
+/// array). Used by clip validation for `type_mismatch`.
 fn field_shape(schema: &serde_json::Value, component: &str, field: &str) -> Option<bool> {
     if NOT_ANIMATABLE.contains(&(component, field)) {
         return None;
@@ -922,7 +976,9 @@ mod tests {
                 {"type":"HudText","text":"x"},
                 {"type":"HudRect","size":[1.0,1.0]},
                 {"type":"ParticleEmitter"},
+                {"type":"Tree"},
                 {"type":"Water"},
+                {"type":"Cloud"},
                 {"type":"Terrain"}
             ]}
         ]}"#;

@@ -214,6 +214,15 @@
         },
         "type": "object"
       },
+      "TreeLeaf": {
+        "description": "What hangs on a tree's outermost branches.\n\nNOTE: leave these variants undocumented, like [`ParticleBlend`]'s — a doc\ncomment on a variant turns the schema into oneOf/const and blinds the\nvalidation walk's closed-vocabulary check.",
+        "enum": [
+          "blade",
+          "cluster",
+          "none"
+        ],
+        "type": "string"
+      },
       "Wave": {
         "additionalProperties": false,
         "description": "One travelling wave in a [`Water`] surface's sum.\n\nGerstner rather than a sine: a Gerstner wave moves each point of the surface\n*toward* the crests as well as up, which sharpens crests and flattens\ntroughs. A sum of sines is a rubber sheet, and no amount of tuning it makes\nit read as water.",
@@ -1317,6 +1326,208 @@
       },
       {
         "additionalProperties": false,
+        "description": "A procedurally generated tree (M19): trunk, recursive branches, and leaves,\ngrown from a `seed` into geometry the renderer draws like any other mesh.\n\nThe tree is built in entity-local space with its **base at the origin,\ngrowing along +Y**, so `\"position\": [x, 0, z]` plants it on flat ground and\n`Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`\nrather than accompanying one (`tree_with_mesh`): the component *is* the\ngeometry.\n\n# Two draws, two materials\n\nA tree needs bark and foliage, and one `Material` cannot be both. The\nentity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]\nand [`Tree::leaf_roughness`], and are always opaque and non-metallic. That\nlast part is a constraint, not an oversight: every leaf of one tree is a\nsingle mesh, and the blended pass sorts whole draws, so translucent leaves\ncould not be sorted against each other and would visibly z-fight.\n\n# Randomness\n\nEverything jittered is drawn from a private xorshift seeded by `seed`,\nconsumed in a fixed order (a branch draws its own wander, then recurses into\nits children in index order, then scatters its leaves), so two trees that\ndiffer only in `seed` are different trees and the *same* tree is the same\nmesh forever — which is what lets a forest sit under a pinned baseline.\n`jitter` is the master dial for how much variation there is at all; `0`\ngrows a rigid diagram of a tree.\n\n# Cost\n\nVertices scale as `(branches · whorl)^levels · segments · sides`, and a\ntree that would blow past the budget is a validation error\n(`tree_too_complex`) rather than a hang. `levels: 2` with the default\nbranching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per\ndistinct parameter set and is cached, so a forest of nine trees is nine\nmeshes no matter how many frames render.",
+        "properties": {
+          "branch_angle": {
+            "default": 48.0,
+            "description": "Angle in degrees between a child branch and its parent at the\nattachment. Small angles sweep up (poplar), large ones reach out\n(oak) or hang down (spruce, with negative `tropism`). `[0, 180]`.",
+            "format": "float",
+            "maximum": 180.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "branch_start": {
+            "default": 0.3499999940395355,
+            "description": "Fraction of a branch's length that carries no children — the bare\ntrunk under the crown. `[0, 1)`.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "branch_twist": {
+            "default": 137.5,
+            "description": "Degrees of rotation around the parent between successive attachment\npoints. The default is the golden angle, which is what real phyllotaxis\nconverges on and what stops branches from stacking into visible rows.",
+            "format": "float",
+            "type": "number"
+          },
+          "branches": {
+            "default": 5,
+            "description": "Attachment points spaced along each parent branch. `[0, 16]`.",
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "crook": {
+            "default": 8.0,
+            "description": "Degrees of random wander per meter of branch. This is the gnarl: `0`\ngrows perfectly straight poles, `8` is a healthy tree, `25` is an old\nolive. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "flare": {
+            "default": 0.4000000059604645,
+            "description": "Extra radius at the very foot of the trunk, as a fraction: `0.4` makes\nthe base 40% wider than the trunk above it. Root flare is most of what\nsays \"grown\" rather than \"placed\", and it is at eye level. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "height": {
+            "default": 6.0,
+            "description": "Trunk length in meters, before `Transform.scale`. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "jitter": {
+            "default": 0.25,
+            "description": "How much every jittered quantity — branch length, radius, angle, leaf\nplacement — varies, as a fraction. `[0, 1)`; `0` is a diagram.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "leaf": {
+            "$ref": "#/$defs/TreeLeaf",
+            "default": "blade",
+            "description": "What hangs on the outermost branches: `\"blade\"` (a folded leaf, the\ndefault), `\"cluster\"` (a foliage blob — cheaper per unit of cover, and\nwhat conifer sprays and distant trees want), or `\"none\"` for a bare\nwinter or dead tree."
+          },
+          "leaf_color": {
+            "default": [
+              0.09000000357627869,
+              0.25999999046325684,
+              0.07999999821186066
+            ],
+            "description": "Foliage albedo, linear RGB in `[0, 1]` — the leaves' half of the tree's\nappearance, the entity's `Material` being the bark's.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "leaf_roughness": {
+            "default": 0.75,
+            "description": "Foliage roughness, `[0, 1]`. Leaves are waxy, not matte: a little\nspecular is what separates them from felt.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "leaf_size": {
+            "default": 0.30000001192092896,
+            "description": "Length of one leaf, or diameter of one cluster, in meters. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "leaves_per_branch": {
+            "default": 6,
+            "description": "Leaves scattered along each outermost branch. `[0, 64]`; `0` is\nequivalent to `\"leaf\": \"none\"`.",
+            "format": "uint32",
+            "maximum": 64,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "length_falloff": {
+            "default": 0.3499999940395355,
+            "description": "How much shorter children get toward the parent's tip, `[0, 1]`: `0`\nmakes every child the same length (a round crown), `0.8` makes the top\nones stubs (the cone of a conifer).",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "length_ratio": {
+            "default": 0.6200000047683716,
+            "description": "Child length as a fraction of its parent's. `(0, 2]`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 2.0,
+            "type": "number"
+          },
+          "levels": {
+            "default": 2,
+            "description": "How many generations of branches hang off the trunk. `0` is a bare\npole; `2` reads as a tree; `3` is a good hero tree; `4` is expensive.\n`[0, 4]`.",
+            "format": "uint32",
+            "maximum": 4,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "radius_ratio": {
+            "default": 0.6000000238418579,
+            "description": "Child radius as a fraction of the parent's radius where it attaches.\n`(0, 1]`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 1.0,
+            "type": "number"
+          },
+          "seed": {
+            "default": 0,
+            "description": "Seeds every random draw. Two trees with the same parameters and\ndifferent seeds are different trees; the same seed always regrows the\nsame tree.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "segments": {
+            "default": 5,
+            "description": "Lengthwise segments per branch — how finely a branch can curve. `[1, 16]`.",
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sides": {
+            "default": 6,
+            "description": "Radial sides of a branch tube. `[3, 16]`; `5`–`6` is plenty, since bark\nsilhouettes read from the branching, not the cross-section.",
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 3,
+            "type": "integer"
+          },
+          "taper": {
+            "default": 0.11999999731779099,
+            "description": "Radius at a branch's tip as a fraction of its base. `[0, 1]`; small\nvalues give the sharp taper of a young shoot.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tropism": {
+            "default": 8.0,
+            "description": "Degrees per meter that a branch curves toward the sky as it grows.\nPositive lifts tips toward the light (most trees), negative lets\ngravity droop them (spruce, willow). This is what makes branches curve\nrather than point.\n\nIt does not apply to the trunk, whose line is [`Tree::crook`] alone: a\nnegative tropism on the trunk is unstable — a degree of crook tips it\noff vertical and the bend then compounds until the tree grows sideways.",
+            "format": "float",
+            "type": "number"
+          },
+          "trunk_radius": {
+            "default": 0.1599999964237213,
+            "description": "Trunk radius at the ground, in meters, before `Transform.scale`. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "Tree",
+            "type": "string"
+          },
+          "whorl": {
+            "default": 1,
+            "description": "Branches emitted at each attachment point **on the trunk**, spread\nevenly around it. `1` (default) gives the alternate, spiralling\narrangement of most broadleaf trees; `4`–`5` gives the whorls of a\nconifer, where a ring of limbs leaves the trunk at one height.\n\nDeeper levels are always alternate, which is both what a real conifer's\nlimbs carry and what keeps the geometry finite — a whorl compounding at\nevery level multiplies the tree by itself. `[1, 8]`.",
+            "format": "uint32",
+            "maximum": 8,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
         "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
         "properties": {
           "crest_foam": {
@@ -1452,7 +1663,180 @@
       },
       {
         "additionalProperties": false,
-        "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M19).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
+        "description": "A cloud: a cumulus, a raft of stratocumulus, a storm anvil, a torn wisp.\n\nA recipe rather than a mesh reference, like [`Tree`] — the engine grows it\ninto a cluster of lobes, each of which grows smaller lobes on itself, seeded\nso two clouds with the same parameters and different seeds are different\nclouds. The entity owns that geometry, sized by `Transform.scale` like a\nwater surface, so a `Cloud` entity carries **no** `Mesh` and **no**\n`Material` (`cloud_with_mesh`). A cloud is not a GGX surface: what a\n`Material` describes, `color` / `shade_color` / `density` / `feather`\ndescribe instead.\n\nNon-uniform scale is the normal case, not an edge case — `scale: [24, 12,\n24]` is what makes a cumulus wider than it is tall, and it oblates the lobes\nwith it.\n\nShading is three cheap stand-ins for multiple scattering, none of which is\nvolumetric: wrapped diffuse between `shade_color` and `color`, a forward-\nscattering silver lining when the camera looks toward the sun, and an alpha\nthat fades toward each lobe's own silhouette. Clouds do not cast shadows\n(the engine has one shadow cascade and it is fitted to the camera, not to a\ncloud at altitude) and are not lit by `PointLight`s.",
+        "properties": {
+          "children": {
+            "default": 3,
+            "description": "Lobes grown on each lobe of the previous generation. `[0, 8]`.",
+            "format": "uint32",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "color": {
+            "default": [
+              1.0,
+              0.9800000190734863,
+              0.949999988079071
+            ],
+            "description": "Linear RGB of the sunlit side. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "density": {
+            "default": 0.8999999761581421,
+            "description": "How opaque the cloud is where it is thickest, `[0, 1]`. Lobes do not\nwrite depth, so overlapping ones accumulate — which is a cheap stand-in\nfor optical depth, and why a wisp wants a much lower value than a storm.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "detail": {
+            "default": 2,
+            "description": "Icosphere subdivisions per lobe: 12, 42, 162 or 642 vertices. `[0, 3]`.\nThis is the quality dial, and `2` is plenty for anything at cloud\ndistance.",
+            "format": "uint32",
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "drift": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "World-space metres per second the cloud travels, evaluated against the\nscene clock (`--time`, else `steps / timestep_hz`) — so a drifting sky\nis as reproducible as a wave, and a script is not needed to move it.\n\nThe cloud's *shape* never changes with time. Regenerating lobes per\nframe would mint a new mesh every frame and defeat the renderer's upload\ncache; in this engine, generated geometry is made once.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "drift_wrap": {
+            "default": 0.0,
+            "description": "Metres after which a drifting cloud recycles to where it started. `>= 0`;\n`0` (the default) lets it drift away for good.\n\nWrapping *teleports* the cloud, so it wants to be wider than the view or\nfar enough out that fog has already eaten it before it jumps.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "feather": {
+            "default": 3.0,
+            "description": "How crisp the cloud's edges are, `[0, 8]`. Alpha follows\n`1 - (1 - facing)^feather` as the surface turns away from the camera, so\n**higher is crisper** and low values are wispy: 1 fades the whole\nsurface proportionally, 3 keeps the body opaque and thins only the last\nfew degrees before the silhouette.\n\nIt is doing two jobs. A real cloud's silhouette is where it thins out,\nnot where its geometry stops — and the same fade is what hides the\nboundaries *between* two interpenetrating lobes, since each of them\nvanishes exactly where its surface turns away.",
+            "format": "float",
+            "maximum": 8.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "flatten": {
+            "default": 0.0,
+            "description": "How much the cloud sits on a flat base, `[0, 1]`. `0` is a puffball with\nlobes scattered through its whole box; `1` seats every lobe on the base\nplane and folds what hangs below onto it.\n\nA cumulus has a flat bottom because condensation begins at one altitude,\nwhich is why every fair-weather cloud in a field shares a base — it is\nthe cheapest of this component's cues and one of the most legible.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "jitter": {
+            "default": 0.30000001192092896,
+            "description": "How much every jittered quantity — lobe radius, placement, child size —\nvaries, as a fraction. `[0, 1)`; `0` is a diagram.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "levels": {
+            "default": 2,
+            "description": "Generations of smaller lobes piled on the base ones. `[0, 3]`: `0` is a\ncluster of plain spheres, `2` reads as cauliflower, `3` is expensive.",
+            "format": "uint32",
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lobe_ratio": {
+            "default": 0.550000011920929,
+            "description": "Child lobe radius as a fraction of its parent's, `(0, 1]`. This is the\ndial that makes the silhouette detailed at more than one scale — at 1\nevery lobe is the same size and the cloud reads as popcorn.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 1.0,
+            "type": "number"
+          },
+          "lobe_size": {
+            "default": 0.41999998688697815,
+            "description": "Diameter of a base lobe as a fraction of the cloud's own size, `(0, 1]`.\nLarge values give a few fat billows, small ones a curdled texture.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 1.0,
+            "type": "number"
+          },
+          "lobes": {
+            "default": 6,
+            "description": "Lobes in the base cluster, spread over the footprint on a golden-angle\nspiral. `[1, 32]`; a handful reads as one cumulus, a dozen or more as a\nraft.",
+            "format": "uint32",
+            "maximum": 32,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rise": {
+            "default": 0.3499999940395355,
+            "description": "How strongly child lobes are biased toward the sky, `[0, 1]`. A cumulus\nis a convection cell: its detail is on top, where the air is still\nrising, and its underside is smooth. At `0` children scatter in every\ndirection and the cloud reads as a sea urchin.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "default": 0,
+            "description": "Seeds every random draw. Two clouds with the same parameters and\ndifferent seeds are different clouds; the same seed always regrows the\nsame cloud.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "shade_color": {
+            "default": [
+              0.41999998688697815,
+              0.46000000834465027,
+              0.5799999833106995
+            ],
+            "description": "Linear RGB of the self-shadowed side, each component `[0, 1]`.\n\nBlue-grey rather than grey by default, and that is the point: the\nunderside of a cloud is lit by the sky above it, not by the sun it is\nhiding from. Darkening this toward slate is most of what makes a storm.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": {
+            "const": "Cloud",
+            "type": "string"
+          },
+          "wobble": {
+            "default": 0.11999999731779099,
+            "description": "Smooth radial distortion of each lobe, as a fraction of its radius.\n`[0, 1)`; a little is what stops a lobe from reading as a ball.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M22).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
         "properties": {
           "bump": {
             "default": 0.30000001192092896,
@@ -1569,7 +1953,9 @@
     "HudText",
     "HudRect",
     "ParticleEmitter",
+    "Tree",
     "Water",
+    "Cloud",
     "Terrain"
   ],
   "scene": {
@@ -2665,6 +3051,208 @@
           },
           {
             "additionalProperties": false,
+            "description": "A procedurally generated tree (M19): trunk, recursive branches, and leaves,\ngrown from a `seed` into geometry the renderer draws like any other mesh.\n\nThe tree is built in entity-local space with its **base at the origin,\ngrowing along +Y**, so `\"position\": [x, 0, z]` plants it on flat ground and\n`Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`\nrather than accompanying one (`tree_with_mesh`): the component *is* the\ngeometry.\n\n# Two draws, two materials\n\nA tree needs bark and foliage, and one `Material` cannot be both. The\nentity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]\nand [`Tree::leaf_roughness`], and are always opaque and non-metallic. That\nlast part is a constraint, not an oversight: every leaf of one tree is a\nsingle mesh, and the blended pass sorts whole draws, so translucent leaves\ncould not be sorted against each other and would visibly z-fight.\n\n# Randomness\n\nEverything jittered is drawn from a private xorshift seeded by `seed`,\nconsumed in a fixed order (a branch draws its own wander, then recurses into\nits children in index order, then scatters its leaves), so two trees that\ndiffer only in `seed` are different trees and the *same* tree is the same\nmesh forever — which is what lets a forest sit under a pinned baseline.\n`jitter` is the master dial for how much variation there is at all; `0`\ngrows a rigid diagram of a tree.\n\n# Cost\n\nVertices scale as `(branches · whorl)^levels · segments · sides`, and a\ntree that would blow past the budget is a validation error\n(`tree_too_complex`) rather than a hang. `levels: 2` with the default\nbranching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per\ndistinct parameter set and is cached, so a forest of nine trees is nine\nmeshes no matter how many frames render.",
+            "properties": {
+              "branch_angle": {
+                "default": 48.0,
+                "description": "Angle in degrees between a child branch and its parent at the\nattachment. Small angles sweep up (poplar), large ones reach out\n(oak) or hang down (spruce, with negative `tropism`). `[0, 180]`.",
+                "format": "float",
+                "maximum": 180.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "branch_start": {
+                "default": 0.3499999940395355,
+                "description": "Fraction of a branch's length that carries no children — the bare\ntrunk under the crown. `[0, 1)`.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "branch_twist": {
+                "default": 137.5,
+                "description": "Degrees of rotation around the parent between successive attachment\npoints. The default is the golden angle, which is what real phyllotaxis\nconverges on and what stops branches from stacking into visible rows.",
+                "format": "float",
+                "type": "number"
+              },
+              "branches": {
+                "default": 5,
+                "description": "Attachment points spaced along each parent branch. `[0, 16]`.",
+                "format": "uint32",
+                "maximum": 16,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "crook": {
+                "default": 8.0,
+                "description": "Degrees of random wander per meter of branch. This is the gnarl: `0`\ngrows perfectly straight poles, `8` is a healthy tree, `25` is an old\nolive. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "flare": {
+                "default": 0.4000000059604645,
+                "description": "Extra radius at the very foot of the trunk, as a fraction: `0.4` makes\nthe base 40% wider than the trunk above it. Root flare is most of what\nsays \"grown\" rather than \"placed\", and it is at eye level. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "height": {
+                "default": 6.0,
+                "description": "Trunk length in meters, before `Transform.scale`. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "jitter": {
+                "default": 0.25,
+                "description": "How much every jittered quantity — branch length, radius, angle, leaf\nplacement — varies, as a fraction. `[0, 1)`; `0` is a diagram.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "leaf": {
+                "$ref": "#/$defs/TreeLeaf",
+                "default": "blade",
+                "description": "What hangs on the outermost branches: `\"blade\"` (a folded leaf, the\ndefault), `\"cluster\"` (a foliage blob — cheaper per unit of cover, and\nwhat conifer sprays and distant trees want), or `\"none\"` for a bare\nwinter or dead tree."
+              },
+              "leaf_color": {
+                "default": [
+                  0.09000000357627869,
+                  0.25999999046325684,
+                  0.07999999821186066
+                ],
+                "description": "Foliage albedo, linear RGB in `[0, 1]` — the leaves' half of the tree's\nappearance, the entity's `Material` being the bark's.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "leaf_roughness": {
+                "default": 0.75,
+                "description": "Foliage roughness, `[0, 1]`. Leaves are waxy, not matte: a little\nspecular is what separates them from felt.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "leaf_size": {
+                "default": 0.30000001192092896,
+                "description": "Length of one leaf, or diameter of one cluster, in meters. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "leaves_per_branch": {
+                "default": 6,
+                "description": "Leaves scattered along each outermost branch. `[0, 64]`; `0` is\nequivalent to `\"leaf\": \"none\"`.",
+                "format": "uint32",
+                "maximum": 64,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "length_falloff": {
+                "default": 0.3499999940395355,
+                "description": "How much shorter children get toward the parent's tip, `[0, 1]`: `0`\nmakes every child the same length (a round crown), `0.8` makes the top\nones stubs (the cone of a conifer).",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "length_ratio": {
+                "default": 0.6200000047683716,
+                "description": "Child length as a fraction of its parent's. `(0, 2]`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "maximum": 2.0,
+                "type": "number"
+              },
+              "levels": {
+                "default": 2,
+                "description": "How many generations of branches hang off the trunk. `0` is a bare\npole; `2` reads as a tree; `3` is a good hero tree; `4` is expensive.\n`[0, 4]`.",
+                "format": "uint32",
+                "maximum": 4,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "radius_ratio": {
+                "default": 0.6000000238418579,
+                "description": "Child radius as a fraction of the parent's radius where it attaches.\n`(0, 1]`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "maximum": 1.0,
+                "type": "number"
+              },
+              "seed": {
+                "default": 0,
+                "description": "Seeds every random draw. Two trees with the same parameters and\ndifferent seeds are different trees; the same seed always regrows the\nsame tree.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segments": {
+                "default": 5,
+                "description": "Lengthwise segments per branch — how finely a branch can curve. `[1, 16]`.",
+                "format": "uint32",
+                "maximum": 16,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "sides": {
+                "default": 6,
+                "description": "Radial sides of a branch tube. `[3, 16]`; `5`–`6` is plenty, since bark\nsilhouettes read from the branching, not the cross-section.",
+                "format": "uint32",
+                "maximum": 16,
+                "minimum": 3,
+                "type": "integer"
+              },
+              "taper": {
+                "default": 0.11999999731779099,
+                "description": "Radius at a branch's tip as a fraction of its base. `[0, 1]`; small\nvalues give the sharp taper of a young shoot.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "tropism": {
+                "default": 8.0,
+                "description": "Degrees per meter that a branch curves toward the sky as it grows.\nPositive lifts tips toward the light (most trees), negative lets\ngravity droop them (spruce, willow). This is what makes branches curve\nrather than point.\n\nIt does not apply to the trunk, whose line is [`Tree::crook`] alone: a\nnegative tropism on the trunk is unstable — a degree of crook tips it\noff vertical and the bend then compounds until the tree grows sideways.",
+                "format": "float",
+                "type": "number"
+              },
+              "trunk_radius": {
+                "default": 0.1599999964237213,
+                "description": "Trunk radius at the ground, in meters, before `Transform.scale`. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "Tree",
+                "type": "string"
+              },
+              "whorl": {
+                "default": 1,
+                "description": "Branches emitted at each attachment point **on the trunk**, spread\nevenly around it. `1` (default) gives the alternate, spiralling\narrangement of most broadleaf trees; `4`–`5` gives the whorls of a\nconifer, where a ring of limbs leaves the trunk at one height.\n\nDeeper levels are always alternate, which is both what a real conifer's\nlimbs carry and what keeps the geometry finite — a whorl compounding at\nevery level multiplies the tree by itself. `[1, 8]`.",
+                "format": "uint32",
+                "maximum": 8,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
             "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
             "properties": {
               "crest_foam": {
@@ -2800,7 +3388,180 @@
           },
           {
             "additionalProperties": false,
-            "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M19).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
+            "description": "A cloud: a cumulus, a raft of stratocumulus, a storm anvil, a torn wisp.\n\nA recipe rather than a mesh reference, like [`Tree`] — the engine grows it\ninto a cluster of lobes, each of which grows smaller lobes on itself, seeded\nso two clouds with the same parameters and different seeds are different\nclouds. The entity owns that geometry, sized by `Transform.scale` like a\nwater surface, so a `Cloud` entity carries **no** `Mesh` and **no**\n`Material` (`cloud_with_mesh`). A cloud is not a GGX surface: what a\n`Material` describes, `color` / `shade_color` / `density` / `feather`\ndescribe instead.\n\nNon-uniform scale is the normal case, not an edge case — `scale: [24, 12,\n24]` is what makes a cumulus wider than it is tall, and it oblates the lobes\nwith it.\n\nShading is three cheap stand-ins for multiple scattering, none of which is\nvolumetric: wrapped diffuse between `shade_color` and `color`, a forward-\nscattering silver lining when the camera looks toward the sun, and an alpha\nthat fades toward each lobe's own silhouette. Clouds do not cast shadows\n(the engine has one shadow cascade and it is fitted to the camera, not to a\ncloud at altitude) and are not lit by `PointLight`s.",
+            "properties": {
+              "children": {
+                "default": 3,
+                "description": "Lobes grown on each lobe of the previous generation. `[0, 8]`.",
+                "format": "uint32",
+                "maximum": 8,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "color": {
+                "default": [
+                  1.0,
+                  0.9800000190734863,
+                  0.949999988079071
+                ],
+                "description": "Linear RGB of the sunlit side. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "density": {
+                "default": 0.8999999761581421,
+                "description": "How opaque the cloud is where it is thickest, `[0, 1]`. Lobes do not\nwrite depth, so overlapping ones accumulate — which is a cheap stand-in\nfor optical depth, and why a wisp wants a much lower value than a storm.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "detail": {
+                "default": 2,
+                "description": "Icosphere subdivisions per lobe: 12, 42, 162 or 642 vertices. `[0, 3]`.\nThis is the quality dial, and `2` is plenty for anything at cloud\ndistance.",
+                "format": "uint32",
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "drift": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "World-space metres per second the cloud travels, evaluated against the\nscene clock (`--time`, else `steps / timestep_hz`) — so a drifting sky\nis as reproducible as a wave, and a script is not needed to move it.\n\nThe cloud's *shape* never changes with time. Regenerating lobes per\nframe would mint a new mesh every frame and defeat the renderer's upload\ncache; in this engine, generated geometry is made once.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "drift_wrap": {
+                "default": 0.0,
+                "description": "Metres after which a drifting cloud recycles to where it started. `>= 0`;\n`0` (the default) lets it drift away for good.\n\nWrapping *teleports* the cloud, so it wants to be wider than the view or\nfar enough out that fog has already eaten it before it jumps.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "feather": {
+                "default": 3.0,
+                "description": "How crisp the cloud's edges are, `[0, 8]`. Alpha follows\n`1 - (1 - facing)^feather` as the surface turns away from the camera, so\n**higher is crisper** and low values are wispy: 1 fades the whole\nsurface proportionally, 3 keeps the body opaque and thins only the last\nfew degrees before the silhouette.\n\nIt is doing two jobs. A real cloud's silhouette is where it thins out,\nnot where its geometry stops — and the same fade is what hides the\nboundaries *between* two interpenetrating lobes, since each of them\nvanishes exactly where its surface turns away.",
+                "format": "float",
+                "maximum": 8.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "flatten": {
+                "default": 0.0,
+                "description": "How much the cloud sits on a flat base, `[0, 1]`. `0` is a puffball with\nlobes scattered through its whole box; `1` seats every lobe on the base\nplane and folds what hangs below onto it.\n\nA cumulus has a flat bottom because condensation begins at one altitude,\nwhich is why every fair-weather cloud in a field shares a base — it is\nthe cheapest of this component's cues and one of the most legible.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "jitter": {
+                "default": 0.30000001192092896,
+                "description": "How much every jittered quantity — lobe radius, placement, child size —\nvaries, as a fraction. `[0, 1)`; `0` is a diagram.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "levels": {
+                "default": 2,
+                "description": "Generations of smaller lobes piled on the base ones. `[0, 3]`: `0` is a\ncluster of plain spheres, `2` reads as cauliflower, `3` is expensive.",
+                "format": "uint32",
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "lobe_ratio": {
+                "default": 0.550000011920929,
+                "description": "Child lobe radius as a fraction of its parent's, `(0, 1]`. This is the\ndial that makes the silhouette detailed at more than one scale — at 1\nevery lobe is the same size and the cloud reads as popcorn.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "maximum": 1.0,
+                "type": "number"
+              },
+              "lobe_size": {
+                "default": 0.41999998688697815,
+                "description": "Diameter of a base lobe as a fraction of the cloud's own size, `(0, 1]`.\nLarge values give a few fat billows, small ones a curdled texture.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "maximum": 1.0,
+                "type": "number"
+              },
+              "lobes": {
+                "default": 6,
+                "description": "Lobes in the base cluster, spread over the footprint on a golden-angle\nspiral. `[1, 32]`; a handful reads as one cumulus, a dozen or more as a\nraft.",
+                "format": "uint32",
+                "maximum": 32,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "rise": {
+                "default": 0.3499999940395355,
+                "description": "How strongly child lobes are biased toward the sky, `[0, 1]`. A cumulus\nis a convection cell: its detail is on top, where the air is still\nrising, and its underside is smooth. At `0` children scatter in every\ndirection and the cloud reads as a sea urchin.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "seed": {
+                "default": 0,
+                "description": "Seeds every random draw. Two clouds with the same parameters and\ndifferent seeds are different clouds; the same seed always regrows the\nsame cloud.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "shade_color": {
+                "default": [
+                  0.41999998688697815,
+                  0.46000000834465027,
+                  0.5799999833106995
+                ],
+                "description": "Linear RGB of the self-shadowed side, each component `[0, 1]`.\n\nBlue-grey rather than grey by default, and that is the point: the\nunderside of a cloud is lit by the sky above it, not by the sun it is\nhiding from. Darkening this toward slate is most of what makes a storm.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": {
+                "const": "Cloud",
+                "type": "string"
+              },
+              "wobble": {
+                "default": 0.11999999731779099,
+                "description": "Smooth radial distortion of each lobe, as a fraction of its radius.\n`[0, 1)`; a little is what stops a lobe from reading as a ball.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M22).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
             "properties": {
               "bump": {
                 "default": 0.30000001192092896,
@@ -2898,6 +3659,194 @@
             "type": "object"
           }
         ]
+      },
+      "DaylightKeyframe": {
+        "additionalProperties": false,
+        "description": "One entry in the day's color table.\n\nThe palette carries the **sun's** color and intensity, not the directional\nlight's in general — the moon has its own two fields on\n[`DaylightSettings`], because it does not meaningfully change color through\na night and would otherwise need repeating in every night keyframe.",
+        "properties": {
+          "ambient_color": {
+            "description": "Linear RGB chromaticity of the ambient fill.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "ambient_intensity": {
+            "description": "Brightness of the ambient fill.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "fog_scale": {
+            "description": "Multiplier on the scene's authored `environment.fog_density`.\n\nA **scale**, not a density, deliberately (design §5): a scene with\n`fog_density: 0` stays clear all day however misty the palette's dawn\nis, and a scene that wants fog authors it once and gets the dawn\nthickening for free. An absolute density here would mean a daylight\nblock silently switching fog on in a scene that never asked for any.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "hour": {
+            "description": "Hours in `[0, 24)`.",
+            "format": "float",
+            "maximum": 24.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "sky_ground": {
+            "description": "Color below the horizon.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sky_horizon": {
+            "description": "Sky color at the horizon — which is also the fog color, since\n`environment` has one field for both.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sky_zenith": {
+            "description": "Sky color straight overhead. Unclamped above 1, like\n`environment.sky_zenith`: a sky is a light source, and clamping it to\nreflectance range makes noon look like dusk.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sun_color": {
+            "description": "Linear RGB chromaticity of direct sunlight at this hour.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sun_intensity": {
+            "description": "Brightness of direct sunlight at this hour.\n\nIt lives in the table rather than falling out of `sin(altitude)`\nbecause a sunset's redness and its dimness are one artistic decision,\nand splitting them across a physical falloff and a color curve means\nretuning a dusk in two places that then disagree.\n\n**Keep it near zero at the horizon hours.** The sun/moon handoff\n(§ [`Daylight`]) switches the light's direction where the two bodies\ncontribute equally, and how visible that switch is *is* the sun's\nintensity there. A test pins it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "hour",
+          "sun_color",
+          "sun_intensity",
+          "ambient_color",
+          "ambient_intensity",
+          "sky_zenith",
+          "sky_horizon",
+          "sky_ground",
+          "fog_scale"
+        ],
+        "type": "object"
+      },
+      "DaylightSettings": {
+        "additionalProperties": false,
+        "description": "The scene-level `daylight` block — a sibling of `physics` and\n`environment`, not a field inside either.\n\nIt sits outside `environment` for two reasons (design §2). Conceptually\nthis is a *clock-driven system*, closer to `physics`, and it **produces**\nenvironment values rather than being one. Mechanically, `EnvironmentSettings`\nis `Copy` because lights resolve every frame in the viewer; an optional\nkeyframe palette is a `Vec`, and hanging it there would cost that type its\n`Copy` and put a clone in the per-frame path.\n\n**A scene with no `daylight` block renders exactly as it did before this\nmodule existed, byte for byte.** That is the M16 contract repeated, and it\nis why nineteen existing baselines did not move.",
+        "properties": {
+          "day_length": {
+            "default": 0.0,
+            "description": "Seconds of scene time per full 24-hour cycle. `0` (the default) freezes\nthe day, which is what most scenes want: a dial, not motion, and a\nscreenshot reproducible from the file with no `--time` at all.\n\n`24.0` makes an hour a second, so `--time 6.5` is 6:30 in the morning.\nThat is the unit the fixtures use because it reads itself.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "drives_sky": {
+            "default": true,
+            "description": "Compute `environment.sky_zenith` / `sky_horizon` / `sky_ground` **and\nthe ambient term** from the palette.\n\nAmbient rides with the sky rather than with the sun because it *is*\nthe sky's contribution — which is why M16 gates hemispheric ambient on\n`sky` in the first place. A scene that authored non-default band colors\nor its own `AmbientLight` and leaves this on gets the\n`daylight_overrides_sky` warning.",
+            "type": "boolean"
+          },
+          "drives_sun": {
+            "default": true,
+            "description": "Synthesize the sun's direction, color, and intensity.\n\nWith this on (the default) a scene needs **no** `DirectionalLight`\nentity, and authoring one anyway is `daylight_and_directional_light`.\nTwo owners of one sun is what invariant 8 exists to prevent: a rotation\nin a text file that is silently ignored, or silently overwritten, is a\nvalue that does not mean what it says.\n\nSet it `false` and daylight paints the sky, ambient, and fog only,\nleaving a hand-aimed `DirectionalLight` its job. That is the artist\nscene, and it is one field.",
+            "type": "boolean"
+          },
+          "moon_color": {
+            "default": [
+              0.550000011920929,
+              0.6600000262260437,
+              0.949999988079071
+            ],
+            "description": "Linear RGB chromaticity of moonlight. Magnitude lives in\n`moon_intensity`, like every other light in the engine.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "moon_elevation": {
+            "default": 48.0,
+            "description": "Degrees above the horizon the moon reaches at its highest. It rides the\nsame arc as the sun offset by twelve hours; giving it its own elevation\nis what keeps it from being a mechanical anti-sun.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 90.0,
+            "type": "number"
+          },
+          "moon_intensity": {
+            "default": 0.05999999865889549,
+            "description": "Brightness of moonlight. The default is deliberately tiny: a moonlit\nscene should read as *navigable*, not as a dim afternoon.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "palette": {
+            "description": "The color table over the day. Absent means [`DaylightSettings::builtin_palette`].\n\nEvery field of a keyframe is required: a half-specified keyframe\nsilently interpolating toward black is a worse failure than a\nvalidation error.",
+            "items": {
+              "$ref": "#/$defs/DaylightKeyframe"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sun_azimuth": {
+            "default": 0.0,
+            "description": "Compass bearing of the noon sun in degrees, rotating the whole arc\nabout Y. `0` puts noon toward −Z, matching the engine's aiming\nconvention. Unbounded — it wraps.",
+            "format": "float",
+            "type": "number"
+          },
+          "sun_elevation": {
+            "default": 62.0,
+            "description": "Degrees above the horizon the sun reaches at noon. `90` is overhead,\n`20` is a winter afternoon that never really gets going.\n\nThis one number replaces latitude, longitude, date, and axial tilt.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 90.0,
+            "type": "number"
+          },
+          "time_of_day": {
+            "default": 12.0,
+            "description": "Hours in `[0, 24)` — `6.5` is half past six in the morning. When the\nday is cycling this is the hour at scene time zero.",
+            "format": "float",
+            "maximum": 24.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "type": "object"
       },
       "EntityDef": {
         "additionalProperties": false,
@@ -3217,6 +4166,15 @@
         },
         "type": "object"
       },
+      "TreeLeaf": {
+        "description": "What hangs on a tree's outermost branches.\n\nNOTE: leave these variants undocumented, like [`ParticleBlend`]'s — a doc\ncomment on a variant turns the schema into oneOf/const and blinds the\nvalidation walk's closed-vocabulary check.",
+        "enum": [
+          "blade",
+          "cluster",
+          "none"
+        ],
+        "type": "string"
+      },
       "Wave": {
         "additionalProperties": false,
         "description": "One travelling wave in a [`Water`] surface's sum.\n\nGerstner rather than a sine: a Gerstner wave moves each point of the surface\n*toward* the crests as well as up, which sharpens crests and flattens\ntroughs. A sum of sines is a rubber sheet, and no amount of tuning it makes\nit read as water.",
@@ -3264,6 +4222,17 @@
     "additionalProperties": false,
     "description": "A scene file, exactly as it appears on disk.",
     "properties": {
+      "daylight": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DaylightSettings"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The day/night block (M21) — a sibling of `physics` and `environment`,\nnot a field inside either. Absent means the pre-M21 engine exactly:\nnothing computes a sky, and the lights are whatever the entities say."
+      },
       "entities": {
         "items": {
           "$ref": "#/$defs/EntityDef"

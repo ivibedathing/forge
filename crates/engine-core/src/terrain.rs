@@ -1,4 +1,4 @@
-//! Terrain surfaces (M19): the height field a [`Terrain`] component stands on,
+//! Terrain surfaces (M22): the height field a [`Terrain`] component stands on,
 //! and the displaced grid it becomes.
 //!
 //! This is deliberately the mirror image of [`water`](crate::water), which keeps
