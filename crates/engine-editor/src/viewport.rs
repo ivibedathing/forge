@@ -6,7 +6,7 @@
 //! buffer, same clear — so what the editor shows is what the engine renders,
 //! not an editor approximation (principle #7).
 
-use engine_core::scene::{RenderItem, ResolvedLights, WaterItem};
+use engine_core::scene::{RenderItem, ResolvedLights, RoadItem, WaterItem};
 use engine_render::scene_renderer::{self, ScenePass, SceneRenderer};
 use glam::{Mat4, Vec3};
 
@@ -43,6 +43,7 @@ impl ViewportRenderer {
         height: u32,
         items: &[RenderItem],
         water: &[WaterItem],
+        roads: &[RoadItem],
         view_projection: Mat4,
         camera_position: Vec3,
         lights: ResolvedLights,
@@ -104,6 +105,7 @@ impl ViewportRenderer {
                 target_size: [width, height],
                 items,
                 water,
+                roads,
                 // The editor shows the scene at rest; particles only exist
                 // once the fixed clock advances, so there are none to draw.
                 particles: &[],

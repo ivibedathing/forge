@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M18 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, and M18 water** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M19 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, and M19 roads** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -28,6 +28,7 @@ engine simulate <scene.json> --steps N [--input f] [--bake out.json] [--trace t.
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
 engine list-animations <scene-or-clip> [--schema]
+engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 # Script component: {"type": "Script", "source": "scripts/x.rhai"} — runs fn step(world, step)
 # once per fixed step (order: animations → scripts → physics → particles → render)
 # Wheel component (M12): raycast-suspension wheel on its own visual entity, chassis by name —
@@ -40,6 +41,13 @@ engine list-animations <scene-or-clip> [--schema]
 # PointLight component (M17): local light, inverse-square windowed at "range", up to 8 per
 #   scene; no shadows. Scripts drive any light's intensity/color (world.set_light_intensity /
 #   set_light_color), which is what lets a fire light the ground it stands on
+# Road component (M19): a circuit, a street, a pass — the entity carries no Mesh
+#   and no Material, the component owns one continuous ribbon swept from a polygon
+#   of corners ("points" with a "radius"), and asphalt/shoulder/embankment are the
+#   same triangles, so there is no ledge to catch a wheel. Markings are painted per
+#   pixel from surface coordinates (u across, v along), so lines follow every curve
+#   and dashes stay the same length in metres through a hairpin. A Collider with
+#   "shape": "trimesh" and no asset takes the road's own geometry
 # Water component (M18): a body of water — the entity carries no Mesh and no Material, the
 #   component owns a tessellated grid ("segments") sized by Transform.scale, Gerstner "waves"
 #   displaced in the vertex stage, per-pixel detail ripples, depth-based absorption between
@@ -238,28 +246,31 @@ momentum; ≈1.0 gives a physical μ≈0.9 tire that slides instead of sticking.
 cylinder wheels; `scripts/car.rhai` is now only the *driver* (pedals, speed-scaled steering
 wheel with finite slew rate, low-gear torque boost below 8 m/s so full-lock corners don't
 stall against front-tire slip drag, chase camera). `car_track_lap.input.jsonl` is a committed
-recording driving three clockwise laps on real suspension and parking on the start line —
-pinned by CLI test and `verify/baselines/m11_lap.png`.
+recording driving three clockwise laps on real suspension and parking just past the start line —
+pinned by CLI test and `verify/baselines/m11_lap.png`. Both were re-authored in M19 when the
+plates became a `Road`: the car carries speed the plate road scrubbed off, so every number moved.
 
-**The circuit is generated** (M15): `examples/scenes/make_car_track.py` emits the scene from a
-closed polygon of 14 named corners (Spa in miniature — La Source's hairpin, the plunge to Eau
+**The circuit is generated** (M15, rebuilt on the `Road` component in M19): `examples/scenes/
+make_car_track.py` emits the scene from a closed polygon of 14 named corners (Spa in miniature — La Source's hairpin, the plunge to Eau
 Rouge, the climb onto Kemmel, Les Combes at the crest, Rivage, Pouhon, Stavelot at the low
 point, Blanchimont, the Bus Stop chicane), ≈546 m round with ≈7.6 m of elevation and grades to
 7.5%. Authoring the loop as a *polygon* is what makes closure free: a closed polygon returns
 to its first vertex and its exterior angles sum to one turn, so position, heading, and the
 height profile all shut without a solver — corners carry `(x, z, radius, height)` and nothing
-carries a heading. Two things the polygon can't guarantee are checked and refuse to build: a
-corner radius too big for the edges feeding it, and a grade too steep to climb.
-Three geometry lessons are baked into the emitter and are easy to reintroduce by
+carries a heading. Two things the polygon can't guarantee refuse to build: a corner radius too big for the edges
+feeding it (the *engine* checks this now — `road_corner_does_not_fit`), and a grade too steep
+for the car to climb (still the emitter's business, since the engine has no opinion about cars).
+Three geometry lessons are baked into the track and are easy to reintroduce by
 "simplifying" it:
 
-- **One collider, not two.** Each segment's drivable surface is a single deep box cut to the
-  road's grade and reaching below the ground plane (which hides its underside); the asphalt is
-  a thin *colliderless* slab laid 3 cm proud of it. Road and shoulder as two colliders at
-  different heights builds a ledge at the asphalt edge, and a wheel that drops off it wedges
-  against the step and stops the car dead.
+- **One collider, not two.** Asphalt, verge and embankment are one surface. Road and shoulder
+  as two colliders at different heights builds a ledge at the asphalt edge, and a wheel that
+  drops off it wedges against the step and stops the car dead. This was a *rule the emitter
+  followed* until M19 (a deep box per segment carrying a colliderless slab 3 cm proud of it);
+  it is now a property of the `Road` component, which cannot express the two-surface version.
 - **The guardrail is continuous.** Posts are spaced 5 m and are 5.4 m long. Dashed barriers let
-  the car slip between two of them and fall off the elevated road.
+  the car slip between two of them and fall off the elevated road. They are placed along the
+  centerline the engine reports (`engine road-centerline`), not one the emitter re-derives.
 - **Radii are sized for the car, not the map.** The layout is Spa at ~1/15 but the car is full
   size, so no corner is under 12 m however tight the real one is.
 
@@ -576,6 +587,79 @@ baseline at `--steps 120`, pinned by a CLI test. The bit-exactness of the sevent
 baselines was checked the way this repo has learned to check it — an A/B between binaries built at
 `main` and here, fifteen scene/step combinations, all byte-identical.
 
+Roads (M19, design in `road-design.md`). The car demo's circuit was **207 `builtin:cube`
+plates**: a deep earth box per segment whose top face was the drivable surface, a thin
+colliderless asphalt slab 9 cm proud of it so the road read as road, kerb cubes on the tight
+corners, and one painted start line. Consecutive rectangles cannot tile a curve, so every corner
+joint left a wedge of verge showing through — papered over by overlapping the slabs 1.1 m and
+lifting them clear of their neighbours (`ASPHALT_OVERLAP`, `SKIN`, both constants that existed
+only to hide the fact that the road was not a surface). The plates had to overlap 35 cm so a
+suspension ray could not fall through the crack between two of them. The `Road` component
+replaces all of it with one entity.
+
+**A road is one entity with one component.** `Road` owns its geometry, so the entity carries
+**no** `Mesh` and **no** `Material` (`road_with_mesh`) — water's rule, one milestone later. The
+centerline is authored as a **polygon with corner radii** (`points`, each a `position` and a
+`radius`), not a spline: a closed polygon returns to its own first vertex and its exterior angles
+sum to one turn, so position *and* heading close without solving anything, and nothing in the file
+carries a heading. `radius: 0` is a sharp vertex, mitred with the standard `1 / cos(turn/2)`
+widening; past `MAX_SHARP_TURN_DEGREES` the mitre folds and validation says so
+(`road_corner_needs_radius`), as it does when two arcs need more of the edge between them than it
+has (`road_corner_does_not_fit`). Elevation rides on the points and is interpolated by arc length
+with a **monotone cubic** (Fritsch–Carlson), not linearly and not Catmull-Rom: linear ramps break
+the grade at every corner — a bump the car feels exactly where it is loaded up — and plain
+Catmull-Rom smooths that but overshoots, so a road authored to reach 6 m crests at 6.4 and the
+file stops predicting the scene.
+
+- **One collider, and it is the whole ribbon.** Asphalt, shoulders and the embankment skirt are
+  the same triangles, so the ledge that stopped the car dead on the plate road is now structurally
+  impossible rather than merely remembered. A `Collider` with `"shape": "trimesh"` on a road entity
+  needs no `asset` and no `Mesh` — the road *is* the geometry — while friction and layers stay on
+  the `Collider`, where every other surface keeps them.
+- **`FIX_INTERNAL_EDGES` on every trimesh collider**, not just roads. Without it a body resting on
+  a triangle mesh eventually contacts an edge *between* two coplanar triangles, takes a contact
+  normal along that edge instead of off the surface, and is flung sideways: a ball resting on the
+  M19 fixture sat still for two seconds and then departed the road at 4.8 m/s. This is the one
+  change in M19 that touches physics for scenes that have no road, and every committed trace and
+  baseline was re-checked against it.
+- **Markings are drawn, not built.** Every marking — edge lines, centre line, kerbs, start line —
+  is computed per pixel in `shaders/road.wgsl` from two surface coordinates the vertex stage
+  carries in the mesh's UVs (which the renderer had never uploaded before and now does for every
+  mesh): `u`, signed metres from the centerline *along the cross-section*, so `|u| > width/2 +
+  shoulder` is exactly "on the skirt"; and `v`, metres along the centerline. A line is a band in
+  `u`, so it follows every curve and grade for free; a dash is periodic in `v`, so it is the same
+  length in metres through a hairpin as on a straight. Paint cannot z-fight, because it is not a
+  surface on a surface — it is the same pixel shaded differently. Anti-aliasing is a **clamped**
+  `fwidth`; unclamped, a road seen at a grazing angle from 200 m dissolves into grey.
+- **Two things the CPU decides**, because per-pixel code cannot: **kerb spans** (which corners are
+  under `markings.kerb_max_radius`, and which side is the *inside* of the turn) ride in a
+  fixed-size uniform array, `MAX_ROAD_KERBS` of them, beyond which `too_many_road_kerbs` rather
+  than a silently dropped kerb; and **period fitting** — on a closed road the dash period is
+  snapped to `total / round(total / period)` and each kerb's stripe to its span, so patterns close
+  on themselves instead of leaving a sliver at the seam. Kerbs are *painted*, not raised: a real
+  kerb is a step, and a step is the thing the whole design says must not exist on the drivable
+  surface.
+- **`markings.start_line_at`** places the start line by arc length rather than at `v = 0`. The
+  obvious alternative — split the straight with a radius-0 point so the road *begins* at the line —
+  fails on the demo circuit and taught the rule: La Source is a 110° turn on a 14 m radius, its arc
+  reaches 20 m back down a 34 m straight, and a sharp vertex 19 m along would sit inside it. The
+  road refuses that, correctly.
+- **`road.wgsl` duplicates `mesh.wgsl`'s lighting**, following the `water.wgsl` precedent and for
+  the same reason: M16's four pinned lines cannot be shared without editing them. Only
+  `sky_common.wgsl` is prepended, so a reflected sky cannot drift from the sky drawn behind it.
+- **`engine road-centerline`** publishes the samples the ribbon was built from — world position,
+  heading and `v` per point. Anything placed *along* a road needs them, and a generator
+  re-deriving them is how two implementations of one curve start disagreeing about where the road
+  is. `make_car_track.py` is the worked example: it writes the road, asks the engine where it went,
+  and writes the scene again with the guardrail and the car on it.
+
+A scene with no `Road` uploads no road uniforms and issues the draws it always did. Verified by
+`engine-render/tests/road.rs` (seven GPU-skipping pixel tests, including that paint lands where
+`u` says, that a dash is not a solid line, that kerbs appear only on corners that asked and only
+on the inside, and that a road-less scene is untouched) plus `engine-core`'s geometry tests, and
+fixture `verify/m19_road.json` + baseline at `--steps 180`, pinned by a CLI test that also drops a
+ball on the road and requires it to *stay where it lands*.
+
 Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
 with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,
@@ -711,7 +795,11 @@ Remaining deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 sk
 GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17/M18 — refraction and
 scene-color sampling for transmissive materials (water's loudest missing feature), planar
 reflections, shadow cascades, shadows from point lights, spot lights, a CPU wave evaluator and
-buoyancy, and a light on the tour's explosion (~~lights a script can drive~~ landed in M17).
+buoyancy, a light on the tour's explosion (~~lights a script can drive~~ landed in M17), and —
+after M19 — road junctions (two roads crossing wants a patch primitive, not a ribbon), banked
+cross-sections, per-point road width for a pit lane merging out of a straight, and textures for
+asphalt grain (analytic markings are better than a texture for anything periodic, but grain is not
+periodic).
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

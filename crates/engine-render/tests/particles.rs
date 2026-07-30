@@ -49,6 +49,7 @@ fn render(particles: &[ParticleInstance]) -> Image {
     offscreen::render(
         &items,
         &scene.water_items(),
+        &scene.road_items(),
         particles,
         &camera,
         camera_transform.matrix(),

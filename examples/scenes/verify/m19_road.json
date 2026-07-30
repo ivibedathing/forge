@@ -1,0 +1,103 @@
+{
+  "name": "m19_road",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.17, 0.31, 0.60],
+    "sky_horizon": [0.60, 0.69, 0.80],
+    "sky_ground": [0.14, 0.15, 0.14],
+    "shadows": true,
+    "shadow_distance": 150.0,
+    "samples": 4
+  },
+  "physics": { "gravity": [0.0, -9.81, 0.0], "timestep_hz": 60 },
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0], "scale": [260.0, 1.0, 220.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.15, 0.21, 0.13], "roughness": 0.95 },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [0.5, 0.5, 0.5],
+          "offset": [0.0, -0.5, 0.0],
+          "friction": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Circuit",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0] },
+        {
+          "type": "Road",
+          "closed": true,
+          "width": 8.0,
+          "shoulder": 1.8,
+          "skirt": 8.0,
+          "segment_length": 2.0,
+          "segment_angle": 4.0,
+          "color": [0.075, 0.075, 0.085],
+          "roughness": 0.9,
+          "shoulder_color": [0.19, 0.17, 0.13],
+          "bank_color": [0.21, 0.18, 0.14],
+          "points": [
+            { "position": [-34.0, 0.2, 0.0], "radius": 0.0 },
+            { "position": [-34.0, 0.6, -44.0], "radius": 15.0 },
+            { "position": [26.0, 3.4, -44.0], "radius": 15.0 },
+            { "position": [52.0, 4.2, -12.0], "radius": 13.0 },
+            { "position": [34.0, 2.4, 34.0], "radius": 12.0 },
+            { "position": [-18.0, 0.8, 46.0], "radius": 20.0 },
+            { "position": [-34.0, 0.4, 24.0], "radius": 16.0 }
+          ],
+          "markings": {
+            "color": [0.90, 0.90, 0.88],
+            "edge_width": 0.16,
+            "edge_inset": 0.12,
+            "center_width": 0.14,
+            "center_dash": 3.0,
+            "center_gap": 5.0,
+            "kerb_max_radius": 14.0,
+            "kerb_width": 1.0,
+            "kerb_stripe": 1.5,
+            "kerb_color": [0.78, 0.09, 0.07],
+            "start_line": true,
+            "start_line_width": 0.9
+          }
+        },
+        { "type": "Collider", "shape": "trimesh", "friction": 0.95 }
+      ]
+    },
+    {
+      "name": "Ball",
+      "components": [
+        { "type": "Transform", "position": [-34.0, 6.0, 0.0], "scale": [1.4, 1.4, 1.4] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.70, 0.18, 0.14], "roughness": 0.45 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "sphere", "radius": 0.5, "friction": 0.6 }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-42.0, 34.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.97, 0.92], "intensity": 1.7 }
+      ]
+    },
+    {
+      "name": "Ambient",
+      "components": [
+        { "type": "AmbientLight", "color": [0.72, 0.80, 1.0], "intensity": 0.22 }
+      ]
+    },
+    {
+      "name": "Eye",
+      "components": [
+        { "type": "Transform", "position": [-52.0, 46.0, 92.0], "rotation": [-24.0, -14.0, 0.0] },
+        { "type": "Camera", "fov": 52.0, "near": 0.5, "far": 400.0, "active": true }
+      ]
+    }
+  ]
+}

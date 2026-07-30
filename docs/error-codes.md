@@ -59,6 +59,11 @@ build fails.
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `water_with_mesh` | 1 | a Water entity owns its own surface; it may not also have a Mesh or a Material |
 | `water_waves_self_intersect` | 1 | the sum of Water wave steepness exceeds 1, which folds the surface through itself |
+| `road_with_mesh` | 1 | a Road entity owns its own surface; it may not also have a Mesh or a Material |
+| `road_too_few_points` | 1 | a Road needs at least two centerline points, or three to close |
+| `road_corner_does_not_fit` | 1 | two corner radii need more of the edge between them than it has |
+| `road_corner_needs_radius` | 1 | a sharp corner turns too far to mitre; give it a radius |
+| `too_many_road_kerbs` | 1 | a Road kerbs more corners than the shader's span array holds |
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |

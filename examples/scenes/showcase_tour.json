@@ -579,6 +579,34 @@
     },
 
     {
+      "name": "RingRoad",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0] },
+        { "type": "Road", "closed": true, "width": 6.0, "shoulder": 1.2, "skirt": 0.5,
+          "segment_length": 2.0, "segment_angle": 4.0,
+          "color": [0.085, 0.085, 0.095], "roughness": 0.93,
+          "shoulder_color": [0.20, 0.19, 0.14], "bank_color": [0.17, 0.15, 0.12],
+          "points": [
+          { "position": [27.950, 0.05, 0.000], "radius": 26.0 },
+          { "position": [24.205, 0.05, 13.975], "radius": 26.0 },
+          { "position": [13.975, 0.05, 24.205], "radius": 26.0 },
+          { "position": [0.000, 0.05, 27.950], "radius": 26.0 },
+          { "position": [-13.975, 0.05, 24.205], "radius": 26.0 },
+          { "position": [-24.205, 0.05, 13.975], "radius": 26.0 },
+          { "position": [-27.950, 0.05, 0.000], "radius": 26.0 },
+          { "position": [-24.205, 0.05, -13.975], "radius": 26.0 },
+          { "position": [-13.975, 0.05, -24.205], "radius": 26.0 },
+          { "position": [-0.000, 0.05, -27.950], "radius": 26.0 },
+          { "position": [13.975, 0.05, -24.205], "radius": 26.0 },
+          { "position": [24.205, 0.05, -13.975], "radius": 26.0 }
+          ],
+          "markings": { "color": [0.88, 0.88, 0.84], "edge_width": 0.14, "edge_inset": 0.10,
+                        "center_width": 0.13, "center_dash": 2.4, "center_gap": 3.6 } },
+        { "type": "Collider", "shape": "trimesh", "friction": 0.9 }
+      ]
+    },
+
+    {
       "name": "Truck",
       "components": [
         { "type": "Transform", "position": [0.0, 0.9, 27.0], "rotation": [0.0, 90.0, 0.0],

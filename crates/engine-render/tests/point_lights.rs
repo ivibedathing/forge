@@ -33,6 +33,7 @@ fn render(source: &str) -> Image {
     offscreen::render(
         &items,
         &scene.water_items(),
+        &scene.road_items(),
         &[],
         &camera,
         camera_transform.matrix(),

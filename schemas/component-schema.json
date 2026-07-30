@@ -130,6 +130,151 @@
         ],
         "type": "string"
       },
+      "RoadMarkings": {
+        "additionalProperties": false,
+        "description": "What is painted on a road, and where.\n\nEvery marking is computed per pixel from the road's surface coordinates —\n`u`, metres from the centerline across the road, and `v`, metres along it —\nrather than built as geometry laid on the asphalt. That is what makes a line\nfollow every curve and grade for free, keeps a dash the same length in\nmetres through a hairpin as on a straight, and means paint can never\nz-fight: it is not a surface on a surface, it is the same pixel shaded\ndifferently.",
+        "properties": {
+          "center_dash": {
+            "default": 3.0,
+            "description": "Length of one painted dash in the centre line, in metres. `0` makes it\nsolid. `>= 0`.\n\nOn a **closed** road the dash period is snapped to a whole number of\nrepeats around the lap, so the pattern meets itself exactly at the seam\ninstead of leaving a short dash there. The ratio of dash to gap is what\nis preserved, not their absolute lengths.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "center_gap": {
+            "default": 6.0,
+            "description": "Unpainted gap between dashes, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "center_width": {
+            "default": 0.0,
+            "description": "Width of the centre line, in metres. `0` (the default) is no centre\nline, which is what a race circuit wants. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "color": {
+            "default": [
+              0.8799999952316284,
+              0.8799999952316284,
+              0.8799999952316284
+            ],
+            "description": "Linear RGB of the paint — the edge lines, the centre line, the start\nline, and the white half of a kerb. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "edge_inset": {
+            "default": 0.10000000149011612,
+            "description": "Gap between the asphalt's edge and the outside of the edge line, in\nmetres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "edge_width": {
+            "default": 0.14000000059604645,
+            "description": "Width of the line down each edge of the asphalt, in metres. `0` is no\nedge line. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "kerb_color": {
+            "default": [
+              0.800000011920929,
+              0.10000000149011612,
+              0.07999999821186066
+            ],
+            "description": "Linear RGB of the red half of a kerb; the other half is `color`. Each\ncomponent `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "kerb_max_radius": {
+            "default": 0.0,
+            "description": "Corners with a radius at or under this get a kerb on the **inside** of\nthe turn, in metres. `0` (the default) is no kerbs. `>= 0`.\n\nWhich corners are tight enough, and which side of the road is the inside\nof the turn, are facts about the plan-view geometry that per-pixel code\ncannot know, so they are computed once and handed to the shader as spans\n— at most [`MAX_ROAD_KERBS`](crate::road::MAX_ROAD_KERBS) of them.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "kerb_stripe": {
+            "default": 1.399999976158142,
+            "description": "Length of one red or white kerb stripe, in metres. `> 0`.\n\nFitted per corner to a whole number of stripes, so a kerb begins and\nends on a stripe boundary rather than on a sliver.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "kerb_width": {
+            "default": 0.8999999761581421,
+            "description": "How far a kerb reaches out from the asphalt edge, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "start_line": {
+            "default": false,
+            "description": "Paint a line across the road.\n\nPainted rather than built, which matters more here than anywhere else: a\nstart line with any real height is a wall the car is parked against at\nstep 0.",
+            "type": "boolean"
+          },
+          "start_line_at": {
+            "default": 0.0,
+            "description": "Where that line goes: metres along the centerline from the road's first\npoint. `>= 0`, and past the end of a closed road it wraps.\n\nA position rather than \"wherever the polygon starts\", because the two\nare different jobs: the polygon's first point is a *corner*, chosen by\nthe shape of the circuit, and a start line belongs partway down a\nstraight. Splitting a straight with an extra point to move the line\nwould be geometry surgery in service of paint — and on a short straight\nit fails outright, because the neighbouring corner's arc already covers\nthe place the line wanted to be. `engine road-centerline` is how a\ngenerator turns \"here, in world space\" into this number.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "start_line_width": {
+            "default": 0.699999988079071,
+            "description": "Width of that line along the road, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "RoadPoint": {
+        "additionalProperties": false,
+        "description": "One authored point on a road's centerline.\n\nThe road is a **polygon with corner radii**, not a spline: a closed polygon\nreturns to its own first vertex and its exterior angles sum to exactly one\nturn, so position and heading close without solving anything. Nothing here\ncarries a heading, deliberately — a heading is derived, and a stored one can\nbe edited into disagreeing with the points on either side of it.",
+        "properties": {
+          "position": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "radius": {
+            "default": 0.0,
+            "description": "Radius of the arc rounding this corner, in metres. `>= 0`.\n\n`0` is a sharp vertex — mitred, which is exactly right for a point that\nis not really a turn (a start line partway along a straight) and wrong\nfor one that is: past\n[`MAX_SHARP_TURN_DEGREES`](crate::road::MAX_SHARP_TURN_DEGREES) of turn\nthe mitre folds back through the road and validation refuses it.\n\nThe two arcs meeting on one edge have to fit on it, which is the other\nthing a polygon cannot guarantee (`road_corner_does_not_fit`).",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
       "Wave": {
         "additionalProperties": false,
         "description": "One travelling wave in a [`Water`] surface's sum.\n\nGerstner rather than a sine: a Gerstner wave moves each point of the surface\n*toward* the crests as well as up, which sharpens crests and flattens\ntroughs. A sum of sines is a rubber sheet, and no amount of tuning it makes\nit read as water.",
@@ -1365,6 +1510,172 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A road: a circuit, a street, a mountain pass.\n\nThe entity owns its surface geometry — one continuous ribbon generated from\nthe centerline — so a `Road` entity carries **no** `Mesh` and no `Material`\n(`road_with_mesh`), the same rule [`Water`] follows and for the same reason.\n\nAsphalt, shoulders and the embankment skirt are all the **same** triangles.\nThat is not a saving, it is the point: road and shoulder as two surfaces at\nslightly different heights build a ledge along the asphalt edge, and a wheel\nthat drops off it wedges against the step and stops the car dead. There is\nno seam between segments either, because consecutive cross-sections share\ntheir vertices.\n\nPhysics reads the same mesh: a `Collider` with `\"shape\": \"trimesh\"` on a\nroad entity needs no `asset` and no `Mesh`, because the road is the\ngeometry. Friction and collision layers stay on the `Collider`, where every\nother surface in the engine keeps them.",
+        "properties": {
+          "bank_color": {
+            "default": [
+              0.20000000298023224,
+              0.17000000178813934,
+              0.12999999523162842
+            ],
+            "description": "Linear RGB of the embankment below the shoulder. Each component\n`[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "closed": {
+            "default": false,
+            "description": "Join the last point back to the first. A closed road is a circuit: the\npolygon's exterior angles sum to one turn, so it shuts without a solver.",
+            "type": "boolean"
+          },
+          "color": {
+            "default": [
+              0.09000000357627869,
+              0.09000000357627869,
+              0.10000000149011612
+            ],
+            "description": "Linear RGB of the asphalt. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "markings": {
+            "$ref": "#/$defs/RoadMarkings",
+            "default": {
+              "center_dash": 3.0,
+              "center_gap": 6.0,
+              "center_width": 0.0,
+              "color": [
+                0.8799999952316284,
+                0.8799999952316284,
+                0.8799999952316284
+              ],
+              "edge_inset": 0.10000000149011612,
+              "edge_width": 0.14000000059604645,
+              "kerb_color": [
+                0.800000011920929,
+                0.10000000149011612,
+                0.07999999821186066
+              ],
+              "kerb_max_radius": 0.0,
+              "kerb_stripe": 1.399999976158142,
+              "kerb_width": 0.8999999761581421,
+              "start_line": false,
+              "start_line_at": 0.0,
+              "start_line_width": 0.699999988079071
+            },
+            "description": "What is painted on it."
+          },
+          "points": {
+            "default": [
+              {
+                "position": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "radius": 0.0
+              },
+              {
+                "position": [
+                  0.0,
+                  0.0,
+                  -20.0
+                ],
+                "radius": 0.0
+              }
+            ],
+            "description": "The centerline, corner by corner, in the order they are driven. At\nleast two points; a closed road needs at least three.",
+            "items": {
+              "$ref": "#/$defs/RoadPoint"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "roughness": {
+            "default": 0.9200000166893005,
+            "description": "Surface roughness, `[0, 1]`, meaning what `Material.roughness` means.\nAsphalt is nearly matte; wet asphalt is not.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "segment_angle": {
+            "default": 5.0,
+            "description": "Most degrees of arc one segment may cover through a corner. `>= 0.5`.\n\nThis is the resolution knob that matters: a corner cut every 5° is\nsmooth to drive and to look at, and the cost is linear in the road's\nlength rather than quadratic like a grid's.",
+            "format": "float",
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "segment_length": {
+            "default": 2.0,
+            "description": "Longest a straight segment may be before the road is cut again, in\nmetres. `>= 0.25`.",
+            "format": "float",
+            "minimum": 0.25,
+            "type": "number"
+          },
+          "shoulder": {
+            "default": 1.5,
+            "description": "Drivable shoulder each side of the asphalt, in metres. `>= 0`.\n\nPart of the same surface, not a second one — see the note above about\nledges.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "shoulder_color": {
+            "default": [
+              0.17000000178813934,
+              0.20000000298023224,
+              0.14000000059604645
+            ],
+            "description": "Linear RGB of the shoulder each side of the asphalt. Each component\n`[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "skirt": {
+            "default": 0.6000000238418579,
+            "description": "How far the embankment drops below the road's outer edge, in metres.\n`>= 0`.\n\nThis is what stops an elevated road from floating. Set it deeper than\nthe road ever climbs and it simply disappears under the ground plane\nwherever the road is low.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": {
+            "const": "Road",
+            "type": "string"
+          },
+          "width": {
+            "default": 7.0,
+            "description": "Width of the asphalt, edge to edge, in metres. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -1386,7 +1697,8 @@
     "HudText",
     "HudRect",
     "ParticleEmitter",
-    "Water"
+    "Water",
+    "Road"
   ],
   "scene": {
     "$defs": {
@@ -2613,6 +2925,172 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A road: a circuit, a street, a mountain pass.\n\nThe entity owns its surface geometry — one continuous ribbon generated from\nthe centerline — so a `Road` entity carries **no** `Mesh` and no `Material`\n(`road_with_mesh`), the same rule [`Water`] follows and for the same reason.\n\nAsphalt, shoulders and the embankment skirt are all the **same** triangles.\nThat is not a saving, it is the point: road and shoulder as two surfaces at\nslightly different heights build a ledge along the asphalt edge, and a wheel\nthat drops off it wedges against the step and stops the car dead. There is\nno seam between segments either, because consecutive cross-sections share\ntheir vertices.\n\nPhysics reads the same mesh: a `Collider` with `\"shape\": \"trimesh\"` on a\nroad entity needs no `asset` and no `Mesh`, because the road is the\ngeometry. Friction and collision layers stay on the `Collider`, where every\nother surface in the engine keeps them.",
+            "properties": {
+              "bank_color": {
+                "default": [
+                  0.20000000298023224,
+                  0.17000000178813934,
+                  0.12999999523162842
+                ],
+                "description": "Linear RGB of the embankment below the shoulder. Each component\n`[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "closed": {
+                "default": false,
+                "description": "Join the last point back to the first. A closed road is a circuit: the\npolygon's exterior angles sum to one turn, so it shuts without a solver.",
+                "type": "boolean"
+              },
+              "color": {
+                "default": [
+                  0.09000000357627869,
+                  0.09000000357627869,
+                  0.10000000149011612
+                ],
+                "description": "Linear RGB of the asphalt. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "markings": {
+                "$ref": "#/$defs/RoadMarkings",
+                "default": {
+                  "center_dash": 3.0,
+                  "center_gap": 6.0,
+                  "center_width": 0.0,
+                  "color": [
+                    0.8799999952316284,
+                    0.8799999952316284,
+                    0.8799999952316284
+                  ],
+                  "edge_inset": 0.10000000149011612,
+                  "edge_width": 0.14000000059604645,
+                  "kerb_color": [
+                    0.800000011920929,
+                    0.10000000149011612,
+                    0.07999999821186066
+                  ],
+                  "kerb_max_radius": 0.0,
+                  "kerb_stripe": 1.399999976158142,
+                  "kerb_width": 0.8999999761581421,
+                  "start_line": false,
+                  "start_line_at": 0.0,
+                  "start_line_width": 0.699999988079071
+                },
+                "description": "What is painted on it."
+              },
+              "points": {
+                "default": [
+                  {
+                    "position": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ],
+                    "radius": 0.0
+                  },
+                  {
+                    "position": [
+                      0.0,
+                      0.0,
+                      -20.0
+                    ],
+                    "radius": 0.0
+                  }
+                ],
+                "description": "The centerline, corner by corner, in the order they are driven. At\nleast two points; a closed road needs at least three.",
+                "items": {
+                  "$ref": "#/$defs/RoadPoint"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "roughness": {
+                "default": 0.9200000166893005,
+                "description": "Surface roughness, `[0, 1]`, meaning what `Material.roughness` means.\nAsphalt is nearly matte; wet asphalt is not.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "segment_angle": {
+                "default": 5.0,
+                "description": "Most degrees of arc one segment may cover through a corner. `>= 0.5`.\n\nThis is the resolution knob that matters: a corner cut every 5° is\nsmooth to drive and to look at, and the cost is linear in the road's\nlength rather than quadratic like a grid's.",
+                "format": "float",
+                "minimum": 0.5,
+                "type": "number"
+              },
+              "segment_length": {
+                "default": 2.0,
+                "description": "Longest a straight segment may be before the road is cut again, in\nmetres. `>= 0.25`.",
+                "format": "float",
+                "minimum": 0.25,
+                "type": "number"
+              },
+              "shoulder": {
+                "default": 1.5,
+                "description": "Drivable shoulder each side of the asphalt, in metres. `>= 0`.\n\nPart of the same surface, not a second one — see the note above about\nledges.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "shoulder_color": {
+                "default": [
+                  0.17000000178813934,
+                  0.20000000298023224,
+                  0.14000000059604645
+                ],
+                "description": "Linear RGB of the shoulder each side of the asphalt. Each component\n`[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "skirt": {
+                "default": 0.6000000238418579,
+                "description": "How far the embankment drops below the road's outer edge, in metres.\n`>= 0`.\n\nThis is what stops an elevated road from floating. Set it deeper than\nthe road ever climbs and it simply disappears under the ground plane\nwherever the road is low.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "type": {
+                "const": "Road",
+                "type": "string"
+              },
+              "width": {
+                "default": 7.0,
+                "description": "Width of the asphalt, edge to edge, in metres. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -2846,6 +3324,151 @@
             "format": "uint32",
             "minimum": 1,
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "RoadMarkings": {
+        "additionalProperties": false,
+        "description": "What is painted on a road, and where.\n\nEvery marking is computed per pixel from the road's surface coordinates —\n`u`, metres from the centerline across the road, and `v`, metres along it —\nrather than built as geometry laid on the asphalt. That is what makes a line\nfollow every curve and grade for free, keeps a dash the same length in\nmetres through a hairpin as on a straight, and means paint can never\nz-fight: it is not a surface on a surface, it is the same pixel shaded\ndifferently.",
+        "properties": {
+          "center_dash": {
+            "default": 3.0,
+            "description": "Length of one painted dash in the centre line, in metres. `0` makes it\nsolid. `>= 0`.\n\nOn a **closed** road the dash period is snapped to a whole number of\nrepeats around the lap, so the pattern meets itself exactly at the seam\ninstead of leaving a short dash there. The ratio of dash to gap is what\nis preserved, not their absolute lengths.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "center_gap": {
+            "default": 6.0,
+            "description": "Unpainted gap between dashes, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "center_width": {
+            "default": 0.0,
+            "description": "Width of the centre line, in metres. `0` (the default) is no centre\nline, which is what a race circuit wants. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "color": {
+            "default": [
+              0.8799999952316284,
+              0.8799999952316284,
+              0.8799999952316284
+            ],
+            "description": "Linear RGB of the paint — the edge lines, the centre line, the start\nline, and the white half of a kerb. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "edge_inset": {
+            "default": 0.10000000149011612,
+            "description": "Gap between the asphalt's edge and the outside of the edge line, in\nmetres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "edge_width": {
+            "default": 0.14000000059604645,
+            "description": "Width of the line down each edge of the asphalt, in metres. `0` is no\nedge line. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "kerb_color": {
+            "default": [
+              0.800000011920929,
+              0.10000000149011612,
+              0.07999999821186066
+            ],
+            "description": "Linear RGB of the red half of a kerb; the other half is `color`. Each\ncomponent `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "kerb_max_radius": {
+            "default": 0.0,
+            "description": "Corners with a radius at or under this get a kerb on the **inside** of\nthe turn, in metres. `0` (the default) is no kerbs. `>= 0`.\n\nWhich corners are tight enough, and which side of the road is the inside\nof the turn, are facts about the plan-view geometry that per-pixel code\ncannot know, so they are computed once and handed to the shader as spans\n— at most [`MAX_ROAD_KERBS`](crate::road::MAX_ROAD_KERBS) of them.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "kerb_stripe": {
+            "default": 1.399999976158142,
+            "description": "Length of one red or white kerb stripe, in metres. `> 0`.\n\nFitted per corner to a whole number of stripes, so a kerb begins and\nends on a stripe boundary rather than on a sliver.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "kerb_width": {
+            "default": 0.8999999761581421,
+            "description": "How far a kerb reaches out from the asphalt edge, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "start_line": {
+            "default": false,
+            "description": "Paint a line across the road.\n\nPainted rather than built, which matters more here than anywhere else: a\nstart line with any real height is a wall the car is parked against at\nstep 0.",
+            "type": "boolean"
+          },
+          "start_line_at": {
+            "default": 0.0,
+            "description": "Where that line goes: metres along the centerline from the road's first\npoint. `>= 0`, and past the end of a closed road it wraps.\n\nA position rather than \"wherever the polygon starts\", because the two\nare different jobs: the polygon's first point is a *corner*, chosen by\nthe shape of the circuit, and a start line belongs partway down a\nstraight. Splitting a straight with an extra point to move the line\nwould be geometry surgery in service of paint — and on a short straight\nit fails outright, because the neighbouring corner's arc already covers\nthe place the line wanted to be. `engine road-centerline` is how a\ngenerator turns \"here, in world space\" into this number.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "start_line_width": {
+            "default": 0.699999988079071,
+            "description": "Width of that line along the road, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "RoadPoint": {
+        "additionalProperties": false,
+        "description": "One authored point on a road's centerline.\n\nThe road is a **polygon with corner radii**, not a spline: a closed polygon\nreturns to its own first vertex and its exterior angles sum to exactly one\nturn, so position and heading close without solving anything. Nothing here\ncarries a heading, deliberately — a heading is derived, and a stored one can\nbe edited into disagreeing with the points on either side of it.",
+        "properties": {
+          "position": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "radius": {
+            "default": 0.0,
+            "description": "Radius of the arc rounding this corner, in metres. `>= 0`.\n\n`0` is a sharp vertex — mitred, which is exactly right for a point that\nis not really a turn (a start line partway along a straight) and wrong\nfor one that is: past\n[`MAX_SHARP_TURN_DEGREES`](crate::road::MAX_SHARP_TURN_DEGREES) of turn\nthe mitre folds back through the road and validation refuses it.\n\nThe two arcs meeting on one edge have to fit on it, which is the other\nthing a polygon cannot guarantee (`road_corner_does_not_fit`).",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
           }
         },
         "type": "object"

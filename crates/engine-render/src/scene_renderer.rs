@@ -29,7 +29,8 @@ use engine_core::components::{Camera, ParticleBlend, Water, MAX_POINT_LIGHTS};
 use engine_core::math::{Mat4, Vec3};
 use engine_core::mesh::MeshData;
 use engine_core::particles::ParticleInstance;
-use engine_core::scene::{EnvironmentSettings, RenderItem, ResolvedLights, WaterItem};
+use engine_core::road::MAX_ROAD_KERBS;
+use engine_core::scene::{EnvironmentSettings, RenderItem, ResolvedLights, RoadItem, WaterItem};
 use engine_core::water::MAX_WAVES;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -115,6 +116,34 @@ struct WaterUniform {
     waves: [[f32; 4]; MAX_WAVES * 2],
 }
 
+/// Per-road shader data, matching WGSL `RoadUniform` (M19).
+///
+/// What a road *is* rides in the ordinary `ObjectUniform` beside this — model
+/// matrix, asphalt colour, roughness — so a road casts shadows through the
+/// unchanged shadow pipeline. This carries only what markings need.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct RoadUniform {
+    /// x = half the asphalt width, y = shoulder width, z = total length,
+    /// w = dash period in metres (0 = a solid centre line).
+    metrics: [f32; 4],
+    /// rgb = paint colour, w = edge-line width.
+    paint: [f32; 4],
+    /// x = edge inset, y = centre-line width, z = dash duty, w = start-line width.
+    lines: [f32; 4],
+    /// rgb = the red half of a kerb, w = kerb width.
+    kerb: [f32; 4],
+    /// rgb = shoulder colour, w = live kerb-span count.
+    shoulder: [f32; 4],
+    /// rgb = embankment colour, w = 1 when a start line is painted.
+    bank: [f32; 4],
+    /// x = where that line is, in metres along the centerline; rest padding.
+    start: [f32; 4],
+    /// `(start_v, end_v, side, stripe)` per kerbed corner. Unused slots are
+    /// zeroed and never read — the shader loops to the count.
+    kerbs: [[f32; 4]; MAX_ROAD_KERBS],
+}
+
 /// Per-pass particle data, matching WGSL `ParticleFrame`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -150,6 +179,10 @@ struct CachedMesh {
     _geometry: Arc<MeshData>,
     vertices: wgpu::Buffer,
     normals_offset: u64,
+    /// Where the UVs start in the same buffer. Uploaded for every mesh since
+    /// M19, because a road's markings are painted from surface coordinates it
+    /// carries there — before that nothing on the GPU read a UV at all.
+    uvs_offset: u64,
     indices: wgpu::Buffer,
     index_count: u32,
     /// Frame counter at the last draw that used this mesh; entries idle for
@@ -341,6 +374,10 @@ pub struct ScenePass<'a> {
     /// it. Pass `&[]` for a scene with no water, which is then rendered by
     /// exactly the passes that existed before water did.
     pub water: &'a [WaterItem],
+    /// Roads (M19), drawn with the opaque geometry and casting shadows like it.
+    /// Pass `&[]` for a scene with no road, which then issues exactly the draws
+    /// it did before roads existed.
+    pub roads: &'a [RoadItem],
     /// Particle billboards, drawn after the meshes (alpha-blended, depth-read
     /// only). Pass `&[]` when nothing simulates particles.
     pub particles: &'a [ParticleInstance],
@@ -378,6 +415,10 @@ pub struct SceneRenderer {
     shadow_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     water_pipeline: wgpu::RenderPipeline,
+    /// Roads (M19): opaque, shadow-casting, and the only pipeline that reads a
+    /// vertex UV — a road's markings are painted from surface coordinates.
+    road_pipeline: wgpu::RenderPipeline,
+    road_layout: wgpu::BindGroupLayout,
     depth_resolve_pipeline: wgpu::RenderPipeline,
     water_layout: wgpu::BindGroupLayout,
     scene_depth_layout: wgpu::BindGroupLayout,
@@ -410,6 +451,10 @@ pub struct SceneRenderer {
     /// much larger) uniform.
     water_objects: Option<Uniforms>,
     water_stride: u64,
+    /// And again for roads, whose marking parameters and kerb spans are far too
+    /// big to ride in the object uniform every mesh shares.
+    road_objects: Option<Uniforms>,
+    road_stride: u64,
     /// The opaque depth copy the water pass reads, allocated on the first frame
     /// that has any water in it and resized with the target.
     scene_depth: Option<SceneDepth>,
@@ -508,8 +553,10 @@ impl SceneRenderer {
             immediate_size: 0,
         });
 
-        // Position and normal live in separate buffers so a future mesh with no
-        // normals does not need a padded interleaved layout.
+        // Position, normal and UV live in separate buffers so a mesh with no
+        // normals does not need a padded interleaved layout. Only the road
+        // pipeline binds the third — it is where a road's surface coordinates
+        // travel.
         let vertex_layouts = [
             Some(wgpu::VertexBufferLayout {
                 array_stride: 12,
@@ -529,6 +576,15 @@ impl SceneRenderer {
                     format: wgpu::VertexFormat::Float32x3,
                 }],
             }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: 8,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x2,
+                }],
+            }),
         ];
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -537,7 +593,7 @@ impl SceneRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &vertex_layouts,
+                buffers: &vertex_layouts[..2],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -578,7 +634,7 @@ impl SceneRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &vertex_layouts,
+                buffers: &vertex_layouts[..2],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -645,6 +701,24 @@ impl SceneRenderer {
             format,
             multisample,
         );
+        // Roads (M19): the opaque twin of the water pipeline — its own uniform
+        // at group 3, the mesh pass's object, frame and shadow bindings, and
+        // the one pipeline in the engine that reads a UV.
+        let road_layout = uniform_layout(
+            "road-uniforms",
+            Some(std::mem::size_of::<RoadUniform>() as u64),
+        );
+        let road_pipeline = Self::road_pipeline(
+            device,
+            &object_layout,
+            &frame_layout,
+            &shadow_layout,
+            &road_layout,
+            &vertex_layouts,
+            format,
+            multisample,
+        );
+
         let (depth_resolve_pipeline, depth_source_layout) =
             Self::depth_resolve_pipeline(device, samples);
 
@@ -787,6 +861,8 @@ impl SceneRenderer {
 
         let water_stride =
             std::mem::size_of::<WaterUniform>().next_multiple_of(alignment as usize) as u64;
+        let road_stride =
+            std::mem::size_of::<RoadUniform>().next_multiple_of(alignment as usize) as u64;
 
         Self {
             pipeline,
@@ -794,6 +870,10 @@ impl SceneRenderer {
             shadow_pipeline,
             sky_pipeline,
             water_pipeline,
+            road_pipeline,
+            road_layout,
+            road_objects: None,
+            road_stride,
             depth_resolve_pipeline,
             water_layout,
             scene_depth_layout,
@@ -1010,6 +1090,77 @@ impl SceneRenderer {
         })
     }
 
+    /// The road pass (M19): the mesh pipeline's opaque twin, with a fourth
+    /// bind group for the marking parameters and a third vertex slot for the
+    /// surface coordinates they are painted in.
+    ///
+    /// Everything else matches the mesh pipeline exactly — back-face culled,
+    /// depth-tested and depth-writing, `REPLACE` blending — because a road is
+    /// ordinary opaque geometry. It is a separate pipeline for the shader's
+    /// sake, not the state's.
+    #[allow(clippy::too_many_arguments)]
+    fn road_pipeline(
+        device: &wgpu::Device,
+        object_layout: &wgpu::BindGroupLayout,
+        frame_layout: &wgpu::BindGroupLayout,
+        shadow_layout: &wgpu::BindGroupLayout,
+        road_layout: &wgpu::BindGroupLayout,
+        vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
+        format: wgpu::TextureFormat,
+        multisample: wgpu::MultisampleState,
+    ) -> wgpu::RenderPipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("road-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("shaders/road.wgsl"))),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("road-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(object_layout),
+                Some(frame_layout),
+                Some(shadow_layout),
+                Some(road_layout),
+            ],
+            immediate_size: 0,
+        });
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("road-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: vertex_layouts,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
     /// The depth copy pass (M18): one fullscreen triangle turning the opaque
     /// pass's depth attachment into something the water shader can read.
     ///
@@ -1193,6 +1344,7 @@ impl SceneRenderer {
             target_size,
             items,
             water,
+            roads,
             particles,
             view_projection,
             camera_position,
@@ -1269,24 +1421,58 @@ impl SceneRenderer {
             .map(|item| self.upload_mesh(device, &item.mesh))
             .collect();
 
+        // Roads join the same geometry cache as everything else; their ribbons
+        // are `Arc`-cached per geometry, so a road that is not being edited
+        // uploads once for the life of the run.
+        let road_keys: Vec<usize> = roads
+            .iter()
+            .map(|item| self.upload_mesh(device, &item.surface.mesh))
+            .collect();
+
         // Every entity's uniforms in one buffer, one write, addressed during
         // the pass by dynamic offset.
+        //
+        // Roads ride at the end of the same array rather than in one of their
+        // own. That is what lets a road cast a shadow through the *unchanged*
+        // shadow pipeline, which reads nothing but this struct's model matrix.
         let stride = self.object_stride as usize;
-        let mut object_bytes = vec![0u8; stride * items.len()];
-        for (index, item) in items.iter().enumerate() {
-            let material = &item.material;
-            let uniform = ObjectUniform {
-                mvp: (view_projection * item.model).to_cols_array_2d(),
-                model: item.model.to_cols_array_2d(),
-                normal_matrix: item.model.inverse().transpose().to_cols_array_2d(),
-                albedo_metallic: material.albedo.extend(material.metallic).to_array(),
-                emissive_roughness: material.emissive.extend(material.roughness).to_array(),
-                surface: [material.alpha, material.transmission, 0.0, 0.0],
-            };
+        let mut object_bytes = vec![0u8; stride * (items.len() + roads.len())];
+        let mut write_object = |index: usize, uniform: &ObjectUniform| {
             let at = index * stride;
             object_bytes[at..at + std::mem::size_of::<ObjectUniform>()]
-                .copy_from_slice(bytemuck::bytes_of(&uniform));
+                .copy_from_slice(bytemuck::bytes_of(uniform));
+        };
+        for (index, item) in items.iter().enumerate() {
+            let material = &item.material;
+            write_object(
+                index,
+                &ObjectUniform {
+                    mvp: (view_projection * item.model).to_cols_array_2d(),
+                    model: item.model.to_cols_array_2d(),
+                    normal_matrix: item.model.inverse().transpose().to_cols_array_2d(),
+                    albedo_metallic: material.albedo.extend(material.metallic).to_array(),
+                    emissive_roughness: material.emissive.extend(material.roughness).to_array(),
+                    surface: [material.alpha, material.transmission, 0.0, 0.0],
+                },
+            );
         }
+        for (index, item) in roads.iter().enumerate() {
+            let road = &item.road;
+            write_object(
+                items.len() + index,
+                &ObjectUniform {
+                    mvp: (view_projection * item.model).to_cols_array_2d(),
+                    model: item.model.to_cols_array_2d(),
+                    normal_matrix: item.model.inverse().transpose().to_cols_array_2d(),
+                    // A road is a dielectric; its markings are painted in the
+                    // fragment stage over this asphalt colour.
+                    albedo_metallic: road.color.extend(0.0).to_array(),
+                    emissive_roughness: Vec3::ZERO.extend(road.roughness).to_array(),
+                    surface: [1.0, 0.0, 0.0, 0.0],
+                },
+            );
+        }
+        drop(write_object);
         if !object_bytes.is_empty() {
             let objects = Uniforms::ensure(
                 &mut self.objects,
@@ -1325,6 +1511,28 @@ impl SceneRenderer {
                 Some(std::mem::size_of::<WaterUniform>() as u64),
             );
             queue.write_buffer(&objects.buffer, 0, &water_bytes);
+        }
+
+        // Road marking parameters and kerb spans, the same
+        // one-buffer-addressed-by-dynamic-offset arrangement.
+        if !roads.is_empty() {
+            let stride = self.road_stride as usize;
+            let mut road_bytes = vec![0u8; stride * roads.len()];
+            for (index, item) in roads.iter().enumerate() {
+                let uniform = road_uniform(item);
+                let at = index * stride;
+                road_bytes[at..at + std::mem::size_of::<RoadUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(&uniform));
+            }
+            let objects = Uniforms::ensure(
+                &mut self.road_objects,
+                device,
+                &self.road_layout,
+                "road-uniforms",
+                road_bytes.len() as u64,
+                Some(std::mem::size_of::<RoadUniform>() as u64),
+            );
+            queue.write_buffer(&objects.buffer, 0, &road_bytes);
         }
 
         // Split the draw list by blend mode. Opaque keeps file order (it is
@@ -1500,17 +1708,29 @@ impl SceneRenderer {
             if let Some(objects) = &self.objects {
                 shadow_pass.set_pipeline(&self.shadow_pipeline);
                 shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-                for &index in &opaque {
-                    let mesh = &self.meshes[&keys[index]];
-                    shadow_pass.set_bind_group(
+                let cast = |pass: &mut wgpu::RenderPass<'_>, object: usize, mesh: &CachedMesh| {
+                    pass.set_bind_group(
                         0,
                         &objects.bind_group,
-                        &[(index as u64 * self.object_stride) as u32],
+                        &[(object as u64 * self.object_stride) as u32],
                     );
-                    shadow_pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    shadow_pass
-                        .set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                };
+                for &index in &opaque {
+                    cast(&mut shadow_pass, index, &self.meshes[&keys[index]]);
+                }
+                // Roads cast too — an embankment's shadow across the valley
+                // below it is most of what makes an elevated road read as
+                // elevated. The pipeline is unchanged: it reads only the model
+                // matrix, which is why roads share the object uniform array.
+                for index in 0..roads.len() {
+                    cast(
+                        &mut shadow_pass,
+                        items.len() + index,
+                        &self.meshes[&road_keys[index]],
+                    );
                 }
             }
         }
@@ -1617,6 +1837,37 @@ impl SceneRenderer {
                 for &index in &opaque {
                     draw(&mut pass, index);
                 }
+            }
+
+            // Roads, still in the opaque pass: they write depth like any solid
+            // surface, so water absorbs against them and particles sort against
+            // them correctly.
+            if let (false, Some(objects), Some(surfaces)) =
+                (roads.is_empty(), &self.objects, &self.road_objects)
+            {
+                pass.set_pipeline(&self.road_pipeline);
+                pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                pass.set_bind_group(2, &shadows.bind_group, &[]);
+                for (index, _) in roads.iter().enumerate() {
+                    let mesh = &self.meshes[&road_keys[index]];
+                    pass.set_bind_group(
+                        0,
+                        &objects.bind_group,
+                        &[((items.len() + index) as u64 * self.object_stride) as u32],
+                    );
+                    pass.set_bind_group(
+                        3,
+                        &surfaces.bind_group,
+                        &[(index as u64 * self.road_stride) as u32],
+                    );
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
+                    pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+                // Nothing after this assumes a bound pipeline: `draw_blended`
+                // sets its own for the first item it draws.
             }
 
             // Blended geometry after every opaque surface has written depth, so
@@ -1830,13 +2081,21 @@ impl SceneRenderer {
             .entry(key)
             .and_modify(|mesh| mesh.last_used = frame_index)
             .or_insert_with(|| {
-                // Positions and normals share one buffer, positions first, so
-                // a single allocation serves both vertex slots.
-                let mut vertex_bytes =
-                    Vec::with_capacity((geometry.positions.len() + geometry.normals.len()) * 12);
+                // Positions, normals and UVs share one buffer in that order, so
+                // a single allocation serves all three vertex slots.
+                let mut vertex_bytes = Vec::with_capacity(
+                    (geometry.positions.len() + geometry.normals.len()) * 12
+                        + geometry.positions.len() * 8,
+                );
                 vertex_bytes.extend_from_slice(bytemuck::cast_slice(&geometry.positions));
                 let normals_offset = vertex_bytes.len() as u64;
                 vertex_bytes.extend_from_slice(bytemuck::cast_slice(&geometry.normals));
+                let uvs_offset = vertex_bytes.len() as u64;
+                vertex_bytes.extend_from_slice(bytemuck::cast_slice(&geometry.uvs));
+                // A glTF mesh may carry no UVs at all; pad so the slot is
+                // always bindable rather than making the layout conditional.
+                let missing = geometry.positions.len().saturating_sub(geometry.uvs.len());
+                vertex_bytes.resize(vertex_bytes.len() + missing * 8, 0);
 
                 CachedMesh {
                     _geometry: Arc::clone(geometry),
@@ -1847,6 +2106,7 @@ impl SceneRenderer {
                         &vertex_bytes,
                     ),
                     normals_offset,
+                    uvs_offset,
                     indices: buffer_with(
                         device,
                         "mesh-indices",
@@ -2043,6 +2303,48 @@ fn water_uniform(item: &WaterItem, view_projection: Mat4, time: f32) -> WaterUni
         params: [w.roughness, w.opacity, w.crest_foam, w.detail_scale],
         clock: [count as f32, time, 0.0, 0.0],
         waves,
+    }
+}
+
+/// Pack one road's marking parameters for the shader (M19).
+///
+/// The road's geometry, dash period and kerb spans were all decided when the
+/// ribbon was generated — this only copies them into the uniform, which is why
+/// a road that is not being edited costs one small write per frame however long
+/// it is.
+fn road_uniform(item: &RoadItem) -> RoadUniform {
+    let road = &item.road;
+    let markings = &road.markings;
+    let surface = &item.surface;
+
+    let mut kerbs = [[0.0f32; 4]; MAX_ROAD_KERBS];
+    let count = surface.kerbs.len().min(MAX_ROAD_KERBS);
+    for (slot, span) in surface.kerbs.iter().take(count).enumerate() {
+        kerbs[slot] = [span.start, span.end, span.side, span.stripe];
+    }
+
+    RoadUniform {
+        metrics: [
+            road.width / 2.0,
+            road.shoulder,
+            surface.length,
+            surface.dash_period,
+        ],
+        paint: markings.color.extend(markings.edge_width).to_array(),
+        lines: [
+            markings.edge_inset,
+            markings.center_width,
+            surface.dash_duty,
+            markings.start_line_width,
+        ],
+        kerb: markings.kerb_color.extend(markings.kerb_width).to_array(),
+        shoulder: road.shoulder_color.extend(count as f32).to_array(),
+        bank: road
+            .bank_color
+            .extend(if markings.start_line { 1.0 } else { 0.0 })
+            .to_array(),
+        start: [markings.start_line_at, 0.0, 0.0, 0.0],
+        kerbs,
     }
 }
 

@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use engine_core::components::{
     BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent,
-    Name, RigidBody as RigidBodyData, Transform, Wheel as WheelData,
+    Name, RigidBody as RigidBodyData, Road, Transform, Wheel as WheelData,
 };
 use engine_core::mesh::MeshSource;
 use engine_core::scene::PhysicsSettings;
@@ -223,7 +223,7 @@ impl PhysicsWorld {
 
         // Deterministic build order: hecs iteration order is stable for a
         // freshly spawned world, and every simulate run spawns fresh.
-        for (entity, name, transform, body, collider, mesh, breakable) in world
+        for (entity, name, transform, body, collider, mesh, breakable, road) in world
             .query::<(
                 Entity,
                 &Name,
@@ -232,6 +232,7 @@ impl PhysicsWorld {
                 Option<&ColliderData>,
                 Option<&MeshComponent>,
                 Option<&Breakable>,
+                Option<&Road>,
             )>()
             .iter()
         {
@@ -295,6 +296,7 @@ impl PhysicsWorld {
                     transform,
                     &physics.name_of[&entity],
                     mesh.map(|m| m.asset.as_str()),
+                    road,
                     meshes,
                     &layer_bits,
                     break_threshold.is_some(),
@@ -458,12 +460,13 @@ impl PhysicsWorld {
 
         if let Some(collider) = collider {
             // Spawned entities (fragments) carry cuboid colliders with no
-            // mesh shapes and no layers, so builtin meshes and an empty
-            // layer table cover every caller.
+            // mesh shapes, no roads and no layers, so builtin meshes and an
+            // empty layer table cover every caller.
             let built = build_collider(
                 collider,
                 transform,
                 name,
+                None,
                 None,
                 &engine_core::mesh::BuiltinAssets,
                 &HashMap::new(),
@@ -887,6 +890,9 @@ fn build_collider(
     transform: &Transform,
     entity: &str,
     entity_mesh: Option<&str>,
+    // `road` is the entity's Road when it has one: a mesh-shaped collider with
+    // no asset and no Mesh takes the road's generated surface (M19).
+    road: Option<&Road>,
     meshes: &dyn MeshSource,
     layer_bits: &HashMap<String, Group>,
     force_events: bool,
@@ -920,12 +926,26 @@ fn build_collider(
             ColliderBuilder::capsule_y((half_height * scale.x).abs(), (radius * scale.x).abs())
         }
         ColliderShapeKind::Trimesh | ColliderShapeKind::ConvexHull => {
-            let asset = collider
-                .asset
-                .as_deref()
-                .or(entity_mesh)
-                .ok_or_else(|| shape_bug(entity, "mesh collider with no asset in reach"))?;
-            let mesh = meshes.load_mesh(asset).map_err(|e| e.entity(entity))?;
+            // Geometry comes from the collider's own asset, else the entity's
+            // Mesh, else — since M19 — the entity's Road, which generates its
+            // ribbon rather than loading one. That last case is what makes the
+            // surface the car drives on and the surface it is shown *the same
+            // triangles*, with no way to author them apart.
+            let (asset, mesh) = match collider.asset.as_deref().or(entity_mesh) {
+                Some(asset) => (
+                    asset.to_string(),
+                    meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
+                ),
+                None => {
+                    let road = road.ok_or_else(|| {
+                        shape_bug(entity, "mesh collider with no asset in reach")
+                    })?;
+                    (
+                        format!("the Road on {entity:?}"),
+                        engine_core::road::surface(road).mesh.clone(),
+                    )
+                }
+            };
             let vertices: Vec<Vec3> = mesh
                 .positions
                 .iter()
@@ -939,7 +959,26 @@ fn build_collider(
                         .chunks_exact(3)
                         .map(|t| [t[0], t[1], t[2]])
                         .collect();
-                    ColliderBuilder::trimesh(vertices, indices).map_err(|e| {
+                    // `FIX_INTERNAL_EDGES` (M19), and this is not a tuning
+                    // preference. Without it a body resting on a triangle mesh
+                    // eventually contacts an edge *between* two coplanar
+                    // triangles, gets a contact normal along that edge rather
+                    // than off the surface, and is flung sideways — which is
+                    // exactly what a ball resting on a road does after two
+                    // seconds of sitting still. It implies
+                    // `MERGE_DUPLICATE_VERTICES`, which welds the crease
+                    // vertices a road's surface and skirt do not share.
+                    //
+                    // Applied to every trimesh rather than only to roads: a
+                    // road authored as a glTF file deserves the same surface a
+                    // generated one gets, and one rule is easier to keep true
+                    // than two.
+                    ColliderBuilder::trimesh_with_flags(
+                        vertices,
+                        indices,
+                        rapier3d::geometry::TriMeshFlags::FIX_INTERNAL_EDGES,
+                    )
+                    .map_err(|e| {
                         EngineError::new(
                             codes::INVALID_SHAPE_DIMENSION,
                             format!(

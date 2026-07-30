@@ -235,6 +235,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut wheel_path: Option<String> = None;
         let mut breakable_threshold: Option<String> = None;
         let mut water: Option<(crate::components::Water, String)> = None;
+        let mut road: Option<(crate::components::Road, String)> = None;
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
@@ -308,6 +309,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 }
                 Some(ComponentData::Water(w)) => {
                     water = Some((w, component_path));
+                }
+                Some(ComponentData::Road(r)) => {
+                    road = Some((r, component_path));
                 }
                 _ => {}
             }
@@ -384,7 +388,11 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 crate::components::ColliderShapeKind::Trimesh
                     | crate::components::ColliderShapeKind::ConvexHull
             );
-            if mesh_shape && collider_data.asset.is_none() && !has_mesh {
+            // A Road entity *is* the geometry (M19), so a trimesh collider on
+            // one needs neither an asset nor a Mesh — which is the whole point:
+            // the surface the car drives on and the surface it is shown are the
+            // same triangles, and there is no way to author them apart.
+            if mesh_shape && collider_data.asset.is_none() && !has_mesh && road.is_none() {
                 errors.push(
                     cx.err(
                         codes::COLLIDER_MISSING_MESH,
@@ -495,6 +503,38 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
+        // ── Road surface checks (M19) ─────────────────────────────────
+        //
+        // Same rule as water, one milestone later: a `Road` generates its own
+        // ribbon and carries its own colours, so a `Mesh` or `Material` beside
+        // it is a second, silently ignored answer to what this surface is.
+        if let Some((_, path)) = &road {
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::ROAD_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a Road component and also {extras}; \
+                             a road generates its own surface from its centerline and \
+                             carries its own colours — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Road"),
+                );
+            }
+
+            // (A road with a collider and no Transform is a road the car falls
+            // through — already `missing_transform` from the collider check
+            // above. One problem, one error.)
+        }
+
         // ── Water surface checks (M18) ────────────────────────────────
         if let Some((water, path)) = &water {
             // A `Water` entity generates its own grid and shades it with its
@@ -556,10 +596,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         }
 
         // Legal but almost certainly wrong: dead data from editing the wrong
-        // entity. A warning, because rendering it is well-defined. A Water
-        // entity's Material is already a hard error above, so it does not also
-        // collect this.
-        if !has_mesh && water.is_none() {
+        // entity. A warning, because rendering it is well-defined. A Water or
+        // Road entity's Material is already a hard error above, so it does not
+        // also collect this.
+        if !has_mesh && water.is_none() && road.is_none() {
             for material_path in material_paths {
                 errors.push(
                     cx.err(
@@ -1122,6 +1162,74 @@ fn check_component(
         // cross-wave, and lives with the entity checks that can see the whole
         // entity.
         ComponentData::Water(_) => {}
+
+        // A road's field ranges are covered by the schema walk. What is left is
+        // what the polygon cannot guarantee about *itself*: whether the corner
+        // radii fit on the edges feeding them, whether a sharp vertex turns
+        // further than a mitre can cover, and whether it kerbs more corners
+        // than the shader has room for. All three render as a road that has
+        // crossed itself or lost a kerb, which is a bad thing to learn from a
+        // screenshot.
+        ComponentData::Road(ref road) => {
+            let needed = if road.closed { 3 } else { 2 };
+            if road.points.len() < needed {
+                errors.push(
+                    cx.err(
+                        codes::ROAD_TOO_FEW_POINTS,
+                        format!(
+                            "Road has {} centerline point(s); {}a road needs at least \
+                             {needed}",
+                            road.points.len(),
+                            if road.closed { "closed, " } else { "" },
+                        ),
+                        &format!("{component_path}/points"),
+                    )
+                    .entity(entity)
+                    .component("Road")
+                    .field("points"),
+                );
+            } else {
+                for (index, kind, message) in crate::road::geometry_problems(road) {
+                    let code = match kind {
+                        crate::road::RoadProblem::CornerDoesNotFit => {
+                            codes::ROAD_CORNER_DOES_NOT_FIT
+                        }
+                        crate::road::RoadProblem::CornerNeedsRadius => {
+                            codes::ROAD_CORNER_NEEDS_RADIUS
+                        }
+                    };
+                    errors.push(
+                        cx.err(
+                            code,
+                            message,
+                            &format!("{component_path}/points/{index}"),
+                        )
+                        .entity(entity)
+                        .component("Road")
+                        .field("points"),
+                    );
+                }
+            }
+
+            let kerbs = crate::road::kerb_span_count(road);
+            if kerbs > crate::road::MAX_ROAD_KERBS {
+                errors.push(
+                    cx.err(
+                        codes::TOO_MANY_ROAD_KERBS,
+                        format!(
+                            "Road kerbs {kerbs} corners but the shader carries at most {}; \
+                             lower markings.kerb_max_radius so it selects fewer, or split \
+                             the road into two entities",
+                            crate::road::MAX_ROAD_KERBS
+                        ),
+                        &format!("{component_path}/markings/kerb_max_radius"),
+                    )
+                    .entity(entity)
+                    .component("Road")
+                    .field("markings"),
+                );
+            }
+        }
 
         // The flat Collider struct keeps the file walkable; which fields each
         // shape requires and forbids is semantic, checked here (design §5).
@@ -2954,6 +3062,156 @@ mod tests {
             ]}
         ]}"#;
         assert!(validate_source(source, "test.json").is_empty());
+    }
+
+
+    /// The road's half of the "a generated surface is one source of truth"
+    /// rule, matching water's.
+    #[test]
+    fn a_road_entity_owns_its_surface_alone() {
+        let bare = r#"{"name":"s","entities":[
+            {"name":"Circuit","components":[
+                {"type":"Transform"},
+                {"type":"Road","points":[
+                    {"position":[0.0,0.0,0.0]},{"position":[0.0,0.0,-20.0]}]}
+            ]}
+        ]}"#;
+        assert!(validate_source(bare, "test.json").is_empty());
+
+        let with_mesh = r#"{"name":"s","entities":[
+            {"name":"Circuit","components":[
+                {"type":"Transform"},
+                {"type":"Road","points":[
+                    {"position":[0.0,0.0,0.0]},{"position":[0.0,0.0,-20.0]}]},
+                {"type":"Mesh","asset":"builtin:cube"}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(with_mesh), ["road_with_mesh"]);
+
+        let with_material = r#"{"name":"s","entities":[
+            {"name":"Circuit","components":[
+                {"type":"Transform"},
+                {"type":"Road","points":[
+                    {"position":[0.0,0.0,0.0]},{"position":[0.0,0.0,-20.0]}]},
+                {"type":"Material"}
+            ]}
+        ]}"#;
+        assert_eq!(
+            codes_of(with_material),
+            ["road_with_mesh"],
+            "a Material on a road is an error, not the unused_material warning"
+        );
+    }
+
+    /// A bare `{"type": "Road"}` is a road: 20 m of straight, so adding the
+    /// component in the editor shows one instead of invalidating the scene.
+    #[test]
+    fn a_bare_road_is_a_road() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Street","components":[
+                {"type":"Transform"},
+                {"type":"Road"}
+            ]}
+        ]}"#;
+        assert!(validate_source(source, "test.json").is_empty());
+    }
+
+    #[test]
+    fn a_road_needs_enough_points_to_be_a_road() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Circuit","components":[
+                {"type":"Transform"},
+                {"type":"Road","points":[{"position":[0.0,0.0,0.0]}]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(source), ["road_too_few_points"]);
+
+        // Two points make a road but not a circuit.
+        let closed = r#"{"name":"s","entities":[
+            {"name":"Circuit","components":[
+                {"type":"Transform"},
+                {"type":"Road","closed":true,"points":[
+                    {"position":[0.0,0.0,0.0]},{"position":[0.0,0.0,-20.0]}]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(closed), ["road_too_few_points"]);
+    }
+
+    /// The two things a polygon of corners cannot guarantee about itself, both
+    /// of which render as a road that has crossed through itself — a bad thing
+    /// to have to diagnose from a screenshot.
+    #[test]
+    fn a_corner_that_cannot_be_built_is_refused() {
+        let overlapping = r#"{"name":"s","entities":[
+            {"name":"Circuit","components":[
+                {"type":"Transform"},
+                {"type":"Road","closed":true,"points":[
+                    {"position":[-20.0,0.0,-20.0],"radius":40.0},
+                    {"position":[20.0,0.0,-20.0],"radius":40.0},
+                    {"position":[0.0,0.0,20.0],"radius":40.0}]}
+            ]}
+        ]}"#;
+        let codes = codes_of(overlapping);
+        assert!(
+            codes.iter().all(|c| *c == "road_corner_does_not_fit"),
+            "{codes:?}"
+        );
+        assert!(!codes.is_empty(), "40 m radii do not fit 40 m edges");
+
+        let folded = r#"{"name":"s","entities":[
+            {"name":"Circuit","components":[
+                {"type":"Transform"},
+                {"type":"Road","closed":true,"points":[
+                    {"position":[-20.0,0.0,-20.0]},
+                    {"position":[20.0,0.0,-20.0]},
+                    {"position":[0.0,0.0,20.0]}]}
+            ]}
+        ]}"#;
+        let codes = codes_of(folded);
+        assert!(
+            codes.contains(&"road_corner_needs_radius"),
+            "a 120-degree sharp vertex cannot be mitred: {codes:?}"
+        );
+    }
+
+    /// A road with a collider is physics geometry, and physics only sees
+    /// entities that have a Transform — so a road without one is an error
+    /// (the collider check\'s, not a second road-shaped copy of it) rather
+    /// than a road the car falls straight through.
+    #[test]
+    fn a_road_that_collides_needs_a_transform() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Circuit","components":[
+                {"type":"Road","points":[
+                    {"position":[0.0,0.0,0.0]},{"position":[0.0,0.0,-20.0]}]},
+                {"type":"Collider","shape":"trimesh"}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(source), ["missing_transform"]);
+    }
+
+    /// The other half of that: a trimesh collider on a road needs no asset and
+    /// no Mesh, because the road *is* the geometry.
+    #[test]
+    fn a_road_supplies_its_own_collider_geometry() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Circuit","components":[
+                {"type":"Transform"},
+                {"type":"Road","points":[
+                    {"position":[0.0,0.0,0.0]},{"position":[0.0,0.0,-20.0]}]},
+                {"type":"Collider","shape":"trimesh","friction":0.9}
+            ]}
+        ]}"#;
+        assert!(validate_source(source, "test.json").is_empty());
+
+        // Without the road it is the error it always was.
+        let orphan = r#"{"name":"s","entities":[
+            {"name":"Nothing","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"trimesh"}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(orphan), ["collider_missing_mesh"]);
     }
 
     #[test]

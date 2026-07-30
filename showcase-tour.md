@@ -62,7 +62,13 @@ everything opaque, 4× MSAA, and sky reflected off the metal and the water.
 
 The truck patrols a 27 m ring for the whole fifteen seconds, so no station is
 a still life; `scripts/tour_truck.rhai` is a cruise-control autopilot on the
-same raycast suspension the playable car demo uses. The critters
+same raycast suspension the playable car demo uses. Since M19 that ring is a
+**road** rather than a line on the grass: `RingRoad` is one `Road` entity whose
+twelve corners round almost the whole way into their edges, so the polygon *is*
+the circle the truck was already driving — asphalt, shoulders, edge lines and a
+dashed centre line fitted to close on itself, and a trimesh collider that is the
+same triangles you see. It is also what turns the wide shot from objects on a
+lawn into a place. The critters
 (`tour_wildlife.rhai`) are kinematic bodies on a `critter` collision layer
 that only collides with `ground` — they share a world with 24 loose fragments
 and cannot touch one.
@@ -114,6 +120,12 @@ than no showcase:
   white-hot `FireBase`, the `Fire` body, breakaway `FireTongues`, alpha-blended
   `FireSmoke`, and additive streaked `Sparks`. What is still missing: the light
   casts no shadows, so the logs do not throw one outward across the pit.
+- **The road** is real as of M19: `RingRoad` is generated from a polygon of
+  corners, its markings are painted per pixel from the road's own surface
+  coordinates (so they bend with it and cannot z-fight), and the truck drives on
+  the same triangles that are drawn. Still missing: junctions — a second road
+  crossing this one would be a visible seam, because a crossing wants a patch
+  primitive and not a ribbon.
 - **Breaking** is real physics on pre-authored fragments — no runtime fracture,
   which is the settled M14 scope.
 - **Water** is real as of M18: one `Water` entity where sixteen cube tiles used

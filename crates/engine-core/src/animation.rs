@@ -421,6 +421,34 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "Road" => {
+            let Ok(mut c) = world.get::<&mut Road>(entity) else {
+                return false;
+            };
+            match field {
+                // `points`, `closed` and `markings` are absent for the reason
+                // `Water.waves` is: an array of objects, a bool and a nested
+                // object are shapes a numeric clip cannot express.
+                //
+                // The geometry fields below *are* settable, because the drift
+                // test's rule is that a validated clip must never silently do
+                // nothing. They are expensive when animated: the ribbon is
+                // regenerated and re-uploaded on every frame the value changes,
+                // where the colour fields are read per pixel and cost nothing.
+                // Widening a road over time is a legitimate thing to ask for;
+                // doing it every frame is a thing to know about.
+                "width" => c.width = scalar,
+                "shoulder" => c.shoulder = scalar,
+                "skirt" => c.skirt = scalar,
+                "segment_length" => c.segment_length = scalar,
+                "segment_angle" => c.segment_angle = scalar,
+                "roughness" => c.roughness = scalar,
+                "color" => c.color = v3,
+                "shoulder_color" => c.shoulder_color = v3,
+                "bank_color" => c.bank_color = v3,
+                _ => return false,
+            }
+        }
         _ => return false,
     }
     true
@@ -880,7 +908,8 @@ mod tests {
                 {"type":"HudText","text":"x"},
                 {"type":"HudRect","size":[1.0,1.0]},
                 {"type":"ParticleEmitter"},
-                {"type":"Water"}
+                {"type":"Water"},
+                {"type":"Road"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

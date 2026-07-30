@@ -35,6 +35,9 @@ pub enum Content {
         /// simulation runs — a script can move a surface — and static
         /// otherwise, exactly like `items`.
         water: Vec<engine_core::scene::WaterItem>,
+        /// The scene's roads (M19). Refreshed with `water` for the same
+        /// reason: a script can move or repaint one.
+        roads: Vec<engine_core::scene::RoadItem>,
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
@@ -300,6 +303,7 @@ impl ViewerApp {
                 Content::Scene {
                     items,
                     water,
+                    roads,
                     camera,
                     camera_model,
                     lights,
@@ -403,6 +407,7 @@ impl ViewerApp {
                         *items = fresh;
                     }
                     *water = sim.scene.water_items();
+                    *roads = sim.scene.road_items();
                     *hud_items = sim.scene.hud_items();
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
@@ -455,6 +460,7 @@ impl ViewerApp {
                             target_size: [width, height],
                             items,
                             water,
+                            roads,
                             particles: &particles,
                             view_projection,
                             camera_position: camera_model.w_axis.truncate(),

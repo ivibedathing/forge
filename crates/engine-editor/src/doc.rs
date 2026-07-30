@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use engine_core::formatter::{self, AddComponent, AddEntity, RemoveComponent, SetComponentField};
-use engine_core::scene::{RenderItem, ResolvedLights, WaterItem};
+use engine_core::scene::{RenderItem, ResolvedLights, RoadItem, WaterItem};
 use engine_core::{EngineError, Scene, SceneFile};
 
 /// How often the file is re-read. Well under the "reflects within a second"
@@ -35,6 +35,10 @@ pub struct SceneDoc {
     /// **time 0**, like it shows particles not at all: the editor draws the
     /// scene at rest, and the rest pose of a wave is a defined, static shape.
     pub water: Vec<WaterItem>,
+    /// Roads, rebuilt with `items` (M19). Unlike water and particles a road has
+    /// no time in it at all — the ribbon a screenshot shows is the ribbon the
+    /// editor shows.
+    pub roads: Vec<RoadItem>,
     pub lights: ResolvedLights,
     /// The scene's own sky, fog and shadow settings, so the viewport shows
     /// what the file says rather than a house style — the editor is a view
@@ -61,6 +65,7 @@ impl SceneDoc {
             raw: None,
             items: Vec::new(),
             water: Vec::new(),
+            roads: Vec::new(),
             lights: engine_core::scene::LightRig {
                 sun: None,
                 ambient: None,
@@ -116,6 +121,7 @@ impl SceneDoc {
                 self.file = None;
                 self.items.clear();
                 self.water.clear();
+                self.roads.clear();
             }
         }
     }
@@ -140,6 +146,7 @@ impl SceneDoc {
 
         self.items.clear();
         self.water.clear();
+        self.roads.clear();
         if self.is_valid() {
             if let Ok(scene) = Scene::from_source(&self.source, &self.display) {
                 let assets = engine_assets::AssetServer::for_scene(&self.path);
@@ -147,6 +154,7 @@ impl SceneDoc {
                     Ok(items) => {
                         self.items = items;
                         self.water = scene.water_items();
+                        self.roads = scene.road_items();
                         self.lights = scene.lights().resolved();
                         // MSAA is the viewport's own business, not the
                         // scene's: the sample count is baked into the

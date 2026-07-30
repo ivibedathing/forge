@@ -153,6 +153,18 @@ registry! {
     WATER_WAVES_SELF_INTERSECT = "water_waves_self_intersect", Input,
         "the sum of Water wave steepness exceeds 1, which folds the surface through itself";
 
+    // ── Roads (M19) ────────────────────────────────────────────────────
+    ROAD_WITH_MESH = "road_with_mesh", Input,
+        "a Road entity owns its own surface; it may not also have a Mesh or a Material";
+    ROAD_TOO_FEW_POINTS = "road_too_few_points", Input,
+        "a Road needs at least two centerline points, or three to close";
+    ROAD_CORNER_DOES_NOT_FIT = "road_corner_does_not_fit", Input,
+        "two corner radii need more of the edge between them than it has";
+    ROAD_CORNER_NEEDS_RADIUS = "road_corner_needs_radius", Input,
+        "a sharp corner turns too far to mitre; give it a radius";
+    TOO_MANY_ROAD_KERBS = "too_many_road_kerbs", Input,
+        "a Road kerbs more corners than the shader's span array holds";
+
     // ── Scripting (M10) ────────────────────────────────────────────────
     SCRIPT_PARSE_ERROR = "script_parse_error", Input,
         "a script file does not compile";
