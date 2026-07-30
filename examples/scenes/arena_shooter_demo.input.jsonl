@@ -1,0 +1,14 @@
+{"step": 0, "held": []}
+{"step": 40, "held": ["ArrowUp", "KeyW"]}
+{"step": 60, "held": ["ArrowUp", "KeyW", "Space"]}
+{"step": 190, "held": ["KeyW"]}
+{"step": 205, "held": []}
+{"step": 215, "held": ["ArrowLeft", "Space"]}
+{"step": 300, "held": ["ArrowRight", "Space"]}
+{"step": 380, "held": ["ArrowRight", "KeyD", "Space"]}
+{"step": 450, "held": ["ArrowDown", "KeyS", "Space"]}
+{"step": 540, "held": ["ArrowDown", "KeyA", "Space"]}
+{"step": 620, "held": ["ArrowLeft", "ArrowDown", "KeyA", "Space"]}
+{"step": 700, "held": ["ArrowLeft", "KeyW", "Space"]}
+{"step": 780, "held": ["ArrowUp", "ArrowLeft", "KeyW", "Space"]}
+{"step": 860, "held": ["ArrowUp", "Space"]}
