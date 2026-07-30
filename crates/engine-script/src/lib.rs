@@ -26,6 +26,7 @@ use engine_core::components::{
     RigidBody, Script, Transform, Wheel,
 };
 use engine_core::contact::ContactState;
+use engine_core::daylight::{Daylight, DaylightSettings};
 use engine_core::input::{self, InputState};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
@@ -78,6 +79,10 @@ pub struct ScriptHost {
     /// Blasts queued by `world.explode`, drained via
     /// [`ScriptHost::take_explosions`].
     explosions: Rc<RefCell<Vec<QueuedExplosion>>>,
+    /// The scene's day/night block (M21), or `None`. Held as *settings* and
+    /// evaluated once per step from the step number, so scripts read the same
+    /// clock the renderer does and a replay reads it identically.
+    daylight: Option<DaylightSettings>,
 }
 
 /// What scripts see: the world, entity names, and the fixed timestep.
@@ -104,9 +109,30 @@ struct WorldApi {
     breaks: Rc<RefCell<Vec<String>>>,
     /// `world.explode`: blasts queued for the next physics step.
     explosions: Rc<RefCell<Vec<QueuedExplosion>>>,
+    /// The day evaluated at this step, or `None` when the scene has no
+    /// `daylight` block — in which case asking for the time is a runtime
+    /// error rather than a made-up noon.
+    daylight: Option<Daylight>,
 }
 
 impl WorldApi {
+    /// The day at this step, or a located runtime error.
+    ///
+    /// Asking a scene with no `daylight` block what time it is gets an error
+    /// rather than a plausible noon: a script that wants the time in a scene
+    /// that has no clock is a bug, and inventing one hides it until the
+    /// lamps come on at the wrong moment.
+    fn day(&self) -> std::result::Result<Daylight, Box<EvalAltResult>> {
+        self.daylight.ok_or_else(|| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                "this scene has no \"daylight\" block, so it has no time of day; \
+                 add one to the scene file to use world.time_of_day()"
+                    .into(),
+                Position::NONE,
+            ))
+        })
+    }
+
     fn entity(&self, name: &str) -> std::result::Result<hecs::Entity, Box<EvalAltResult>> {
         self.names.get(name).copied().ok_or_else(|| {
             Box::new(EvalAltResult::ErrorRuntime(
@@ -231,6 +257,28 @@ fn curated_engine() -> rhai::Engine {
 
     engine.register_type_with_name::<WorldApi>("World");
     engine.register_fn("dt", |w: &mut WorldApi| f64::from(w.dt));
+
+    // Daylight (M21): two read-only getters, and that is the whole surface.
+    //
+    // There is deliberately no setter. A script-settable clock would be
+    // hidden state — the scene would stop being reconstructible from its
+    // text, which is invariant 2. "Sleep until dawn" is a real want and is
+    // named in the design doc's "what is not here" rather than smuggled in.
+    engine.register_fn(
+        "time_of_day",
+        |w: &mut WorldApi| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.day().map(|day| f64::from(day.hours))
+        },
+    );
+    // Derivable from `time_of_day` only by reimplementing the sun's arc in
+    // Rhai, and "turn the lamps on when the sun is down" is *the* use case —
+    // which is why this is a second function rather than a documented formula.
+    engine.register_fn(
+        "sun_altitude",
+        |w: &mut WorldApi| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.day().map(|day| f64::from(day.sun_altitude))
+        },
+    );
 
     engine.register_fn(
         "key",
@@ -761,6 +809,7 @@ impl ScriptHost {
         world: &World,
         scene_path: &Path,
         timestep_hz: u32,
+        daylight: Option<DaylightSettings>,
     ) -> Result<Option<Self>> {
         let base_dir = scene_path.parent().unwrap_or(Path::new(""));
         let engine = curated_engine();
@@ -813,6 +862,7 @@ impl ScriptHost {
             state: Rc::new(RefCell::new(HashMap::new())),
             breaks: Rc::new(RefCell::new(Vec::new())),
             explosions: Rc::new(RefCell::new(Vec::new())),
+            daylight,
         }))
     }
 
@@ -847,10 +897,19 @@ impl ScriptHost {
         input: &InputState,
         contacts: &ContactState,
     ) -> Result<Vec<String>> {
+        // The same reproducible clock the renderer uses: whole fixed steps
+        // converted to seconds. Evaluated once per step rather than per call,
+        // so two `world.time_of_day()` calls in one step cannot disagree.
+        let daylight = self
+            .daylight
+            .as_ref()
+            .map(|settings| settings.evaluate(step as f32 * self.dt));
+
         let api = WorldApi {
             world: Rc::new(RefCell::new(std::mem::take(world))),
             names: Rc::clone(&self.names),
             dt: self.dt,
+            daylight,
             input: Rc::new(input.clone()),
             contacts: Rc::new(contacts.clone()),
             state: Rc::clone(&self.state),
@@ -988,7 +1047,7 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         for step in 0..150 {
             host.step(&mut scene.world, step, &InputState::default(), &ContactState::default()).unwrap();
         }
@@ -1006,7 +1065,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.position("Nobody"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("Nobody"), "{}", error.message);
@@ -1025,7 +1084,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { let x = 0; loop { x += 1; } }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         std::fs::remove_dir_all(&dir).ok();
@@ -1070,7 +1129,7 @@ mod tests {
                 if step == 1 { world.look_at("Mover", 5.0, 0.25, 0.0); }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let entity = scene.entity("Mover").unwrap();
 
         host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
@@ -1106,7 +1165,7 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
 
         let mut held = InputState::default();
         held.press("ArrowUp");
@@ -1121,7 +1180,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.key("ArowUp"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host
             .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
             .unwrap_err();
@@ -1144,7 +1203,7 @@ mod tests {
                 world.set_position("Mover", f[0], f[1], f[2]);
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let entity = scene.entity("Mover").unwrap();
 
         // Physics writes yaws past ±90° as the gimbal twin (±180, θ, ±180),
@@ -1196,7 +1255,7 @@ mod tests {
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene =
             Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
         host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
 
         let entity = scene.entity("Car").unwrap();
@@ -1242,7 +1301,7 @@ mod tests {
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene =
             Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
         host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
         host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap();
 
@@ -1265,7 +1324,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.set_engine_force("Mover", 1.0); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host
             .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
             .unwrap_err();
@@ -1281,7 +1340,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.linear_velocity("Mover"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host
             .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
             .unwrap_err();
@@ -1306,7 +1365,7 @@ mod tests {
                 world.set_position("Mover", 0.0, y, 0.0);
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let entity = scene.entity("Mover").unwrap();
         let y_of = |scene: &Scene| scene.world.get::<&Transform>(entity).unwrap().position.y;
 
@@ -1346,7 +1405,7 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let hud = host
             .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
             .unwrap();
@@ -1366,7 +1425,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.touching("Nobody"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host
             .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
             .unwrap_err();
@@ -1385,7 +1444,7 @@ mod tests {
                 while i < 17 { world.hud("line"); i += 1; }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("at most 16 lines"), "{}", error.message);
@@ -1394,7 +1453,7 @@ mod tests {
             &dir,
             "fn step(world, step) { world.hud(\"caf\u{e9}\"); }",
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
         assert!(error.message.contains("printable ASCII"), "{}", error.message);
         std::fs::remove_dir_all(&dir).ok();
@@ -1427,7 +1486,7 @@ mod tests {
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene =
             Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
         host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
 
         let text = scene
@@ -1449,7 +1508,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.hud_text("Mover"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("no HudText"), "{}", error.message);
@@ -1479,7 +1538,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
         let rate_now = |scene: &Scene| {
             scene
                 .world
@@ -1502,7 +1561,7 @@ mod tests {
                 &dir,
                 &format!("fn step(world, step) {{ world.set_particle_rate(\"Puff\", {bad}); }}"),
             );
-            let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+            let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
             let error = host
                 .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
                 .unwrap_err();
@@ -1515,7 +1574,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.particle_rate("Mover"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host
             .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
             .unwrap_err();
@@ -1557,7 +1616,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
         host.step(
             &mut scene.world,
             0,
@@ -1601,7 +1660,7 @@ mod tests {
             std::fs::write(dir.join("scripts/test.rhai"), &script).unwrap();
             let mut scene =
                 Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-            let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+            let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
             let error = host
                 .step(
                     &mut scene.world,
@@ -1633,7 +1692,7 @@ mod tests {
         ]}"#;
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
         let error = host
             .step(
                 &mut scene.world,
@@ -1680,7 +1739,7 @@ mod tests {
                 world.set_position("Mover", laps, 0.0, world.state("missing", -7.5));
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         for step in 0..8 {
             host.step(&mut scene.world, step, &InputState::default(), &ContactState::default()).unwrap();
         }
@@ -1722,7 +1781,7 @@ mod tests {
                 if step == 2 { world.break_entity("Ghost"); }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
 
         host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
         assert_eq!(host.take_breaks(), vec!["Crate".to_string()]);
@@ -1747,7 +1806,7 @@ mod tests {
                 if step == 2 { world.explode(0.0, 0.0, 0.0, 1.0, -1.0); }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
 
         host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
         assert_eq!(
@@ -1770,7 +1829,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.set_position("Fragment", 1.0, 2.0, 3.0); }"#,
         );
-        let mut host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let mut host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
 
         // Before the spawn the name is unknown — a runtime error.
         let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
@@ -1793,7 +1852,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { timestamp(); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60).unwrap().unwrap();
+        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
         let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
         assert_eq!(
             error.error, "script_runtime_error",

@@ -2275,3 +2275,123 @@ fn the_m18_water_fixture_pins_waves_depth_and_foam() {
         "water at t=0 should not match a baseline blessed at t=2: {report}"
     );
 }
+
+/// M21: one scene file, five times of day.
+///
+/// The fixture runs a 24-second day (`day_length: 24.0`), so an hour is a
+/// second and step `hour * 60` at 60 Hz is that hour — which is why the
+/// baselines are named for the clock and not for a step count. Five renders
+/// from *one* file is the point: the day is a pure function of the clock, so
+/// there is nothing to author per time of day.
+///
+/// The lamp is what makes the night baselines more than a dark picture. Its
+/// `PointLight` starts at intensity 0 and `scripts/m21_lamp.rhai` raises it off
+/// `world.sun_altitude()`, so the two night frames are lit by something that
+/// read the clock. That also means these renders need `--steps` rather than
+/// `--time`: scripts run on the step loop, and a `--time` render never steps.
+#[test]
+fn the_m21_daylight_fixture_pins_a_whole_day_from_one_file() {
+    let scene = repo_path("examples/scenes/verify/m21_daylight.json");
+
+    let validate = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(validate.status.code(), Some(0), "{validate:?}");
+
+    // (label, steps) — night, sunrise, noon, sunset, night again.
+    for (label, steps) in [
+        ("0200", "120"),
+        ("0630", "390"),
+        ("1200", "720"),
+        ("1830", "1110"),
+        ("2200", "1320"),
+    ] {
+        let baseline = repo_path(&format!(
+            "examples/scenes/verify/baselines/m21_daylight_{label}.png"
+        ));
+        let diff = engine()
+            .arg("diff-render")
+            .arg(&scene)
+            .arg(&baseline)
+            .args(["--steps", steps])
+            .output()
+            .unwrap();
+        if !diff.status.success() {
+            let stderr = String::from_utf8_lossy(&diff.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "diff-render failed for a non-GPU reason at {label}: {stderr}"
+            );
+            eprintln!("skipping render pin: no usable GPU on this machine");
+            return;
+        }
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "at {label}: {report}");
+        assert_eq!(report["diff_pixels"], 0, "at {label}: {report}");
+    }
+
+    // The times have to actually differ, or the five assertions above would
+    // all pass for the trivial reason that the clock is ignored.
+    let noon = repo_path("examples/scenes/verify/baselines/m21_daylight_1200.png");
+    let at_night = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&noon)
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&at_night).trim()).unwrap();
+    assert_eq!(
+        report["pass"], false,
+        "02:00 must not match a baseline blessed at noon: {report}"
+    );
+}
+
+/// M21: the two ways a scene can disagree with its own daylight block.
+///
+/// GPU-free, so it runs everywhere the rest of the suite's validation tests do.
+#[test]
+fn daylight_owns_the_sun_and_says_so() {
+    // Two owners of one sun (invariant 8).
+    let clash = scene_file(
+        "daylight-and-sun",
+        r#"{"name":"clash","daylight":{},"entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Sun","components":[
+                {"type":"Transform","rotation":[-40.0,0.0,0.0]},
+                {"type":"DirectionalLight"}
+            ]}
+        ]}"#,
+    );
+    let output = engine().arg("validate").arg(&clash).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["daylight_and_directional_light", "validation_failed"]
+    );
+
+    // An authored sky under `drives_sky` is a warning, not a failure — the
+    // scene still renders, it just renders the day's colors.
+    let overridden = scene_file(
+        "daylight-overrides-sky",
+        r#"{"name":"warn",
+            "daylight":{},
+            "environment":{"sky":true,"sky_zenith":[0.1,0.2,0.3]},
+            "entities":[
+                {"name":"Cam","components":[{"type":"Camera","active":true}]}
+            ]}"#,
+    );
+    let output = engine().arg("validate").arg(&overridden).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "a warning must not fail: {output:?}");
+    assert_eq!(
+        codes_of(&stderr_lines(&output)),
+        ["daylight_overrides_sky"]
+    );
+
+    // ...and --strict promotes it, like every other warning.
+    let strict = engine()
+        .arg("validate")
+        .arg(&overridden)
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(strict.status.code(), Some(1), "{strict:?}");
+}

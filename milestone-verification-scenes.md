@@ -1110,6 +1110,58 @@ byte-identical, which is the check that actually settles it.
 
 ---
 
+## M21 — day and night
+
+**Scene:** `examples/scenes/verify/m21_daylight.json` — a pond in a basin, three trees, a boulder
+and a wall for shadow shapes, and a lamp post whose `PointLight` a script raises off
+`world.sun_altitude()`. `day_length: 24.0`, so an hour is a second and step `hour × 60` at 60 Hz is
+that hour.
+
+**The point of the fixture is that there is one file and five pictures.** The day is a pure function
+of the clock, so nothing is authored per time of day.
+
+```
+engine validate examples/scenes/verify/m21_daylight.json
+
+# 02:00, 06:30, noon, 18:30, 22:00 — all from the one scene
+engine diff-render examples/scenes/verify/m21_daylight.json \
+    examples/scenes/verify/baselines/m21_daylight_0200.png --steps 120
+engine diff-render examples/scenes/verify/m21_daylight.json \
+    examples/scenes/verify/baselines/m21_daylight_0630.png --steps 390
+engine diff-render examples/scenes/verify/m21_daylight.json \
+    examples/scenes/verify/baselines/m21_daylight_1200.png --steps 720
+engine diff-render examples/scenes/verify/m21_daylight.json \
+    examples/scenes/verify/baselines/m21_daylight_1830.png --steps 1110
+engine diff-render examples/scenes/verify/m21_daylight.json \
+    examples/scenes/verify/baselines/m21_daylight_2200.png --steps 1320
+#   pinned by cli.rs::the_m21_daylight_fixture_pins_a_whole_day_from_one_file
+
+# The whole cycle on one sheet — the fastest way to *look at* a day.
+engine filmstrip examples/scenes/verify/m21_daylight.json \
+    --out /tmp/day.png --start 0 --end 24 --frames 8 --columns 4
+```
+
+**`--steps`, not `--time`:** the lamp is script-driven, and scripts run on the step loop. A
+`--time` render never steps, so it renders the right sky under a dark lamp. The filmstrip has the
+same limitation by design, and is therefore not a committed baseline — it is also not something
+`diff-render` could check, since that renders a scene at a baseline's dimensions.
+
+**What this regresses:** the sun/moon arc and its east/west sense, the wrapping palette, the clock
+(frozen at `day_length: 0`, cycling otherwise, `t` and `t + day_length` identical), the
+dominant-body handoff and its brightness bound, the shadow-elevation clamp that keeps a horizon sun
+from casting shadows upward, and the two ownership rules — `daylight_and_directional_light` as an
+error, `daylight_overrides_sky` as a warning. 21 GPU-free tests in `engine-core/tests/daylight.rs`,
+four in `validate.rs`, two at the CLI.
+
+**Bless from a debug build**, for M19's reason: the fixture has trees.
+
+**Also re-blessed here:** all six `showcase_*` baselines, since the tour's hand-aimed `Sun` and
+`Sky` entities became a `daylight` block. No other baseline moved — an A/B between the merge-base
+binary and the worktree's over 15 scenes × 5 step counts (75 combinations) was byte-identical,
+which is the check that actually settles it.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):

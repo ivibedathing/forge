@@ -34,7 +34,12 @@ pub fn run(
     mut trace: Option<&mut dyn Write>,
 ) -> Result<StepRun> {
     let mut scripts =
-        engine_script::ScriptHost::build(&scene.world, scene_path, scene.physics.timestep_hz)?;
+        engine_script::ScriptHost::build(
+            &scene.world,
+            scene_path,
+            scene.physics.timestep_hz,
+            scene.daylight.clone(),
+        )?;
     let assets = engine_assets::AssetServer::for_scene(scene_path);
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
     let mut particles = ParticleSystem::build(&scene.world);
