@@ -8,7 +8,7 @@
 # calls a milestone takes, it is the difference between a loop that is free
 # to run and one worth avoiding.
 #
-# So: check staleness ourselves (a find over the sources, ~0.15s), rebuild
+# So: check staleness ourselves (a find over the sources, ~0.02s warm), rebuild
 # only when something actually changed, and exec the binary. Arguments are
 # passed through untouched, and nothing is written to stdout, so the CLI
 # contract in docs/cli-contract.md still describes exactly what a caller
@@ -42,12 +42,20 @@ bin="$root/target/$profile/engine"
 # Stale when the binary is missing, or when any source the binary is built
 # from is newer than it. Shaders count: they are include_str!'d into the
 # render crate, so a .wgsl edit changes the binary's behaviour.
+#
+# tests/ and benches/ are pruned because they are NOT inputs to this binary:
+# `cargo build -p engine-cli` never compiles them, so it can never make the
+# binary newer than a test file, and counting them means every later call
+# rebuilds forever. (Measured: it turned a 0.02s call into 1.3s of cargo
+# deciding there was nothing to do.)
 stale=yes
 if [ -x "$bin" ]; then
     newer=$(
-        find "$root/crates" "$root/Cargo.toml" "$root/Cargo.lock" -type f \
-            \( -name '*.rs' -o -name '*.wgsl' -o -name '*.toml' -o -name '*.lock' \) \
-            -newer "$bin" -print 2>/dev/null | head -n 1
+        find "$root/crates" "$root/Cargo.toml" "$root/Cargo.lock" \
+            \( -type d \( -name tests -o -name benches \) -prune \) -o \
+            \( -type f \
+               \( -name '*.rs' -o -name '*.wgsl' -o -name '*.toml' -o -name '*.lock' \) \
+               -newer "$bin" -print \) 2>/dev/null | head -n 1
     )
     [ -z "$newer" ] && stale=no
 fi

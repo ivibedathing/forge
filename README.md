@@ -50,7 +50,7 @@ cargo test --workspace
 ```
 
 `bin/engine` is the CLI without cargo's tax: it checks whether any source is
-newer than the binary (~0.15s), rebuilds only if so, and execs. `cargo run -p
+newer than the binary (~0.02s warm), rebuilds only if so, and execs. `cargo run -p
 engine-cli --` spends ~8s on freshness checking before every single call, warm
 — which is nothing once and is most of a milestone across the hundreds of
 validate/screenshot/diff-render calls the loop actually makes. Arguments pass
