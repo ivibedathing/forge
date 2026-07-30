@@ -421,6 +421,21 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "Terrain" => {
+            let Ok(mut c) = world.get::<&mut Terrain>(entity) else {
+                return false;
+            };
+            match field {
+                // Appearance only. The shape fields are listed in
+                // `NOT_ANIMATABLE` and never reach here — regenerating the
+                // surface every frame is not something a clip should be able to
+                // ask for by accident.
+                "texture_scale" => c.texture_scale = scalar,
+                "color_variation" => c.color_variation = scalar,
+                "bump" => c.bump = scalar,
+                _ => return false,
+            }
+        }
         _ => return false,
     }
     true
@@ -428,7 +443,34 @@ pub fn set_field(
 
 /// Whether a field is vector-shaped in the published schema (3-element
 /// array). Used by clip validation for `type_mismatch`.
+/// Numeric fields that are nonetheless not animatable, and why.
+///
+/// A terrain's *shape* is generated on the CPU and cached as one `Arc<MeshData>`
+/// per distinct patch, which the renderer in turn keys its uploaded vertex
+/// buffers on (M15). A clip driving one of these would mint a new surface every
+/// frame: a full regeneration (a 256² patch is 330 000 noise evaluations), a new
+/// GPU upload, and — because the renderer holds an idle entry for 240 frames —
+/// hundreds of megabytes of vertex buffers for a scene that looks like it is
+/// merely undulating.
+///
+/// Refusing is better than paying that quietly. Because `field_shape` is the one
+/// gate, a clip aimed here fails validation with `unknown_property` and a
+/// `did_you_mean` naming the fields that *do* animate, rather than silently
+/// doing nothing — which is exactly what the drift test in this module exists to
+/// prevent. Terrain's appearance (`texture_scale`, `color_variation`, `bump`)
+/// animates freely; it costs nothing but a uniform.
+const NOT_ANIMATABLE: &[(&str, &str)] = &[
+    ("Terrain", "height"),
+    ("Terrain", "feature_scale"),
+    ("Terrain", "persistence"),
+    ("Terrain", "warp"),
+];
+
 fn field_shape(schema: &serde_json::Value, component: &str, field: &str) -> Option<bool> {
+    if NOT_ANIMATABLE.contains(&(component, field)) {
+        return None;
+    }
+
     let variant = schema["oneOf"]
         .as_array()?
         .iter()
@@ -880,7 +922,8 @@ mod tests {
                 {"type":"HudText","text":"x"},
                 {"type":"HudRect","size":[1.0,1.0]},
                 {"type":"ParticleEmitter"},
-                {"type":"Water"}
+                {"type":"Water"},
+                {"type":"Terrain"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

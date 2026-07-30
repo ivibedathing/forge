@@ -576,6 +576,64 @@ baseline at `--steps 120`, pinned by a CLI test. The bit-exactness of the sevent
 baselines was checked the way this repo has learned to check it — an A/B between binaries built at
 `main` and here, fifteen scene/step combinations, all byte-identical.
 
+Terrain (M19, design in `terrain-design.md`). Ground was `builtin:plane` scaled to 200 m with one
+albedo — two triangles and one colour, so the sun struck all 40 000 m² at the same angle and the eye
+read it as a backdrop rather than a place. The `Terrain` component replaces it, and **there is no
+flat ground in the repo's scenes any more**.
+
+**A patch of ground is one entity with one component**, following `Water` exactly: `Terrain` owns a
+tessellated unit grid (`segments`, 1..512) sized by `Transform.scale`, so the entity carries **no**
+`Mesh` and **no** `Material` (`terrain_with_mesh`). Heights are sampled in **world** XZ, so two
+patches sharing a description meet seamlessly; `Transform.scale.y` multiplies the relief.
+
+- **The height field is CPU-side — the opposite of water's choice, for three reasons.** Terrain does
+  not animate, so the argument that forced waves onto the GPU (a new `Arc<MeshData>` every frame,
+  defeating M15's geometry cache) does not apply; physics has to stand on it (a `trimesh` `Collider`
+  with no `asset` and no `Mesh` borrows the generated surface, which is how ground is collidable
+  without a mesh file); and placement has to query it. So there is exactly one implementation and
+  **nothing to keep in agreement**, which is strictly better than water's position. fBm value noise
+  with the integer hash spelled out in-repo like M17's turbulence (a terrain render sits under a
+  baseline, so the hash is a format contract), `warp` domain-warping it into ridges and valleys, and
+  the octave sum normalised so `height` means metres however many octaves are summed.
+- **Mesh normals are written in the patch's local space**, gradient scaled by the patch's own size.
+  The renderer transforms normals by the model's inverse-transpose — `diag(1/180, 1, 1/180)` on a
+  180 m patch — so a world-space normal arrives crushed to straight up and the landscape lights
+  exactly like a plane *and* reports 0° everywhere, silently disabling every slope-selected layer.
+  Pinned by `mesh_normals_survive_the_model_transform`.
+- **The generative texture system** is `layers` (at most 4), each claiming a band of world height and
+  a band of slope. The first is the base coat and each later one **paints over** what is beneath it
+  (averaging would leave a rock layer half grass on a cliff it fully claims). Slope does the heavy
+  lifting — height alone draws a contour map. Fades are **absolute** (`height_blend` in metres,
+  `slope_blend` in degrees) and spent *outside* the band: a scale-free fraction-of-the-band `blend`
+  was tried first and bleeds a 13 m fade out of a layer aimed at "above 1.9 m". `noise` jitters each
+  boundary out of an iso-line into interlocking fingers, `color_variation` mottles the result at two
+  scales an order of magnitude apart, and `bump` perturbs the normal per pixel with no displacement
+  behind it, fading with view distance (water's specular-aliasing lesson). Nothing physical depends
+  on any of the texture noise — the collider is the displaced grid and nothing else.
+- **`mesh.wgsl` is not edited.** Terrain is lit exactly like a mesh, so it shares the file rather
+  than duplicating 200 lines of GGX/PCF/ambient/point-light/fog that would drift; but M16's four
+  untouchable lines must reach the compiler surrounded by the code they shipped in. Putting the
+  branch inline — those lines textually identical, only `albedo`/`roughness` arriving from a function
+  result — **moved one pixel by one unit in each of `m16_environment`, `m17_fire` and `m18_water`**,
+  found by the A/B between binaries. So the plain pipeline compiles the file as it sits on disk
+  (byte-identical by construction) and a second `terrain-pipeline` compiles a variant assembled by
+  `with_terrain`: `shaders/terrain.wgsl` inserted plus two **anchored** substitutions that panic at
+  startup if `mesh.wgsl` is reworded. Terrain draws in one run at the end of the opaque pass, so the
+  pipeline switches once a frame.
+- **`world.terrain_height(name, x, z)`** is the only terrain call in the script API — read-only,
+  returning a world Y a script can assign directly. It is what keeps the tour's critters on the
+  ground and the truck's exhaust and skid smoke from firing out of a hillside. **Terrain's shape
+  fields are deliberately not animatable** (`NOT_ANIMATABLE` in `animation.rs`): a clip driving
+  `height` would regenerate the surface every frame and leave hundreds of megabytes of vertex
+  buffers in the renderer's cache, so a clip aimed there fails validation with `unknown_property`
+  rather than doing it quietly. Appearance fields animate freely.
+
+Verified by `engine-render/tests/terrain.rs` (six GPU-skipping pixel tests, including
+`a_flat_single_layer_patch_is_exactly_a_painted_plane`, which pins the shading path against
+`builtin:plane` at `segments: 1`) and fixture `verify/m19_terrain.json` + baseline at `--steps 120`,
+pinned by a CLI test that also proves the dropped sphere lands *on* the ground. The eighteen earlier
+scene/step combinations were A/B'd against `main` and are byte-identical.
+
 Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
 with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,

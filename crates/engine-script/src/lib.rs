@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use engine_core::components::{
     AmbientLight, Breakable, DirectionalLight, HudRect, HudText, Name, ParticleEmitter, PointLight,
-    RigidBody, Script, Transform, Wheel,
+    RigidBody, Script, Terrain, Transform, Wheel,
 };
 use engine_core::contact::ContactState;
 use engine_core::input::{self, InputState};
@@ -176,6 +176,38 @@ impl WorldApi {
             .into(),
             Position::NONE,
         )))
+    }
+
+    /// The height of a terrain patch at a world XZ position, in world metres
+    /// (M19).
+    ///
+    /// Needs the patch's `Transform` as well as its `Terrain`, so it reads the
+    /// world directly rather than going through `with_component`: the answer
+    /// includes the entity's own Y and `Transform.scale.y`, which makes it a
+    /// coordinate a script can assign straight to a position. That is the whole
+    /// point — an animal walking a parametric loop over rolling ground needs to
+    /// ask where the ground *is* every step, and before this there was no way to
+    /// ask.
+    fn terrain_height_at(
+        &mut self,
+        name: &str,
+        x: f32,
+        z: f32,
+    ) -> std::result::Result<f32, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow();
+        let terrain = world.get::<&Terrain>(entity).map_err(|_| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                format!("entity {name:?} has no Terrain").into(),
+                Position::NONE,
+            ))
+        })?;
+        let transform = world
+            .get::<&Transform>(entity)
+            .map(|t| *t)
+            .unwrap_or_default();
+        Ok(transform.position.y
+            + transform.scale.y * engine_core::terrain::height_at(&terrain, x, z))
     }
 
     /// The vehicle path: velocity access needs a `RigidBody`; what a write
@@ -579,6 +611,23 @@ fn curated_engine() -> rhai::Engine {
             w.with_component::<HudRect, _>(name, "HudRect", |r| {
                 r.size = glam::Vec2::new(width as f32, height as f32);
             })
+        },
+    );
+
+    // Terrain (M19): read-only, and the only terrain field the API exposes.
+    // A patch's shape is a function of its authored fields, so there is nothing
+    // meaningful to write here — what a script needs is the answer to "where is
+    // the ground under this point", which is what keeps feet, wheels and props
+    // on a surface that is no longer flat anywhere.
+    engine.register_fn(
+        "terrain_height",
+        |w: &mut WorldApi,
+         name: &str,
+         x: f64,
+         z: f64|
+         -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.terrain_height_at(name, x as f32, z as f32)
+                .map(f64::from)
         },
     );
 

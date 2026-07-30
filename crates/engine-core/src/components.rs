@@ -1259,6 +1259,237 @@ impl Default for Water {
     }
 }
 
+/// A patch of ground: displaced terrain with a procedurally shaded surface
+/// (M19).
+///
+/// The entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns
+/// both, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is
+/// a tessellated unit grid sized by `Transform.scale`, displaced by an fBm
+/// height field; `Transform.scale.y` multiplies that displacement, so [`height`]
+/// is what you get at scale 1.
+///
+/// Heights are sampled in **world** XZ, so two patches with the same fields meet
+/// seamlessly and moving one moves it *through* the field rather than dragging
+/// its hills along.
+///
+/// Unlike water's waves, the height field is evaluated on the **CPU**: terrain
+/// does not animate, so the surface is generated once and cached, and there is
+/// exactly one implementation for the renderer, the collider (a `trimesh`
+/// `Collider` with no asset uses this surface) and
+/// `world.terrain_height(name, x, z)` to share. Appearance is the opposite —
+/// per-pixel, in the shader, mirrored by nothing, which is what licenses detail
+/// far finer than the grid.
+///
+/// [`height`]: Terrain::height
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Terrain {
+    /// Quads per axis across the patch. `[1, 512]`.
+    ///
+    /// The resolution the *relief* is drawn and collided at. What matters is
+    /// metres per quad against [`feature_scale`](Terrain::feature_scale): a
+    /// 200 m patch at 192 has one vertex per metre, which resolves a 40 m hill
+    /// comfortably and a 3 m hummock not at all. Surface *detail* is per pixel
+    /// and does not care.
+    #[schemars(range(min = 1, max = 512))]
+    pub segments: u32,
+
+    /// Chooses the landscape. Any change reshapes every hill.
+    ///
+    /// The noise hash is written out in this crate rather than pulled from a
+    /// dependency, so a given seed means the same terrain across upgrades — a
+    /// terrain render sits under a `diff-render` baseline, which makes this a
+    /// format contract.
+    pub seed: u32,
+
+    /// Metres of displacement at full amplitude, `>= 0`.
+    ///
+    /// The field is normalised to `[-1, 1]` before scaling, so this is the peak
+    /// above (and below) the entity's own Y, and **adding octaves adds detail
+    /// rather than altitude**. 0 is a flat patch, which is a legitimate thing to
+    /// ask for and is still shaded by the layer system.
+    #[schemars(range(min = 0.0))]
+    pub height: f32,
+
+    /// Metres across one cell of the largest noise octave. `> 0`.
+    ///
+    /// The size of the big rolling features, and the field that decides whether
+    /// a patch reads as dunes, as pasture or as foothills. Well under
+    /// `segments`-worth of quads and the grid cannot resolve it; far larger than
+    /// the patch and the ground reads as a tilted plane.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub feature_scale: f32,
+
+    /// How many octaves of noise are summed. `[1, 8]`.
+    ///
+    /// Each octave halves the feature size and scales its amplitude by
+    /// [`persistence`](Terrain::persistence). Past about 5 the added detail is
+    /// finer than the grid can carry and only costs generation time.
+    #[schemars(range(min = 1, max = 8))]
+    pub octaves: u32,
+
+    /// Amplitude multiplier per octave, `[0, 1]`.
+    ///
+    /// Low values give smooth swells; near 1 gives a rough, noisy surface with
+    /// no clear large-scale shape. 0.5 is the usual landscape.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub persistence: f32,
+
+    /// Domain warp: how far the field is dragged sideways before it is summed,
+    /// as a fraction of [`feature_scale`](Terrain::feature_scale). `[0, 2]`;
+    /// 0 (the default) is off.
+    ///
+    /// Two lines of arithmetic, and the largest single difference between "fBm"
+    /// and "landscape". Unwarped fBm is isotropic blobs; warping shears them
+    /// into ridges and valleys that read as though water once ran over them.
+    /// Past ~1 the surface starts to look smeared.
+    #[schemars(range(min = 0.0, max = 2.0))]
+    pub warp: f32,
+
+    /// The materials the surface is painted with, at most
+    /// [`MAX_TERRAIN_LAYERS`](crate::terrain::MAX_TERRAIN_LAYERS), blended by
+    /// height and slope.
+    ///
+    /// Empty (the default) paints the whole surface with
+    /// [`TerrainLayer`]'s own defaults, so a bare `{"type": "Terrain"}` is a
+    /// plausible grassy patch rather than an error or a blank.
+    #[schemars(length(max = 4))]
+    pub layers: Vec<TerrainLayer>,
+
+    /// Metres across one cell of the surface-detail noise. `> 0`.
+    ///
+    /// The scale of the mottling within a layer and of the fingers along the
+    /// boundary between two — the *texture*, as opposed to the relief. Around a
+    /// few metres reads as ground cover seen from standing height.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub texture_scale: f32,
+
+    /// How strongly the detail noise modulates the blended albedo, `[0, 1]`.
+    ///
+    /// The cure for the one-flat-colour look: even a single-layer terrain stops
+    /// being a sheet of paint. Past ~0.5 the ground reads as camouflage.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub color_variation: f32,
+
+    /// Per-pixel normal perturbation from the detail noise, `[0, 1]`.
+    ///
+    /// Bumpiness with no displacement behind it — nothing physical may depend on
+    /// it, which is what allows detail far finer than the grid or the collider.
+    /// It fades with view distance, because sub-pixel normal variation aliases
+    /// into sparkle that reads as broken rather than as low quality (the lesson
+    /// water's detail ripples already paid for).
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub bump: f32,
+}
+
+impl Default for Terrain {
+    fn default() -> Self {
+        Self {
+            segments: 128,
+            seed: 0,
+            height: 2.0,
+            feature_scale: 40.0,
+            octaves: 4,
+            persistence: 0.5,
+            warp: 0.0,
+            layers: Vec::new(),
+            texture_scale: 4.0,
+            color_variation: 0.25,
+            bump: 0.3,
+        }
+    }
+}
+
+/// One material a [`Terrain`] paints itself with, claiming a band of height and
+/// a band of slope.
+///
+/// A pixel's surface is the weighted average of every layer whose bands it falls
+/// inside; a layer that leaves both at their defaults covers everything and is
+/// the base coat.
+///
+/// **Slope does the heavy lifting.** Height alone gives horizontal stripes — a
+/// contour map, and unmistakably so once the camera moves. What separates rock
+/// from grass in the world is that soil cannot cling to a steep face, so
+/// `slope_range` is the selector that reads as real and `height_range` adds
+/// bands of climate on top of it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerrainLayer {
+    /// Linear RGB, each component `[0, 1]` — `Material.albedo` for this band.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub albedo: Vec3,
+
+    /// Perceptual roughness, `[0, 1]`, meaning what `Material.roughness` means.
+    /// Wet rock and packed sand are smoother than grass, and the difference
+    /// shows wherever the sun is low.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub roughness: f32,
+
+    /// World-space Y band this layer covers, in metres, `[min, max]`.
+    ///
+    /// World Y, not a fraction of [`Terrain::height`], so a layer's altitude
+    /// does not shift when the relief is retuned — and so that two patches at
+    /// different elevations can share one description of what grows where.
+    #[schemars(with = "[f32; 2]")]
+    pub height_range: [f32; 2],
+
+    /// Surface-angle band this layer covers, in degrees from horizontal,
+    /// `[min, max]`. 0 is flat ground, 90 a vertical face.
+    #[schemars(with = "[f32; 2]", inner(range(min = 0.0, max = 90.0)))]
+    pub slope_range: [f32; 2],
+
+    /// Metres over which this layer fades out beyond each end of
+    /// `height_range`. `>= 0`; 0 is a hard edge, which reads as a cut line and
+    /// is almost never what ground does.
+    ///
+    /// Absolute, not a fraction of the band — that was tried first and is a
+    /// trap. A fraction means a wide band gets a wide fade, so a layer written
+    /// as "above 1.9 m" with a generous top end bleeds ten metres *below* where
+    /// it was aimed and washes out everything under it. In metres, what the
+    /// author writes is what the surface does.
+    #[schemars(range(min = 0.0))]
+    pub height_blend: f32,
+
+    /// Degrees over which this layer fades out beyond each end of
+    /// `slope_range`. `>= 0`.
+    ///
+    /// Separate from [`height_blend`](TerrainLayer::height_blend) because the
+    /// two bands are in different units and one number cannot be honest about
+    /// both.
+    #[schemars(range(min = 0.0))]
+    pub slope_blend: f32,
+
+    /// How much the detail noise jitters this layer's boundary, `[0, 1]`, as a
+    /// fraction of its own fade widths.
+    ///
+    /// Drawn honestly, the boundary between two layers is an iso-line of a
+    /// smooth function — a clean sweeping curve, and the eye reads clean curves
+    /// as artificial faster than it reads anything else here. Jittering the
+    /// height and slope the layer *thinks* it is at breaks the boundary into
+    /// interlocking fingers at two scales, for one multiply-add.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub noise: f32,
+}
+
+impl Default for TerrainLayer {
+    fn default() -> Self {
+        Self {
+            // A plausible dry grass, so `{"type": "Terrain"}` on its own draws
+            // ground rather than the 0.8 grey a missing material would give.
+            albedo: Vec3::new(0.13, 0.17, 0.09),
+            roughness: 0.95,
+            // Bands that cover everything: absent means "applies here", so the
+            // first layer an author writes is the base coat without having to
+            // say so.
+            height_range: [-1000.0, 1000.0],
+            slope_range: [0.0, 90.0],
+            height_blend: 0.5,
+            slope_blend: 8.0,
+            noise: 0.5,
+        }
+    }
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -1330,6 +1561,7 @@ components!(
     HudRect,
     ParticleEmitter,
     Water,
+    Terrain,
 );
 
 #[cfg(test)]
@@ -1422,7 +1654,8 @@ mod tests {
                 "HudText",
                 "HudRect",
                 "ParticleEmitter",
-                "Water"
+                "Water",
+                "Terrain"
             ]
         );
     }

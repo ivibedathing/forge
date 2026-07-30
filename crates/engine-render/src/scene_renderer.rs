@@ -25,11 +25,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use engine_core::components::{Camera, ParticleBlend, Water, MAX_POINT_LIGHTS};
+use engine_core::components::{Camera, ParticleBlend, Terrain, Water, MAX_POINT_LIGHTS};
 use engine_core::math::{Mat4, Vec3};
 use engine_core::mesh::MeshData;
 use engine_core::particles::ParticleInstance;
 use engine_core::scene::{EnvironmentSettings, RenderItem, ResolvedLights, WaterItem};
+use engine_core::terrain::MAX_TERRAIN_LAYERS;
 use engine_core::water::MAX_WAVES;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -47,6 +48,36 @@ struct ObjectUniform {
     emissive_roughness: [f32; 4],
     /// x = alpha, y = transmission; z and w are padding.
     surface: [f32; 4],
+
+    /// Terrain shading (M19): x = live layer count (0 for every other draw,
+    /// which is the branch that keeps this free), y = texture scale in metres,
+    /// z = colour variation, w = bump.
+    ///
+    /// Appended at the end of the struct, which is the pattern `FrameUniform`
+    /// documents for the same reason: every prior field stays at the offset the
+    /// shader already reads it from, so the M4 path is untouched by the growth
+    /// as well as by the branch.
+    terrain: [f32; 4],
+    /// x = the terrain's seed; y, z, w padding. `u32` rather than a float lane
+    /// because a seed is an exact bit pattern and large ones do not survive f32.
+    terrain_seed: [u32; 4],
+    /// Fixed-size table, `terrain.x` entries live. Unused slots are zeroed and
+    /// never read — the shader loops to the count.
+    terrain_layers: [TerrainLayerUniform; MAX_TERRAIN_LAYERS],
+}
+
+/// One terrain layer as the object uniform carries it, matching WGSL
+/// `TerrainLayer`.
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct TerrainLayerUniform {
+    /// rgb = linear albedo, w = roughness.
+    albedo_roughness: [f32; 4],
+    /// x, y = world-Y band in metres; z, w = slope band in degrees.
+    bands: [f32; 4],
+    /// x = height fade in metres, y = boundary jitter, z = slope fade in
+    /// degrees; w is padding.
+    blend_noise: [f32; 4],
 }
 
 /// Per-pass shader data, matching WGSL `FrameUniform`. Colors arrive already
@@ -375,6 +406,10 @@ pub struct SceneRenderer {
     /// Same shader as `pipeline`, blended and depth-write-off, for materials
     /// with `alpha < 1` or `transmission > 0`.
     transparent_pipeline: wgpu::RenderPipeline,
+    /// `pipeline` with the terrain material generator spliced into its shader
+    /// (M19) — see `with_terrain` for why this is a separate module rather than
+    /// a branch inside the shared one.
+    terrain_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     water_pipeline: wgpu::RenderPipeline,
@@ -542,6 +577,57 @@ impl SceneRenderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // The terrain twin of the mesh pipeline (M19): identical in every
+        // respect except its shader module, which is `mesh.wgsl` with the
+        // generative material spliced in by `with_terrain`.
+        //
+        // A second pipeline rather than a branch inside one, because the branch
+        // was measured and it cost `m16_environment`, `m17_fire` and
+        // `m18_water` one pixel each. Compiling the untouched file for
+        // everything that is not terrain is the only way to be byte-identical
+        // by construction rather than by hoping.
+        let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("terrain-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_terrain(include_str!(
+                "shaders/mesh.wgsl"
+            )))),
+        });
+        let terrain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("terrain-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &terrain_shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_layouts,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &terrain_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -791,6 +877,7 @@ impl SceneRenderer {
         Self {
             pipeline,
             transparent_pipeline,
+            terrain_pipeline,
             shadow_pipeline,
             sky_pipeline,
             water_pipeline,
@@ -1282,6 +1369,20 @@ impl SceneRenderer {
                 albedo_metallic: material.albedo.extend(material.metallic).to_array(),
                 emissive_roughness: material.emissive.extend(material.roughness).to_array(),
                 surface: [material.alpha, material.transmission, 0.0, 0.0],
+                terrain: match &item.terrain {
+                    // Zero layers is the "not terrain" signal, and it is the
+                    // only thing the shader tests: every mesh drawn since M4
+                    // lands here and never executes a line of the terrain path.
+                    Some(t) => [
+                        t.layers.len().min(MAX_TERRAIN_LAYERS) as f32,
+                        t.texture_scale,
+                        t.color_variation,
+                        t.bump,
+                    ],
+                    None => [0.0; 4],
+                },
+                terrain_seed: [item.terrain.as_ref().map_or(0, |t| t.seed), 0, 0, 0],
+                terrain_layers: terrain_layers(item.terrain.as_ref()),
             };
             let at = index * stride;
             object_bytes[at..at + std::mem::size_of::<ObjectUniform>()]
@@ -1614,8 +1715,28 @@ impl SceneRenderer {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 };
 
+                // Terrain draws in one run at the end, so the pipeline switches
+                // at most once a frame rather than once an entity. Both
+                // pipelines write depth and neither blends, so ordering within
+                // the opaque pass cannot change a pixel — and a scene with no
+                // terrain never leaves `self.pipeline`.
                 for &index in &opaque {
-                    draw(&mut pass, index);
+                    if items[index].terrain.is_none() {
+                        draw(&mut pass, index);
+                    }
+                }
+                let mut switched = false;
+                for &index in &opaque {
+                    if items[index].terrain.is_some() {
+                        if !switched {
+                            pass.set_pipeline(&self.terrain_pipeline);
+                            switched = true;
+                        }
+                        draw(&mut pass, index);
+                    }
+                }
+                if switched {
+                    pass.set_pipeline(&self.pipeline);
                 }
             }
 
@@ -2003,6 +2124,43 @@ enum Blended {
     Water(usize),
 }
 
+/// Pack a terrain's layer table for the mesh shader (M19), zeroed for every
+/// other draw.
+///
+/// Slope arrives in degrees and stays in degrees: the shader compares it against
+/// an angle it derives with `acos`, and keeping the file's unit all the way to
+/// the comparison is what makes `slope_range: [30, 90]` mean what it reads as.
+fn terrain_layers(terrain: Option<&Terrain>) -> [TerrainLayerUniform; MAX_TERRAIN_LAYERS] {
+    let mut layers = [TerrainLayerUniform::default(); MAX_TERRAIN_LAYERS];
+    let Some(terrain) = terrain else {
+        return layers;
+    };
+
+    for (slot, layer) in terrain
+        .layers
+        .iter()
+        .take(MAX_TERRAIN_LAYERS)
+        .zip(layers.iter_mut())
+        .map(|(layer, slot)| (slot, layer))
+    {
+        slot.albedo_roughness = layer.albedo.extend(layer.roughness).to_array();
+        slot.bands = [
+            layer.height_range[0],
+            layer.height_range[1],
+            layer.slope_range[0],
+            layer.slope_range[1],
+        ];
+        slot.blend_noise = [
+            layer.height_blend,
+            layer.noise,
+            layer.slope_blend,
+            0.0,
+        ];
+    }
+
+    layers
+}
+
 /// Pack one surface's shading parameters and waves for the water shader.
 ///
 /// The wave packing is where the file's units become the shader's: `wavelength`
@@ -2059,6 +2217,97 @@ fn with_sky_common(source: &str) -> std::borrow::Cow<'static, str> {
     combined.push('\n');
     combined.push_str(source);
     std::borrow::Cow::Owned(combined)
+}
+
+/// The mesh shader with terrain's generative material spliced in (M19).
+///
+/// Terrain is lit exactly like a mesh — the same GGX lobe, shadow lookup, sky
+/// ambient, point lights and fog — so it shares `mesh.wgsl` rather than
+/// duplicating two hundred lines that would then have to stay in lockstep
+/// forever. What it may not do is *edit* that file: M16's four untouchable lines
+/// have to reach the compiler surrounded by the code they already shipped in,
+/// and putting the branch inline moved one pixel by one unit in each of three
+/// committed fixtures (see `shaders/terrain.wgsl`).
+///
+/// So the file on disk stays the pre-M19 one, the plain mesh pipeline compiles
+/// it unchanged — byte-identical by construction, not by measurement — and this
+/// builds the terrain variant by two anchored substitutions. Both anchors are
+/// asserted: if `mesh.wgsl` is ever reworded, this fails loudly at startup
+/// rather than silently rendering terrain as flat grey.
+fn with_terrain(source: &str) -> std::borrow::Cow<'static, str> {
+    // 1. The object uniform grows the layer table at its end, where it leaves
+    //    every prior field at the offset the shader already reads it from.
+    const UNIFORM_TAIL: &str = "    // x = alpha, y = transmission; z and w unused.\n\
+                                \x20   surface: vec4<f32>,\n\
+                                };\n";
+    // 2. The fragment prologue resolves its surface through the generator
+    //    instead of reading the material directly.
+    const PROLOGUE: &str = "    let albedo = object.albedo_metallic.rgb;\n\
+                            \x20   let metallic = object.albedo_metallic.w;\n\
+                            \x20   let emissive = object.emissive_roughness.rgb;\n";
+    const NORMAL: &str = "    let n = normalize(in.normal);\n";
+    const ROUGHNESS: &str = "    let roughness = max(object.emissive_roughness.w, 0.045);\n";
+
+    let mut out = source.to_string();
+    for (what, anchor) in [
+        ("the object uniform's tail", UNIFORM_TAIL),
+        ("the fragment prologue", PROLOGUE),
+        ("the surface normal", NORMAL),
+        ("the roughness floor", ROUGHNESS),
+    ] {
+        assert_eq!(
+            source.matches(anchor).count(),
+            1,
+            "mesh.wgsl no longer contains {what} exactly once; \
+             with_terrain splices against it and must be updated with it"
+        );
+    }
+
+    out = out.replace(
+        UNIFORM_TAIL,
+        "    // x = alpha, y = transmission; z and w unused.\n\
+         \x20   surface: vec4<f32>,\n\
+         \x20   // Terrain (M19), appended at the end so every field above keeps\n\
+         \x20   // the offset the shader already reads it from. x = live layer\n\
+         \x20   // count, y = texture scale in metres, z = colour variation,\n\
+         \x20   // w = bump.\n\
+         \x20   terrain: vec4<f32>,\n\
+         \x20   // x = the terrain's seed; y, z, w unused.\n\
+         \x20   terrain_seed: vec4<u32>,\n\
+         \x20   terrain_layers: array<TerrainLayer, MAX_TERRAIN_LAYERS>,\n\
+         };\n",
+    );
+
+    // The generator's own declarations go ahead of the uniform that now holds
+    // its layer table.
+    out = out.replace(
+        "struct ObjectUniform {",
+        &format!(
+            "{}\nstruct ObjectUniform {{",
+            include_str!("shaders/terrain.wgsl")
+        ),
+    );
+
+    out = out.replace(
+        PROLOGUE,
+        "    let generated = terrain_surface(\n\
+         \x20       in.world_position,\n\
+         \x20       normalize(in.normal),\n\
+         \x20       length(frame.camera_pos.xyz - in.world_position),\n\
+         \x20       object.albedo_metallic.rgb,\n\
+         \x20       object.emissive_roughness.w,\n\
+         \x20   );\n\
+         \x20   let albedo = generated.albedo;\n\
+         \x20   let metallic = object.albedo_metallic.w;\n\
+         \x20   let emissive = object.emissive_roughness.rgb;\n",
+    );
+    out = out.replace(NORMAL, "    let n = generated.normal;\n");
+    out = out.replace(
+        ROUGHNESS,
+        "    let roughness = max(generated.roughness, 0.045);\n",
+    );
+
+    std::borrow::Cow::Owned(out)
 }
 
 /// A buffer holding `contents`, created once and never rewritten — the shape

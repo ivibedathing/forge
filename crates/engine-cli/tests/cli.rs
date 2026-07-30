@@ -2108,6 +2108,28 @@ fn the_showcase_tour_keeps_its_crates_on_the_ground() {
 
     // Five seconds in, long before anything is meant to move, the stack is
     // still standing where the file put it.
+    //
+    // Measured against each body's *authored* height rather than a world
+    // constant. Since M19 the ground is terrain, so "resting" is a different
+    // number for every entity and a fixed floor would only be pinning where
+    // this particular hillside happens to sit — the claim is that nothing sank
+    // through whatever it was standing on.
+    let authored: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&scene).unwrap()).unwrap();
+    let authored_y = |name: &str| -> f64 {
+        authored["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == name)
+            .and_then(|e| e["components"].as_array())
+            .unwrap()
+            .iter()
+            .find(|c| c["type"] == "Transform")
+            .and_then(|t| t["position"][1].as_f64())
+            .unwrap_or_else(|| panic!("{name} has no authored height"))
+    };
+
     let resting: Vec<serde_json::Value> = trace
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
@@ -2119,9 +2141,11 @@ fn the_showcase_tour_keeps_its_crates_on_the_ground() {
             .find(|l| l["entity"] == name)
             .unwrap_or_else(|| panic!("{name} left the trace entirely"));
         let y = row["position"][1].as_f64().unwrap();
+        let start = authored_y(name);
         assert!(
-            y > 0.2,
-            "{name} sank to y={y} — a resting body lost its ground contact"
+            y > start - 0.3,
+            "{name} sank to y={y} from an authored {start} — \
+             a resting body lost its ground contact"
         );
     }
 }
@@ -2194,5 +2218,97 @@ fn the_m18_water_fixture_pins_waves_depth_and_foam() {
     assert_eq!(
         report["pass"], false,
         "water at t=0 should not match a baseline blessed at t=2: {report}"
+    );
+}
+
+/// M19's fixture: a landscape with relief, a generated surface material, a
+/// trimesh collider taken from that same surface, and props standing on it.
+///
+/// The render pins the whole path at once — the CPU height field, the local
+/// normals the shader lights it by, slope- and height-selected layers, the
+/// detail noise, and the fact that terrain reaches all of this through the mesh
+/// pipeline (so it takes the sun, the shadow map, the sky ambient and the fog
+/// with it).
+///
+/// The rest is what makes such a pin possible. Terrain is a pure function of the
+/// file: unlike water it does not move with the clock, so the *same* baseline
+/// has to match whether the scene is asked for at step 0 or step 120 — every
+/// pixel that differs between those two is the ball falling, not the ground
+/// drifting. And the collider has to come from the surface: the dropped sphere
+/// is authored in mid-air, so if terrain were invisible to physics it would fall
+/// through the world and out of frame.
+#[test]
+fn the_m19_terrain_fixture_pins_relief_layers_and_collision() {
+    let scene = repo_path("examples/scenes/verify/m19_terrain.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m19_terrain.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+
+    // The ball has to land *on* the ground rather than through it, which is the
+    // one claim a picture of a hillside cannot make on its own: the collider is
+    // generated from the same height field the renderer draws.
+    let simulate = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    assert_eq!(simulate.status.code(), Some(0), "{simulate:?}");
+
+    let trace_dir =
+        std::env::temp_dir().join(format!("engine-m19-{}", std::process::id()));
+    std::fs::create_dir_all(&trace_dir).unwrap();
+    let trace_path = trace_dir.join("terrain.jsonl");
+    let traced = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "120"])
+        .arg("--trace")
+        .arg(&trace_path)
+        .output()
+        .unwrap();
+    assert_eq!(traced.status.code(), Some(0), "{traced:?}");
+
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(&trace_path)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let ball = rows
+        .iter()
+        .rev()
+        .find(|row| row["entity"] == "Dropped")
+        .expect("the dropped sphere should appear in the trace");
+    let y = ball["position"][1].as_f64().unwrap();
+
+    // It starts at y = 2.0 over ground about 4 m below it. Landing *on* the
+    // hillside puts it near -3.8; still up at 2 means gravity never ran, and
+    // far below the ground means the trimesh collider was never built from the
+    // terrain and it fell through the world.
+    assert!(
+        y > -5.0,
+        "the ball fell through the terrain — it ended at y = {y}: {ball}"
+    );
+    assert!(
+        y < -2.0,
+        "the ball never fell — it ended at y = {y}: {ball}"
     );
 }

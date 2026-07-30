@@ -130,6 +130,90 @@
         ],
         "type": "string"
       },
+      "TerrainLayer": {
+        "additionalProperties": false,
+        "description": "One material a [`Terrain`] paints itself with, claiming a band of height and\na band of slope.\n\nA pixel's surface is the weighted average of every layer whose bands it falls\ninside; a layer that leaves both at their defaults covers everything and is\nthe base coat.\n\n**Slope does the heavy lifting.** Height alone gives horizontal stripes — a\ncontour map, and unmistakably so once the camera moves. What separates rock\nfrom grass in the world is that soil cannot cling to a steep face, so\n`slope_range` is the selector that reads as real and `height_range` adds\nbands of climate on top of it.",
+        "properties": {
+          "albedo": {
+            "default": [
+              0.12999999523162842,
+              0.17000000178813934,
+              0.09000000357627869
+            ],
+            "description": "Linear RGB, each component `[0, 1]` — `Material.albedo` for this band.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "height_blend": {
+            "default": 0.5,
+            "description": "Metres over which this layer fades out beyond each end of\n`height_range`. `>= 0`; 0 is a hard edge, which reads as a cut line and\nis almost never what ground does.\n\nAbsolute, not a fraction of the band — that was tried first and is a\ntrap. A fraction means a wide band gets a wide fade, so a layer written\nas \"above 1.9 m\" with a generous top end bleeds ten metres *below* where\nit was aimed and washes out everything under it. In metres, what the\nauthor writes is what the surface does.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "height_range": {
+            "default": [
+              -1000.0,
+              1000.0
+            ],
+            "description": "World-space Y band this layer covers, in metres, `[min, max]`.\n\nWorld Y, not a fraction of [`Terrain::height`], so a layer's altitude\ndoes not shift when the relief is retuned — and so that two patches at\ndifferent elevations can share one description of what grows where.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "noise": {
+            "default": 0.5,
+            "description": "How much the detail noise jitters this layer's boundary, `[0, 1]`, as a\nfraction of its own fade widths.\n\nDrawn honestly, the boundary between two layers is an iso-line of a\nsmooth function — a clean sweeping curve, and the eye reads clean curves\nas artificial faster than it reads anything else here. Jittering the\nheight and slope the layer *thinks* it is at breaks the boundary into\ninterlocking fingers at two scales, for one multiply-add.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "roughness": {
+            "default": 0.949999988079071,
+            "description": "Perceptual roughness, `[0, 1]`, meaning what `Material.roughness` means.\nWet rock and packed sand are smoother than grass, and the difference\nshows wherever the sun is low.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "slope_blend": {
+            "default": 8.0,
+            "description": "Degrees over which this layer fades out beyond each end of\n`slope_range`. `>= 0`.\n\nSeparate from [`height_blend`](TerrainLayer::height_blend) because the\ntwo bands are in different units and one number cannot be honest about\nboth.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "slope_range": {
+            "default": [
+              0.0,
+              90.0
+            ],
+            "description": "Surface-angle band this layer covers, in degrees from horizontal,\n`[min, max]`. 0 is flat ground, 90 a vertical face.",
+            "items": {
+              "format": "float",
+              "maximum": 90.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "Wave": {
         "additionalProperties": false,
         "description": "One travelling wave in a [`Water`] surface's sum.\n\nGerstner rather than a sine: a Gerstner wave moves each point of the surface\n*toward* the crests as well as up, which sharpens crests and flattens\ntroughs. A sum of sines is a rubber sheet, and no amount of tuning it makes\nit read as water.",
@@ -1365,6 +1449,105 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M19).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
+        "properties": {
+          "bump": {
+            "default": 0.30000001192092896,
+            "description": "Per-pixel normal perturbation from the detail noise, `[0, 1]`.\n\nBumpiness with no displacement behind it — nothing physical may depend on\nit, which is what allows detail far finer than the grid or the collider.\nIt fades with view distance, because sub-pixel normal variation aliases\ninto sparkle that reads as broken rather than as low quality (the lesson\nwater's detail ripples already paid for).",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "color_variation": {
+            "default": 0.25,
+            "description": "How strongly the detail noise modulates the blended albedo, `[0, 1]`.\n\nThe cure for the one-flat-colour look: even a single-layer terrain stops\nbeing a sheet of paint. Past ~0.5 the ground reads as camouflage.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "feature_scale": {
+            "default": 40.0,
+            "description": "Metres across one cell of the largest noise octave. `> 0`.\n\nThe size of the big rolling features, and the field that decides whether\na patch reads as dunes, as pasture or as foothills. Well under\n`segments`-worth of quads and the grid cannot resolve it; far larger than\nthe patch and the ground reads as a tilted plane.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "height": {
+            "default": 2.0,
+            "description": "Metres of displacement at full amplitude, `>= 0`.\n\nThe field is normalised to `[-1, 1]` before scaling, so this is the peak\nabove (and below) the entity's own Y, and **adding octaves adds detail\nrather than altitude**. 0 is a flat patch, which is a legitimate thing to\nask for and is still shaded by the layer system.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "layers": {
+            "default": [],
+            "description": "The materials the surface is painted with, at most\n[`MAX_TERRAIN_LAYERS`](crate::terrain::MAX_TERRAIN_LAYERS), blended by\nheight and slope.\n\nEmpty (the default) paints the whole surface with\n[`TerrainLayer`]'s own defaults, so a bare `{\"type\": \"Terrain\"}` is a\nplausible grassy patch rather than an error or a blank.",
+            "items": {
+              "$ref": "#/$defs/TerrainLayer"
+            },
+            "maxItems": 4,
+            "type": "array"
+          },
+          "octaves": {
+            "default": 4,
+            "description": "How many octaves of noise are summed. `[1, 8]`.\n\nEach octave halves the feature size and scales its amplitude by\n[`persistence`](Terrain::persistence). Past about 5 the added detail is\nfiner than the grid can carry and only costs generation time.",
+            "format": "uint32",
+            "maximum": 8,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "persistence": {
+            "default": 0.5,
+            "description": "Amplitude multiplier per octave, `[0, 1]`.\n\nLow values give smooth swells; near 1 gives a rough, noisy surface with\nno clear large-scale shape. 0.5 is the usual landscape.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "default": 0,
+            "description": "Chooses the landscape. Any change reshapes every hill.\n\nThe noise hash is written out in this crate rather than pulled from a\ndependency, so a given seed means the same terrain across upgrades — a\nterrain render sits under a `diff-render` baseline, which makes this a\nformat contract.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "segments": {
+            "default": 128,
+            "description": "Quads per axis across the patch. `[1, 512]`.\n\nThe resolution the *relief* is drawn and collided at. What matters is\nmetres per quad against [`feature_scale`](Terrain::feature_scale): a\n200 m patch at 192 has one vertex per metre, which resolves a 40 m hill\ncomfortably and a 3 m hummock not at all. Surface *detail* is per pixel\nand does not care.",
+            "format": "uint32",
+            "maximum": 512,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "texture_scale": {
+            "default": 4.0,
+            "description": "Metres across one cell of the surface-detail noise. `> 0`.\n\nThe scale of the mottling within a layer and of the fingers along the\nboundary between two — the *texture*, as opposed to the relief. Around a\nfew metres reads as ground cover seen from standing height.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "Terrain",
+            "type": "string"
+          },
+          "warp": {
+            "default": 0.0,
+            "description": "Domain warp: how far the field is dragged sideways before it is summed,\nas a fraction of [`feature_scale`](Terrain::feature_scale). `[0, 2]`;\n0 (the default) is off.\n\nTwo lines of arithmetic, and the largest single difference between \"fBm\"\nand \"landscape\". Unwarped fBm is isotropic blobs; warping shears them\ninto ridges and valleys that read as though water once ran over them.\nPast ~1 the surface starts to look smeared.",
+            "format": "float",
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -1386,7 +1569,8 @@
     "HudText",
     "HudRect",
     "ParticleEmitter",
-    "Water"
+    "Water",
+    "Terrain"
   ],
   "scene": {
     "$defs": {
@@ -2613,6 +2797,105 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M19).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
+            "properties": {
+              "bump": {
+                "default": 0.30000001192092896,
+                "description": "Per-pixel normal perturbation from the detail noise, `[0, 1]`.\n\nBumpiness with no displacement behind it — nothing physical may depend on\nit, which is what allows detail far finer than the grid or the collider.\nIt fades with view distance, because sub-pixel normal variation aliases\ninto sparkle that reads as broken rather than as low quality (the lesson\nwater's detail ripples already paid for).",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "color_variation": {
+                "default": 0.25,
+                "description": "How strongly the detail noise modulates the blended albedo, `[0, 1]`.\n\nThe cure for the one-flat-colour look: even a single-layer terrain stops\nbeing a sheet of paint. Past ~0.5 the ground reads as camouflage.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "feature_scale": {
+                "default": 40.0,
+                "description": "Metres across one cell of the largest noise octave. `> 0`.\n\nThe size of the big rolling features, and the field that decides whether\na patch reads as dunes, as pasture or as foothills. Well under\n`segments`-worth of quads and the grid cannot resolve it; far larger than\nthe patch and the ground reads as a tilted plane.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "height": {
+                "default": 2.0,
+                "description": "Metres of displacement at full amplitude, `>= 0`.\n\nThe field is normalised to `[-1, 1]` before scaling, so this is the peak\nabove (and below) the entity's own Y, and **adding octaves adds detail\nrather than altitude**. 0 is a flat patch, which is a legitimate thing to\nask for and is still shaded by the layer system.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "layers": {
+                "default": [],
+                "description": "The materials the surface is painted with, at most\n[`MAX_TERRAIN_LAYERS`](crate::terrain::MAX_TERRAIN_LAYERS), blended by\nheight and slope.\n\nEmpty (the default) paints the whole surface with\n[`TerrainLayer`]'s own defaults, so a bare `{\"type\": \"Terrain\"}` is a\nplausible grassy patch rather than an error or a blank.",
+                "items": {
+                  "$ref": "#/$defs/TerrainLayer"
+                },
+                "maxItems": 4,
+                "type": "array"
+              },
+              "octaves": {
+                "default": 4,
+                "description": "How many octaves of noise are summed. `[1, 8]`.\n\nEach octave halves the feature size and scales its amplitude by\n[`persistence`](Terrain::persistence). Past about 5 the added detail is\nfiner than the grid can carry and only costs generation time.",
+                "format": "uint32",
+                "maximum": 8,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "persistence": {
+                "default": 0.5,
+                "description": "Amplitude multiplier per octave, `[0, 1]`.\n\nLow values give smooth swells; near 1 gives a rough, noisy surface with\nno clear large-scale shape. 0.5 is the usual landscape.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "seed": {
+                "default": 0,
+                "description": "Chooses the landscape. Any change reshapes every hill.\n\nThe noise hash is written out in this crate rather than pulled from a\ndependency, so a given seed means the same terrain across upgrades — a\nterrain render sits under a `diff-render` baseline, which makes this a\nformat contract.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segments": {
+                "default": 128,
+                "description": "Quads per axis across the patch. `[1, 512]`.\n\nThe resolution the *relief* is drawn and collided at. What matters is\nmetres per quad against [`feature_scale`](Terrain::feature_scale): a\n200 m patch at 192 has one vertex per metre, which resolves a 40 m hill\ncomfortably and a 3 m hummock not at all. Surface *detail* is per pixel\nand does not care.",
+                "format": "uint32",
+                "maximum": 512,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "texture_scale": {
+                "default": 4.0,
+                "description": "Metres across one cell of the surface-detail noise. `> 0`.\n\nThe scale of the mottling within a layer and of the fingers along the\nboundary between two — the *texture*, as opposed to the relief. Around a\nfew metres reads as ground cover seen from standing height.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "Terrain",
+                "type": "string"
+              },
+              "warp": {
+                "default": 0.0,
+                "description": "Domain warp: how far the field is dragged sideways before it is summed,\nas a fraction of [`feature_scale`](Terrain::feature_scale). `[0, 2]`;\n0 (the default) is off.\n\nTwo lines of arithmetic, and the largest single difference between \"fBm\"\nand \"landscape\". Unwarped fBm is isotropic blobs; warping shears them\ninto ridges and valleys that read as though water once ran over them.\nPast ~1 the surface starts to look smeared.",
+                "format": "float",
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -2846,6 +3129,90 @@
             "format": "uint32",
             "minimum": 1,
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "TerrainLayer": {
+        "additionalProperties": false,
+        "description": "One material a [`Terrain`] paints itself with, claiming a band of height and\na band of slope.\n\nA pixel's surface is the weighted average of every layer whose bands it falls\ninside; a layer that leaves both at their defaults covers everything and is\nthe base coat.\n\n**Slope does the heavy lifting.** Height alone gives horizontal stripes — a\ncontour map, and unmistakably so once the camera moves. What separates rock\nfrom grass in the world is that soil cannot cling to a steep face, so\n`slope_range` is the selector that reads as real and `height_range` adds\nbands of climate on top of it.",
+        "properties": {
+          "albedo": {
+            "default": [
+              0.12999999523162842,
+              0.17000000178813934,
+              0.09000000357627869
+            ],
+            "description": "Linear RGB, each component `[0, 1]` — `Material.albedo` for this band.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "height_blend": {
+            "default": 0.5,
+            "description": "Metres over which this layer fades out beyond each end of\n`height_range`. `>= 0`; 0 is a hard edge, which reads as a cut line and\nis almost never what ground does.\n\nAbsolute, not a fraction of the band — that was tried first and is a\ntrap. A fraction means a wide band gets a wide fade, so a layer written\nas \"above 1.9 m\" with a generous top end bleeds ten metres *below* where\nit was aimed and washes out everything under it. In metres, what the\nauthor writes is what the surface does.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "height_range": {
+            "default": [
+              -1000.0,
+              1000.0
+            ],
+            "description": "World-space Y band this layer covers, in metres, `[min, max]`.\n\nWorld Y, not a fraction of [`Terrain::height`], so a layer's altitude\ndoes not shift when the relief is retuned — and so that two patches at\ndifferent elevations can share one description of what grows where.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "noise": {
+            "default": 0.5,
+            "description": "How much the detail noise jitters this layer's boundary, `[0, 1]`, as a\nfraction of its own fade widths.\n\nDrawn honestly, the boundary between two layers is an iso-line of a\nsmooth function — a clean sweeping curve, and the eye reads clean curves\nas artificial faster than it reads anything else here. Jittering the\nheight and slope the layer *thinks* it is at breaks the boundary into\ninterlocking fingers at two scales, for one multiply-add.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "roughness": {
+            "default": 0.949999988079071,
+            "description": "Perceptual roughness, `[0, 1]`, meaning what `Material.roughness` means.\nWet rock and packed sand are smoother than grass, and the difference\nshows wherever the sun is low.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "slope_blend": {
+            "default": 8.0,
+            "description": "Degrees over which this layer fades out beyond each end of\n`slope_range`. `>= 0`.\n\nSeparate from [`height_blend`](TerrainLayer::height_blend) because the\ntwo bands are in different units and one number cannot be honest about\nboth.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "slope_range": {
+            "default": [
+              0.0,
+              90.0
+            ],
+            "description": "Surface-angle band this layer covers, in degrees from horizontal,\n`[min, max]`. 0 is flat ground, 90 a vertical face.",
+            "items": {
+              "format": "float",
+              "maximum": 90.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
           }
         },
         "type": "object"

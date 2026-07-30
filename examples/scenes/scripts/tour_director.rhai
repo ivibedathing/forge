@@ -75,6 +75,18 @@ fn step(world, step) {
 
     // Station 04's three ways to break something, in the order the design doc
     // lists them: a collision, a script call, and an explosion.
+    //
+    // The boulder has to be *held* until its cue. On the old flat ground a
+    // sphere parked on the floor stayed parked; on terrain it is a sphere on a
+    // hillside, and it rolled thirteen metres downhill during the nine seconds
+    // before anything asked it to move — arriving at the crates early, from the
+    // wrong side and at the wrong speed. Zeroing its velocity every step is the
+    // whole fix: gravity still settles it against the slope, and its cue is
+    // simply the step this stops.
+    if step < 545 {
+        world.set_linear_velocity("Boulder", 0.0, 0.0, 0.0);
+        world.set_angular_velocity("Boulder", 0.0, 0.0, 0.0);
+    }
     if step == 545 { world.set_linear_velocity("Boulder", 13.0, 0.0, 0.0); }
     if step == 600 { world.break_entity("IcePillar"); }
     if step == 636 { world.explode(-1.0, 0.9, 15.0, 6.5, 210.0); }

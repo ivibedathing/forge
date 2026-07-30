@@ -235,6 +235,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut wheel_path: Option<String> = None;
         let mut breakable_threshold: Option<String> = None;
         let mut water: Option<(crate::components::Water, String)> = None;
+        let mut terrain: Option<(crate::components::Terrain, String)> = None;
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
@@ -308,6 +309,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 }
                 Some(ComponentData::Water(w)) => {
                     water = Some((w, component_path));
+                }
+                Some(ComponentData::Terrain(t)) => {
+                    terrain = Some((t, component_path));
                 }
                 _ => {}
             }
@@ -384,7 +388,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 crate::components::ColliderShapeKind::Trimesh
                     | crate::components::ColliderShapeKind::ConvexHull
             );
-            if mesh_shape && collider_data.asset.is_none() && !has_mesh {
+            // Terrain counts as geometry to borrow (M19): a `trimesh` collider
+            // on a terrain patch with no asset takes the generated surface,
+            // which is how ground is collidable without a duplicate mesh file.
+            if mesh_shape && collider_data.asset.is_none() && !has_mesh && terrain.is_none() {
                 errors.push(
                     cx.err(
                         codes::COLLIDER_MISSING_MESH,
@@ -555,11 +562,70 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
+        // ── Terrain checks (M19) ─────────────────────────────────────────
+        if let Some((terrain, path)) = &terrain {
+            // Same rule as water, for the same reason: the patch generates its
+            // own surface and paints it from its own layers, so a Mesh or a
+            // Material beside it is a second, silently ignored answer to what
+            // this ground is.
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::TERRAIN_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a Terrain component and also {extras}; \
+                             terrain generates its own surface (sized by Transform.scale) \
+                             and paints it from its layers — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Terrain"),
+                );
+            }
+
+            // A backwards band is silent otherwise: the layer's weight is zero
+            // everywhere, so it simply never appears and the author is left
+            // looking at the shader for a missing material that was never asked
+            // for. Cheaper to refuse, with the numbers in the message.
+            for (index, layer) in terrain.layers.iter().enumerate() {
+                let mut inverted = |field: &str, range: [f32; 2], unit: &str| {
+                    errors.push(
+                        cx.err(
+                            codes::TERRAIN_LAYER_RANGE_INVERTED,
+                            format!(
+                                "entity {name:?} layer {index} has {field} \
+                                 [{}, {}]{unit}, which runs backwards and so covers \
+                                 nothing; swap the two values",
+                                range[0], range[1]
+                            ),
+                            &format!("{path}/layers/{index}/{field}"),
+                        )
+                        .entity(name)
+                        .component("Terrain")
+                        .field(field),
+                    );
+                };
+
+                if layer.height_range[0] > layer.height_range[1] {
+                    inverted("height_range", layer.height_range, " m");
+                }
+                if layer.slope_range[0] > layer.slope_range[1] {
+                    inverted("slope_range", layer.slope_range, "°");
+                }
+            }
+        }
+
         // Legal but almost certainly wrong: dead data from editing the wrong
-        // entity. A warning, because rendering it is well-defined. A Water
-        // entity's Material is already a hard error above, so it does not also
-        // collect this.
-        if !has_mesh && water.is_none() {
+        // entity. A warning, because rendering it is well-defined. A Water or
+        // Terrain entity's Material is already a hard error above, so it does
+        // not also collect this.
+        if !has_mesh && water.is_none() && terrain.is_none() {
             for material_path in material_paths {
                 errors.push(
                     cx.err(
@@ -1122,6 +1188,11 @@ fn check_component(
         // cross-wave, and lives with the entity checks that can see the whole
         // entity.
         ComponentData::Water(_) => {}
+
+        // Terrain likewise: field ranges and the layer count are schema, and
+        // what is left (a Mesh beside it, a backwards band) needs the whole
+        // entity in view.
+        ComponentData::Terrain(_) => {}
 
         // The flat Collider struct keeps the file walkable; which fields each
         // shape requires and forbids is semantic, checked here (design §5).
@@ -2990,6 +3061,122 @@ mod tests {
             ]}
         ]}"#;
         assert!(validate_source(alone, "test.json").is_empty());
+    }
+
+    #[test]
+    fn a_terrain_entity_owns_its_surface_alone() {
+        // Same rule as water: the patch generates its geometry and paints it
+        // from its layers, so a Mesh or a Material beside it is a second,
+        // silently ignored answer to what this ground is.
+        let with_mesh = r#"{"name":"s","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform","scale":[100.0,1.0,100.0]},
+                {"type":"Terrain"},
+                {"type":"Mesh","asset":"builtin:plane"}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(with_mesh), ["terrain_with_mesh"]);
+
+        let with_material = r#"{"name":"s","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform","scale":[100.0,1.0,100.0]},
+                {"type":"Terrain"},
+                {"type":"Material","albedo":[0.2,0.3,0.1]}
+            ]}
+        ]}"#;
+        // And not *also* `unused_material`: one complaint per mistake.
+        assert_eq!(codes_of(with_material), ["terrain_with_mesh"]);
+
+        // Terrain on its own: valid, and a bare `{"type": "Terrain"}` is a
+        // plausible grassy patch rather than a blank.
+        let alone = r#"{"name":"s","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform","scale":[100.0,1.0,100.0]},
+                {"type":"Terrain"}
+            ]}
+        ]}"#;
+        assert!(validate_source(alone, "test.json").is_empty());
+    }
+
+    #[test]
+    fn a_terrain_collider_may_borrow_the_generated_surface() {
+        // A mesh-shaped collider with no asset normally has nothing to work
+        // from; a Terrain is geometry in reach, and this is how ground becomes
+        // collidable without a mesh file duplicating what the renderer draws.
+        let source = r#"{"name":"s","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform","scale":[100.0,1.0,100.0]},
+                {"type":"Terrain"},
+                {"type":"Collider","shape":"trimesh"}
+            ]}
+        ]}"#;
+        assert!(validate_source(source, "test.json").is_empty());
+
+        // Without either, the old error still stands.
+        let bare = r#"{"name":"s","entities":[
+            {"name":"Nothing","components":[
+                {"type":"Transform"},
+                {"type":"Collider","shape":"trimesh"}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(bare), ["collider_missing_mesh"]);
+    }
+
+    #[test]
+    fn rejects_a_terrain_layer_whose_band_runs_backwards() {
+        // Silent otherwise: the layer's weight is zero everywhere, so it never
+        // appears and the author goes looking in the shader for a material that
+        // was never asked for.
+        let source = r#"{"name":"s","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform"},
+                {"type":"Terrain","layers":[
+                    {"albedo":[0.1,0.2,0.1]},
+                    {"albedo":[0.3,0.3,0.3],"slope_range":[70.0,30.0]}
+                ]}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(codes_of(source), ["terrain_layer_range_inverted"]);
+        assert_eq!(
+            errors[0].context().unwrap().path.as_deref(),
+            Some("/entities/0/components/1/layers/1/slope_range")
+        );
+
+        // Both bands are checked, and both are reported at once.
+        let both = r#"{"name":"s","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform"},
+                {"type":"Terrain","layers":[
+                    {"albedo":[0.1,0.2,0.1]},
+                    {"albedo":[0.3,0.3,0.3],"height_range":[4.0,1.0],
+                     "slope_range":[70.0,30.0]}
+                ]}
+            ]}
+        ]}"#;
+        assert_eq!(
+            codes_of(both),
+            ["terrain_layer_range_inverted", "terrain_layer_range_inverted"]
+        );
+    }
+
+    #[test]
+    fn rejects_more_terrain_layers_than_the_shader_can_hold() {
+        // The layer table is fixed-size, so a fifth layer would be dropped
+        // silently — the schema's `maxItems` catches it before it can be.
+        let source = r#"{"name":"s","entities":[
+            {"name":"Ground","components":[
+                {"type":"Transform"},
+                {"type":"Terrain","layers":[
+                    {"albedo":[0.1,0.1,0.1]},
+                    {"albedo":[0.2,0.2,0.2]},
+                    {"albedo":[0.3,0.3,0.3]},
+                    {"albedo":[0.4,0.4,0.4]},
+                    {"albedo":[0.5,0.5,0.5]}
+                ]}
+            ]}
+        ]}"#;
+        assert_eq!(codes_of(source), ["value_out_of_range"]);
     }
 
     #[test]

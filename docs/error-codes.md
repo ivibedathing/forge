@@ -59,6 +59,8 @@ build fails.
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `water_with_mesh` | 1 | a Water entity owns its own surface; it may not also have a Mesh or a Material |
 | `water_waves_self_intersect` | 1 | the sum of Water wave steepness exceeds 1, which folds the surface through itself |
+| `terrain_with_mesh` | 1 | a Terrain entity owns its own surface; it may not also have a Mesh or a Material |
+| `terrain_layer_range_inverted` | 1 | a Terrain layer's height or slope range runs backwards, so it covers nothing |
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |
