@@ -7,7 +7,7 @@
 use engine_core::components::Camera;
 use engine_core::math::Mat4;
 use engine_core::particles::ParticleInstance;
-use engine_core::scene::{EnvironmentSettings, HudItems, RenderItem, ResolvedLights};
+use engine_core::scene::{EnvironmentSettings, HudItems, RenderItem, ResolvedLights, WaterItem};
 use engine_core::{EngineError, Result};
 
 use crate::gpu::Gpu;
@@ -50,11 +50,13 @@ impl Image {
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     items: &[RenderItem],
+    water: &[WaterItem],
     particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
     environment: EnvironmentSettings,
+    time: f32,
     width: u32,
     height: u32,
     hud: &HudItems,
@@ -62,11 +64,13 @@ pub fn render(
 ) -> Result<Image> {
     render_with_adapter(
         items,
+        water,
         particles,
         camera,
         camera_model,
         lights,
         environment,
+        time,
         width,
         height,
         hud,
@@ -83,11 +87,15 @@ pub fn render(
 #[allow(clippy::too_many_arguments)]
 pub fn render_with_adapter(
     items: &[RenderItem],
+    water: &[WaterItem],
     particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
     lights: ResolvedLights,
     environment: EnvironmentSettings,
+    // Scene time in seconds, from the same reproducible clock the rest of the
+    // frame came from — read only by water (M18).
+    time: f32,
     width: u32,
     height: u32,
     hud: &HudItems,
@@ -138,7 +146,9 @@ pub fn render_with_adapter(
             target: &view,
             msaa: msaa.as_ref(),
             depth: &depth,
+            target_size: [width, height],
             items,
+            water,
             particles,
             view_projection,
             camera_position: camera_model.w_axis.truncate(),
@@ -146,6 +156,7 @@ pub fn render_with_adapter(
             camera_up: camera_model.y_axis.truncate(),
             lights,
             environment,
+            time,
             clear: scene_renderer::DEFAULT_CLEAR,
             hud: canvas.as_ref(),
         },

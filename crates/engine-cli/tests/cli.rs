@@ -1542,9 +1542,9 @@ fn the_m17_fire_fixture_pins_additive_flame_and_firelight() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-// ── trees (M18) ────────────────────────────────────────────────────────
+// ── trees (M19) ────────────────────────────────────────────────────────
 
-/// The M18 fixture: six procedural trees — two broadleaves differing only in
+/// The M19 fixture: six procedural trees — two broadleaves differing only in
 /// `seed`, a whorled conifer, a leafless snag, a scrub, and the no-randomness
 /// diagram tree — pinned bit-exactly.
 ///
@@ -1557,9 +1557,9 @@ fn the_m17_fire_fixture_pins_additive_flame_and_firelight() {
 /// The second half needs no GPU and pins the two ways a Tree can be authored
 /// wrong: geometry it does not own, and geometry too big to grow.
 #[test]
-fn the_m18_tree_fixture_pins_seeded_procedural_growth() {
-    let scene = repo_path("examples/scenes/verify/m18_trees.json");
-    let baseline = repo_path("examples/scenes/verify/baselines/m18_trees.png");
+fn the_m19_tree_fixture_pins_seeded_procedural_growth() {
+    let scene = repo_path("examples/scenes/verify/m19_trees.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m19_trees.png");
 
     let validate = engine().arg("validate").arg(&scene).output().unwrap();
     assert_eq!(validate.status.code(), Some(0), "{validate:?}");
@@ -2203,4 +2203,75 @@ fn the_showcase_tour_keeps_its_crates_on_the_ground() {
             "{name} sank to y={y} — a resting body lost its ground contact"
         );
     }
+}
+
+/// The M18 fixture: a lake with Gerstner waves over a sloping bed, a shoreline,
+/// and three things standing in the water.
+///
+/// The render half pins the whole new path at once — wave displacement in the
+/// vertex stage, the depth copy between the two passes, absorption, foam, and
+/// the sorted blended list that puts a transmissive ice floe in the same
+/// ordering as the surface it sits in.
+///
+/// The rest of the test is the property that makes such a pin possible at all:
+/// water is a pure function of the file and the clock. `--steps 120` at 60 Hz
+/// and `--time 2.0` are the same instant said two ways, so they have to produce
+/// the same bytes; and the same instant asked for twice has to as well. Without
+/// that, a water baseline would be a flake generator rather than a regression
+/// test.
+#[test]
+fn the_m18_water_fixture_pins_waves_depth_and_foam() {
+    let scene = repo_path("examples/scenes/verify/m18_water.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m18_water.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+
+    // 120 steps at the scene's 60 Hz *is* two seconds: the two flags name the
+    // same instant, and the renderer has one clock.
+    let by_time = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--time", "2.0"])
+        .output()
+        .unwrap();
+    assert_eq!(by_time.status.code(), Some(0), "{by_time:?}");
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&by_time).trim()).unwrap();
+    assert_eq!(
+        report["diff_pixels"], 0,
+        "--time 2.0 must render the same water as --steps 120 at 60 Hz: {report}"
+    );
+
+    // And a scene that says nothing about time renders its water at rest, which
+    // is a *different* picture — otherwise the two assertions above would pass
+    // for the trivial reason that the clock is ignored.
+    let at_rest = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&at_rest).trim()).unwrap();
+    assert_eq!(
+        report["pass"], false,
+        "water at t=0 should not match a baseline blessed at t=2: {report}"
+    );
 }

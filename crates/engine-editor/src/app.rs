@@ -429,6 +429,7 @@ impl EditorApp {
             (logical.x * ppp) as u32,
             (logical.y * ppp) as u32,
             &items,
+            &self.doc.water,
             view_projection,
             camera_eye,
             lights,

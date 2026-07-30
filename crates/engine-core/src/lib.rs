@@ -19,6 +19,7 @@ pub mod scene;
 pub mod schema;
 pub mod tree;
 pub mod validate;
+pub mod water;
 
 pub use error::{EngineError, Result};
 pub use scene::{Scene, SceneFile};

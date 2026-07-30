@@ -138,6 +138,48 @@
           "none"
         ],
         "type": "string"
+      },
+      "Wave": {
+        "additionalProperties": false,
+        "description": "One travelling wave in a [`Water`] surface's sum.\n\nGerstner rather than a sine: a Gerstner wave moves each point of the surface\n*toward* the crests as well as up, which sharpens crests and flattens\ntroughs. A sum of sines is a rubber sheet, and no amount of tuning it makes\nit read as water.",
+        "properties": {
+          "amplitude": {
+            "default": 0.05999999865889549,
+            "description": "Half the crest-to-trough height, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "direction": {
+            "default": 0.0,
+            "description": "Heading the wave travels, in degrees: a yaw about +Y applied to the\nengine's forward axis, so `0` travels toward **−Z** and `90` toward\n**−X**. The same convention as aiming a camera, a light or a particle\ncone.",
+            "format": "float",
+            "type": "number"
+          },
+          "speed": {
+            "default": 1.2000000476837158,
+            "description": "Crest travel speed in metres/second. `>= 0`; reverse a wave with\n`direction`, not a negative speed.\n\nReal deep-water waves are dispersive (`c = sqrt(g·λ/2π)`, so long waves\noutrun short ones), and authoring speed per wave rather than deriving it\nkeeps a scene free to be wrong about that on purpose — a lake's chop\nlooks better slightly slower than physics says.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "steepness": {
+            "default": 0.4000000059604645,
+            "description": "How far the surface is pulled toward the crests, `[0, 1]`: 0 is a plain\nsine, 1 is a cusp.\n\nThe **sum** over every wave must not exceed 1\n(`water_waves_self_intersect`). Past that the surface folds through\nitself and the crests curl into loops — a well-known Gerstner failure,\nand cheaper to refuse than to debug from a screenshot.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "wavelength": {
+            "default": 4.0,
+            "description": "Crest-to-crest distance in metres. `> 0`.\n\nThis is the field that sets the *scale* of the water: 40 m swells read\nas ocean, 2 m chop as a lake, 0.4 m as a puddle. It must also be\ncomfortably larger than one grid quad, or the surface cannot represent\nthe wave — see [`Water::segments`].",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          }
+        },
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1200,7 +1242,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "A procedurally generated tree (M18): trunk, recursive branches, and leaves,\ngrown from a `seed` into geometry the renderer draws like any other mesh.\n\nThe tree is built in entity-local space with its **base at the origin,\ngrowing along +Y**, so `\"position\": [x, 0, z]` plants it on flat ground and\n`Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`\nrather than accompanying one (`tree_with_mesh`): the component *is* the\ngeometry.\n\n# Two draws, two materials\n\nA tree needs bark and foliage, and one `Material` cannot be both. The\nentity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]\nand [`Tree::leaf_roughness`], and are always opaque and non-metallic. That\nlast part is a constraint, not an oversight: every leaf of one tree is a\nsingle mesh, and the blended pass sorts whole draws, so translucent leaves\ncould not be sorted against each other and would visibly z-fight.\n\n# Randomness\n\nEverything jittered is drawn from a private xorshift seeded by `seed`,\nconsumed in a fixed order (a branch draws its own wander, then recurses into\nits children in index order, then scatters its leaves), so two trees that\ndiffer only in `seed` are different trees and the *same* tree is the same\nmesh forever — which is what lets a forest sit under a pinned baseline.\n`jitter` is the master dial for how much variation there is at all; `0`\ngrows a rigid diagram of a tree.\n\n# Cost\n\nVertices scale as `(branches · whorl)^levels · segments · sides`, and a\ntree that would blow past the budget is a validation error\n(`tree_too_complex`) rather than a hang. `levels: 2` with the default\nbranching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per\ndistinct parameter set and is cached, so a forest of nine trees is nine\nmeshes no matter how many frames render.",
+        "description": "A procedurally generated tree (M19): trunk, recursive branches, and leaves,\ngrown from a `seed` into geometry the renderer draws like any other mesh.\n\nThe tree is built in entity-local space with its **base at the origin,\ngrowing along +Y**, so `\"position\": [x, 0, z]` plants it on flat ground and\n`Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`\nrather than accompanying one (`tree_with_mesh`): the component *is* the\ngeometry.\n\n# Two draws, two materials\n\nA tree needs bark and foliage, and one `Material` cannot be both. The\nentity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]\nand [`Tree::leaf_roughness`], and are always opaque and non-metallic. That\nlast part is a constraint, not an oversight: every leaf of one tree is a\nsingle mesh, and the blended pass sorts whole draws, so translucent leaves\ncould not be sorted against each other and would visibly z-fight.\n\n# Randomness\n\nEverything jittered is drawn from a private xorshift seeded by `seed`,\nconsumed in a fixed order (a branch draws its own wander, then recurses into\nits children in index order, then scatters its leaves), so two trees that\ndiffer only in `seed` are different trees and the *same* tree is the same\nmesh forever — which is what lets a forest sit under a pinned baseline.\n`jitter` is the master dial for how much variation there is at all; `0`\ngrows a rigid diagram of a tree.\n\n# Cost\n\nVertices scale as `(branches · whorl)^levels · segments · sides`, and a\ntree that would blow past the budget is a validation error\n(`tree_too_complex`) rather than a hang. `levels: 2` with the default\nbranching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per\ndistinct parameter set and is cached, so a forest of nine trees is nine\nmeshes no matter how many frames render.",
         "properties": {
           "branch_angle": {
             "default": 48.0,
@@ -1399,6 +1441,141 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
+        "properties": {
+          "crest_foam": {
+            "default": 0.0,
+            "description": "Foam on the crests, `[0, 1]`; 0 (the default) is off.\n\nDriven by the Gerstner Jacobian — where the surface pinches toward\nfolding, which is exactly where a real wave breaks — so it appears only\non steep waves and needs no second noise field to place it.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "deep_color": {
+            "default": [
+              0.009999999776482582,
+              0.05000000074505806,
+              0.07999999821186066
+            ],
+            "description": "Linear RGB of water far deeper than `depth_fade`. Each component\n`[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "depth_fade": {
+            "default": 2.5,
+            "description": "Metres of water the view has to pass through to reach `deep_color` and\nfull `opacity`. `> 0`.\n\nBeer-Lambert absorption against the depth of whatever is behind the\nsurface, so the same water is clear at the edge of a pond and opaque in\nthe middle — which is most of how a surface reads as *deep* rather than\nas a coloured pane. A clear alpine lake is 6 or more; a silty pond is\nunder 1.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "detail": {
+            "default": 0.5,
+            "description": "Strength of the per-pixel ripple normals, `[0, 1]`.\n\nSmall-scale roughness the grid is far too coarse to carry as geometry,\nperturbing the normal and nothing else. Per line of code this is the\nbiggest single difference between \"blue glass\" and \"water\", because it\nis what breaks the sun and the sky into glitter between the vertices.\nNothing physical may depend on it — no buoyancy, no collision.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "detail_scale": {
+            "default": 0.6000000238418579,
+            "description": "Size of one ripple cell in metres. `> 0`. Around 0.5 reads as wind\ntexture on a lake; 3 or more as a swell the grid did not resolve.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "foam_color": {
+            "default": [
+              0.8600000143051147,
+              0.8999999761581421,
+              0.9200000166893005
+            ],
+            "description": "Linear RGB of both foam kinds, each component `[0, 1]`. Foam is\nscattered light, so it is opaque where it appears.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "opacity": {
+            "default": 0.9399999976158142,
+            "description": "How opaque deep water becomes, `[0, 1]`. 1 hides its bed completely\nhowever clear the shallows are.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "roughness": {
+            "default": 0.05999999865889549,
+            "description": "Surface roughness, `[0, 1]`, meaning what `Material.roughness` means.\n\nWater is smooth, but not 0: a mirror-tight sun highlight is a single\nblown-out pixel that aliases as the camera moves, and the reflected sky\ncarries most of the look anyway.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "segments": {
+            "default": 64,
+            "description": "Quads per axis across the surface. `[1, 512]`.\n\nThis is the resolution the *waves* are drawn at, and it is the one field\nworth thinking about: a wave needs roughly eight quads per wavelength to\nlook like a wave rather than a fold, so a 14 m pond carrying 2 m chop\nwants ~64, and a 200 m ocean carrying 3 m chop cannot be drawn by any\ngrid this component will generate. Detail *normals* are per pixel and\ncost nothing, which is why the glitter survives a coarse grid even\nthough the silhouette does not.",
+            "format": "uint32",
+            "maximum": 512,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "shallow_color": {
+            "default": [
+              0.09000000357627869,
+              0.20000000298023224,
+              0.20999999344348907
+            ],
+            "description": "Linear RGB of water one `depth_fade` deep or less — the colour at the\nshoreline. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "shore_foam": {
+            "default": 0.0,
+            "description": "Width in metres of the foam line where the surface meets geometry.\n`>= 0`; 0 (the default) is off.\n\nThis is the shoreline, and it is also the waterline on anything standing\nin the water: it comes from the depth behind the surface, so a boat, an\nice block and the bank all get one without being marked up.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": {
+            "const": "Water",
+            "type": "string"
+          },
+          "waves": {
+            "default": [],
+            "description": "The waves summed to shape the surface, at most\n[`MAX_WAVES`](crate::water::MAX_WAVES) of them. Empty (the default)\nleaves the surface flat: a mirror, which is what a sheltered pond at\ndawn actually looks like.",
+            "items": {
+              "$ref": "#/$defs/Wave"
+            },
+            "maxItems": 8,
+            "type": "array"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -1420,7 +1597,8 @@
     "HudText",
     "HudRect",
     "ParticleEmitter",
-    "Tree"
+    "Tree",
+    "Water"
   ],
   "scene": {
     "$defs": {
@@ -2515,7 +2693,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "A procedurally generated tree (M18): trunk, recursive branches, and leaves,\ngrown from a `seed` into geometry the renderer draws like any other mesh.\n\nThe tree is built in entity-local space with its **base at the origin,\ngrowing along +Y**, so `\"position\": [x, 0, z]` plants it on flat ground and\n`Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`\nrather than accompanying one (`tree_with_mesh`): the component *is* the\ngeometry.\n\n# Two draws, two materials\n\nA tree needs bark and foliage, and one `Material` cannot be both. The\nentity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]\nand [`Tree::leaf_roughness`], and are always opaque and non-metallic. That\nlast part is a constraint, not an oversight: every leaf of one tree is a\nsingle mesh, and the blended pass sorts whole draws, so translucent leaves\ncould not be sorted against each other and would visibly z-fight.\n\n# Randomness\n\nEverything jittered is drawn from a private xorshift seeded by `seed`,\nconsumed in a fixed order (a branch draws its own wander, then recurses into\nits children in index order, then scatters its leaves), so two trees that\ndiffer only in `seed` are different trees and the *same* tree is the same\nmesh forever — which is what lets a forest sit under a pinned baseline.\n`jitter` is the master dial for how much variation there is at all; `0`\ngrows a rigid diagram of a tree.\n\n# Cost\n\nVertices scale as `(branches · whorl)^levels · segments · sides`, and a\ntree that would blow past the budget is a validation error\n(`tree_too_complex`) rather than a hang. `levels: 2` with the default\nbranching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per\ndistinct parameter set and is cached, so a forest of nine trees is nine\nmeshes no matter how many frames render.",
+            "description": "A procedurally generated tree (M19): trunk, recursive branches, and leaves,\ngrown from a `seed` into geometry the renderer draws like any other mesh.\n\nThe tree is built in entity-local space with its **base at the origin,\ngrowing along +Y**, so `\"position\": [x, 0, z]` plants it on flat ground and\n`Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`\nrather than accompanying one (`tree_with_mesh`): the component *is* the\ngeometry.\n\n# Two draws, two materials\n\nA tree needs bark and foliage, and one `Material` cannot be both. The\nentity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]\nand [`Tree::leaf_roughness`], and are always opaque and non-metallic. That\nlast part is a constraint, not an oversight: every leaf of one tree is a\nsingle mesh, and the blended pass sorts whole draws, so translucent leaves\ncould not be sorted against each other and would visibly z-fight.\n\n# Randomness\n\nEverything jittered is drawn from a private xorshift seeded by `seed`,\nconsumed in a fixed order (a branch draws its own wander, then recurses into\nits children in index order, then scatters its leaves), so two trees that\ndiffer only in `seed` are different trees and the *same* tree is the same\nmesh forever — which is what lets a forest sit under a pinned baseline.\n`jitter` is the master dial for how much variation there is at all; `0`\ngrows a rigid diagram of a tree.\n\n# Cost\n\nVertices scale as `(branches · whorl)^levels · segments · sides`, and a\ntree that would blow past the budget is a validation error\n(`tree_too_complex`) rather than a hang. `levels: 2` with the default\nbranching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per\ndistinct parameter set and is cached, so a forest of nine trees is nine\nmeshes no matter how many frames render.",
             "properties": {
               "branch_angle": {
                 "default": 48.0,
@@ -2708,6 +2886,141 @@
                 "maximum": 8,
                 "minimum": 1,
                 "type": "integer"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
+            "properties": {
+              "crest_foam": {
+                "default": 0.0,
+                "description": "Foam on the crests, `[0, 1]`; 0 (the default) is off.\n\nDriven by the Gerstner Jacobian — where the surface pinches toward\nfolding, which is exactly where a real wave breaks — so it appears only\non steep waves and needs no second noise field to place it.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "deep_color": {
+                "default": [
+                  0.009999999776482582,
+                  0.05000000074505806,
+                  0.07999999821186066
+                ],
+                "description": "Linear RGB of water far deeper than `depth_fade`. Each component\n`[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "depth_fade": {
+                "default": 2.5,
+                "description": "Metres of water the view has to pass through to reach `deep_color` and\nfull `opacity`. `> 0`.\n\nBeer-Lambert absorption against the depth of whatever is behind the\nsurface, so the same water is clear at the edge of a pond and opaque in\nthe middle — which is most of how a surface reads as *deep* rather than\nas a coloured pane. A clear alpine lake is 6 or more; a silty pond is\nunder 1.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "detail": {
+                "default": 0.5,
+                "description": "Strength of the per-pixel ripple normals, `[0, 1]`.\n\nSmall-scale roughness the grid is far too coarse to carry as geometry,\nperturbing the normal and nothing else. Per line of code this is the\nbiggest single difference between \"blue glass\" and \"water\", because it\nis what breaks the sun and the sky into glitter between the vertices.\nNothing physical may depend on it — no buoyancy, no collision.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "detail_scale": {
+                "default": 0.6000000238418579,
+                "description": "Size of one ripple cell in metres. `> 0`. Around 0.5 reads as wind\ntexture on a lake; 3 or more as a swell the grid did not resolve.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "foam_color": {
+                "default": [
+                  0.8600000143051147,
+                  0.8999999761581421,
+                  0.9200000166893005
+                ],
+                "description": "Linear RGB of both foam kinds, each component `[0, 1]`. Foam is\nscattered light, so it is opaque where it appears.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "opacity": {
+                "default": 0.9399999976158142,
+                "description": "How opaque deep water becomes, `[0, 1]`. 1 hides its bed completely\nhowever clear the shallows are.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "roughness": {
+                "default": 0.05999999865889549,
+                "description": "Surface roughness, `[0, 1]`, meaning what `Material.roughness` means.\n\nWater is smooth, but not 0: a mirror-tight sun highlight is a single\nblown-out pixel that aliases as the camera moves, and the reflected sky\ncarries most of the look anyway.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "segments": {
+                "default": 64,
+                "description": "Quads per axis across the surface. `[1, 512]`.\n\nThis is the resolution the *waves* are drawn at, and it is the one field\nworth thinking about: a wave needs roughly eight quads per wavelength to\nlook like a wave rather than a fold, so a 14 m pond carrying 2 m chop\nwants ~64, and a 200 m ocean carrying 3 m chop cannot be drawn by any\ngrid this component will generate. Detail *normals* are per pixel and\ncost nothing, which is why the glitter survives a coarse grid even\nthough the silhouette does not.",
+                "format": "uint32",
+                "maximum": 512,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "shallow_color": {
+                "default": [
+                  0.09000000357627869,
+                  0.20000000298023224,
+                  0.20999999344348907
+                ],
+                "description": "Linear RGB of water one `depth_fade` deep or less — the colour at the\nshoreline. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "shore_foam": {
+                "default": 0.0,
+                "description": "Width in metres of the foam line where the surface meets geometry.\n`>= 0`; 0 (the default) is off.\n\nThis is the shoreline, and it is also the waterline on anything standing\nin the water: it comes from the depth behind the surface, so a boat, an\nice block and the bank all get one without being marked up.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "type": {
+                "const": "Water",
+                "type": "string"
+              },
+              "waves": {
+                "default": [],
+                "description": "The waves summed to shape the surface, at most\n[`MAX_WAVES`](crate::water::MAX_WAVES) of them. Empty (the default)\nleaves the surface flat: a mirror, which is what a sheltered pond at\ndawn actually looks like.",
+                "items": {
+                  "$ref": "#/$defs/Wave"
+                },
+                "maxItems": 8,
+                "type": "array"
               }
             },
             "required": [
@@ -2959,6 +3272,48 @@
           "none"
         ],
         "type": "string"
+      },
+      "Wave": {
+        "additionalProperties": false,
+        "description": "One travelling wave in a [`Water`] surface's sum.\n\nGerstner rather than a sine: a Gerstner wave moves each point of the surface\n*toward* the crests as well as up, which sharpens crests and flattens\ntroughs. A sum of sines is a rubber sheet, and no amount of tuning it makes\nit read as water.",
+        "properties": {
+          "amplitude": {
+            "default": 0.05999999865889549,
+            "description": "Half the crest-to-trough height, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "direction": {
+            "default": 0.0,
+            "description": "Heading the wave travels, in degrees: a yaw about +Y applied to the\nengine's forward axis, so `0` travels toward **−Z** and `90` toward\n**−X**. The same convention as aiming a camera, a light or a particle\ncone.",
+            "format": "float",
+            "type": "number"
+          },
+          "speed": {
+            "default": 1.2000000476837158,
+            "description": "Crest travel speed in metres/second. `>= 0`; reverse a wave with\n`direction`, not a negative speed.\n\nReal deep-water waves are dispersive (`c = sqrt(g·λ/2π)`, so long waves\noutrun short ones), and authoring speed per wave rather than deriving it\nkeeps a scene free to be wrong about that on purpose — a lake's chop\nlooks better slightly slower than physics says.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "steepness": {
+            "default": 0.4000000059604645,
+            "description": "How far the surface is pulled toward the crests, `[0, 1]`: 0 is a plain\nsine, 1 is a cusp.\n\nThe **sum** over every wave must not exceed 1\n(`water_waves_self_intersect`). Past that the surface folds through\nitself and the crests curl into loops — a well-known Gerstner failure,\nand cheaper to refuse than to debug from a screenshot.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "wavelength": {
+            "default": 4.0,
+            "description": "Crest-to-crest distance in metres. `> 0`.\n\nThis is the field that sets the *scale* of the water: 40 m swells read\nas ocean, 2 m chop as a lake, 0.4 m as a puddle. It must also be\ncomfortably larger than one grid quad, or the surface cannot represent\nthe wave — see [`Water::segments`].",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          }
+        },
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",

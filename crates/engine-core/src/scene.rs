@@ -156,6 +156,26 @@ pub struct RenderItem {
     pub material: crate::components::Material,
 }
 
+/// One water surface, with its geometry resolved and its transform flattened
+/// (M18) — [`RenderItem`]'s counterpart for entities that own their surface
+/// instead of referencing a mesh.
+///
+/// Kept a separate list rather than a variant of `RenderItem` because water is
+/// a separate pipeline with its own uniforms: folding it in would put a
+/// `Material` on entities that have none and hand every existing consumer of
+/// the draw list (picking, the editor's selection, the shadow pass) a case it
+/// does not want.
+#[derive(Debug, Clone)]
+pub struct WaterItem {
+    /// The source entity's stable name (invariant 4).
+    pub entity: String,
+    /// The tessellated unit grid, shared across frames — see
+    /// [`crate::water::surface_grid`].
+    pub mesh: std::sync::Arc<crate::mesh::MeshData>,
+    pub model: glam::Mat4,
+    pub water: crate::components::Water,
+}
+
 /// The scene's screen-space overlay, extracted as plain data in draw order
 /// (M12): `rects` under `texts`, each in scene-file order. An empty overlay
 /// means no HUD pass runs at all, so pre-M12 scenes render byte-identically.
@@ -474,7 +494,7 @@ impl Scene {
             });
         }
 
-        // Trees carry their geometry instead of referencing it (M18), and one
+        // Trees carry their geometry instead of referencing it (M19), and one
         // tree is two draws: bark under the entity's own `Material`, leaves
         // under the tree's foliage fields. Both items keep the entity's name,
         // so picking and selection resolve a tree back to one place in the
@@ -514,6 +534,36 @@ impl Scene {
         }
 
         Ok(items)
+    }
+
+    /// Flatten the world's water surfaces into a draw list (M18).
+    ///
+    /// Takes no [`MeshSource`](crate::mesh::MeshSource): a water entity's
+    /// geometry is generated, not loaded, so this cannot fail — and the grid
+    /// comes back as a cached `Arc`, so the renderer uploads one surface per
+    /// tessellation for the life of the run however many frames pass.
+    ///
+    /// Sorted by entity name, for the same reason the lights are: a fixed
+    /// order that does not depend on how hecs happened to lay out archetypes.
+    /// (Drawing order is decided later, back-to-front from the camera.)
+    pub fn water_items(&self) -> Vec<WaterItem> {
+        let mut items: Vec<WaterItem> = self
+            .world
+            .query::<(Entity, &crate::components::Water)>()
+            .iter()
+            .map(|(entity, water)| WaterItem {
+                entity: self
+                    .world
+                    .get::<&Name>(entity)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default(),
+                mesh: crate::water::surface_grid(water.segments),
+                model: self.transform_of(entity).matrix(),
+                water: water.clone(),
+            })
+            .collect();
+        items.sort_by(|a, b| a.entity.cmp(&b.entity));
+        items
     }
 
     /// Extract the screen-space overlay as plain data, in draw order (M12):

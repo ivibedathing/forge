@@ -6,7 +6,7 @@
 //! buffer, same clear — so what the editor shows is what the engine renders,
 //! not an editor approximation (principle #7).
 
-use engine_core::scene::{RenderItem, ResolvedLights};
+use engine_core::scene::{RenderItem, ResolvedLights, WaterItem};
 use engine_render::scene_renderer::{self, ScenePass, SceneRenderer};
 use glam::{Mat4, Vec3};
 
@@ -42,6 +42,7 @@ impl ViewportRenderer {
         width: u32,
         height: u32,
         items: &[RenderItem],
+        water: &[WaterItem],
         view_projection: Mat4,
         camera_position: Vec3,
         lights: ResolvedLights,
@@ -100,7 +101,9 @@ impl ViewportRenderer {
                 target: &target.view,
                 msaa: None,
                 depth: &target.depth,
+                target_size: [width, height],
                 items,
+                water,
                 // The editor shows the scene at rest; particles only exist
                 // once the fixed clock advances, so there are none to draw.
                 particles: &[],
@@ -110,6 +113,9 @@ impl ViewportRenderer {
                 camera_up: Vec3::Y,
                 lights,
                 environment,
+                // The scene at rest: waves are frozen at their t = 0 pose, the
+                // same choice that leaves the viewport free of particles.
+                time: 0.0,
                 clear: scene_renderer::DEFAULT_CLEAR,
                 // The orbit-camera viewport is not the game camera's frame;
                 // screen-anchored HUD elements would be misleading here, so

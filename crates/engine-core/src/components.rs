@@ -1078,7 +1078,7 @@ pub enum TreeLeaf {
     None,
 }
 
-/// A procedurally generated tree (M18): trunk, recursive branches, and leaves,
+/// A procedurally generated tree (M19): trunk, recursive branches, and leaves,
 /// grown from a `seed` into geometry the renderer draws like any other mesh.
 ///
 /// The tree is built in entity-local space with its **base at the origin,
@@ -1281,6 +1281,67 @@ impl Default for Tree {
     }
 }
 
+/// One travelling wave in a [`Water`] surface's sum.
+///
+/// Gerstner rather than a sine: a Gerstner wave moves each point of the surface
+/// *toward* the crests as well as up, which sharpens crests and flattens
+/// troughs. A sum of sines is a rubber sheet, and no amount of tuning it makes
+/// it read as water.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Wave {
+    /// Heading the wave travels, in degrees: a yaw about +Y applied to the
+    /// engine's forward axis, so `0` travels toward **−Z** and `90` toward
+    /// **−X**. The same convention as aiming a camera, a light or a particle
+    /// cone.
+    pub direction: f32,
+
+    /// Crest-to-crest distance in metres. `> 0`.
+    ///
+    /// This is the field that sets the *scale* of the water: 40 m swells read
+    /// as ocean, 2 m chop as a lake, 0.4 m as a puddle. It must also be
+    /// comfortably larger than one grid quad, or the surface cannot represent
+    /// the wave — see [`Water::segments`].
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub wavelength: f32,
+
+    /// Half the crest-to-trough height, in metres. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub amplitude: f32,
+
+    /// How far the surface is pulled toward the crests, `[0, 1]`: 0 is a plain
+    /// sine, 1 is a cusp.
+    ///
+    /// The **sum** over every wave must not exceed 1
+    /// (`water_waves_self_intersect`). Past that the surface folds through
+    /// itself and the crests curl into loops — a well-known Gerstner failure,
+    /// and cheaper to refuse than to debug from a screenshot.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub steepness: f32,
+
+    /// Crest travel speed in metres/second. `>= 0`; reverse a wave with
+    /// `direction`, not a negative speed.
+    ///
+    /// Real deep-water waves are dispersive (`c = sqrt(g·λ/2π)`, so long waves
+    /// outrun short ones), and authoring speed per wave rather than deriving it
+    /// keeps a scene free to be wrong about that on purpose — a lake's chop
+    /// looks better slightly slower than physics says.
+    #[schemars(range(min = 0.0))]
+    pub speed: f32,
+}
+
+impl Default for Wave {
+    fn default() -> Self {
+        Self {
+            direction: 0.0,
+            wavelength: 4.0,
+            amplitude: 0.06,
+            steepness: 0.4,
+            speed: 1.2,
+        }
+    }
+}
+
 impl Tree {
     /// The leaves' surface, assembled from the foliage fields. Opaque and
     /// non-metallic by construction — see the type's note on why leaves cannot
@@ -1293,6 +1354,140 @@ impl Tree {
             emissive: Vec3::ZERO,
             alpha: 1.0,
             transmission: 0.0,
+        }
+    }
+}
+
+/// A body of water: an ocean, a lake, a pond, a canal.
+///
+/// The entity owns its own surface geometry — a tessellated unit grid sized by
+/// `Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`
+/// entity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One
+/// surface is one entity: sixteen tiles pretending to be a pond is what this
+/// component exists to delete, and their seams are visible in any screenshot.
+///
+/// Waves are evaluated in **world space** in the vertex stage, which has two
+/// consequences worth knowing: scaling a surface never stretches its waves, and
+/// two adjacent water entities at the same height share one continuous surface
+/// for free.
+///
+/// Shading is water-specific rather than a `Material`: sky reflection with a
+/// Fresnel-weighted view term, absorption of what is behind the surface with
+/// depth (`shallow_color` → `deep_color`), and foam where the water meets
+/// geometry or folds at a crest. What it does *not* do is refract — the bed of
+/// a pond is not displaced by the ripples above it (`water-design.md` §8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Water {
+    /// Quads per axis across the surface. `[1, 512]`.
+    ///
+    /// This is the resolution the *waves* are drawn at, and it is the one field
+    /// worth thinking about: a wave needs roughly eight quads per wavelength to
+    /// look like a wave rather than a fold, so a 14 m pond carrying 2 m chop
+    /// wants ~64, and a 200 m ocean carrying 3 m chop cannot be drawn by any
+    /// grid this component will generate. Detail *normals* are per pixel and
+    /// cost nothing, which is why the glitter survives a coarse grid even
+    /// though the silhouette does not.
+    #[schemars(range(min = 1, max = 512))]
+    pub segments: u32,
+
+    /// The waves summed to shape the surface, at most
+    /// [`MAX_WAVES`](crate::water::MAX_WAVES) of them. Empty (the default)
+    /// leaves the surface flat: a mirror, which is what a sheltered pond at
+    /// dawn actually looks like.
+    #[schemars(length(max = 8))]
+    pub waves: Vec<Wave>,
+
+    /// Strength of the per-pixel ripple normals, `[0, 1]`.
+    ///
+    /// Small-scale roughness the grid is far too coarse to carry as geometry,
+    /// perturbing the normal and nothing else. Per line of code this is the
+    /// biggest single difference between "blue glass" and "water", because it
+    /// is what breaks the sun and the sky into glitter between the vertices.
+    /// Nothing physical may depend on it — no buoyancy, no collision.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub detail: f32,
+
+    /// Size of one ripple cell in metres. `> 0`. Around 0.5 reads as wind
+    /// texture on a lake; 3 or more as a swell the grid did not resolve.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub detail_scale: f32,
+
+    /// Surface roughness, `[0, 1]`, meaning what `Material.roughness` means.
+    ///
+    /// Water is smooth, but not 0: a mirror-tight sun highlight is a single
+    /// blown-out pixel that aliases as the camera moves, and the reflected sky
+    /// carries most of the look anyway.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub roughness: f32,
+
+    /// Linear RGB of water one `depth_fade` deep or less — the colour at the
+    /// shoreline. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub shallow_color: Vec3,
+
+    /// Linear RGB of water far deeper than `depth_fade`. Each component
+    /// `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub deep_color: Vec3,
+
+    /// Metres of water the view has to pass through to reach `deep_color` and
+    /// full `opacity`. `> 0`.
+    ///
+    /// Beer-Lambert absorption against the depth of whatever is behind the
+    /// surface, so the same water is clear at the edge of a pond and opaque in
+    /// the middle — which is most of how a surface reads as *deep* rather than
+    /// as a coloured pane. A clear alpine lake is 6 or more; a silty pond is
+    /// under 1.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub depth_fade: f32,
+
+    /// How opaque deep water becomes, `[0, 1]`. 1 hides its bed completely
+    /// however clear the shallows are.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: f32,
+
+    /// Foam on the crests, `[0, 1]`; 0 (the default) is off.
+    ///
+    /// Driven by the Gerstner Jacobian — where the surface pinches toward
+    /// folding, which is exactly where a real wave breaks — so it appears only
+    /// on steep waves and needs no second noise field to place it.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub crest_foam: f32,
+
+    /// Width in metres of the foam line where the surface meets geometry.
+    /// `>= 0`; 0 (the default) is off.
+    ///
+    /// This is the shoreline, and it is also the waterline on anything standing
+    /// in the water: it comes from the depth behind the surface, so a boat, an
+    /// ice block and the bank all get one without being marked up.
+    #[schemars(range(min = 0.0))]
+    pub shore_foam: f32,
+
+    /// Linear RGB of both foam kinds, each component `[0, 1]`. Foam is
+    /// scattered light, so it is opaque where it appears.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub foam_color: Vec3,
+}
+
+impl Default for Water {
+    fn default() -> Self {
+        Self {
+            segments: 64,
+            // Absent means off, as everywhere else in the engine: a bare
+            // `{"type": "Water"}` is a flat, clear, reflective surface, and
+            // every feature past that is asked for by name.
+            waves: Vec::new(),
+            detail: 0.5,
+            detail_scale: 0.6,
+            roughness: 0.06,
+            shallow_color: Vec3::new(0.09, 0.20, 0.21),
+            deep_color: Vec3::new(0.01, 0.05, 0.08),
+            depth_fade: 2.5,
+            opacity: 0.94,
+            crest_foam: 0.0,
+            shore_foam: 0.0,
+            foam_color: Vec3::new(0.86, 0.90, 0.92),
         }
     }
 }
@@ -1368,6 +1563,7 @@ components!(
     HudRect,
     ParticleEmitter,
     Tree,
+    Water,
 );
 
 #[cfg(test)]
@@ -1460,7 +1656,8 @@ mod tests {
                 "HudText",
                 "HudRect",
                 "ParticleEmitter",
-                "Tree"
+                "Tree",
+                "Water"
             ]
         );
     }

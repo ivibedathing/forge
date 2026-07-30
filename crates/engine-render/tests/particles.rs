@@ -48,11 +48,13 @@ fn render(particles: &[ParticleInstance]) -> Image {
         .expect("no assets to fail on");
     offscreen::render(
         &items,
+        &scene.water_items(),
         particles,
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),
         scene.environment,
+        0.0,
         SIZE,
         SIZE,
         &scene.hud_items(),

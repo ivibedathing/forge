@@ -1,4 +1,4 @@
-//! Procedural tree geometry (M18).
+//! Procedural tree geometry (M19).
 //!
 //! A [`Tree`] component is not a mesh reference — it is a recipe, and this
 //! module is what turns the recipe into two meshes: the woody one (trunk and

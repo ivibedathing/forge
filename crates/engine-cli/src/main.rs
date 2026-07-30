@@ -609,11 +609,13 @@ fn diff_render(
 
     let (actual, adapter) = engine_render::offscreen::render_with_adapter(
         &items,
+        &scene.water_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),
         scene.environment,
+        scene_time(time, steps, &scene),
         baseline.width,
         baseline.height,
         &scene.hud_items(),
@@ -677,6 +679,31 @@ fn diff_render(
 }
 
 /// Decode a baseline PNG into the comparison image format.
+/// The scene clock in seconds, as water reads it (M18).
+///
+/// Water is the first thing in the engine that is a pure function of *time* and
+/// yet belongs to the rendered frame rather than to a clip, so it needs one rule
+/// covering both ways a command can say when "now" is:
+///
+/// - `--time T` names an instant directly, the way it does for animation. It
+///   wins when given, so `screenshot --time 2.5` and `diff-render --time 2.5`
+///   pin the same wave state down to identical bytes, and a `filmstrip` walking
+///   time shows the waves moving.
+/// - otherwise `--steps N` has advanced the fixed clock by `N/hz` seconds, and
+///   the water is where that much simulated time put it — the same clock the
+///   physics, the scripts and the particles in that frame ran on.
+///
+/// Neither is wall clock, and nothing else in the frame is: this is what keeps
+/// a water render reproducible from the file plus its flags (invariant 2). A
+/// command that passes both flags gets the explicit `--time`, which is the only
+/// combination where the two answers differ.
+fn scene_time(time: f32, steps: u32, scene: &engine_core::Scene) -> f32 {
+    if time > 0.0 {
+        return time;
+    }
+    steps as f32 / scene.physics.timestep_hz.max(1) as f32
+}
+
 fn load_baseline(path: &std::path::Path) -> Result<engine_render::Image> {
     let display = path.display().to_string();
 
@@ -751,14 +778,18 @@ fn filmstrip(
         engine_core::animation::apply_all(&mut scene, &players, t);
         let items = scene.render_items(&assets)?;
         // Filmstrip samples animation time only; particles advance with
-        // --steps, which filmstrip does not take, so none are drawn.
+        // --steps, which filmstrip does not take, so none are drawn. Water is
+        // a pure function of time rather than of stepping, so it *does* move
+        // across the strip — a filmstrip of a lake is a filmstrip of its waves.
         let rendered = engine_render::offscreen::render(
             &items,
+            &scene.water_items(),
             &[],
             &camera,
             camera_transform.matrix(),
             scene.lights().resolved(),
             scene.environment,
+            t,
             tile_width,
             tile_height,
             &scene.hud_items(),
@@ -882,11 +913,13 @@ fn screenshot(
 
     let image = engine_render::offscreen::render(
         &items,
+        &scene.water_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),
         scene.environment,
+        scene_time(time, steps, &scene),
         width,
         height,
         &scene.hud_items(),
@@ -925,6 +958,7 @@ fn run_scene(
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let items = scene.render_items(&assets)?;
+    let water = scene.water_items();
     let lights = scene.lights().resolved();
     let environment = scene.environment;
     let hud_items = scene.hud_items();
@@ -982,6 +1016,7 @@ fn run_scene(
         height,
         Content::Scene {
             items,
+            water,
             camera,
             camera_model: camera_transform.matrix(),
             lights,

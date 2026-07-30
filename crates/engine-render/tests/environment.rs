@@ -35,11 +35,13 @@ fn render(source: &str) -> Image {
         .expect("test scenes use builtins only");
     offscreen::render(
         &items,
+        &scene.water_items(),
         &[],
         &camera,
         camera_transform.matrix(),
         scene.lights().resolved(),
         scene.environment,
+        0.0,
         SIZE,
         SIZE,
         &scene.hud_items(),

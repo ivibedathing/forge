@@ -52,7 +52,7 @@ moving.
 |-------|---------|-------------------|---------|
 | 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — four critters running loops, the glTF monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), `Material`, `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
 | 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
-| 360–539 | 03 water and ice | a pond of sixteen tiles on a travelling wave, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | low-roughness metallic PBR, `ParticleEmitter` ×3, scripted transforms |
+| 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
 | 540–719 | 04 breaking | a boulder rolls into a crate stack, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
 | 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4, `HudText`, `HudRect`, the camera |
 
@@ -60,7 +60,7 @@ Running underneath all five, from the `environment` block rather than from any
 component: a gradient sky with the sun in it, distance fog, sun shadows from
 everything opaque, 4× MSAA, and sky reflected off the metal and the water.
 
-The forest is nine `Tree` components and no meshes (M18). Each is a seed and a
+The forest is nine `Tree` components and no meshes (M19). Each is a seed and a
 species recipe — broadleaf, conifer, snag, scrub — so the two oaks are the same
 species and visibly different individuals, which is the thing twelve
 cylinder-and-sphere entities could not do however they were placed. The station
@@ -125,19 +125,22 @@ than no showcase:
   casts no shadows, so the logs do not throw one outward across the pit.
 - **Breaking** is real physics on pre-authored fragments — no runtime fracture,
   which is the settled M14 scope.
-- **Water** is sixteen tiles that a script moves on a sine wave, and since M16
-  it is genuinely transmissive: `Material.transmission` at 0.82, so the pond
-  bed and anything in it show through, and the Fresnel term turns the far edge
-  reflective while the near edge stays clear. Still missing: refraction (the
-  bed shows through undistorted) and absorption with depth, so the water is
-  equally clear however deep it is. The tiles now **abut instead of
-  overlapping** — an overlap is invisible between opaque tiles and reads as a
-  grid of seams between transmissive ones, because pixels in the overlap are
-  blended through two surfaces.
+- **Water** is real as of M18: one `Water` entity where sixteen cube tiles used
+  to be. It has its own waves (three Gerstner components plus per-pixel ripple
+  normals), it absorbs with depth between `shallow_color` and `deep_color` so
+  the middle of the pond is darker than its rim, it foams where the surface
+  meets the bed and where a crest pinches, and it reflects the sky with a
+  Fresnel weight. The sixteen tiles were the clearest fake in the tour: each one
+  translated rigidly, so the surface normal pointed straight up everywhere and
+  nothing could catch the light, and their seams were visible in every
+  screenshot. Still missing: refraction — the bed shows through undistorted —
+  and the trees beside the pond are not reflected in it, only the sky is. See
+  `water-design.md`.
 - **Ice** is a pale dielectric at roughness 0.05–0.10 with transmission
-  0.55–0.66. No subsurface scattering and no tinting by thickness, so a thick
-  block is exactly as clear as a thin one.
-- **The trees are real geometry** as of M18 — swept tubes on wandering
+  0.55–0.66, and the floating blocks are sorted into the same back-to-front
+  list as the water they sit in. No subsurface scattering and no tinting by
+  thickness, so a thick block is exactly as clear as a thin one.
+- **The trees are real geometry** as of M19 — swept tubes on wandering
   polylines, recursively branched, with taper and a root flare, and a seed per
   tree so no two are the same individual. What is missing is surface: there is
   no bark texture and no leaf texture (the engine has neither), so bark is a
@@ -162,9 +165,10 @@ than no showcase:
   ground. Crisp shadows near the camera *and* shadows out to the horizon would
   need cascades, which M16 does not have.
 
-Refraction is the upgrade that would move this scene most now; textured bark
-and alpha-cut leaves are what would move the forest most, and both are the same
-missing feature — the renderer has no texture-mapped materials yet.
+Refraction is the upgrade that would move this scene most now, and the water is
+its loudest customer. For the forest it is textured bark and alpha-cut leaves —
+the same missing feature seen from the other side, since the renderer has no
+texture-mapped materials at all yet.
 
 ## Measuring frames
 

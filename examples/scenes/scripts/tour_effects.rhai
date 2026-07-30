@@ -4,10 +4,12 @@
 // emitter whose rate a script can write, and Transforms it can push around;
 // the *look* of fire and water is authored in these numbers.
 //
-// Where the honest limits are: the pond is opaque geometry with a low
-// roughness, not refraction, and the ice is a pale dielectric, not
-// transmission. Both stations become real the day materials grow alpha and
-// transmission — and this file is where that upgrade will show up first.
+// Where the honest limits are: the fire is particles and a point light, not
+// combustion, and the water reflects a gradient sky rather than the trees
+// standing next to it. What is no longer faked here: the ice is real
+// transmission (M16), the flame is additive and turbulent (M17), and the pond
+// is a real water surface with its own waves (M18) — which is why this file no
+// longer moves it.
 
 fn step(world, step) {
     let t = step.to_float() / 60.0;
@@ -53,17 +55,11 @@ fn step(world, step) {
     world.set_position("FireLight", 9.0, 1.05 + flick * 0.12, -13.0);
 
     // --- Pond ---------------------------------------------------------------
-    // Sixteen tiles on one travelling wave. The phase runs along both axes, so
-    // the crest crosses the pond diagonally instead of the whole surface
-    // breathing in unison.
-    for i in 0..4 {
-        for j in 0..4 {
-            let x = 10.35 + i.to_float() * 3.1;
-            let z = 1.35 + j.to_float() * 3.1;
-            let phase = t * 2.4 - i.to_float() * 0.85 - j.to_float() * 0.55;
-            world.set_position("Water" + i + j, x, 0.14 + sin(phase) * 0.07, z);
-        }
-    }
+    // Nothing here any more, and that is the point. Until M18 this was sixteen
+    // cube tiles that a loop pushed up and down on one travelling sine: every
+    // tile stayed flat, so the surface had no normal variation at all, and the
+    // seams between them were visible in every screenshot. One `Water`
+    // component replaced the geometry, the loop, and both artifacts.
 
     // --- Waterfall ----------------------------------------------------------
     // The plunge pool surges: the fall is a constant curtain, the spray at its

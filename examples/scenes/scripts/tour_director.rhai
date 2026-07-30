@@ -55,7 +55,7 @@ fn step(world, step) {
     let systems = [
         "MESHES . GLTF . MATERIALS . LIGHTING . ANIMATION",
         "ADDITIVE FIRE . TURBULENCE . FIRELIGHT . EMBERS",
-        "PBR RESPONSE . SCRIPTED WAVES . SPRAY . FROST",
+        "GERSTNER WAVES . DEPTH . FOAM . SPRAY . FROST",
         "RIGID BODIES . COLLISION . FRAGMENTS . BLAST",
         "VEHICLE . WHEELS . HUD . CAMERA . ALL OF IT",
     ];
