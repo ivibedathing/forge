@@ -112,7 +112,7 @@ with basic PBR is enough to prove the concept. Desktop only; no mobile or consol
 editor stays deliberately small: it is a convenience view for supervising an agent, not the primary
 interface, and features land there only after the CLI can do the same thing headlessly.
 
-`agent-native-engine-design.md` is the source of truth for layout, formats, and build order.
+`designs/agent-native-engine-design.md` is the source of truth for layout, formats, and build order.
 `CLAUDE.md` carries the working notes an agent needs before touching this code.
 
 ## License

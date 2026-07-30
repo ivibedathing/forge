@@ -10,7 +10,7 @@ all-errors-at-once reporting under a formalized CLI contract, reference glTF mes
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
 that is a live writable *view* onto the file. Verified by 200+ tests including offscreen pixel
 readback and an end-to-end CLI suite, and by the verification fixtures from
-`milestone-verification-scenes.md` (`verify/m4_lighting.json` diff-renders bit-exactly against
+`designs/milestone-verification-scenes.md` (`verify/m4_lighting.json` diff-renders bit-exactly against
 `verify/baselines/m4_lighting.png`; `verify/m5_broken.json` is committed **broken** and must
 never validate — its failing with all seven planted errors is the pass condition, pinned by
 `repo_contracts.rs`). **From M6 on, the standard check's "look at the PNGs" step is
@@ -190,7 +190,7 @@ Transform of a **dynamic** body is `animation_on_dynamic_body` (kinematic is the
 file/line; `engine validate` accepts clip files directly (structural checks only).
 
 Scripting (M10, `crates/engine-script`): **Rhai pinned =1.25.1** — the §9 decision is settled
-(see `scripting-design.md` §1; Lua lost on the C dependency and determinism friction,
+(see `designs/scripting-design.md` §1; Lua lost on the C dependency and determinism friction,
 compiled-Rust-only lost on rebuild-per-iteration). Scripts define `fn step(world, step)`; the
 curated `world` API (dt / position / rotation / scale get+set) is the entire universe — no
 time, no I/O, no randomness, 1M-operation budget per call, so traces stay byte-identical with
@@ -201,7 +201,7 @@ script-driven kinematics land in baked files. Kinematic-vs-fixed contact events 
 via `ActiveCollisionTypes` (rapier skips them by default; a scripted platform crossing a
 static sensor needs them). Bake next to the scene, not /tmp — relative paths.
 
-Input (M11, `input-design.md`): keyboard input sampled per fixed step on the shared integer
+Input (M11, `designs/input-design.md`): keyboard input sampled per fixed step on the shared integer
 clock — scripts ask `world.key("ArrowUp")` (unknown names are runtime errors with
 `did_you_mean`). Live keys exist only in `engine run-scene`; headlessly, input is an
 `*.input.jsonl` timeline (sparse keyframes of the complete held set, in effect from their
@@ -292,7 +292,7 @@ envelope, without which the car reads corners correctly and arrives far too fast
 Regenerating the track means regenerating the timeline and re-blessing the baseline — the two
 scripts print the start-line constants `car.rhai` needs.
 
-HUD (M11.6 lines + M12 components, `hud-design.md`): two layers, one render path.
+HUD (M11.6 lines + M12 components, `designs/hud-design.md`): two layers, one render path.
 `world.hud(text)` pushes printable-ASCII debug lines, cleared every step — the line HUD is a
 pure function of the step that drew it — and `world.state(key, default)` /
 `world.set_state(key, value)` is numeric per-run memory on the ScriptHost (replay-
@@ -385,7 +385,7 @@ re-blessed `m11_lap.png`. Both are emitted by `make_car_track.py` and follow the
 *height*, like the exhaust: a contact patch pinned to a fixed altitude smokes from inside
 the hill on a circuit that climbs.
 
-Breaking (M14, design in `breaking-design.md`): `Breakable` lists **pre-authored fragments**
+Breaking (M14, design in `designs/breaking-design.md`): `Breakable` lists **pre-authored fragments**
 (mesh ref + local placement + cuboid `half_extents` + `density` — no runtime fracture, the
 settled decision) and breaks three ways: collision (`impulse_threshold` in kg·m/s — rapier
 contact *force* × dt at the event boundary, **peak** per step not sum, and force events are
@@ -485,7 +485,7 @@ sky runs blue upward, fog grows with distance, blending shows what is behind, MS
 interiors exact, and an absent block equals an all-defaults one) and fixture
 `verify/m16_environment.json` + baseline, pinned by a CLI test.
 
-Fire and point lights (M17, design in `fire-and-lights-design.md`). Two halves of one problem: the
+Fire and point lights (M17, design in `designs/fire-and-lights-design.md`). Two halves of one problem: the
 tour's campfire was a cone of identical orange sprites, and its own doc named script-driven lights
 as the upgrade that would move the scene most.
 
@@ -540,7 +540,7 @@ both, `cmp` the PNGs. Doing that here found a 1-pixel `m14_break.png` diff that 
 two builds. Fixture `verify/m17_fire.json` + `scripts/m17_fire.rhai` + baseline at `--steps 240`,
 pinned by a CLI test that also bakes and revalidates the run.
 
-Trees (M19, design in `tree-design.md`). The `Tree` component is a **recipe, not a mesh
+Trees (M19, design in `designs/tree-design.md`). The `Tree` component is a **recipe, not a mesh
 reference**: `engine-core/src/tree.rs` grows it into two meshes — bark (drawn with the entity's own
 `Material`) and leaves (drawn with `Tree::leaf_material`, from `leaf_color`/`leaf_roughness`) — so
 one entity emits two `RenderItem`s under one name, and `unused_material` knows a tree's Material is
@@ -575,7 +575,7 @@ channel step (measured; Rust does not contract floats, so this is libm, not FMA)
 the debug binary `cargo test` runs. Every pre-tree fixture is profile-insensitive; the constraint
 arrives with CPU-generated geometry.
 
-Water (M18, design in `water-design.md`). The tour's pond was sixteen `builtin:cube` tiles a script
+Water (M18, design in `designs/water-design.md`). The tour's pond was sixteen `builtin:cube` tiles a script
 bobbed on a shared sine: every tile translated rigidly, so the surface normal was straight up
 everywhere at every moment, there was nothing for the sun or sky to catch, the seams showed, and
 "deep" and "shallow" did not exist. The `Water` component replaces all of that.
@@ -631,7 +631,7 @@ baseline at `--steps 120`, pinned by a CLI test. The bit-exactness of the sevent
 baselines was checked the way this repo has learned to check it — an A/B between binaries built at
 `main` and here, fifteen scene/step combinations, all byte-identical.
 
-Clouds (M20, design in `cloud-design.md`). The `Cloud` component is M19's premise applied to the
+Clouds (M20, design in `designs/cloud-design.md`). The `Cloud` component is M19's premise applied to the
 sky: a **recipe, not a mesh reference**. `engine-core/src/cloud.rs` grows it into one mesh — a
 golden-angle spiral of icosphere lobes over the footprint, each growing `children` smaller lobes
 biased upward by `rise`, buried 45% of their own radius so the surfaces interpenetrate (M19's join,
@@ -672,7 +672,7 @@ sharpening the curve instead — the obvious fix — turns a storm cloud into gr
 between binaries, twenty scene/step combinations against `main` including all five hours of the
 M21 daylight fixture, all byte-identical.
 
-Day and night (M21, design in `daylight-design.md`). Every scene was pinned at whatever hour its
+Day and night (M21, design in `designs/daylight-design.md`). Every scene was pinned at whatever hour its
 author typed, and moving one to dusk meant hand-editing six colors and keeping them consistent.
 `daylight` makes them one number.
 
@@ -743,7 +743,7 @@ the fixture's lamp globe wanted and is a gap this milestone surfaced rather than
 **The A/B settled the no-pixel-moved claim**: merge-base binary vs the worktree's, 15 scenes × 5
 step counts = 75 combinations, all byte-identical.
 
-Terrain (M22, design in `terrain-design.md`). Ground was `builtin:plane` scaled to 200 m with one
+Terrain (M22, design in `designs/terrain-design.md`). Ground was `builtin:plane` scaled to 200 m with one
 albedo — two triangles and one colour, so the sun struck all 40 000 m² at the same angle and the eye
 read it as a backdrop rather than a place. The `Terrain` component replaces it, and **there is no
 flat ground in the repo's scenes any more**.
@@ -826,7 +826,7 @@ Verified by `engine-render/tests/terrain.rs` (six GPU-skipping pixel tests, incl
 pinned by a CLI test that also proves the dropped sphere lands *on* the ground. The eighteen earlier
 scene/step combinations were A/B'd against `main` and are byte-identical.
 
-Roads (M23, design in `road-design.md`). The car demo's circuit was **207 `builtin:cube`
+Roads (M23, design in `designs/road-design.md`). The car demo's circuit was **207 `builtin:cube`
 plates**: a deep earth box per segment whose top face was the drivable surface, a thin
 colliderless asphalt slab 9 cm proud of it so the road read as road, kerb cubes on the tight
 corners, and one painted start line. Consecutive rectangles cannot tile a curve, so every corner
@@ -912,7 +912,7 @@ about the engine). Verified by
 on the inside, and that a road-less scene is untouched) plus `engine-core`'s geometry tests, and
 fixture `verify/m23_road.json` + baseline at `--steps 180`, pinned by a CLI test that also drops a
 ball on the road and requires it to *stay where it lands*.
-Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
+Showcase tour (`designs/showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
 with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,
 truck}.rhai`) and six 640×360 baselines (`verify/baselines/showcase_*.png`, per-adapter, checked
@@ -935,7 +935,7 @@ scrubs) where twelve cylinder-and-sphere entities used to be, which cost all six
 a re-bless and no other baseline anything. M20 adds four `Cloud` entities and re-blessed the same
 six: the tour's cameras are all ground-level and aimed *down* at their subjects, so the clouds ride
 the horizon rather than filling the sky — visible at stations 02 and 03 and absent from 01. A
-sky-facing beat, or the sky-dome cloud layer of `cloud-design.md` §9, is what would change that. What is still faked and named as such in the doc:
+sky-facing beat, or the sky-dome cloud layer of `designs/cloud-design.md` §9, is what would change that. What is still faked and named as such in the doc:
 animals (scaled spheres on parametric loops) and the sky (a gradient, not scattering). The blast at
 station 04 still emits no light, which is now a wiring job rather than a missing feature.
 Refraction is the upgrade that would move this scene most now, and water is its loudest customer;
@@ -949,7 +949,7 @@ resting in contact at load** silently lost its contacts and fell through the wor
 first-step BVH now goes on a scratch clone (`bvh_cold` in engine-physics); `refresh_queries` is
 documented destructive, with the `--steps 0` query path its only safe caller.
 
-Read `agent-native-engine-design.md` before making structural decisions; it is the source of truth
+Read `designs/agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).
 
 ## Dependency versions — check before trusting recall
@@ -981,7 +981,7 @@ baselines are blessed. `ENGINE_PROFILE=release bin/engine …` when you want spe
 
 **`bin/verify-baselines` is "look at the PNGs" as one command.** Every committed baseline is listed
 in `examples/scenes/verify/baselines.json` with the scene and flags that reproduce it — a mapping
-that previously lived only in prose here, in `milestone-verification-scenes.md`, and hardcoded in
+that previously lived only in prose here, in `designs/milestone-verification-scenes.md`, and hardcoded in
 `cli.rs`, so the full sweep and the A/B check were reassembled by hand each time.
 `repo_contracts.rs::every_committed_baseline_is_listed_in_the_manifest` fails on any baseline
 missing from it. NDJSON out, exit 1 on drift, `--filter` to scope, `--bless` to re-bless (from the
@@ -1095,7 +1095,7 @@ M23: road junctions (two roads crossing wants a patch primitive, not a ribbon), 
 cross-sections, per-point road width for a pit lane merging out of a straight, roads that follow a
 `Terrain` instead of carrying their own heights, and textures for asphalt grain (analytic markings
 beat a texture for anything periodic, but grain is not periodic).
-Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
+Each milestone from M4 on ends by running its fixture from `designs/milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any
 `TextureView`, `Gpu::new` takes an optional surface, and the readback path (texture → buffer →
@@ -1137,7 +1137,7 @@ this.
 
 Still unsettled (design doc §9). If a task forces one, surface it rather than picking silently:
 
-- ~~Runtime scripting~~ — settled: Rhai (M10, `scripting-design.md`)
+- ~~Runtime scripting~~ — settled: Rhai (M10, `designs/scripting-design.md`)
 - Whether to support hot reload of scene data without a Rust rebuild
 
 ## Out of scope for v1
