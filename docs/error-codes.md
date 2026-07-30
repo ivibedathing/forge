@@ -35,6 +35,7 @@ build fails.
 | `multiple_active_cameras` | 1 | more than one camera is marked active |
 | `multiple_directional_lights` | 1 | more than one DirectionalLight in the scene |
 | `multiple_ambient_lights` | 1 | more than one AmbientLight in the scene |
+| `too_many_point_lights` | 1 | a scene may carry at most 8 PointLight components |
 | `validation_failed` | 1 | summary error after per-diagnostic reports; see the preceding lines |
 | `unknown_shape` | 1 | a Collider names no known shape kind |
 | `unknown_body_kind` | 1 | a RigidBody names no known body kind |

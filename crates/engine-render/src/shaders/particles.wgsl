@@ -24,6 +24,8 @@ struct VsIn {
     @location(0) pos_size: vec4<f32>,
     // rgb = linear color, a = opacity.
     @location(1) color: vec4<f32>,
+    // xyz = world velocity, w = stretch in seconds (0 = a round sprite).
+    @location(2) velocity_stretch: vec4<f32>,
 };
 
 struct VsOut {
@@ -44,8 +46,48 @@ fn vs_main(in: VsIn) -> VsOut {
         vec2(-1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0),
     );
     let corner = corners[in.index];
-    let world = in.pos_size.xyz
-        + (frame.camera_right.xyz * corner.x + frame.camera_up.xyz * corner.y) * in.pos_size.w;
+
+    // Velocity stretching (M17). A round sprite is a poor ember: a real one
+    // draws a streak, because it moves further during the exposure than its own
+    // width. So the quad is elongated along the *screen-space* projection of
+    // the velocity — screen-space, because a particle flying at the camera has
+    // no visible direction of travel and must stay round rather than collapsing
+    // to a line.
+    //
+    // The `stretch == 0` branch is the pre-M17 expression, character for
+    // character. Folding both cases into one lerp would be tidier and would
+    // also mean every previously-blessed sprite goes through new arithmetic;
+    // this is the same discipline mesh.wgsl follows for its M4 lines.
+    var world: vec3<f32>;
+    let stretch = in.velocity_stretch.w;
+    if stretch > 0.0 {
+        // The velocity in the camera's 2D basis.
+        let planar = vec2<f32>(
+            dot(in.velocity_stretch.xyz, frame.camera_right.xyz),
+            dot(in.velocity_stretch.xyz, frame.camera_up.xyz),
+        );
+        let speed = length(planar);
+        if speed > 1e-4 {
+            let along = planar / speed;
+            let across = vec2<f32>(-along.y, along.x);
+            // Grow along the direction of travel by the distance covered in
+            // `stretch` seconds; the cross-section keeps the authored size, so
+            // a stretched sprite gets longer without getting fatter.
+            let half_length = in.pos_size.w + speed * stretch;
+            let plane = along * (corner.y * half_length) + across * (corner.x * in.pos_size.w);
+            world = in.pos_size.xyz
+                + frame.camera_right.xyz * plane.x
+                + frame.camera_up.xyz * plane.y;
+        } else {
+            world = in.pos_size.xyz
+                + (frame.camera_right.xyz * corner.x + frame.camera_up.xyz * corner.y)
+                    * in.pos_size.w;
+        }
+    } else {
+        world = in.pos_size.xyz
+            + (frame.camera_right.xyz * corner.x + frame.camera_up.xyz * corner.y)
+                * in.pos_size.w;
+    }
 
     var out: VsOut;
     out.clip = frame.view_proj * vec4(world, 1.0);

@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use engine_core::components::Camera;
+use engine_core::components::{Camera, ParticleBlend, MAX_POINT_LIGHTS};
 use engine_core::math::{Mat4, Vec3};
 use engine_core::mesh::MeshData;
 use engine_core::particles::ParticleInstance;
@@ -65,6 +65,26 @@ struct FrameUniform {
     sky_ground: [f32; 4],
     /// x = fog density, y = shadows on, z = shadow-map texel size, w = sky on.
     params: [f32; 4],
+    /// x = live point-light count; y, z, w are padding.
+    ///
+    /// A second params vec4 rather than a spare lane in the first: the existing
+    /// lanes are all taken, and a uniform struct that grows only at its end
+    /// leaves every prior field at the offset the shader already reads it from.
+    params2: [f32; 4],
+    /// Fixed-size array, `count` entries live. Unused slots are zeroed, which
+    /// the shader never reads — it loops to `count`.
+    point_lights: [PointLightUniform; MAX_POINT_LIGHTS],
+}
+
+/// One point light as the frame uniform carries it, matching WGSL
+/// `PointLightData`.
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct PointLightUniform {
+    /// xyz = world position, w = range in world units.
+    position_range: [f32; 4],
+    /// rgb = color premultiplied by intensity; w is padding.
+    color: [f32; 4],
 }
 
 /// Per-pass particle data, matching WGSL `ParticleFrame`.
@@ -87,6 +107,8 @@ struct ParticleRaw {
     pos_size: [f32; 4],
     /// rgb = linear color, a = opacity.
     color: [f32; 4],
+    /// xyz = world velocity, w = stretch in seconds (0 = a round sprite).
+    velocity_stretch: [f32; 4],
 }
 
 /// One uploaded mesh, cached across frames.
@@ -241,6 +263,9 @@ pub struct SceneRenderer {
     shadow_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     particle_pipeline: wgpu::RenderPipeline,
+    /// Same shader and same instance buffer as `particle_pipeline`, blending
+    /// additively — for `ParticleEmitter.blend: "additive"` (fire, sparks).
+    additive_particle_pipeline: wgpu::RenderPipeline,
     object_layout: wgpu::BindGroupLayout,
     hud_pipeline: wgpu::RenderPipeline,
     hud_layout: wgpu::BindGroupLayout,
@@ -485,49 +510,90 @@ impl SceneRenderer {
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
             ],
         })];
 
-        let particle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("particle-pipeline"),
-            layout: Some(&particle_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &particle_shader,
-                entry_point: Some("vs_main"),
-                buffers: &particle_vertex_layouts,
-                compilation_options: Default::default(),
+        // Two pipelines, one shader, one instance buffer: the *only* difference
+        // is the blend equation, and which particle uses which is a CPU-side
+        // partition of the sorted draw list.
+        //
+        // `ALPHA_BLENDING` is `src·srcA + dst·(1-srcA)` — a sprite hides what
+        // it covers. Additive is `src·srcA + dst·1` — it only ever adds light,
+        // so a stack of flame sprites climbs toward white and the darkest a
+        // flame can make anything is "unchanged". Doing this by shipping
+        // premultiplied color through one pipeline (emitting alpha 0 for the
+        // additive case) would also work and would save a pipeline, but it
+        // would move the multiply by alpha from the blend unit into the shader
+        // for *every* particle — and rearranging arithmetic that eleven
+        // committed baselines depend on, to save one pipeline object, is the
+        // wrong trade. Alpha-blended particles keep the exact pipeline they had.
+        let particle_pipeline_for = |label: &str, blend: wgpu::BlendState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&particle_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &particle_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &particle_vertex_layouts,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &particle_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                // Billboards always face the camera; culling would be a no-op at
+                // best and a winding trap at worst.
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                // Depth-test against the meshes but never write: translucent
+                // sprites must not occlude each other (they are sorted and
+                // blended instead).
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample,
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let particle_pipeline =
+            particle_pipeline_for("particle-pipeline", wgpu::BlendState::ALPHA_BLENDING);
+        let additive_particle_pipeline = particle_pipeline_for(
+            "particle-pipeline-additive",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                // The scene target is opaque, so nothing reads this back; keep
+                // it saturating rather than leaving it at whatever the default
+                // would imply.
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &particle_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            // Billboards always face the camera; culling would be a no-op at
-            // best and a winding trap at worst.
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            // Depth-test against the meshes but never write: translucent
-            // sprites must not occlude each other (they are sorted and
-            // blended instead).
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample,
-            multiview_mask: None,
-            cache: None,
-        });
+        );
 
         let frame_uniform = Uniforms::new(
             device,
@@ -558,6 +624,7 @@ impl SceneRenderer {
             shadow_pipeline,
             sky_pipeline,
             particle_pipeline,
+            additive_particle_pipeline,
             object_layout,
             hud_pipeline,
             hud_layout,
@@ -828,6 +895,19 @@ impl SceneRenderer {
             Mat4::IDENTITY
         };
 
+        // Point lights pack into the fixed-size array in the order
+        // `ResolvedLights` produced (entity-name order). Validation caps the
+        // count, so `take` here is a belt-and-braces bound on an already-valid
+        // scene rather than a silent truncation policy.
+        let mut point_lights = [PointLightUniform::default(); MAX_POINT_LIGHTS];
+        let point_light_count = lights.live_points().len();
+        for (slot, light) in point_lights.iter_mut().zip(lights.live_points()) {
+            *slot = PointLightUniform {
+                position_range: light.position.extend(light.range).to_array(),
+                color: light.color.extend(0.0).to_array(),
+            };
+        }
+
         let frame = FrameUniform {
             camera_pos: camera_position.extend(1.0).to_array(),
             sun_direction: lights.sun_direction.extend(0.0).to_array(),
@@ -844,6 +924,8 @@ impl SceneRenderer {
                 1.0 / SHADOW_MAP_SIZE as f32,
                 if environment.sky { 1.0 } else { 0.0 },
             ],
+            params2: [point_light_count as f32, 0.0, 0.0, 0.0],
+            point_lights,
         };
         queue.write_buffer(&self.frame_uniform.buffer, 0, bytemuck::bytes_of(&frame));
 
@@ -908,8 +990,14 @@ impl SceneRenderer {
         // dependent) and upload as one instance buffer. Distance to the
         // camera stands in for view depth — correct enough for sprites, and
         // `total_cmp` plus a stable sort keeps the order deterministic.
-        let particle_count = if particles.is_empty() {
-            0
+        //
+        // Additive sprites then move to the back of the buffer as one
+        // contiguous run, so the pass is two draws over one buffer rather than
+        // a pipeline switch per sprite. `sort_by_key` is stable, so each group
+        // keeps the back-to-front order the distance sort just gave it — which
+        // additive blending does not need (it commutes) but alpha does.
+        let (particle_count, alpha_particles) = if particles.is_empty() {
+            (0, 0)
         } else {
             let mut sorted: Vec<&ParticleInstance> = particles.iter().collect();
             sorted.sort_by(|a, b| {
@@ -917,11 +1005,17 @@ impl SceneRenderer {
                 let db = (b.position - camera_position).length_squared();
                 db.total_cmp(&da)
             });
+            sorted.sort_by_key(|p| p.blend == ParticleBlend::Additive);
+            let alpha_particles = sorted
+                .iter()
+                .take_while(|p| p.blend != ParticleBlend::Additive)
+                .count() as u32;
             let raw: Vec<ParticleRaw> = sorted
                 .iter()
                 .map(|p| ParticleRaw {
                     pos_size: p.position.extend(p.size).to_array(),
                     color: p.color.extend(p.alpha).to_array(),
+                    velocity_stretch: p.velocity.extend(p.stretch).to_array(),
                 })
                 .collect();
 
@@ -947,7 +1041,7 @@ impl SceneRenderer {
                 0,
                 bytemuck::bytes_of(&uniform),
             );
-            raw.len() as u32
+            (raw.len() as u32, alpha_particles)
         };
 
         // The overlay canvas covers only the pixels the HUD touches; upload it
@@ -1121,10 +1215,20 @@ impl SceneRenderer {
             // they test against the depth the meshes just wrote.
             if particle_count > 0 {
                 let instances = self.particle_instances.as_ref().expect("just written");
-                pass.set_pipeline(&self.particle_pipeline);
                 pass.set_bind_group(0, &self.particle_uniform.bind_group, &[]);
                 pass.set_vertex_buffer(0, instances.slice(..));
-                pass.draw(0..6, 0..particle_count);
+                // Alpha first, additive after: a flame reads as glowing
+                // *through* the smoke above it, which is what firelight
+                // scattering in that smoke actually looks like. A scene with no
+                // additive emitter issues exactly the one draw it always did.
+                if alpha_particles > 0 {
+                    pass.set_pipeline(&self.particle_pipeline);
+                    pass.draw(0..6, 0..alpha_particles);
+                }
+                if particle_count > alpha_particles {
+                    pass.set_pipeline(&self.additive_particle_pipeline);
+                    pass.draw(0..6, alpha_particles..particle_count);
+                }
             }
         }
 

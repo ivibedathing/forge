@@ -189,7 +189,7 @@
       "components": [
         { "type": "Transform", "position": [9.0, 0.14, -13.0], "scale": [3.0, 0.28, 3.0] },
         { "type": "Mesh", "asset": "builtin:cylinder" },
-        { "type": "Material", "albedo": [0.15, 0.14, 0.13], "roughness": 0.95 }
+        { "type": "Material", "albedo": [0.075, 0.070, 0.065], "roughness": 0.96 }
       ]
     },
     {
@@ -213,42 +213,85 @@
     {
       "name": "FireCore",
       "components": [
-        { "type": "Transform", "position": [9.0, 0.55, -13.0], "scale": [0.5, 0.4, 0.5] },
+        { "type": "Transform", "position": [9.0, 0.30, -13.0], "scale": [0.74, 0.22, 0.74] },
         { "type": "Mesh", "asset": "builtin:sphere" },
-        { "type": "Material", "albedo": [0.05, 0.02, 0.0], "emissive": [1.0, 0.42, 0.06] }
+        { "type": "Material", "albedo": [0.05, 0.02, 0.0], "emissive": [0.62, 0.13, 0.01] }
+      ]
+    },
+    {
+      "name": "FireLight",
+      "components": [
+        { "type": "Transform", "position": [9.0, 1.10, -13.0] },
+        { "type": "PointLight", "color": [1.0, 0.52, 0.18], "intensity": 5.5, "range": 15.0 }
+      ]
+    },
+    {
+      "name": "FireBase",
+      "components": [
+        { "type": "Transform", "position": [9.0, 0.44, -13.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 85.0, "lifetime": 0.40, "speed": 1.1, "spread": 46.0,
+          "acceleration": [0.0, 5.4, 0.0], "drag": 2.4,
+          "start_size": 0.24, "end_size": 0.34,
+          "start_color": [1.0, 0.78, 0.44], "end_color": [1.0, 0.38, 0.07],
+          "start_alpha": 0.20, "end_alpha": 0.0, "max_particles": 320, "seed": 201,
+          "blend": "additive", "radius": 0.34,
+          "speed_jitter": 0.45, "size_jitter": 0.30, "lifetime_jitter": 0.35,
+          "turbulence": 2.8, "turbulence_scale": 0.55 }
       ]
     },
     {
       "name": "Fire",
       "components": [
-        { "type": "Transform", "position": [9.0, 0.45, -13.0], "rotation": [90.0, 0.0, 0.0] },
-        { "type": "ParticleEmitter", "rate": 130.0, "lifetime": 0.75, "speed": 2.4, "spread": 26.0,
-          "acceleration": [0.0, 2.6, 0.0], "drag": 1.6,
-          "start_size": 0.26, "end_size": 0.05,
-          "start_color": [1.0, 0.52, 0.10], "end_color": [0.55, 0.05, 0.01],
-          "start_alpha": 0.9, "end_alpha": 0.0, "max_particles": 512, "seed": 101 }
+        { "type": "Transform", "position": [9.0, 0.50, -13.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 300.0, "lifetime": 1.00, "speed": 2.1, "spread": 34.0,
+          "acceleration": [0.0, 3.4, 0.0], "drag": 1.9,
+          "start_size": 0.42, "end_size": 0.12,
+          "start_color": [1.0, 0.44, 0.10], "end_color": [0.40, 0.05, 0.01],
+          "start_alpha": 0.26, "end_alpha": 0.0, "max_particles": 768, "seed": 101,
+          "blend": "additive", "radius": 0.55,
+          "speed_jitter": 0.40, "size_jitter": 0.35, "lifetime_jitter": 0.45,
+          "turbulence": 5.0, "turbulence_scale": 0.70, "stretch": 0.03 }
+      ]
+    },
+    {
+      "name": "FireTongues",
+      "components": [
+        { "type": "Transform", "position": [9.0, 0.60, -13.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 54.0, "lifetime": 1.20, "speed": 3.0, "spread": 19.0,
+          "acceleration": [0.20, 1.9, -0.09], "drag": 1.8,
+          "start_size": 0.24, "end_size": 0.03,
+          "start_color": [1.0, 0.55, 0.15], "end_color": [0.46, 0.06, 0.0],
+          "start_alpha": 0.28, "end_alpha": 0.0, "max_particles": 256, "seed": 105,
+          "blend": "additive", "radius": 0.32,
+          "speed_jitter": 0.45, "size_jitter": 0.40, "lifetime_jitter": 0.50,
+          "turbulence": 8.0, "turbulence_scale": 0.50, "stretch": 0.045 }
       ]
     },
     {
       "name": "FireSmoke",
       "components": [
-        { "type": "Transform", "position": [9.0, 2.1, -13.0], "rotation": [90.0, 0.0, 0.0] },
-        { "type": "ParticleEmitter", "rate": 26.0, "lifetime": 4.0, "speed": 1.3, "spread": 16.0,
-          "acceleration": [0.55, 0.8, 0.15], "drag": 0.45,
-          "start_size": 0.30, "end_size": 1.5,
-          "start_color": [0.24, 0.23, 0.23], "end_color": [0.42, 0.42, 0.45],
-          "start_alpha": 0.6, "end_alpha": 0.0, "max_particles": 320, "seed": 102 }
+        { "type": "Transform", "position": [9.0, 2.05, -13.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 24.0, "lifetime": 4.2, "speed": 1.2, "spread": 18.0,
+          "acceleration": [0.55, 0.85, 0.15], "drag": 0.45,
+          "start_size": 0.30, "end_size": 1.70,
+          "start_color": [0.22, 0.21, 0.21], "end_color": [0.42, 0.42, 0.45],
+          "start_alpha": 0.50, "end_alpha": 0.0, "max_particles": 320, "seed": 102,
+          "radius": 0.45, "speed_jitter": 0.50, "size_jitter": 0.40, "lifetime_jitter": 0.40,
+          "turbulence": 1.6, "turbulence_scale": 2.20 }
       ]
     },
     {
       "name": "Sparks",
       "components": [
-        { "type": "Transform", "position": [9.0, 0.7, -13.0], "rotation": [90.0, 0.0, 0.0] },
-        { "type": "ParticleEmitter", "rate": 22.0, "lifetime": 1.6, "speed": 3.6, "spread": 34.0,
-          "acceleration": [0.3, -2.4, 0.1], "drag": 0.5,
-          "start_size": 0.05, "end_size": 0.015,
-          "start_color": [1.0, 0.85, 0.35], "end_color": [1.0, 0.30, 0.02],
-          "start_alpha": 1.0, "end_alpha": 0.0, "max_particles": 128, "seed": 103 }
+        { "type": "Transform", "position": [9.0, 0.80, -13.0], "rotation": [90.0, 0.0, 0.0] },
+        { "type": "ParticleEmitter", "rate": 24.0, "lifetime": 1.5, "speed": 2.2, "spread": 30.0,
+          "acceleration": [0.30, -2.0, 0.10], "drag": 1.0,
+          "start_size": 0.040, "end_size": 0.012,
+          "start_color": [1.0, 0.86, 0.42], "end_color": [1.0, 0.22, 0.02],
+          "start_alpha": 0.90, "end_alpha": 0.0, "max_particles": 160, "seed": 103,
+          "blend": "additive", "radius": 0.34,
+          "speed_jitter": 0.60, "size_jitter": 0.50, "lifetime_jitter": 0.55,
+          "turbulence": 2.4, "turbulence_scale": 1.20, "stretch": 0.04 }
       ]
     },
 

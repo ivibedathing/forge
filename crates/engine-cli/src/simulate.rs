@@ -316,6 +316,39 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                 }
             }
         }
+        // Script-driven light state (M17), same rule again. A flickering
+        // campfire's light is at some intensity when the run stops, and that is
+        // the intensity a baked scene has to reopen at, or the resumed scene is
+        // lit differently from the one that was saved.
+        macro_rules! bake_light {
+            ($variant:ident, $ty:ty) => {
+                if def.components.iter().any(|c| matches!(c, ComponentData::$variant(_))) {
+                    if let Ok(current) = scene.world.get::<&$ty>(entity) {
+                        let rest = def
+                            .components
+                            .iter()
+                            .find_map(|c| match c {
+                                ComponentData::$variant(l) => Some(*l),
+                                _ => None,
+                            })
+                            .expect("guarded above");
+                        if current.intensity != rest.intensity {
+                            edits.push(field_edit(
+                                "intensity",
+                                stringify!($variant),
+                                number_from_f32(current.intensity),
+                            ));
+                        }
+                        if current.color != rest.color {
+                            edits.push(edit("color", stringify!($variant), current.color));
+                        }
+                    }
+                }
+            };
+        }
+        bake_light!(PointLight, engine_core::components::PointLight);
+        bake_light!(DirectionalLight, engine_core::components::DirectionalLight);
+        bake_light!(AmbientLight, engine_core::components::AmbientLight);
         for edit in edits {
             baked = formatter::apply_set_component_field(&baked, &edit)?;
         }

@@ -60,6 +60,7 @@ fn draw_frames(gpu: &Gpu, renderer: &mut SceneRenderer, items: &[RenderItem], fr
     let lights = LightRig {
         sun: None,
         ambient: None,
+        points: Vec::new(),
     }
     .resolved();
 

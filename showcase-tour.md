@@ -51,7 +51,7 @@ moving.
 | steps | station | what is on screen | systems |
 |-------|---------|-------------------|---------|
 | 0–179 | 01 forest | six trees, four critters running loops, the glTF monolith, its animated beacon | `Mesh` (builtin + glTF), `Material`, `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
-| 180–359 | 02 campfire | flame, smoke column, sparks, an emissive core that breathes | `ParticleEmitter` ×3, `Material.emissive`, script-driven `rate` |
+| 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
 | 360–539 | 03 water and ice | a pond of sixteen tiles on a travelling wave, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | low-roughness metallic PBR, `ParticleEmitter` ×3, scripted transforms |
 | 540–719 | 04 breaking | a boulder rolls into a crate stack, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
 | 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4, `HudText`, `HudRect`, the camera |
@@ -106,6 +106,14 @@ than no showcase:
 
 - **Fire, smoke, sparks, spray, frost, blast, dust** are real: `ParticleEmitter`
   with scripted rates. Nothing is faked here.
+- **The campfire casts real light** as of M17. `FireLight` is a `PointLight`, and
+  `tour_effects.rhai` drives its intensity, color, and height from the same
+  flicker-times-breath signal that drives the flame's emission rates and the coal
+  bed's size — so the pool of firelight on the grass breathes with the flame
+  instead of sitting at a fixed radius. The flame itself is five emitters: a
+  white-hot `FireBase`, the `Fire` body, breakaway `FireTongues`, alpha-blended
+  `FireSmoke`, and additive streaked `Sparks`. What is still missing: the light
+  casts no shadows, so the logs do not throw one outward across the pit.
 - **Breaking** is real physics on pre-authored fragments — no runtime fracture,
   which is the settled M14 scope.
 - **Water** is sixteen tiles that a script moves on a sine wave, and since M16
@@ -123,9 +131,11 @@ than no showcase:
 - **The animals** are scaled spheres on parametric loops. There is no
   navigation, no steering behaviour, no state machine — scripts have no
   randomness by design, so the variety is sums of sines.
-- **The blast** has no light. Nothing in the engine can flash a light or drive
-  a material from a script, so brightness has to be geometry or particles;
-  the fireball is particles, which is the better answer anyway.
+- **The blast** still has no light — but as of M17 that is a wiring job rather
+  than a missing feature. A `PointLight` at the crate pile, pulsed for a dozen
+  steps from `tour_director.rhai` (which already fires the explosion), would do
+  it; the fireball is particles either way, which is the better answer for the
+  bulk of the effect.
 - **The sky is a gradient, not a simulation.** Three bands and a sun disc — no
   clouds, no scattering model, no time of day. Surfaces reflect it, which is
   what makes the metal and the water read as they do, but nothing else in the
