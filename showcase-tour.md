@@ -155,11 +155,19 @@ than no showcase:
   steps from `tour_director.rhai` (which already fires the explosion), would do
   it; the fireball is particles either way, which is the better answer for the
   bulk of the effect.
-- **The sky is a gradient, not a simulation.** Three bands and a sun disc — no
-  clouds, no scattering model, no time of day. Surfaces reflect it, which is
-  what makes the metal and the water read as they do, but nothing else in the
-  world knows it is there beyond the hemispheric tint it puts on
-  `AmbientLight`.
+- **The clouds are real geometry** as of M20 — four `Cloud` entities, seeded
+  clusters of lobes growing smaller lobes on themselves, with flat cumulus
+  bases and a slow `drift` on the scene clock. What they are not is
+  *positioned to be seen*: every station's camera sits at head height and aims
+  **down** at its subject, so the clouds ride the horizon — a corner of one at
+  station 02, a sliver above the title bar at 03, and nothing at all at 01.
+  They are placed to be found rather than to dominate, and a sky-facing beat is
+  what would change that.
+- **The sky behind them is still a gradient, not a simulation.** Three bands
+  and a sun disc — no scattering model, no time of day, and no high cloud (the
+  M20 component makes objects, not a dome). Surfaces reflect the gradient,
+  which is what makes the metal and the water read as they do, and they do not
+  reflect the clouds: a cumulus over the pond is not in the pond.
 - **One shadow map, one cascade.** It follows the camera and covers 72 m; past
   that, shadows fade to lit rather than ending on a line ruled across the
   ground. Crisp shadows near the camera *and* shadows out to the horizon would
@@ -168,7 +176,10 @@ than no showcase:
 Refraction is the upgrade that would move this scene most now, and the water is
 its loudest customer. For the forest it is textured bark and alpha-cut leaves —
 the same missing feature seen from the other side, since the renderer has no
-texture-mapped materials at all yet.
+texture-mapped materials at all yet. For the sky it is the cloud *layer* of
+`cloud-design.md` §9: overcast and cirrus belong to the dome, would ride into
+the water reflection for free through `sky_common.wgsl`, and unlike the cloud
+objects would be visible from a camera that never looks up.
 
 ## Measuring frames
 

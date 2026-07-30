@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M19 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, and M19 procedural trees** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M20 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, M19 procedural trees, and M20 procedural clouds** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -42,6 +42,10 @@ engine list-animations <scene-or-clip> [--schema]
 #   set_light_color), which is what lets a fire light the ground it stands on
 # Tree component (M19): a recipe, not a mesh — seeded procedural trunk/branches/leaves grown
 #   on load; carries no Mesh (tree_with_mesh), and the entity's Material is its bark
+# Cloud component (M20): a recipe too — a seeded cluster of icosphere lobes, each growing
+#   smaller lobes on itself, sized by Transform.scale; carries no Mesh and no Material
+#   (cloud_with_mesh), shades through its own clouds.wgsl, and "drift" moves it on the same
+#   reproducible clock water uses
 # Water component (M18): a body of water — the entity carries no Mesh and no Material, the
 #   component owns a tessellated grid ("segments") sized by Transform.scale, Gerstner "waves"
 #   displaced in the vertex stage, per-pixel detail ripples, depth-based absorption between
@@ -613,6 +617,45 @@ baseline at `--steps 120`, pinned by a CLI test. The bit-exactness of the sevent
 baselines was checked the way this repo has learned to check it — an A/B between binaries built at
 `main` and here, fifteen scene/step combinations, all byte-identical.
 
+Clouds (M20, design in `cloud-design.md`). The `Cloud` component is M19's premise applied to the
+sky: a **recipe, not a mesh reference**. `engine-core/src/cloud.rs` grows it into one mesh — a
+golden-angle spiral of icosphere lobes over the footprint, each growing `children` smaller lobes
+biased upward by `rise`, buried 45% of their own radius so the surfaces interpenetrate (M19's join,
+for M19's reason), radially displaced by `wobble`, and folded onto a base plane by `flatten`. The
+entity carries **no `Mesh` and no `Material`** (`cloud_with_mesh`) and is sized by `Transform.scale`
+like a water surface; non-uniform scale is the normal case, which is what oblates the lobes.
+Determinism, the exact `vertex_count` + `cloud_too_complex` budget (100k), and `Arc`-identity
+caching are M19's, transposed — except that the cache key covers the **eleven geometry fields
+only**, since colour and density are uniforms that cannot move a vertex. **Cloud baselines are per
+build profile as well as per adapter**, like tree baselines: bless from the debug binary.
+
+Rendering is `shaders/clouds.wgsl`, a new pipeline (not a `Material` branch) duplicating
+`FrameUniform` and the fog term rather than touching `mesh.wgsl`, with `sky_common.wgsl` prepended
+so a cloud's underside is lit by the sky drawn behind it. Clouds join the existing back-to-front
+`Blended` list beside water and transparent meshes, depth-tested but **not** depth-writing, so
+overlapping lobes accumulate alpha as a stand-in for optical depth; culling is **off** for this
+pipeline alone, because a cloud has no inside and would vanish the moment a camera entered one.
+`drift` (m/s) is applied in the **vertex stage** from `ScenePass.time` — not folded into the model
+matrix — which is what keeps `Scene::cloud_items` a pure function of the file and the grown mesh's
+`Arc` stable across frames; the shape never evolves with time, for the reason trees have no wind.
+No shadows cast (one cascade, fitted to the camera, does not reach a cloud at altitude), no point
+lights, no volumetrics.
+
+**Four things the renders changed, and all four are easy to reintroduce by "simplifying" it:**
+vertex normals are bent **55% from each lobe's centre toward the cloud's** (`BODY_NORMAL`), without
+which every lobe draws its own terminator and the cluster reads as a bag of marbles; the height
+profile's rise is capped at 0.8 lobe *diameters* (`DOME_STACK`), without which the middle lobe
+floats clear of the ring around it — the consequence being that how far a cloud fills a tall box is
+set by `lobe_size`, not by stretching a fixed lobe count to reach; alpha is
+`density · (1 - (1 - facing)^feather)` and **not** `facing^feather`, since the proportional form
+turns a cloud seen from below translucent all over (this inverted `feather`'s sense: higher is now
+*crisper*); and the sun reaches the shadowed side at a `THROUGH_SCATTER` fraction (0.3) with the
+diffuse curve left **linear**, because applying it in full saturates a white cloud everywhere and
+sharpening the curve instead — the obvious fix — turns a storm cloud into grey rock. Fixture
+`verify/m20_clouds.json` + baseline at `--steps 120`, pinned by a CLI test that also pins
+`cloud_with_mesh` and `cloud_too_complex`; seven GPU-skipping pixel tests in
+`engine-render/tests/clouds.rs`.
+
 Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
 with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,
@@ -629,7 +672,10 @@ sixteen script-bobbed cube tiles used to be (the wave loop is gone from `tour_ef
 `PondBed` under it was retuned at the same time: absorption has nothing to reveal over a black bed)
 — and since M19 the forest, nine `Tree` components (two oaks, a birch, three spruces, a snag, two
 scrubs) where twelve cylinder-and-sphere entities used to be, which cost all six showcase baselines
-a re-bless and no other baseline anything. What is still faked and named as such in the doc:
+a re-bless and no other baseline anything. M20 adds four `Cloud` entities and re-blessed the same
+six: the tour's cameras are all ground-level and aimed *down* at their subjects, so the clouds ride
+the horizon rather than filling the sky — visible at stations 02 and 03 and absent from 01. A
+sky-facing beat, or the sky-dome cloud layer of `cloud-design.md` §9, is what would change that. What is still faked and named as such in the doc:
 animals (scaled spheres on parametric loops) and the sky (a gradient, not scattering). The blast at
 station 04 still emits no light, which is now a wiring job rather than a missing feature.
 Refraction is the upgrade that would move this scene most now, and water is its loudest customer;
@@ -749,12 +795,12 @@ error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ �
 lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ →
 ~~M8 physics~~ → ~~M9 animation (A0–A1)~~ → ~~M10 scripting~~ — **the roadmap is complete.**
 Remaining deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF +
-GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17/M18/M19 — refraction
+GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17/M18/M19/M20 — refraction
 and scene-color sampling for transmissive materials (water's loudest missing feature), planar
-reflections, shadow cascades, shadows from point lights, spot lights, a CPU wave evaluator and
-buoyancy, a light on the tour's explosion (~~lights a script can drive~~ landed in M17), and
-texture-mapped materials — bark and alpha-cut leaves are the same missing feature — plus tree LOD
-and wind.
+reflections, shadow cascades (which is also what cloud shadows need), shadows from point lights,
+spot lights, a CPU wave evaluator and buoyancy, a light on the tour's explosion (~~lights a script
+can drive~~ landed in M17), a sky-dome cloud layer for cirrus and overcast, and texture-mapped
+materials — bark and alpha-cut leaves are the same missing feature — plus tree LOD and wind.
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

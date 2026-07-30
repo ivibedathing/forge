@@ -176,6 +176,21 @@ pub struct WaterItem {
     pub water: crate::components::Water,
 }
 
+/// One cloud, with its geometry grown and its transform flattened (M20) — a
+/// [`WaterItem`] for the sky, and separate from [`RenderItem`] for the same
+/// reason: a cloud has no `Material`, and its own pipeline reads fields no mesh
+/// has.
+#[derive(Debug, Clone)]
+pub struct CloudItem {
+    /// The source entity's stable name (invariant 4).
+    pub entity: String,
+    /// The grown lobe cluster, shared across frames — see
+    /// [`crate::cloud::mesh_for`].
+    pub mesh: std::sync::Arc<crate::mesh::MeshData>,
+    pub model: glam::Mat4,
+    pub cloud: crate::components::Cloud,
+}
+
 /// The scene's screen-space overlay, extracted as plain data in draw order
 /// (M12): `rects` under `texts`, each in scene-file order. An empty overlay
 /// means no HUD pass runs at all, so pre-M12 scenes render byte-identically.
@@ -560,6 +575,40 @@ impl Scene {
                 mesh: crate::water::surface_grid(water.segments),
                 model: self.transform_of(entity).matrix(),
                 water: water.clone(),
+            })
+            .collect();
+        items.sort_by(|a, b| a.entity.cmp(&b.entity));
+        items
+    }
+
+    /// Flatten the world's clouds into a draw list (M20).
+    ///
+    /// Takes no [`MeshSource`](crate::mesh::MeshSource) and cannot fail, like
+    /// [`water_items`](Self::water_items): a cloud's geometry is grown, not
+    /// loaded, and comes back as a cached `Arc` so the renderer uploads each
+    /// distinct cloud once for the life of the run.
+    ///
+    /// Time is deliberately absent. `drift` is applied in the vertex stage from
+    /// the frame's own clock, which is what keeps this a pure function of the
+    /// file — and keeps the grown mesh's `Arc` identity stable across frames,
+    /// which the renderer's upload cache depends on.
+    ///
+    /// Sorted by entity name, for the reason the lights and the water surfaces
+    /// are: a fixed order that does not depend on hecs' archetype layout.
+    pub fn cloud_items(&self) -> Vec<CloudItem> {
+        let mut items: Vec<CloudItem> = self
+            .world
+            .query::<(Entity, &crate::components::Cloud)>()
+            .iter()
+            .map(|(entity, cloud)| CloudItem {
+                entity: self
+                    .world
+                    .get::<&Name>(entity)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default(),
+                mesh: crate::cloud::mesh_for(cloud),
+                model: self.transform_of(entity).matrix(),
+                cloud: cloud.clone(),
             })
             .collect();
         items.sort_by(|a, b| a.entity.cmp(&b.entity));

@@ -149,6 +149,47 @@
     },
 
     {
+      "name": "CloudEast",
+      "components": [
+        { "type": "Transform", "position": [104.0, 27.0, -150.0], "scale": [66.0, 30.0, 60.0] },
+        { "type": "Cloud", "seed": 7, "lobes": 7, "levels": 2, "children": 3,
+          "lobe_size": 0.46, "lobe_ratio": 0.56, "flatten": 0.85, "rise": 0.4,
+          "wobble": 0.14, "jitter": 0.3, "density": 0.9, "feather": 3.0,
+          "drift": [0.6, 0.0, 0.0], "drift_wrap": 160.0 }
+      ]
+    },
+    {
+      "name": "CloudNorth",
+      "components": [
+        { "type": "Transform", "position": [-38.0, 31.0, -186.0], "scale": [88.0, 36.0, 72.0] },
+        { "type": "Cloud", "seed": 8, "lobes": 8, "levels": 2, "children": 3,
+          "lobe_size": 0.44, "lobe_ratio": 0.56, "flatten": 0.85, "rise": 0.45,
+          "wobble": 0.14, "jitter": 0.32, "density": 0.9, "feather": 3.0,
+          "drift": [0.6, 0.0, 0.0], "drift_wrap": 160.0 }
+      ]
+    },
+    {
+      "name": "CloudWest",
+      "components": [
+        { "type": "Transform", "position": [-158.0, 26.0, -54.0], "scale": [74.0, 28.0, 62.0] },
+        { "type": "Cloud", "seed": 19, "lobes": 6, "levels": 2, "children": 3,
+          "lobe_size": 0.48, "lobe_ratio": 0.55, "flatten": 0.8, "rise": 0.35,
+          "wobble": 0.15, "jitter": 0.3, "density": 0.85, "feather": 3.0,
+          "drift": [0.6, 0.0, 0.0], "drift_wrap": 160.0 }
+      ]
+    },
+    {
+      "name": "CloudDeck",
+      "components": [
+        { "type": "Transform", "position": [0.0, 54.0, -250.0], "scale": [380.0, 40.0, 180.0] },
+        { "type": "Cloud", "seed": 3, "lobes": 18, "levels": 1, "children": 3,
+          "lobe_size": 0.24, "lobe_ratio": 0.6, "flatten": 0.95, "rise": 0.15,
+          "wobble": 0.12, "jitter": 0.35, "density": 0.7, "feather": 2.6,
+          "shade_color": [0.44, 0.48, 0.58], "drift": [0.4, 0.0, 0.0], "drift_wrap": 400.0 }
+      ]
+    },
+
+    {
       "name": "Critter1",
       "components": [
         { "type": "Transform", "position": [-10.0, 0.32, -10.0], "scale": [0.34, 0.30, 0.50] },

@@ -450,6 +450,31 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        // A clip on a cloud's *shape* regrows its lobes every step it changes,
+        // which is legal, deterministic and not free — the shading fields below
+        // are uniforms and cost nothing. `seed`, `lobes`, `levels`, `children`
+        // and `detail` are absent for the usual reason: integers are not
+        // numbers this function can interpolate into.
+        "Cloud" => {
+            let Ok(mut c) = world.get::<&mut Cloud>(entity) else {
+                return false;
+            };
+            match field {
+                "lobe_size" => c.lobe_size = scalar,
+                "lobe_ratio" => c.lobe_ratio = scalar,
+                "flatten" => c.flatten = scalar,
+                "rise" => c.rise = scalar,
+                "wobble" => c.wobble = scalar,
+                "jitter" => c.jitter = scalar,
+                "density" => c.density = scalar,
+                "feather" => c.feather = scalar,
+                "color" => c.color = v3,
+                "shade_color" => c.shade_color = v3,
+                "drift" => c.drift = v3,
+                "drift_wrap" => c.drift_wrap = scalar,
+                _ => return false,
+            }
+        }
         _ => return false,
     }
     true
@@ -910,7 +935,8 @@ mod tests {
                 {"type":"HudRect","size":[1.0,1.0]},
                 {"type":"ParticleEmitter"},
                 {"type":"Tree"},
-                {"type":"Water"}
+                {"type":"Water"},
+                {"type":"Cloud"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are
