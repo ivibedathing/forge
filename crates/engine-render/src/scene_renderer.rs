@@ -1876,16 +1876,30 @@ impl SceneRenderer {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 };
 
-                // Terrain draws in one run at the end, so the pipeline switches
-                // at most once a frame rather than once an entity. Both
-                // pipelines write depth and neither blends, so ordering within
-                // the opaque pass cannot change a pixel — and a scene with no
-                // terrain never leaves `self.pipeline`.
-                for &index in &opaque {
-                    if items[index].terrain.is_none() {
-                        draw(&mut pass, index);
-                    }
-                }
+                // Terrain draws in one run at the **front** of the opaque pass,
+                // so the pipeline switches at most once a frame rather than
+                // once an entity, and a scene with no terrain never leaves
+                // `self.pipeline` — the first loop does nothing and the second
+                // is the pre-terrain code exactly.
+                //
+                // Front and not back, and this is load-bearing: a 200k-triangle
+                // ground patch as the *last* draw of an MSAA render pass
+                // renders **nondeterministically** on Metal (measured on an
+                // M3 Pro: 2–3 distinct images over 20 runs of one unchanged
+                // file, ~24 pixels apart, wherever the patch meets other
+                // geometry within a pixel). The shadow map and the depth copy
+                // come back bit-identical run to run, so what varies is which
+                // surface wins MSAA samples 1–3 in the pass's final draw. Any
+                // draw after it removes the variance — drawing the ground
+                // first, splitting its index range in two, or even re-drawing
+                // one small mesh behind it all render the same bytes every
+                // time. Ground first is the one of those that is also right on
+                // its own terms: everything in a scene stands *on* the terrain,
+                // so a contact surface exactly coplanar with it should tie in
+                // favour of the object, which is what drawing the object second
+                // under `Less` gives. Reproduce with `bin/verify-baselines
+                // --filter showcase` run repeatedly, or by rendering one file
+                // 20 times and `md5`-ing the PNGs.
                 let mut switched = false;
                 for &index in &opaque {
                     if items[index].terrain.is_some() {
@@ -1898,6 +1912,11 @@ impl SceneRenderer {
                 }
                 if switched {
                     pass.set_pipeline(&self.pipeline);
+                }
+                for &index in &opaque {
+                    if items[index].terrain.is_none() {
+                        draw(&mut pass, index);
+                    }
                 }
             }
 
