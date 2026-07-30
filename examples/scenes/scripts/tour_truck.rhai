@@ -86,11 +86,16 @@ fn step(world, step) {
     // real sideslip so a truck holding its line does not smoulder.
     let right_x = -f[2];
     let right_z = f[0];
+    // Follow the ground's *height*, not a fixed altitude: on terrain a pinned
+    // emitter smokes from inside a hill on the climbs and from mid-air in the
+    // hollows — the lesson the car track's skid emitters already paid for.
+    let exhaust_x = p[0] - f[0] * 2.05 - right_x * 0.55;
+    let exhaust_z = p[2] - f[2] * 2.05 - right_z * 0.55;
     world.set_position(
         "Exhaust",
-        p[0] - f[0] * 2.05 - right_x * 0.55,
-        0.4,
-        p[2] - f[2] * 2.05 - right_z * 0.55,
+        exhaust_x,
+        world.terrain_height("Ground", exhaust_x, exhaust_z) + 0.4,
+        exhaust_z,
     );
 
     let lateral = abs(v[0] * right_x + v[2] * right_z);
@@ -100,17 +105,21 @@ fn step(world, step) {
     let tire_smoke = 120.0 * skid;
     world.set_particle_rate("SkidLeft", tire_smoke);
     world.set_particle_rate("SkidRight", tire_smoke);
+    let left_x = p[0] - f[0] * 1.25 - right_x * 0.92;
+    let left_z = p[2] - f[2] * 1.25 - right_z * 0.92;
     world.set_position(
         "SkidLeft",
-        p[0] - f[0] * 1.25 - right_x * 0.92,
-        0.12,
-        p[2] - f[2] * 1.25 - right_z * 0.92,
+        left_x,
+        world.terrain_height("Ground", left_x, left_z) + 0.12,
+        left_z,
     );
+    let sr_x = p[0] - f[0] * 1.25 + right_x * 0.92;
+    let sr_z = p[2] - f[2] * 1.25 + right_z * 0.92;
     world.set_position(
         "SkidRight",
-        p[0] - f[0] * 1.25 + right_x * 0.92,
-        0.12,
-        p[2] - f[2] * 1.25 + right_z * 0.92,
+        sr_x,
+        world.terrain_height("Ground", sr_x, sr_z) + 0.12,
+        sr_z,
     );
 
     let speed = sqrt(v[0] * v[0] + v[2] * v[2]) * 3.6;

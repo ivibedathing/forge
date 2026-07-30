@@ -161,6 +161,12 @@ registry! {
     WATER_WAVES_SELF_INTERSECT = "water_waves_self_intersect", Input,
         "the sum of Water wave steepness exceeds 1, which folds the surface through itself";
 
+    // ── Terrain (M22) ──────────────────────────────────────────────────
+    TERRAIN_WITH_MESH = "terrain_with_mesh", Input,
+        "a Terrain entity owns its own surface; it may not also have a Mesh or a Material";
+    TERRAIN_LAYER_RANGE_INVERTED = "terrain_layer_range_inverted", Input,
+        "a Terrain layer's height or slope range runs backwards, so it covers nothing";
+
     // ── Scripting (M10) ────────────────────────────────────────────────
     SCRIPT_PARSE_ERROR = "script_parse_error", Input,
         "a script file does not compile";

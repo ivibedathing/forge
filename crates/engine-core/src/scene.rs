@@ -161,6 +161,19 @@ pub struct RenderItem {
     pub mesh: std::sync::Arc<crate::mesh::MeshData>,
     pub model: glam::Mat4,
     pub material: crate::components::Material,
+    /// Set when this item is a [`Terrain`](crate::components::Terrain) patch
+    /// (M22), which shades itself per pixel from its layers rather than from
+    /// `material`.
+    ///
+    /// Terrain rides the mesh draw list instead of getting its own the way water
+    /// does, and the difference between the two is the reason: water *shades*
+    /// differently — reflection, absorption, foam — while terrain is an ordinary
+    /// opaque lit surface that happens to compute its own albedo and roughness.
+    /// Sharing the list gives it shadows, fog, MSAA, the hemispheric sky ambient
+    /// and point lights (the tour's campfire has to light the ground it stands
+    /// on) with no second copy of any of them, and hands the editor's picking
+    /// and selection a surface they already know how to handle.
+    pub terrain: Option<crate::components::Terrain>,
 }
 
 /// One water surface, with its geometry resolved and its transform flattened
@@ -594,6 +607,7 @@ impl Scene {
                 mesh: data,
                 model: transform.matrix(),
                 material,
+                terrain: None,
             });
         }
 
@@ -625,6 +639,7 @@ impl Scene {
                 mesh: grown.bark,
                 model,
                 material: bark,
+                terrain: None,
             });
             if let Some(leaves) = grown.leaves {
                 items.push(RenderItem {
@@ -632,11 +647,67 @@ impl Scene {
                     mesh: leaves,
                     model,
                     material: tree.leaf_material(),
+                    terrain: None,
                 });
             }
         }
+        items.extend(self.terrain_items());
 
         Ok(items)
+    }
+
+    /// Terrain patches, as draw items with their surfaces generated (M22).
+    ///
+    /// Takes no [`MeshSource`](crate::mesh::MeshSource) and cannot fail — a
+    /// patch's geometry is generated from its own fields, like water's — and the
+    /// surface comes back as a cached `Arc`, so the renderer uploads each patch
+    /// once for the life of the run however many frames pass.
+    ///
+    /// Sorted by entity name, so the draw list does not depend on how hecs
+    /// happened to lay out archetypes.
+    pub fn terrain_items(&self) -> Vec<RenderItem> {
+        let mut items: Vec<RenderItem> = self
+            .world
+            .query::<(Entity, &crate::components::Terrain)>()
+            .iter()
+            .map(|(entity, terrain)| {
+                let transform = self.transform_of(entity);
+                RenderItem {
+                    entity: self
+                        .world
+                        .get::<&Name>(entity)
+                        .map(|n| n.0.clone())
+                        .unwrap_or_default(),
+                    mesh: crate::terrain::surface_grid(
+                        terrain,
+                        glam::Vec2::new(transform.position.x, transform.position.z),
+                        glam::Vec2::new(transform.scale.x, transform.scale.z),
+                    ),
+                    model: transform.matrix(),
+                    // Opaque, non-metallic, unlit-by-emission: everything the
+                    // layers do not decide. `albedo` and `roughness` here are
+                    // what a terrain with no layers at all would use, and the
+                    // shader replaces both the moment there is one.
+                    material: crate::components::Material::default(),
+                    terrain: Some(terrain.clone()),
+                }
+            })
+            .collect();
+        items.sort_by(|a, b| a.entity.cmp(&b.entity));
+        items
+    }
+
+    /// The height of a terrain patch at a world XZ position, in world metres
+    /// (M22) — what `world.terrain_height` and prop placement resolve through.
+    ///
+    /// `None` when the entity does not exist or has no `Terrain`. Applies the
+    /// patch's own Y and `Transform.scale.y`, so the answer is a world
+    /// coordinate a caller can assign to a position directly.
+    pub fn terrain_height(&self, name: &str, x: f32, z: f32) -> Option<f32> {
+        let entity = self.entity(name)?;
+        let terrain = self.world.get::<&crate::components::Terrain>(entity).ok()?;
+        let transform = self.transform_of(entity);
+        Some(transform.position.y + transform.scale.y * crate::terrain::height_at(&terrain, x, z))
     }
 
     /// Flatten the world's water surfaces into a draw list (M18).

@@ -52,7 +52,8 @@ fn step(world, step) {
     // The light's *center* rises and falls with the flame body, so the pool of
     // firelight on the ground breathes with it instead of being pinned to one
     // radius. A few centimetres is plenty at this distance.
-    world.set_position("FireLight", 9.0, 1.05 + flick * 0.12, -13.0);
+    let pit = world.terrain_height("Ground", 9.0, -13.0);
+    world.set_position("FireLight", 9.0, pit + 1.05 + flick * 0.12, -13.0);
 
     // --- Pond ---------------------------------------------------------------
     // Nothing here any more, and that is the point. Until M18 this was sixteen

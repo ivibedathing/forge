@@ -1,0 +1,299 @@
+{
+  "name": "m22_terrain",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [
+      0.2,
+      0.37,
+      0.66
+    ],
+    "sky_horizon": [
+      0.68,
+      0.73,
+      0.76
+    ],
+    "sky_ground": [
+      0.26,
+      0.23,
+      0.18
+    ],
+    "fog_density": 0.0035,
+    "shadows": true,
+    "shadow_distance": 120.0,
+    "samples": 4
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.81,
+      0.0
+    ],
+    "timestep_hz": 60
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            5.0,
+            28.0
+          ],
+          "rotation": [
+            -7.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "fov": 55.0,
+          "near": 0.1,
+          "far": 500.0,
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "rotation": [
+            -24.0,
+            34.0,
+            0.0
+          ]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [
+            1.0,
+            0.96,
+            0.88
+          ],
+          "intensity": 1.2
+        }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [
+            0.66,
+            0.7,
+            0.78
+          ],
+          "intensity": 0.36
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            180.0,
+            1.0,
+            180.0
+          ]
+        },
+        {
+          "type": "Terrain",
+          "segments": 256,
+          "seed": 3,
+          "height": 9.5,
+          "feature_scale": 46.0,
+          "octaves": 5,
+          "persistence": 0.5,
+          "warp": 0.5,
+          "texture_scale": 3.0,
+          "color_variation": 0.4,
+          "bump": 0.35,
+          "layers": [
+            {
+              "albedo": [
+                0.105,
+                0.145,
+                0.068
+              ],
+              "roughness": 0.96
+            },
+            {
+              "albedo": [
+                0.152,
+                0.158,
+                0.082
+              ],
+              "roughness": 0.96,
+              "height_range": [
+                3.2,
+                60.0
+              ],
+              "height_blend": 2.8,
+              "slope_range": [
+                0.0,
+                19.0
+              ],
+              "slope_blend": 9.0,
+              "noise": 0.9
+            },
+            {
+              "albedo": [
+                0.112,
+                0.082,
+                0.052
+              ],
+              "roughness": 0.95,
+              "slope_range": [
+                27.0,
+                90.0
+              ],
+              "slope_blend": 8.0,
+              "noise": 0.9
+            },
+            {
+              "albedo": [
+                0.148,
+                0.138,
+                0.122
+              ],
+              "roughness": 0.95,
+              "slope_range": [
+                44.0,
+                90.0
+              ],
+              "slope_blend": 11.0,
+              "noise": 0.9
+            }
+          ]
+        },
+        {
+          "type": "Collider",
+          "shape": "trimesh",
+          "friction": 0.95,
+          "layers": [
+            "ground"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Boulder",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -6.2,
+            -0.52,
+            6.4
+          ],
+          "scale": [
+            1.7,
+            1.2,
+            1.5
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.33,
+            0.31,
+            0.29
+          ],
+          "roughness": 0.82
+        }
+      ]
+    },
+    {
+      "name": "Post",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            4.8,
+            -2.02,
+            8.2
+          ],
+          "scale": [
+            0.3,
+            2.4,
+            0.3
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.25,
+            0.19,
+            0.13
+          ],
+          "roughness": 0.85
+        }
+      ]
+    },
+    {
+      "name": "Dropped",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.9,
+            2.0,
+            9.5
+          ],
+          "scale": [
+            0.7,
+            0.7,
+            0.7
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.62,
+            0.24,
+            0.16
+          ],
+          "roughness": 0.5
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "sphere",
+          "radius": 0.7,
+          "friction": 0.8,
+          "restitution": 0.25,
+          "collides_with": [
+            "ground"
+          ]
+        }
+      ]
+    }
+  ]
+}

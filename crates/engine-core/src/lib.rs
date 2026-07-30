@@ -19,6 +19,7 @@ pub mod mesh;
 pub mod particles;
 pub mod scene;
 pub mod schema;
+pub mod terrain;
 pub mod tree;
 pub mod validate;
 pub mod water;

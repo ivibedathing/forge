@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use engine_core::components::{
     BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent,
-    Name, RigidBody as RigidBodyData, Transform, Wheel as WheelData,
+    Name, RigidBody as RigidBodyData, Terrain as TerrainData, Transform, Wheel as WheelData,
 };
 use engine_core::mesh::MeshSource;
 use engine_core::scene::PhysicsSettings;
@@ -223,7 +223,7 @@ impl PhysicsWorld {
 
         // Deterministic build order: hecs iteration order is stable for a
         // freshly spawned world, and every simulate run spawns fresh.
-        for (entity, name, transform, body, collider, mesh, breakable) in world
+        for (entity, name, transform, body, collider, mesh, terrain, breakable) in world
             .query::<(
                 Entity,
                 &Name,
@@ -231,6 +231,7 @@ impl PhysicsWorld {
                 Option<&RigidBodyData>,
                 Option<&ColliderData>,
                 Option<&MeshComponent>,
+                Option<&TerrainData>,
                 Option<&Breakable>,
             )>()
             .iter()
@@ -295,6 +296,7 @@ impl PhysicsWorld {
                     transform,
                     &physics.name_of[&entity],
                     mesh.map(|m| m.asset.as_str()),
+                    terrain,
                     meshes,
                     &layer_bits,
                     break_threshold.is_some(),
@@ -464,6 +466,7 @@ impl PhysicsWorld {
                 collider,
                 transform,
                 name,
+                None,
                 None,
                 &engine_core::mesh::BuiltinAssets,
                 &HashMap::new(),
@@ -887,6 +890,7 @@ fn build_collider(
     transform: &Transform,
     entity: &str,
     entity_mesh: Option<&str>,
+    terrain: Option<&TerrainData>,
     meshes: &dyn MeshSource,
     layer_bits: &HashMap<String, Group>,
     force_events: bool,
@@ -920,12 +924,28 @@ fn build_collider(
             ColliderBuilder::capsule_y((half_height * scale.x).abs(), (radius * scale.x).abs())
         }
         ColliderShapeKind::Trimesh | ColliderShapeKind::ConvexHull => {
-            let asset = collider
-                .asset
-                .as_deref()
-                .or(entity_mesh)
-                .ok_or_else(|| shape_bug(entity, "mesh collider with no asset in reach"))?;
-            let mesh = meshes.load_mesh(asset).map_err(|e| e.entity(entity))?;
+            // Geometry comes from the explicit asset, else the entity's own
+            // Mesh, else — M22 — its Terrain, which generates a surface rather
+            // than loading one. That last case is how ground becomes collidable
+            // without a mesh file duplicating what the renderer already draws,
+            // and it uses the same `height_at` the CPU shares with placement.
+            let (asset, mesh) = match (collider.asset.as_deref().or(entity_mesh), terrain) {
+                (Some(asset), _) => (
+                    asset.to_string(),
+                    meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
+                ),
+                (None, Some(terrain)) => (
+                    "the entity's Terrain".to_string(),
+                    engine_core::terrain::surface_grid(
+                        terrain,
+                        glam::Vec2::new(transform.position.x, transform.position.z),
+                        glam::Vec2::new(scale.x, scale.z),
+                    ),
+                ),
+                (None, None) => {
+                    return Err(shape_bug(entity, "mesh collider with no asset in reach"))
+                }
+            };
             let vertices: Vec<Vec3> = mesh
                 .positions
                 .iter()

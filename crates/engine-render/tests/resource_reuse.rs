@@ -36,6 +36,7 @@ fn item(mesh: &Arc<MeshData>, x: f32) -> RenderItem {
         mesh: Arc::clone(mesh),
         model: Mat4::from_translation(Vec3::new(x, 0.0, -4.0)),
         material: Material::default(),
+        terrain: None,
     }
 }
 
