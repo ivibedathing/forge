@@ -2,7 +2,7 @@
 
 The circuit is authored as a closed polygon: one CORNER per turn, each holding
 a plan-view position, a corner radius, and a height above the ground plane.
-Since M19 that polygon *is* the scene's `Road` component — the engine rounds
+Since M23 that polygon *is* the scene's `Road` component — the engine rounds
 the corners, sweeps the cross-section, paints the markings and hands physics
 the same triangles it draws. This script's remaining job is to say where the
 corners are, and to place everything that stands beside the road.

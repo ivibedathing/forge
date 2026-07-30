@@ -48,7 +48,7 @@ engine road-centerline <scene.json> [--entity Name]  # where a Road actually wen
 #   pixel from surface coordinates (u across, v along), so lines follow every curve
 #   and dashes stay the same length in metres through a hairpin. A Collider with
 #   "shape": "trimesh" and no asset takes the road's own geometry
-# Tree component (M23): a recipe, not a mesh — seeded procedural trunk/branches/leaves grown
+# Tree component (M19): a recipe, not a mesh — seeded procedural trunk/branches/leaves grown
 #   on load; carries no Mesh (tree_with_mesh), and the entity's Material is its bark
 # Cloud component (M20): a recipe too — a seeded cluster of icosphere lobes, each growing
 #   smaller lobes on itself, sized by Transform.scale; carries no Mesh and no Material
@@ -256,10 +256,10 @@ cylinder wheels; `scripts/car.rhai` is now only the *driver* (pedals, speed-scal
 wheel with finite slew rate, low-gear torque boost below 8 m/s so full-lock corners don't
 stall against front-tire slip drag, chase camera). `car_track_lap.input.jsonl` is a committed
 recording driving three clockwise laps on real suspension and parking just past the start line —
-pinned by CLI test and `verify/baselines/m11_lap.png`. Both were re-authored in M19 when the
+pinned by CLI test and `verify/baselines/m11_lap.png`. Both were re-authored in M23 when the
 plates became a `Road`: the car carries speed the plate road scrubbed off, so every number moved.
 
-**The circuit is generated** (M15, rebuilt on the `Road` component in M19): `examples/scenes/
+**The circuit is generated** (M15, rebuilt on the `Road` component in M23): `examples/scenes/
 make_car_track.py` emits the scene from a closed polygon of 14 named corners (Spa in miniature — La Source's hairpin, the plunge to Eau
 Rouge, the climb onto Kemmel, Les Combes at the crest, Rivage, Pouhon, Stavelot at the low
 point, Blanchimont, the Bus Stop chicane), ≈546 m round with ≈7.6 m of elevation and grades to
@@ -275,7 +275,7 @@ Three geometry lessons are baked into the track and are easy to reintroduce by
 - **One collider, not two.** Asphalt, verge and embankment are one surface. Road and shoulder
   as two colliders at different heights builds a ledge at the asphalt edge, and a wheel that
   drops off it wedges against the step and stops the car dead. This was a *rule the emitter
-  followed* until M19 (a deep box per segment carrying a colliderless slab 3 cm proud of it);
+  followed* until M23 (a deep box per segment carrying a colliderless slab 3 cm proud of it);
   it is now a property of the `Road` component, which cannot express the two-surface version.
 - **The guardrail is continuous.** Posts are spaced 5 m and are 5.4 m long. Dashed barriers let
   the car slip between two of them and fall off the elevated road. They are placed along the
@@ -631,63 +631,6 @@ baseline at `--steps 120`, pinned by a CLI test. The bit-exactness of the sevent
 baselines was checked the way this repo has learned to check it — an A/B between binaries built at
 `main` and here, fifteen scene/step combinations, all byte-identical.
 
-Terrain (M22, design in `terrain-design.md`). Ground was `builtin:plane` scaled to 200 m with one
-albedo — two triangles and one colour, so the sun struck all 40 000 m² at the same angle and the eye
-read it as a backdrop rather than a place. The `Terrain` component replaces it, and **there is no
-flat ground in the repo's scenes any more**.
-
-**A patch of ground is one entity with one component**, following `Water` exactly: `Terrain` owns a
-tessellated unit grid (`segments`, 1..512) sized by `Transform.scale`, so the entity carries **no**
-`Mesh` and **no** `Material` (`terrain_with_mesh`). Heights are sampled in **world** XZ, so two
-patches sharing a description meet seamlessly; `Transform.scale.y` multiplies the relief.
-
-- **The height field is CPU-side — the opposite of water's choice, for three reasons.** Terrain does
-  not animate, so the argument that forced waves onto the GPU (a new `Arc<MeshData>` every frame,
-  defeating M15's geometry cache) does not apply; physics has to stand on it (a `trimesh` `Collider`
-  with no `asset` and no `Mesh` borrows the generated surface, which is how ground is collidable
-  without a mesh file); and placement has to query it. So there is exactly one implementation and
-  **nothing to keep in agreement**, which is strictly better than water's position. fBm value noise
-  with the integer hash spelled out in-repo like M17's turbulence (a terrain render sits under a
-  baseline, so the hash is a format contract), `warp` domain-warping it into ridges and valleys, and
-  the octave sum normalised so `height` means metres however many octaves are summed.
-- **Mesh normals are written in the patch's local space**, gradient scaled by the patch's own size.
-  The renderer transforms normals by the model's inverse-transpose — `diag(1/180, 1, 1/180)` on a
-  180 m patch — so a world-space normal arrives crushed to straight up and the landscape lights
-  exactly like a plane *and* reports 0° everywhere, silently disabling every slope-selected layer.
-  Pinned by `mesh_normals_survive_the_model_transform`.
-- **The generative texture system** is `layers` (at most 4), each claiming a band of world height and
-  a band of slope. The first is the base coat and each later one **paints over** what is beneath it
-  (averaging would leave a rock layer half grass on a cliff it fully claims). Slope does the heavy
-  lifting — height alone draws a contour map. Fades are **absolute** (`height_blend` in metres,
-  `slope_blend` in degrees) and spent *outside* the band: a scale-free fraction-of-the-band `blend`
-  was tried first and bleeds a 13 m fade out of a layer aimed at "above 1.9 m". `noise` jitters each
-  boundary out of an iso-line into interlocking fingers, `color_variation` mottles the result at two
-  scales an order of magnitude apart, and `bump` perturbs the normal per pixel with no displacement
-  behind it, fading with view distance (water's specular-aliasing lesson). Nothing physical depends
-  on any of the texture noise — the collider is the displaced grid and nothing else.
-- **`mesh.wgsl` is not edited.** Terrain is lit exactly like a mesh, so it shares the file rather
-  than duplicating 200 lines of GGX/PCF/ambient/point-light/fog that would drift; but M16's four
-  untouchable lines must reach the compiler surrounded by the code they shipped in. Putting the
-  branch inline — those lines textually identical, only `albedo`/`roughness` arriving from a function
-  result — **moved one pixel by one unit in each of `m16_environment`, `m17_fire` and `m18_water`**,
-  found by the A/B between binaries. So the plain pipeline compiles the file as it sits on disk
-  (byte-identical by construction) and a second `terrain-pipeline` compiles a variant assembled by
-  `with_terrain`: `shaders/terrain.wgsl` inserted plus two **anchored** substitutions that panic at
-  startup if `mesh.wgsl` is reworded. Terrain draws in one run at the end of the opaque pass, so the
-  pipeline switches once a frame.
-- **`world.terrain_height(name, x, z)`** is the only terrain call in the script API — read-only,
-  returning a world Y a script can assign directly. It is what keeps the tour's critters on the
-  ground and the truck's exhaust and skid smoke from firing out of a hillside. **Terrain's shape
-  fields are deliberately not animatable** (`NOT_ANIMATABLE` in `animation.rs`): a clip driving
-  `height` would regenerate the surface every frame and leave hundreds of megabytes of vertex
-  buffers in the renderer's cache, so a clip aimed there fails validation with `unknown_property`
-  rather than doing it quietly. Appearance fields animate freely.
-
-Verified by `engine-render/tests/terrain.rs` (six GPU-skipping pixel tests, including
-`a_flat_single_layer_patch_is_exactly_a_painted_plane`, which pins the shading path against
-`builtin:plane` at `segments: 1`) and fixture `verify/m22_terrain.json` + baseline at `--steps 120`,
-pinned by a CLI test that also proves the dropped sphere lands *on* the ground. The eighteen earlier
-scene/step combinations were A/B'd against `main` and are byte-identical.
 Clouds (M20, design in `cloud-design.md`). The `Cloud` component is M19's premise applied to the
 sky: a **recipe, not a mesh reference**. `engine-core/src/cloud.rs` grows it into one mesh — a
 golden-angle spiral of icosphere lobes over the footprint, each growing `children` smaller lobes
@@ -800,6 +743,89 @@ the fixture's lamp globe wanted and is a gap this milestone surfaced rather than
 **The A/B settled the no-pixel-moved claim**: merge-base binary vs the worktree's, 15 scenes × 5
 step counts = 75 combinations, all byte-identical.
 
+Terrain (M22, design in `terrain-design.md`). Ground was `builtin:plane` scaled to 200 m with one
+albedo — two triangles and one colour, so the sun struck all 40 000 m² at the same angle and the eye
+read it as a backdrop rather than a place. The `Terrain` component replaces it, and **there is no
+flat ground in the repo's scenes any more**.
+
+**A patch of ground is one entity with one component**, following `Water` exactly: `Terrain` owns a
+tessellated unit grid (`segments`, 1..512) sized by `Transform.scale`, so the entity carries **no**
+`Mesh` and **no** `Material` (`terrain_with_mesh`). Heights are sampled in **world** XZ, so two
+patches sharing a description meet seamlessly; `Transform.scale.y` multiplies the relief.
+
+- **The height field is CPU-side — the opposite of water's choice, for three reasons.** Terrain does
+  not animate, so the argument that forced waves onto the GPU (a new `Arc<MeshData>` every frame,
+  defeating M15's geometry cache) does not apply; physics has to stand on it (a `trimesh` `Collider`
+  with no `asset` and no `Mesh` borrows the generated surface, which is how ground is collidable
+  without a mesh file); and placement has to query it. So there is exactly one implementation and
+  **nothing to keep in agreement**, which is strictly better than water's position. fBm value noise
+  with the integer hash spelled out in-repo like M17's turbulence (a terrain render sits under a
+  baseline, so the hash is a format contract), `warp` domain-warping it into ridges and valleys, and
+  the octave sum normalised so `height` means metres however many octaves are summed.
+- **Mesh normals are written in the patch's local space**, gradient scaled by the patch's own size.
+  The renderer transforms normals by the model's inverse-transpose — `diag(1/180, 1, 1/180)` on a
+  180 m patch — so a world-space normal arrives crushed to straight up and the landscape lights
+  exactly like a plane *and* reports 0° everywhere, silently disabling every slope-selected layer.
+  Pinned by `mesh_normals_survive_the_model_transform`.
+- **The generative texture system** is `layers` (at most 4), each claiming a band of world height and
+  a band of slope. The first is the base coat and each later one **paints over** what is beneath it
+  (averaging would leave a rock layer half grass on a cliff it fully claims). Slope does the heavy
+  lifting — height alone draws a contour map. Fades are **absolute** (`height_blend` in metres,
+  `slope_blend` in degrees) and spent *outside* the band: a scale-free fraction-of-the-band `blend`
+  was tried first and bleeds a 13 m fade out of a layer aimed at "above 1.9 m". `noise` jitters each
+  boundary out of an iso-line into interlocking fingers, `color_variation` mottles the result at two
+  scales an order of magnitude apart, and `bump` perturbs the normal per pixel with no displacement
+  behind it, fading with view distance (water's specular-aliasing lesson). Nothing physical depends
+  on any of the texture noise — the collider is the displaced grid and nothing else.
+- **`mesh.wgsl` is not edited.** Terrain is lit exactly like a mesh, so it shares the file rather
+  than duplicating 200 lines of GGX/PCF/ambient/point-light/fog that would drift; but M16's four
+  untouchable lines must reach the compiler surrounded by the code they shipped in. Putting the
+  branch inline — those lines textually identical, only `albedo`/`roughness` arriving from a function
+  result — **moved one pixel by one unit in each of `m16_environment`, `m17_fire` and `m18_water`**,
+  found by the A/B between binaries. So the plain pipeline compiles the file as it sits on disk
+  (byte-identical by construction) and a second `terrain-pipeline` compiles a variant assembled by
+  `with_terrain`: `shaders/terrain.wgsl` inserted plus two **anchored** substitutions that panic at
+  startup if `mesh.wgsl` is reworded. Terrain draws in one run at the **front** of the opaque pass,
+  so the pipeline switches once a frame — see the determinism note below for why front and not back.
+- **`world.terrain_height(name, x, z)`** is the only terrain call in the script API — read-only,
+  returning a world Y a script can assign directly. It is what keeps the tour's critters on the
+  ground and the truck's exhaust and skid smoke from firing out of a hillside. **Terrain's shape
+  fields are deliberately not animatable** (`NOT_ANIMATABLE` in `animation.rs`): a clip driving
+  `height` would regenerate the surface every frame and leave hundreds of megabytes of vertex
+  buffers in the renderer's cache, so a clip aimed there fails validation with `unknown_property`
+  rather than doing it quietly. Appearance fields animate freely.
+
+**Terrain is the first thing in this engine whose render is not bit-reproducible, and the reason is
+not in the engine.** A 200k-triangle ground patch as the *last* draw of an MSAA render pass renders
+differently run to run on Metal: one unchanged `showcase_tour.json` rendered 20 times came back as
+two or three distinct PNGs, ~24 pixels apart, max channel delta 6, wherever the patch met other
+geometry inside a pixel. Everything the CPU hands the GPU was dumped and is identical run to run —
+draw order, particle instances, the shadow map, the resolved depth copy, the `--trace`, the
+`--bake`; the repro needs no simulation at all, since a *baked* scene at `--steps 0` flakes too. So
+what varies is which surface wins MSAA samples 1–3. At `samples: 1`, with `shadows: false`, or with
+`height: 0` it is stable, because then nothing competes there. **Any draw after the terrain removes
+it** — ground first, splitting its index range in two, even re-drawing one small mesh behind it all
+render the same bytes 20 times out of 20. Ground first is the one that is also right on its own
+terms: everything stands *on* the terrain, so a contact surface exactly coplanar with it should tie
+in favour of the object, which is what drawing the object second under `Less` gives. That change
+moved no pixel of the 21 baselines without terrain (A/B between binaries, including
+`m22_terrain.png`) and re-blessed the six showcase frames.
+
+It does not cover every case, and the residue is recorded rather than hidden: `showcase_646.png`,
+the blast frame, still comes back as two images ~100 pixels apart (delta ≤ 18) in the distant tree
+canopy, where a few hundred leaf triangles compete with terrain relief inside single pixels. It is
+the only baseline with a `diff_args` tolerance in `baselines.json` (`--threshold 24`), which keeps
+the pin — real drift still fails — while not reporting adapter noise as a regression. **The general
+rule this leaves behind: fine geometry against relief under MSAA is where this adapter stops being
+reproducible, so a new fixture wanting a hard pin should aim its camera at its subject rather than
+across a landscape.**
+
+Verified by `engine-render/tests/terrain.rs` (six GPU-skipping pixel tests, including
+`a_flat_single_layer_patch_is_exactly_a_painted_plane`, which pins the shading path against
+`builtin:plane` at `segments: 1`) and fixture `verify/m22_terrain.json` + baseline at `--steps 120`,
+pinned by a CLI test that also proves the dropped sphere lands *on* the ground. The eighteen earlier
+scene/step combinations were A/B'd against `main` and are byte-identical.
+
 Roads (M23, design in `road-design.md`). The car demo's circuit was **207 `builtin:cube`
 plates**: a deep earth box per segment whose top face was the drivable surface, a thin
 colliderless asphalt slab 9 cm proud of it so the road read as road, kerb cubes on the tight
@@ -868,6 +894,13 @@ file stops predicting the scene.
   re-deriving them is how two implementations of one curve start disagreeing about where the road
   is. `make_car_track.py` is the worked example: it writes the road, asks the engine where it went,
   and writes the scene again with the guardrail and the car on it.
+- **Roads draw last in the opaque pass**, after the terrain run M22 moved to the front. That puts a
+  road where M22 measured this adapter to be unreliable — the pass's final draw — so it was checked
+  rather than assumed: five consecutive sweeps of the six tour frames, a scene with both a `Terrain`
+  and a `Road`, came back with **zero** differing pixels every time, `showcase_646` included, which
+  is the frame that needs a `--threshold 24` tolerance without a road in the scene. A road ribbon is
+  a few thousand triangles against terrain's 200k, which is the likely reason; if a future road
+  scene starts flaking, the fix M22 already found is to give the pass something to draw afterwards.
 
 A scene with no `Road` uploads no road uniforms and issues the draws it always did, and the A/B
 proves it: every manifest entry rendered by a binary built at `main` and by this one, **20 of 20
@@ -879,7 +912,6 @@ about the engine). Verified by
 on the inside, and that a road-less scene is untouched) plus `engine-core`'s geometry tests, and
 fixture `verify/m23_road.json` + baseline at `--steps 180`, pinned by a CLI test that also drops a
 ball on the road and requires it to *stay where it lands*.
-
 Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
 with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,
@@ -958,10 +990,15 @@ run the A/B bit-exactness check as a loop rather than a reconstruction. Both gol
 checked too, GPU-free. Cataloguing this surfaced that **15 of the 26 baselines are pinned by no
 test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`, both `m10`, `m11_lap`, `m13_smoke`,
 `m14_break`, and all six `showcase_*`) — the sweep is their only check, and its first run found
-`m14_break.png` still carrying the 1-pixel drift M17 recorded as pre-existing. `m11_lap.png` is
+`m14_break.png` still carrying the 1-pixel drift M17 recorded as pre-existing (re-blessed in M22,
+after confirming that scene renders the same bytes ten runs running: a check that always fails is a
+check an agent learns to skip). `m11_lap.png` is
 the one to be careful about when reading older notes: the lap CLI test pins the *drive* — the
 positions, the elevation, the parked HUD strings — and names the PNG in a comment, but nothing
-diff-renders it. The three repeated rituals are
+diff-renders it. A sweep failure that will not reproduce twice in a row is worth suspecting before
+it is worth debugging: since M22 one artifact (`showcase_646.png`) genuinely renders two ways on
+this adapter and carries a `diff_args` tolerance for it — the rest of the manifest is bit-exact and
+a failure there is real. The three repeated rituals are
 skills in `.claude/skills/`: `verify-baselines`, `ab-check`, `milestone`.
 
 `cargo test --workspace` is the real check, not `cargo build`. `crates/engine-render/tests/

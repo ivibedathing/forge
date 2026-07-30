@@ -627,7 +627,7 @@ impl Scene {
             });
         }
 
-        // Trees carry their geometry instead of referencing it (M23), and one
+        // Trees carry their geometry instead of referencing it (M19), and one
         // tree is two draws: bark under the entity's own `Material`, leaves
         // under the tree's foliage fields. Both items keep the entity's name,
         // so picking and selection resolve a tree back to one place in the

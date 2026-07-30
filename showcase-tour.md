@@ -60,7 +60,7 @@ Running underneath all five, from the `environment` block rather than from any
 component: a gradient sky with the sun in it, distance fog, sun shadows from
 everything opaque, 4× MSAA, and sky reflected off the metal and the water.
 
-The forest is nine `Tree` components and no meshes (M23). Each is a seed and a
+The forest is nine `Tree` components and no meshes (M19). Each is a seed and a
 species recipe — broadleaf, conifer, snag, scrub — so the two oaks are the same
 species and visibly different individuals, which is the thing twelve
 cylinder-and-sphere entities could not do however they were placed. The station
@@ -71,7 +71,7 @@ front to show that the model scales rather than special-casing a bush.
 
 The truck patrols a 27 m ring for the whole fifteen seconds, so no station is
 a still life; `scripts/tour_truck.rhai` is a cruise-control autopilot on the
-same raycast suspension the playable car demo uses. Since M19 that ring is a
+same raycast suspension the playable car demo uses. Since M23 that ring is a
 **road** rather than a line on the grass: `RingRoad` is one `Road` entity whose
 twelve corners round almost the whole way into their edges, so the polygon *is*
 the circle the truck was already driving — asphalt, shoulders, edge lines and a
@@ -150,7 +150,7 @@ than no showcase:
   white-hot `FireBase`, the `Fire` body, breakaway `FireTongues`, alpha-blended
   `FireSmoke`, and additive streaked `Sparks`. What is still missing: the light
   casts no shadows, so the logs do not throw one outward across the pit.
-- **The road** is real as of M19: `RingRoad` is generated from a polygon of
+- **The road** is real as of M23: `RingRoad` is generated from a polygon of
   corners, its markings are painted per pixel from the road's own surface
   coordinates (so they bend with it and cannot z-fight), and the truck drives on
   the same triangles that are drawn. Still missing: junctions — a second road

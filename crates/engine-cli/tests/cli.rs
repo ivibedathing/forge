@@ -1544,9 +1544,9 @@ fn the_m17_fire_fixture_pins_additive_flame_and_firelight() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-// ── trees (M23) ────────────────────────────────────────────────────────
+// ── trees (M19) ────────────────────────────────────────────────────────
 
-/// The M23 fixture: six procedural trees — two broadleaves differing only in
+/// The M19 fixture: six procedural trees — two broadleaves differing only in
 /// `seed`, a whorled conifer, a leafless snag, a scrub, and the no-randomness
 /// diagram tree — pinned bit-exactly.
 ///

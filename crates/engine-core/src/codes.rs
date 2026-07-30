@@ -166,7 +166,7 @@ registry! {
         "a Terrain entity owns its own surface; it may not also have a Mesh or a Material";
     TERRAIN_LAYER_RANGE_INVERTED = "terrain_layer_range_inverted", Input,
         "a Terrain layer's height or slope range runs backwards, so it covers nothing";
-    // ── Roads (M19) ────────────────────────────────────────────────────
+    // ── Roads (M23) ────────────────────────────────────────────────────
     ROAD_WITH_MESH = "road_with_mesh", Input,
         "a Road entity owns its own surface; it may not also have a Mesh or a Material";
     ROAD_TOO_FEW_POINTS = "road_too_few_points", Input,

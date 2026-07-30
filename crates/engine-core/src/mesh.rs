@@ -20,7 +20,7 @@ use crate::error::{EngineError, Result};
 ///
 /// Positions, normals, and uvs are parallel arrays of the same length;
 /// `indices` refers into them. UVs were carried from M3 so glTF files loaded
-/// them once and nothing read them; since M19 they reach the GPU, where a
+/// them once and nothing read them; since M23 they reach the GPU, where a
 /// road's are the surface coordinates its markings are painted in. Still no
 /// texture samples anything.
 #[derive(Debug, Clone, Default, PartialEq)]

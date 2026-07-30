@@ -1078,7 +1078,7 @@ pub enum TreeLeaf {
     None,
 }
 
-/// A procedurally generated tree (M23): trunk, recursive branches, and leaves,
+/// A procedurally generated tree (M19): trunk, recursive branches, and leaves,
 /// grown from a `seed` into geometry the renderer draws like any other mesh.
 ///
 /// The tree is built in entity-local space with its **base at the origin,

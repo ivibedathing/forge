@@ -1,378 +1,392 @@
 {
-  "about": [
-    "Every committed render baseline and the exact invocation that reproduces it.",
-    "Until this file existed the mapping lived only in prose (milestone-verification-scenes.md,",
-    "showcase-tour.md, CLAUDE.md) and in hardcoded Rust in crates/engine-cli/tests/cli.rs, so",
-    "'re-diff everything' and 'the A/B check between two binaries' were reassembled by hand every",
-    "time. Now they are a loop over this list: bin/verify-baselines.",
-    "",
-    "Paths are repo-relative. 'args' are the flags that select WHAT is rendered (--steps, --time,",
-    "--input); size is not among them because diff-render always renders at the baseline's own",
-    "dimensions -- width/height are here for the bless path, which is `engine screenshot`.",
-    "",
-    "Baselines are per-adapter AND per-build-profile artifacts: bless from the debug binary, which",
-    "is what `cargo test` runs and what bin/engine builds by default (CLAUDE.md, M19).",
-    "",
-    "repo_contracts.rs::every_committed_baseline_is_listed_in_the_manifest keeps this file honest:",
-    "a new baseline that is not listed here fails the build.",
-    "",
-    "'pinned_by' is 'cli.rs' when a CLI test diff-renders the artifact and fails the build on drift,",
-    "and 'hand' when nothing automated checks it -- 15 of the 26 baselines are in the second group,",
-    "which is why the sweep exists. The first run of it found m14_break.png one channel step off in",
-    "one pixel: the pre-existing drift CLAUDE.md records under M17, still uncorrected, invisible",
-    "until now because no test looks at that PNG."
-  ],
-  "baselines": [
-    {
-      "baseline": "examples/scenes/verify/baselines/m4_lighting.png",
-      "scene": "examples/scenes/verify/m4_lighting.json",
-      "args": [],
-      "width": 640,
-      "height": 360,
-      "milestone": "M4",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m8_drop_t0.png",
-      "scene": "examples/scenes/verify/m8_drop.json",
-      "args": [
-        "--steps",
-        "0"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M8",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m8_drop_t300.png",
-      "scene": "examples/scenes/verify/m8_drop.json",
-      "args": [
-        "--steps",
-        "300"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M8",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m9_t025.png",
-      "scene": "examples/scenes/verify/m9_spin.json",
-      "args": [
-        "--time",
-        "0.25"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M9",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m10_t0.png",
-      "scene": "examples/scenes/verify/m10_script.json",
-      "args": [
-        "--steps",
-        "0"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M10",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m10_t120.png",
-      "scene": "examples/scenes/verify/m10_script.json",
-      "args": [
-        "--steps",
-        "120"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M10",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m11_lap.png",
-      "scene": "examples/scenes/car_track.json",
-      "args": [
-        "--steps",
-        "11634",
-        "--input",
-        "examples/scenes/car_track_lap.input.jsonl"
-      ],
-      "width": 1280,
-      "height": 720,
-      "milestone": "M11",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m12_hud.png",
-      "scene": "examples/scenes/verify/m12_hud.json",
-      "args": [
-        "--steps",
-        "60"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M12",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m13_smoke.png",
-      "scene": "examples/scenes/verify/m13_smoke.json",
-      "args": [
-        "--steps",
-        "180"
-      ],
-      "width": 1280,
-      "height": 720,
-      "milestone": "M13",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m14_break.png",
-      "scene": "examples/scenes/verify/m14_break.json",
-      "args": [
-        "--steps",
-        "300"
-      ],
-      "width": 1280,
-      "height": 720,
-      "milestone": "M14",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m16_environment.png",
-      "scene": "examples/scenes/verify/m16_environment.json",
-      "args": [],
-      "width": 640,
-      "height": 360,
-      "milestone": "M16",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m17_fire.png",
-      "scene": "examples/scenes/verify/m17_fire.json",
-      "args": [
-        "--steps",
-        "240"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M17",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m18_water.png",
-      "scene": "examples/scenes/verify/m18_water.json",
-      "args": [
-        "--steps",
-        "120"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M18",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m19_trees.png",
-      "scene": "examples/scenes/verify/m19_trees.json",
-      "args": [],
-      "width": 640,
-      "height": 360,
-      "milestone": "M19",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m20_clouds.png",
-      "scene": "examples/scenes/verify/m20_clouds.json",
-      "args": [
-        "--steps",
-        "120"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M20",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m21_daylight_0200.png",
-      "scene": "examples/scenes/verify/m21_daylight.json",
-      "args": [
-        "--steps",
-        "120"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M21",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m21_daylight_0630.png",
-      "scene": "examples/scenes/verify/m21_daylight.json",
-      "args": [
-        "--steps",
-        "390"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M21",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m21_daylight_1200.png",
-      "scene": "examples/scenes/verify/m21_daylight.json",
-      "args": [
-        "--steps",
-        "720"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M21",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m21_daylight_1830.png",
-      "scene": "examples/scenes/verify/m21_daylight.json",
-      "args": [
-        "--steps",
-        "1110"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M21",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m21_daylight_2200.png",
-      "scene": "examples/scenes/verify/m21_daylight.json",
-      "args": [
-        "--steps",
-        "1320"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M21",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/showcase_90.png",
-      "scene": "examples/scenes/showcase_tour.json",
-      "args": [
-        "--steps",
-        "90"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "tour",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/showcase_270.png",
-      "scene": "examples/scenes/showcase_tour.json",
-      "args": [
-        "--steps",
-        "270"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "tour",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/showcase_450.png",
-      "scene": "examples/scenes/showcase_tour.json",
-      "args": [
-        "--steps",
-        "450"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "tour",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/showcase_585.png",
-      "scene": "examples/scenes/showcase_tour.json",
-      "args": [
-        "--steps",
-        "585"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "tour",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/showcase_646.png",
-      "scene": "examples/scenes/showcase_tour.json",
-      "args": [
-        "--steps",
-        "646"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "tour",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/showcase_810.png",
-      "scene": "examples/scenes/showcase_tour.json",
-      "args": [
-        "--steps",
-        "810"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "tour",
-      "pinned_by": "hand"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m22_terrain.png",
-      "scene": "examples/scenes/verify/m22_terrain.json",
-      "args": [
-        "--steps",
-        "120"
-      ],
-      "width": 640,
-      "height": 360,
-      "milestone": "M22",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "baseline": "examples/scenes/verify/baselines/m23_road.png",
-      "scene": "examples/scenes/verify/m23_road.json",
-      "args": [
-        "--steps",
-        "180"
-      ],
-      "width": 800,
-      "height": 450,
-      "milestone": "M23",
-      "pinned_by": "cli.rs"
-    }
-  ],
-  "traces": [
-    {
-      "trace": "examples/scenes/verify/baselines/m8_drop.trace.jsonl",
-      "scene": "examples/scenes/verify/m8_drop.json",
-      "args": [
-        "--steps",
-        "300"
-      ],
-      "milestone": "M8",
-      "pinned_by": "cli.rs"
-    },
-    {
-      "trace": "examples/scenes/verify/baselines/m14_break.trace.jsonl",
-      "scene": "examples/scenes/verify/m14_break.json",
-      "args": [
-        "--steps",
-        "300"
-      ],
-      "milestone": "M14",
-      "pinned_by": "cli.rs"
-    }
-  ]
+ "about": [
+  "Every committed render baseline and the exact invocation that reproduces it.",
+  "Until this file existed the mapping lived only in prose (milestone-verification-scenes.md,",
+  "showcase-tour.md, CLAUDE.md) and in hardcoded Rust in crates/engine-cli/tests/cli.rs, so",
+  "'re-diff everything' and 'the A/B check between two binaries' were reassembled by hand every",
+  "time. Now they are a loop over this list: bin/verify-baselines.",
+  "",
+  "Paths are repo-relative. 'args' are the flags that select WHAT is rendered (--steps, --time,",
+  "--input); size is not among them because diff-render always renders at the baseline's own",
+  "dimensions -- width/height are here for the bless path, which is `engine screenshot`.",
+  "",
+  "Baselines are per-adapter AND per-build-profile artifacts: bless from the debug binary, which",
+  "is what `cargo test` runs and what bin/engine builds by default (CLAUDE.md, M19).",
+  "",
+  "repo_contracts.rs::every_committed_baseline_is_listed_in_the_manifest keeps this file honest:",
+  "a new baseline that is not listed here fails the build.",
+  "",
+  "'diff_args' is tolerance and rides the diff path only. Exactly one artifact has it:",
+  "showcase_646.png, the blast frame, which this adapter will not render bit-exactly. Rendering",
+  "it 16 times gives two images ~100 pixels apart, max channel delta 18, in the distant tree",
+  "canopy where dense leaf geometry competes with terrain relief inside a pixel under MSAA. Every",
+  "CPU input was dumped and is identical run to run -- draw order, particle instances, the shadow",
+  "map, the resolved depth copy, the trace and the bake -- and at samples: 1, or with the terrain",
+  "flattened, it is stable. See CLAUDE.md (M22) for the full elimination. --threshold 24 keeps the",
+  "pin: anything moving further than the noise, or moving a single pixel past it, still fails.",
+  "",
+  "'pinned_by' is 'cli.rs' when a CLI test diff-renders the artifact and fails the build on drift,",
+  "and 'hand' when nothing automated checks it -- 15 of the 26 baselines are in the second group,",
+  "which is why the sweep exists. The first run of it found m14_break.png one channel step off in",
+  "one pixel: the pre-existing drift CLAUDE.md records under M17, invisible until then because no",
+  "test looks at that PNG. It was re-blessed in M22 after confirming that scene renders the same",
+  "bytes ten runs in a row -- a permanently failing sweep teaches an agent to ignore the sweep."
+ ],
+ "baselines": [
+  {
+   "baseline": "examples/scenes/verify/baselines/m4_lighting.png",
+   "scene": "examples/scenes/verify/m4_lighting.json",
+   "args": [],
+   "width": 640,
+   "height": 360,
+   "milestone": "M4",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m8_drop_t0.png",
+   "scene": "examples/scenes/verify/m8_drop.json",
+   "args": [
+    "--steps",
+    "0"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M8",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m8_drop_t300.png",
+   "scene": "examples/scenes/verify/m8_drop.json",
+   "args": [
+    "--steps",
+    "300"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M8",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m9_t025.png",
+   "scene": "examples/scenes/verify/m9_spin.json",
+   "args": [
+    "--time",
+    "0.25"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M9",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m10_t0.png",
+   "scene": "examples/scenes/verify/m10_script.json",
+   "args": [
+    "--steps",
+    "0"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M10",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m10_t120.png",
+   "scene": "examples/scenes/verify/m10_script.json",
+   "args": [
+    "--steps",
+    "120"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M10",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m11_lap.png",
+   "scene": "examples/scenes/car_track.json",
+   "args": [
+    "--steps",
+    "11634",
+    "--input",
+    "examples/scenes/car_track_lap.input.jsonl"
+   ],
+   "width": 1280,
+   "height": 720,
+   "milestone": "M11",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m12_hud.png",
+   "scene": "examples/scenes/verify/m12_hud.json",
+   "args": [
+    "--steps",
+    "60"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M12",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m13_smoke.png",
+   "scene": "examples/scenes/verify/m13_smoke.json",
+   "args": [
+    "--steps",
+    "180"
+   ],
+   "width": 1280,
+   "height": 720,
+   "milestone": "M13",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m14_break.png",
+   "scene": "examples/scenes/verify/m14_break.json",
+   "args": [
+    "--steps",
+    "300"
+   ],
+   "width": 1280,
+   "height": 720,
+   "milestone": "M14",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m16_environment.png",
+   "scene": "examples/scenes/verify/m16_environment.json",
+   "args": [],
+   "width": 640,
+   "height": 360,
+   "milestone": "M16",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m17_fire.png",
+   "scene": "examples/scenes/verify/m17_fire.json",
+   "args": [
+    "--steps",
+    "240"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M17",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m18_water.png",
+   "scene": "examples/scenes/verify/m18_water.json",
+   "args": [
+    "--steps",
+    "120"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M18",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m19_trees.png",
+   "scene": "examples/scenes/verify/m19_trees.json",
+   "args": [],
+   "width": 640,
+   "height": 360,
+   "milestone": "M19",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m20_clouds.png",
+   "scene": "examples/scenes/verify/m20_clouds.json",
+   "args": [
+    "--steps",
+    "120"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M20",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m21_daylight_0200.png",
+   "scene": "examples/scenes/verify/m21_daylight.json",
+   "args": [
+    "--steps",
+    "120"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M21",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m21_daylight_0630.png",
+   "scene": "examples/scenes/verify/m21_daylight.json",
+   "args": [
+    "--steps",
+    "390"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M21",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m21_daylight_1200.png",
+   "scene": "examples/scenes/verify/m21_daylight.json",
+   "args": [
+    "--steps",
+    "720"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M21",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m21_daylight_1830.png",
+   "scene": "examples/scenes/verify/m21_daylight.json",
+   "args": [
+    "--steps",
+    "1110"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M21",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m21_daylight_2200.png",
+   "scene": "examples/scenes/verify/m21_daylight.json",
+   "args": [
+    "--steps",
+    "1320"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M21",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m22_terrain.png",
+   "scene": "examples/scenes/verify/m22_terrain.json",
+   "args": [
+    "--steps",
+    "120"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "M22",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/m23_road.png",
+   "scene": "examples/scenes/verify/m23_road.json",
+   "args": [
+    "--steps",
+    "180"
+   ],
+   "width": 800,
+   "height": 450,
+   "milestone": "M23",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/showcase_90.png",
+   "scene": "examples/scenes/showcase_tour.json",
+   "args": [
+    "--steps",
+    "90"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "tour",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/showcase_270.png",
+   "scene": "examples/scenes/showcase_tour.json",
+   "args": [
+    "--steps",
+    "270"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "tour",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/showcase_450.png",
+   "scene": "examples/scenes/showcase_tour.json",
+   "args": [
+    "--steps",
+    "450"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "tour",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/showcase_585.png",
+   "scene": "examples/scenes/showcase_tour.json",
+   "args": [
+    "--steps",
+    "585"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "tour",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/showcase_646.png",
+   "scene": "examples/scenes/showcase_tour.json",
+   "args": [
+    "--steps",
+    "646"
+   ],
+   "diff_args": [
+    "--threshold",
+    "24"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "tour",
+   "pinned_by": "hand"
+  },
+  {
+   "baseline": "examples/scenes/verify/baselines/showcase_810.png",
+   "scene": "examples/scenes/showcase_tour.json",
+   "args": [
+    "--steps",
+    "810"
+   ],
+   "width": 640,
+   "height": 360,
+   "milestone": "tour",
+   "pinned_by": "hand"
+  }
+ ],
+ "traces": [
+  {
+   "trace": "examples/scenes/verify/baselines/m8_drop.trace.jsonl",
+   "scene": "examples/scenes/verify/m8_drop.json",
+   "args": [
+    "--steps",
+    "300"
+   ],
+   "milestone": "M8",
+   "pinned_by": "cli.rs"
+  },
+  {
+   "trace": "examples/scenes/verify/baselines/m14_break.trace.jsonl",
+   "scene": "examples/scenes/verify/m14_break.json",
+   "args": [
+    "--steps",
+    "300"
+   ],
+   "milestone": "M14",
+   "pinned_by": "cli.rs"
+  }
+ ]
 }

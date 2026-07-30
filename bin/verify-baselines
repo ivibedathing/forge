@@ -87,7 +87,17 @@ def main():
                                   *entry["args"]])
             ok = result.returncode == 0
         else:
-            cmd = ["diff-render", entry["scene"], baseline, *entry["args"]]
+            # "diff_args" is tolerance, not selection: --threshold /
+            # --max-diff-percent for the one artifact this adapter refuses to
+            # render bit-exactly (see the manifest's "about"). It rides only the
+            # diff path, since bless and render take no such flags.
+            cmd = [
+                "diff-render",
+                entry["scene"],
+                baseline,
+                *entry["args"],
+                *entry.get("diff_args", []),
+            ]
             if diff_dir:
                 cmd += ["--out", str(diff_dir / f"{pathlib.Path(name).stem}.diff.png")]
             result = run(engine, cmd)

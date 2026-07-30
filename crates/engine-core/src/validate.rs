@@ -536,7 +536,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
-        // ── Tree entity checks (M23) ──────────────────────────────────
+        // ── Tree entity checks (M19) ──────────────────────────────────
         //
         // A `Tree` *is* the entity's geometry. Carrying a `Mesh` as well would
         // draw both at one transform, which is never what an author means and
