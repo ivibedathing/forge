@@ -130,6 +130,15 @@
         ],
         "type": "string"
       },
+      "TreeLeaf": {
+        "description": "What hangs on a tree's outermost branches.\n\nNOTE: leave these variants undocumented, like [`ParticleBlend`]'s — a doc\ncomment on a variant turns the schema into oneOf/const and blinds the\nvalidation walk's closed-vocabulary check.",
+        "enum": [
+          "blade",
+          "cluster",
+          "none"
+        ],
+        "type": "string"
+      },
       "Wave": {
         "additionalProperties": false,
         "description": "One travelling wave in a [`Water`] surface's sum.\n\nGerstner rather than a sine: a Gerstner wave moves each point of the surface\n*toward* the crests as well as up, which sharpens crests and flattens\ntroughs. A sum of sines is a rubber sheet, and no amount of tuning it makes\nit read as water.",
@@ -1233,6 +1242,208 @@
       },
       {
         "additionalProperties": false,
+        "description": "A procedurally generated tree (M19): trunk, recursive branches, and leaves,\ngrown from a `seed` into geometry the renderer draws like any other mesh.\n\nThe tree is built in entity-local space with its **base at the origin,\ngrowing along +Y**, so `\"position\": [x, 0, z]` plants it on flat ground and\n`Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`\nrather than accompanying one (`tree_with_mesh`): the component *is* the\ngeometry.\n\n# Two draws, two materials\n\nA tree needs bark and foliage, and one `Material` cannot be both. The\nentity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]\nand [`Tree::leaf_roughness`], and are always opaque and non-metallic. That\nlast part is a constraint, not an oversight: every leaf of one tree is a\nsingle mesh, and the blended pass sorts whole draws, so translucent leaves\ncould not be sorted against each other and would visibly z-fight.\n\n# Randomness\n\nEverything jittered is drawn from a private xorshift seeded by `seed`,\nconsumed in a fixed order (a branch draws its own wander, then recurses into\nits children in index order, then scatters its leaves), so two trees that\ndiffer only in `seed` are different trees and the *same* tree is the same\nmesh forever — which is what lets a forest sit under a pinned baseline.\n`jitter` is the master dial for how much variation there is at all; `0`\ngrows a rigid diagram of a tree.\n\n# Cost\n\nVertices scale as `(branches · whorl)^levels · segments · sides`, and a\ntree that would blow past the budget is a validation error\n(`tree_too_complex`) rather than a hang. `levels: 2` with the default\nbranching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per\ndistinct parameter set and is cached, so a forest of nine trees is nine\nmeshes no matter how many frames render.",
+        "properties": {
+          "branch_angle": {
+            "default": 48.0,
+            "description": "Angle in degrees between a child branch and its parent at the\nattachment. Small angles sweep up (poplar), large ones reach out\n(oak) or hang down (spruce, with negative `tropism`). `[0, 180]`.",
+            "format": "float",
+            "maximum": 180.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "branch_start": {
+            "default": 0.3499999940395355,
+            "description": "Fraction of a branch's length that carries no children — the bare\ntrunk under the crown. `[0, 1)`.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "branch_twist": {
+            "default": 137.5,
+            "description": "Degrees of rotation around the parent between successive attachment\npoints. The default is the golden angle, which is what real phyllotaxis\nconverges on and what stops branches from stacking into visible rows.",
+            "format": "float",
+            "type": "number"
+          },
+          "branches": {
+            "default": 5,
+            "description": "Attachment points spaced along each parent branch. `[0, 16]`.",
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "crook": {
+            "default": 8.0,
+            "description": "Degrees of random wander per meter of branch. This is the gnarl: `0`\ngrows perfectly straight poles, `8` is a healthy tree, `25` is an old\nolive. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "flare": {
+            "default": 0.4000000059604645,
+            "description": "Extra radius at the very foot of the trunk, as a fraction: `0.4` makes\nthe base 40% wider than the trunk above it. Root flare is most of what\nsays \"grown\" rather than \"placed\", and it is at eye level. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "height": {
+            "default": 6.0,
+            "description": "Trunk length in meters, before `Transform.scale`. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "jitter": {
+            "default": 0.25,
+            "description": "How much every jittered quantity — branch length, radius, angle, leaf\nplacement — varies, as a fraction. `[0, 1)`; `0` is a diagram.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "leaf": {
+            "$ref": "#/$defs/TreeLeaf",
+            "default": "blade",
+            "description": "What hangs on the outermost branches: `\"blade\"` (a folded leaf, the\ndefault), `\"cluster\"` (a foliage blob — cheaper per unit of cover, and\nwhat conifer sprays and distant trees want), or `\"none\"` for a bare\nwinter or dead tree."
+          },
+          "leaf_color": {
+            "default": [
+              0.09000000357627869,
+              0.25999999046325684,
+              0.07999999821186066
+            ],
+            "description": "Foliage albedo, linear RGB in `[0, 1]` — the leaves' half of the tree's\nappearance, the entity's `Material` being the bark's.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "leaf_roughness": {
+            "default": 0.75,
+            "description": "Foliage roughness, `[0, 1]`. Leaves are waxy, not matte: a little\nspecular is what separates them from felt.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "leaf_size": {
+            "default": 0.30000001192092896,
+            "description": "Length of one leaf, or diameter of one cluster, in meters. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "leaves_per_branch": {
+            "default": 6,
+            "description": "Leaves scattered along each outermost branch. `[0, 64]`; `0` is\nequivalent to `\"leaf\": \"none\"`.",
+            "format": "uint32",
+            "maximum": 64,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "length_falloff": {
+            "default": 0.3499999940395355,
+            "description": "How much shorter children get toward the parent's tip, `[0, 1]`: `0`\nmakes every child the same length (a round crown), `0.8` makes the top\nones stubs (the cone of a conifer).",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "length_ratio": {
+            "default": 0.6200000047683716,
+            "description": "Child length as a fraction of its parent's. `(0, 2]`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 2.0,
+            "type": "number"
+          },
+          "levels": {
+            "default": 2,
+            "description": "How many generations of branches hang off the trunk. `0` is a bare\npole; `2` reads as a tree; `3` is a good hero tree; `4` is expensive.\n`[0, 4]`.",
+            "format": "uint32",
+            "maximum": 4,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "radius_ratio": {
+            "default": 0.6000000238418579,
+            "description": "Child radius as a fraction of the parent's radius where it attaches.\n`(0, 1]`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 1.0,
+            "type": "number"
+          },
+          "seed": {
+            "default": 0,
+            "description": "Seeds every random draw. Two trees with the same parameters and\ndifferent seeds are different trees; the same seed always regrows the\nsame tree.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "segments": {
+            "default": 5,
+            "description": "Lengthwise segments per branch — how finely a branch can curve. `[1, 16]`.",
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sides": {
+            "default": 6,
+            "description": "Radial sides of a branch tube. `[3, 16]`; `5`–`6` is plenty, since bark\nsilhouettes read from the branching, not the cross-section.",
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 3,
+            "type": "integer"
+          },
+          "taper": {
+            "default": 0.11999999731779099,
+            "description": "Radius at a branch's tip as a fraction of its base. `[0, 1]`; small\nvalues give the sharp taper of a young shoot.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tropism": {
+            "default": 8.0,
+            "description": "Degrees per meter that a branch curves toward the sky as it grows.\nPositive lifts tips toward the light (most trees), negative lets\ngravity droop them (spruce, willow). This is what makes branches curve\nrather than point.\n\nIt does not apply to the trunk, whose line is [`Tree::crook`] alone: a\nnegative tropism on the trunk is unstable — a degree of crook tips it\noff vertical and the bend then compounds until the tree grows sideways.",
+            "format": "float",
+            "type": "number"
+          },
+          "trunk_radius": {
+            "default": 0.1599999964237213,
+            "description": "Trunk radius at the ground, in meters, before `Transform.scale`. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "Tree",
+            "type": "string"
+          },
+          "whorl": {
+            "default": 1,
+            "description": "Branches emitted at each attachment point **on the trunk**, spread\nevenly around it. `1` (default) gives the alternate, spiralling\narrangement of most broadleaf trees; `4`–`5` gives the whorls of a\nconifer, where a ring of limbs leaves the trunk at one height.\n\nDeeper levels are always alternate, which is both what a real conifer's\nlimbs carry and what keeps the geometry finite — a whorl compounding at\nevery level multiplies the tree by itself. `[1, 8]`.",
+            "format": "uint32",
+            "maximum": 8,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
         "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
         "properties": {
           "crest_foam": {
@@ -1386,6 +1597,7 @@
     "HudText",
     "HudRect",
     "ParticleEmitter",
+    "Tree",
     "Water"
   ],
   "scene": {
@@ -2481,6 +2693,208 @@
           },
           {
             "additionalProperties": false,
+            "description": "A procedurally generated tree (M19): trunk, recursive branches, and leaves,\ngrown from a `seed` into geometry the renderer draws like any other mesh.\n\nThe tree is built in entity-local space with its **base at the origin,\ngrowing along +Y**, so `\"position\": [x, 0, z]` plants it on flat ground and\n`Transform.scale` sizes the whole thing. It replaces the entity's `Mesh`\nrather than accompanying one (`tree_with_mesh`): the component *is* the\ngeometry.\n\n# Two draws, two materials\n\nA tree needs bark and foliage, and one `Material` cannot be both. The\nentity's own `Material` is the **bark**; the leaves get [`Tree::leaf_color`]\nand [`Tree::leaf_roughness`], and are always opaque and non-metallic. That\nlast part is a constraint, not an oversight: every leaf of one tree is a\nsingle mesh, and the blended pass sorts whole draws, so translucent leaves\ncould not be sorted against each other and would visibly z-fight.\n\n# Randomness\n\nEverything jittered is drawn from a private xorshift seeded by `seed`,\nconsumed in a fixed order (a branch draws its own wander, then recurses into\nits children in index order, then scatters its leaves), so two trees that\ndiffer only in `seed` are different trees and the *same* tree is the same\nmesh forever — which is what lets a forest sit under a pinned baseline.\n`jitter` is the master dial for how much variation there is at all; `0`\ngrows a rigid diagram of a tree.\n\n# Cost\n\nVertices scale as `(branches · whorl)^levels · segments · sides`, and a\ntree that would blow past the budget is a validation error\n(`tree_too_complex`) rather than a hang. `levels: 2` with the default\nbranching is ~1k vertices; `levels: 3` is ~6k. Generation happens once per\ndistinct parameter set and is cached, so a forest of nine trees is nine\nmeshes no matter how many frames render.",
+            "properties": {
+              "branch_angle": {
+                "default": 48.0,
+                "description": "Angle in degrees between a child branch and its parent at the\nattachment. Small angles sweep up (poplar), large ones reach out\n(oak) or hang down (spruce, with negative `tropism`). `[0, 180]`.",
+                "format": "float",
+                "maximum": 180.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "branch_start": {
+                "default": 0.3499999940395355,
+                "description": "Fraction of a branch's length that carries no children — the bare\ntrunk under the crown. `[0, 1)`.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "branch_twist": {
+                "default": 137.5,
+                "description": "Degrees of rotation around the parent between successive attachment\npoints. The default is the golden angle, which is what real phyllotaxis\nconverges on and what stops branches from stacking into visible rows.",
+                "format": "float",
+                "type": "number"
+              },
+              "branches": {
+                "default": 5,
+                "description": "Attachment points spaced along each parent branch. `[0, 16]`.",
+                "format": "uint32",
+                "maximum": 16,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "crook": {
+                "default": 8.0,
+                "description": "Degrees of random wander per meter of branch. This is the gnarl: `0`\ngrows perfectly straight poles, `8` is a healthy tree, `25` is an old\nolive. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "flare": {
+                "default": 0.4000000059604645,
+                "description": "Extra radius at the very foot of the trunk, as a fraction: `0.4` makes\nthe base 40% wider than the trunk above it. Root flare is most of what\nsays \"grown\" rather than \"placed\", and it is at eye level. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "height": {
+                "default": 6.0,
+                "description": "Trunk length in meters, before `Transform.scale`. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "jitter": {
+                "default": 0.25,
+                "description": "How much every jittered quantity — branch length, radius, angle, leaf\nplacement — varies, as a fraction. `[0, 1)`; `0` is a diagram.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "leaf": {
+                "$ref": "#/$defs/TreeLeaf",
+                "default": "blade",
+                "description": "What hangs on the outermost branches: `\"blade\"` (a folded leaf, the\ndefault), `\"cluster\"` (a foliage blob — cheaper per unit of cover, and\nwhat conifer sprays and distant trees want), or `\"none\"` for a bare\nwinter or dead tree."
+              },
+              "leaf_color": {
+                "default": [
+                  0.09000000357627869,
+                  0.25999999046325684,
+                  0.07999999821186066
+                ],
+                "description": "Foliage albedo, linear RGB in `[0, 1]` — the leaves' half of the tree's\nappearance, the entity's `Material` being the bark's.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "leaf_roughness": {
+                "default": 0.75,
+                "description": "Foliage roughness, `[0, 1]`. Leaves are waxy, not matte: a little\nspecular is what separates them from felt.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "leaf_size": {
+                "default": 0.30000001192092896,
+                "description": "Length of one leaf, or diameter of one cluster, in meters. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "leaves_per_branch": {
+                "default": 6,
+                "description": "Leaves scattered along each outermost branch. `[0, 64]`; `0` is\nequivalent to `\"leaf\": \"none\"`.",
+                "format": "uint32",
+                "maximum": 64,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "length_falloff": {
+                "default": 0.3499999940395355,
+                "description": "How much shorter children get toward the parent's tip, `[0, 1]`: `0`\nmakes every child the same length (a round crown), `0.8` makes the top\nones stubs (the cone of a conifer).",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "length_ratio": {
+                "default": 0.6200000047683716,
+                "description": "Child length as a fraction of its parent's. `(0, 2]`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "maximum": 2.0,
+                "type": "number"
+              },
+              "levels": {
+                "default": 2,
+                "description": "How many generations of branches hang off the trunk. `0` is a bare\npole; `2` reads as a tree; `3` is a good hero tree; `4` is expensive.\n`[0, 4]`.",
+                "format": "uint32",
+                "maximum": 4,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "radius_ratio": {
+                "default": 0.6000000238418579,
+                "description": "Child radius as a fraction of the parent's radius where it attaches.\n`(0, 1]`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "maximum": 1.0,
+                "type": "number"
+              },
+              "seed": {
+                "default": 0,
+                "description": "Seeds every random draw. Two trees with the same parameters and\ndifferent seeds are different trees; the same seed always regrows the\nsame tree.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segments": {
+                "default": 5,
+                "description": "Lengthwise segments per branch — how finely a branch can curve. `[1, 16]`.",
+                "format": "uint32",
+                "maximum": 16,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "sides": {
+                "default": 6,
+                "description": "Radial sides of a branch tube. `[3, 16]`; `5`–`6` is plenty, since bark\nsilhouettes read from the branching, not the cross-section.",
+                "format": "uint32",
+                "maximum": 16,
+                "minimum": 3,
+                "type": "integer"
+              },
+              "taper": {
+                "default": 0.11999999731779099,
+                "description": "Radius at a branch's tip as a fraction of its base. `[0, 1]`; small\nvalues give the sharp taper of a young shoot.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "tropism": {
+                "default": 8.0,
+                "description": "Degrees per meter that a branch curves toward the sky as it grows.\nPositive lifts tips toward the light (most trees), negative lets\ngravity droop them (spruce, willow). This is what makes branches curve\nrather than point.\n\nIt does not apply to the trunk, whose line is [`Tree::crook`] alone: a\nnegative tropism on the trunk is unstable — a degree of crook tips it\noff vertical and the bend then compounds until the tree grows sideways.",
+                "format": "float",
+                "type": "number"
+              },
+              "trunk_radius": {
+                "default": 0.1599999964237213,
+                "description": "Trunk radius at the ground, in meters, before `Transform.scale`. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "Tree",
+                "type": "string"
+              },
+              "whorl": {
+                "default": 1,
+                "description": "Branches emitted at each attachment point **on the trunk**, spread\nevenly around it. `1` (default) gives the alternate, spiralling\narrangement of most broadleaf trees; `4`–`5` gives the whorls of a\nconifer, where a ring of limbs leaves the trunk at one height.\n\nDeeper levels are always alternate, which is both what a real conifer's\nlimbs carry and what keeps the geometry finite — a whorl compounding at\nevery level multiplies the tree by itself. `[1, 8]`.",
+                "format": "uint32",
+                "maximum": 8,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
             "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
             "properties": {
               "crest_foam": {
@@ -2849,6 +3263,15 @@
           }
         },
         "type": "object"
+      },
+      "TreeLeaf": {
+        "description": "What hangs on a tree's outermost branches.\n\nNOTE: leave these variants undocumented, like [`ParticleBlend`]'s — a doc\ncomment on a variant turns the schema into oneOf/const and blinds the\nvalidation walk's closed-vocabulary check.",
+        "enum": [
+          "blade",
+          "cluster",
+          "none"
+        ],
+        "type": "string"
       },
       "Wave": {
         "additionalProperties": false,

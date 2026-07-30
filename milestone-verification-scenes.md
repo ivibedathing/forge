@@ -1052,6 +1052,57 @@ may read the clock.
 
 ---
 
+## M19 — trees
+
+**Scene:** `examples/scenes/verify/m19_trees.json` — six trees on a lit ground plane, static (no
+steps, no scripts): two broadleaves differing **only in `seed`**, a whorled conifer, a leafless
+snag, a one-meter scrub, and a `Diagram` tree with `jitter`, `crook`, `tropism` and `flare` all
+zeroed. The twins are the point of the fixture — they are the same species and visibly different
+individuals, which is the property the milestone exists to add, and it has to survive under a
+bit-exact baseline.
+
+```
+engine validate examples/scenes/verify/m19_trees.json
+engine diff-render examples/scenes/verify/m19_trees.json \
+    examples/scenes/verify/baselines/m19_trees.png
+#   pinned by cli.rs::the_m19_tree_fixture_pins_seeded_procedural_growth
+
+# The authoring loop: change one field, look at it. The Diagram tree is where a
+# parameter's effect is visible on its own, because nothing else is moving.
+engine screenshot examples/scenes/verify/m19_trees.json --out /tmp/trees.png --width 960 --height 540
+```
+
+**Two failures are part of the pass condition**, both no-GPU and both in the same CLI test:
+
+```
+# A Tree *is* the entity's geometry; a Mesh beside it is a second opinion.
+{"type":"Tree"} + {"type":"Mesh","asset":"builtin:cube"}   → tree_with_mesh, exit 1
+
+# Branching is exponential, so a plausible edit can ask for a billion vertices.
+{"type":"Tree","levels":4,"branches":12,"sides":16,"segments":12} → tree_too_complex, exit 1
+```
+
+The second is the one worth re-running by hand after any change to `tree::vertex_count`: it is
+computed from the parameters *before anything is allocated*, and it has to be the exact count
+rather than an estimate (`vertex_count_predicts_what_generation_produces` walks six configurations
+against real generation). A hung render with no output is the worst failure an agent loop can hit.
+
+**What this regresses:** the tube sweep and its winding (a wrongly-wound tree renders as nothing
+at all, so `every_wall_triangle_faces_outward` checks each wall face against the axis it was swept
+around), parallel transport of the ring frame, power-curve taper, the root flare, golden-angle
+phyllotaxis, the three stability rules discovered by rendering — whorls are trunk-only, tropism is
+branch-only, and the trunk's random walk has a restoring term (each with its own multi-seed test),
+double-sided flat-shaded leaves, the exact-bits mesh cache and its `Arc` identity contract, and
+schema-driven validation of 24 new fields. The GPU-free half is 12 tests in
+`engine-core/src/tree.rs`; the showcase forest is the applied version.
+
+**Also re-blessed here:** all six `showcase_*` baselines, since station 01's twelve
+cylinder-and-sphere entities became nine `Tree`s. No other baseline moved — an A/B between the
+`main` binary and the worktree's over all sixteen pre-M19 scene/step combinations was
+byte-identical, which is the check that actually settles it.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):
@@ -1066,7 +1117,7 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 | M9 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | | ⬤ |
 | M10 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M17 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
-| M18 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M19 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)

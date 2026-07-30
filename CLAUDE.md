@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M18 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, and M18 water** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M19 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, and M19 procedural trees** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
-that is a live writable *view* onto the file. Verified by 170+ tests including offscreen pixel
+that is a live writable *view* onto the file. Verified by 200+ tests including offscreen pixel
 readback and an end-to-end CLI suite, and by the verification fixtures from
 `milestone-verification-scenes.md` (`verify/m4_lighting.json` diff-renders bit-exactly against
 `verify/baselines/m4_lighting.png`; `verify/m5_broken.json` is committed **broken** and must
@@ -40,6 +40,8 @@ engine list-animations <scene-or-clip> [--schema]
 # PointLight component (M17): local light, inverse-square windowed at "range", up to 8 per
 #   scene; no shadows. Scripts drive any light's intensity/color (world.set_light_intensity /
 #   set_light_color), which is what lets a fire light the ground it stands on
+# Tree component (M19): a recipe, not a mesh — seeded procedural trunk/branches/leaves grown
+#   on load; carries no Mesh (tree_with_mesh), and the entity's Material is its bark
 # Water component (M18): a body of water — the entity carries no Mesh and no Material, the
 #   component owns a tessellated grid ("segments") sized by Transform.scale, Gerstner "waves"
 #   displaced in the vertex stage, per-pixel detail ripples, depth-based absorption between
@@ -520,6 +522,37 @@ both, `cmp` the PNGs. Doing that here found a 1-pixel `m14_break.png` diff that 
 two builds. Fixture `verify/m17_fire.json` + `scripts/m17_fire.rhai` + baseline at `--steps 240`,
 pinned by a CLI test that also bakes and revalidates the run.
 
+Trees (M19, design in `tree-design.md`). The `Tree` component is a **recipe, not a mesh
+reference**: `engine-core/src/tree.rs` grows it into two meshes — bark (drawn with the entity's own
+`Material`) and leaves (drawn with `Tree::leaf_material`, from `leaf_color`/`leaf_roughness`) — so
+one entity emits two `RenderItem`s under one name, and `unused_material` knows a tree's Material is
+its bark. A branch is a polyline that wanders: each of `segments` steps adds a random `crook` and
+a tube of `sides` faces is swept along it, tapering on a **power curve** (`t^1.6`, since linear
+draws a carrot), with a quadratic root flare over the bottom fifth of the trunk. Children attach
+past `branch_start`, spun by `branch_twist` per point (137.5°, the golden angle — a whole-number
+division stacks branches into visible rows) and started 70% inside the parent's radius so the
+tubes interpenetrate instead of needing a union. Ring orientation is carried by **parallel
+transport**; rebuilding a perpendicular from a world axis spins the tube wherever a branch aligns
+with it. Leaves are `blade` (a midrib with two wings folded down, emitted twice for both faces —
+the fold is what gives a canopy texture when the engine has no leaf textures), `cluster` (a
+stretched octahedron, for conifer sprays), or `none`. **Three model rules came out of looking at
+renders, and all three are now multi-seed tests**: `whorl` applies to the **trunk only** (compounding
+it is quadratic — a plausible spruce hit 175,898 vertices — and botanically wrong); `tropism`
+applies at **depth > 0 only** and clamps against overshoot (at depth 0 it is unstable: a degree of
+crook gives a negative tropism something to amplify, and the first pine grew sideways); and the
+trunk gives back 30% of its accumulated lean every segment, because **a random walk with nothing
+pulling on it drifts** and which seeds toppled was pure luck. Determinism is the M13 discipline
+again — one private xorshift written out in-repo so no dependency upgrade can reshape a forest —
+except that jitter helpers always consume a draw even at `jitter: 0`, since no tree baseline
+predates any tree field. `tree::vertex_count` is exact (not an estimate) and validation refuses
+anything over `MAX_TREE_VERTICES` (100k) with `tree_too_complex` before allocating, because a hung
+render with no output is the worst failure an agent loop can hit. `meshes_for` caches on the
+component's **exact field bits** (26 words, compared not hashed) and must return the same `Arc` —
+M15's upload cache keys on `Arc` identity. There is no species enum: a species is a set of
+parameters, tabulated in the design doc. Fixture `verify/m18_trees.json` + baseline (twins
+differing only in `seed`, plus a zero-randomness `Diagram` tree), pinned by a CLI test that also
+pins `tree_with_mesh` and `tree_too_complex`.
+
 Water (M18, design in `water-design.md`). The tour's pond was sixteen `builtin:cube` tiles a script
 bobbed on a shared sine: every tile translated rigidly, so the surface normal was straight up
 everywhere at every moment, there was nothing for the sun or sky to catch, the seams showed, and
@@ -587,13 +620,17 @@ allowlist, deliberately. Station 04 fires all three `Breakable` triggers in one 
 ~585, `break_entity` at 601, `explode` at 636). What is real: particles, physics, fragments, the ice
 (real `Material.transmission`, not an opaque stand-in), since M17 the campfire — layered additive
 flame, turbulent smoke, streaked embers, and a `PointLight` the tour's effects script flickers off
-the same signal that drives the emission rates — and since M18 the pond, one `Water` entity where
+the same signal that drives the emission rates — since M18 the pond, one `Water` entity where
 sixteen script-bobbed cube tiles used to be (the wave loop is gone from `tour_effects.rhai`, and the
-`PondBed` under it was retuned at the same time: absorption has nothing to reveal over a black bed).
-What is still faked and named as such in the doc: animals (scaled spheres on parametric loops) and
-the sky (a gradient, not scattering). The blast at station 04 still emits no light, which is now a
-wiring job rather than a missing feature. Refraction is the upgrade that would move this scene most
-now, and water is its loudest customer.
+`PondBed` under it was retuned at the same time: absorption has nothing to reveal over a black bed)
+— and since M19 the forest, nine `Tree` components (two oaks, a birch, three spruces, a snag, two
+scrubs) where twelve cylinder-and-sphere entities used to be, which cost all six showcase baselines
+a re-bless and no other baseline anything. What is still faked and named as such in the doc:
+animals (scaled spheres on parametric loops) and the sky (a gradient, not scattering). The blast at
+station 04 still emits no light, which is now a wiring job rather than a missing feature.
+Refraction is the upgrade that would move this scene most now, and water is its loudest customer;
+textured bark and alpha-cut leaves are what would move the forest most, and both need the same
+missing feature.
 **Building it found a physics bug** now fixed and regression-tested: priming the broad-phase BVH
 before the first step (vehicle worlds did this so wheel rays hit ground on step 0) consumed the
 pair events, and rapier's `NarrowPhase::register_pairs` is private — so every collider **already
@@ -708,10 +745,12 @@ error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ �
 lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ →
 ~~M8 physics~~ → ~~M9 animation (A0–A1)~~ → ~~M10 scripting~~ — **the roadmap is complete.**
 Remaining deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF +
-GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17/M18 — refraction and
-scene-color sampling for transmissive materials (water's loudest missing feature), planar
+GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17/M18/M19 — refraction
+and scene-color sampling for transmissive materials (water's loudest missing feature), planar
 reflections, shadow cascades, shadows from point lights, spot lights, a CPU wave evaluator and
-buoyancy, and a light on the tour's explosion (~~lights a script can drive~~ landed in M17).
+buoyancy, a light on the tour's explosion (~~lights a script can drive~~ landed in M17), and
+texture-mapped materials — bark and alpha-cut leaves are the same missing feature — plus tree LOD
+and wind.
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

@@ -494,6 +494,45 @@ impl Scene {
             });
         }
 
+        // Trees carry their geometry instead of referencing it (M19), and one
+        // tree is two draws: bark under the entity's own `Material`, leaves
+        // under the tree's foliage fields. Both items keep the entity's name,
+        // so picking and selection resolve a tree back to one place in the
+        // file like anything else.
+        for (entity, tree) in self
+            .world
+            .query::<(Entity, &crate::components::Tree)>()
+            .iter()
+        {
+            let grown = crate::tree::meshes_for(tree);
+            let model = self.transform_of(entity).matrix();
+            let name = self
+                .world
+                .get::<&Name>(entity)
+                .map(|n| n.0.clone())
+                .unwrap_or_default();
+            let bark = self
+                .world
+                .get::<&crate::components::Material>(entity)
+                .map(|m| *m)
+                .unwrap_or_default();
+
+            items.push(RenderItem {
+                entity: name.clone(),
+                mesh: grown.bark,
+                model,
+                material: bark,
+            });
+            if let Some(leaves) = grown.leaves {
+                items.push(RenderItem {
+                    entity: name,
+                    mesh: leaves,
+                    model,
+                    material: tree.leaf_material(),
+                });
+            }
+        }
+
         Ok(items)
     }
 

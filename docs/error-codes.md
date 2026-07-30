@@ -65,6 +65,8 @@ build fails.
 | `wheel_vehicle_not_found` | 1 | a Wheel's "vehicle" names no entity in the scene |
 | `wheel_vehicle_invalid` | 1 | a Wheel's "vehicle" must be a different entity with a dynamic RigidBody |
 | `wheel_with_physics` | 1 | a Wheel entity may not have its own RigidBody or Collider; the chassis owns all collision |
+| `tree_with_mesh` | 1 | an entity may not have both a Tree and a Mesh; a Tree is the entity's geometry |
+| `tree_too_complex` | 1 | a Tree's parameters would generate more vertices than the engine will grow |
 | `input_unreadable` | 1 | the input timeline file could not be read |
 | `input_parse_error` | 1 | an input timeline line is not a valid {"step", "held"} object |
 | `unknown_key` | 1 | an input timeline holds a name that is no known key |

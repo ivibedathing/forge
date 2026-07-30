@@ -169,6 +169,12 @@ registry! {
     WHEEL_WITH_PHYSICS = "wheel_with_physics", Input,
         "a Wheel entity may not have its own RigidBody or Collider; the chassis owns all collision";
 
+    // ── Trees (M19) ────────────────────────────────────────────────────
+    TREE_WITH_MESH = "tree_with_mesh", Input,
+        "an entity may not have both a Tree and a Mesh; a Tree is the entity's geometry";
+    TREE_TOO_COMPLEX = "tree_too_complex", Input,
+        "a Tree's parameters would generate more vertices than the engine will grow";
+
     // ── Input (M11) ────────────────────────────────────────────────────
     INPUT_UNREADABLE = "input_unreadable", Input,
         "the input timeline file could not be read";

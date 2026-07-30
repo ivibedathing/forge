@@ -397,6 +397,35 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        // A clip on a tree parameter regrows the tree's mesh every step it
+        // changes — legal, deterministic, and not free. `seed`, `levels`,
+        // `branches`, `whorl`, `sides`, `segments`, `leaves_per_branch`, and
+        // `leaf` are absent for the usual reason: integers and string enums
+        // are not numbers this function can interpolate into.
+        "Tree" => {
+            let Ok(mut c) = world.get::<&mut Tree>(entity) else {
+                return false;
+            };
+            match field {
+                "height" => c.height = scalar,
+                "trunk_radius" => c.trunk_radius = scalar,
+                "branch_angle" => c.branch_angle = scalar,
+                "branch_twist" => c.branch_twist = scalar,
+                "branch_start" => c.branch_start = scalar,
+                "length_ratio" => c.length_ratio = scalar,
+                "length_falloff" => c.length_falloff = scalar,
+                "radius_ratio" => c.radius_ratio = scalar,
+                "taper" => c.taper = scalar,
+                "flare" => c.flare = scalar,
+                "crook" => c.crook = scalar,
+                "tropism" => c.tropism = scalar,
+                "jitter" => c.jitter = scalar,
+                "leaf_size" => c.leaf_size = scalar,
+                "leaf_color" => c.leaf_color = v3,
+                "leaf_roughness" => c.leaf_roughness = scalar,
+                _ => return false,
+            }
+        }
         "Water" => {
             let Ok(mut c) = world.get::<&mut Water>(entity) else {
                 return false;
@@ -880,6 +909,7 @@ mod tests {
                 {"type":"HudText","text":"x"},
                 {"type":"HudRect","size":[1.0,1.0]},
                 {"type":"ParticleEmitter"},
+                {"type":"Tree"},
                 {"type":"Water"}
             ]}
         ]}"#;
