@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use engine_core::formatter::{self, AddComponent, AddEntity, RemoveComponent, SetComponentField};
-use engine_core::scene::{RenderItem, ResolvedLights, WaterItem};
+use engine_core::scene::{CloudItem, RenderItem, ResolvedLights, WaterItem};
 use engine_core::{EngineError, Scene, SceneFile};
 
 /// How often the file is re-read. Well under the "reflects within a second"
@@ -23,10 +23,10 @@ pub struct SceneDoc {
     pub display: String,
     /// The exact bytes on disk at last reload.
     pub source: String,
-    /// Parsed file — present even when semantic validation failed, as long
+    /// Parsed file â present even when semantic validation failed, as long
     /// as the JSON parses, so the hierarchy stays useful mid-edit.
     pub file: Option<SceneFile>,
-    /// The same parse as raw JSON — what the inspector and gizmo read, so
+    /// The same parse as raw JSON â what the inspector and gizmo read, so
     /// they see exactly the file's fields (absent keys and all).
     pub raw: Option<serde_json::Value>,
     /// Draw list + lights, rebuilt per reload; empty when invalid.
@@ -35,13 +35,16 @@ pub struct SceneDoc {
     /// **time 0**, like it shows particles not at all: the editor draws the
     /// scene at rest, and the rest pose of a wave is a defined, static shape.
     pub water: Vec<WaterItem>,
+    /// Clouds (M20). Unlike particles these exist at rest, so the viewport
+    /// shows them — a cloud is scene content, not simulation state.
+    pub clouds: Vec<CloudItem>,
     pub lights: ResolvedLights,
     /// The scene's own sky, fog and shadow settings, so the viewport shows
-    /// what the file says rather than a house style — the editor is a view
+    /// what the file says rather than a house style â the editor is a view
     /// onto the text (invariant 8), and lighting is most of what there is to
     /// look at.
     pub environment: engine_core::scene::EnvironmentSettings,
-    /// Full `engine validate` output — same path, same codes (principle #6).
+    /// Full `engine validate` output â same path, same codes (principle #6).
     pub diagnostics: Vec<EngineError>,
     pub last_reload: Option<Instant>,
     /// Status-bar notice (conflict drops, write errors). Sticky until the
@@ -61,6 +64,7 @@ impl SceneDoc {
             raw: None,
             items: Vec::new(),
             water: Vec::new(),
+            clouds: Vec::new(),
             lights: engine_core::scene::LightRig {
                 sun: None,
                 ambient: None,
@@ -116,6 +120,7 @@ impl SceneDoc {
                 self.file = None;
                 self.items.clear();
                 self.water.clear();
+                self.clouds.clear();
             }
         }
     }
@@ -140,6 +145,7 @@ impl SceneDoc {
 
         self.items.clear();
         self.water.clear();
+        self.clouds.clear();
         if self.is_valid() {
             if let Ok(scene) = Scene::from_source(&self.source, &self.display) {
                 let assets = engine_assets::AssetServer::for_scene(&self.path);
@@ -147,6 +153,7 @@ impl SceneDoc {
                     Ok(items) => {
                         self.items = items;
                         self.water = scene.water_items();
+                        self.clouds = scene.cloud_items();
                         // At rest, like particles: the viewport shows the
                         // scene at scene time zero, so a `daylight` block
                         // renders at exactly the `time_of_day` the file
@@ -172,12 +179,12 @@ impl SceneDoc {
     /// Commit one logical mutation: re-read the file (the gesture may be
     /// older than the newest external write), rebase the edit onto the fresh
     /// contents by name/type, write atomically, reload. On a vanished
-    /// target: drop the edit and say so (editor design §5) — never guess.
+    /// target: drop the edit and say so (editor design Â§5) â never guess.
     pub fn apply(&mut self, edit: &SetComponentField) {
         let fresh = match std::fs::read_to_string(&self.path) {
             Ok(fresh) => fresh,
             Err(e) => {
-                self.notice = Some(format!("edit dropped — cannot read file: {e}"));
+                self.notice = Some(format!("edit dropped â cannot read file: {e}"));
                 return;
             }
         };
@@ -194,19 +201,19 @@ impl SceneDoc {
                 Err(e) => self.notice = Some(format!("write failed: {}", e.message)),
             },
             Err(e) => {
-                self.notice = Some(format!("edit dropped — {}", e.message));
+                self.notice = Some(format!("edit dropped â {}", e.message));
             }
         }
     }
 
     /// Add a component (all fields at their documented defaults) to an
-    /// entity — same commit shape as [`apply`](Self::apply): fresh read,
+    /// entity â same commit shape as [`apply`](Self::apply): fresh read,
     /// rebase by name, atomic write, reload.
     pub fn add_component(&mut self, entity: &str, component: &str) {
         let fresh = match std::fs::read_to_string(&self.path) {
             Ok(fresh) => fresh,
             Err(e) => {
-                self.notice = Some(format!("edit dropped — cannot read file: {e}"));
+                self.notice = Some(format!("edit dropped â cannot read file: {e}"));
                 return;
             }
         };
@@ -223,7 +230,7 @@ impl SceneDoc {
                 }
                 Err(e) => self.notice = Some(format!("write failed: {}", e.message)),
             },
-            Err(e) => self.notice = Some(format!("edit dropped — {}", e.message)),
+            Err(e) => self.notice = Some(format!("edit dropped â {}", e.message)),
         }
     }
 
@@ -233,7 +240,7 @@ impl SceneDoc {
         let fresh = match std::fs::read_to_string(&self.path) {
             Ok(fresh) => fresh,
             Err(e) => {
-                self.notice = Some(format!("edit dropped — cannot read file: {e}"));
+                self.notice = Some(format!("edit dropped â cannot read file: {e}"));
                 return;
             }
         };
@@ -249,12 +256,12 @@ impl SceneDoc {
                 }
                 Err(e) => self.notice = Some(format!("write failed: {}", e.message)),
             },
-            Err(e) => self.notice = Some(format!("edit dropped — {}", e.message)),
+            Err(e) => self.notice = Some(format!("edit dropped â {}", e.message)),
         }
     }
 
     /// Append a new entity named `base_name` (deduplicated against the
-    /// fresh file contents: `pyramid`, `pyramid-2`, …). Same commit shape as
+    /// fresh file contents: `pyramid`, `pyramid-2`, â¦). Same commit shape as
     /// [`apply`](Self::apply): fresh read, splice, atomic write, reload.
     /// Returns the name actually written, for selection.
     pub fn add_entity(
@@ -265,7 +272,7 @@ impl SceneDoc {
         let fresh = match std::fs::read_to_string(&self.path) {
             Ok(fresh) => fresh,
             Err(e) => {
-                self.notice = Some(format!("import dropped — cannot read file: {e}"));
+                self.notice = Some(format!("import dropped â cannot read file: {e}"));
                 return None;
             }
         };
@@ -300,7 +307,7 @@ impl SceneDoc {
                 }
             },
             Err(e) => {
-                self.notice = Some(format!("import dropped — {}", e.message));
+                self.notice = Some(format!("import dropped â {}", e.message));
                 None
             }
         }

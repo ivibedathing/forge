@@ -7,7 +7,9 @@
 use engine_core::components::Camera;
 use engine_core::math::Mat4;
 use engine_core::particles::ParticleInstance;
-use engine_core::scene::{EnvironmentSettings, HudItems, RenderItem, ResolvedLights, WaterItem};
+use engine_core::scene::{
+    CloudItem, EnvironmentSettings, HudItems, RenderItem, ResolvedLights, WaterItem,
+};
 use engine_core::{EngineError, Result};
 
 use crate::gpu::Gpu;
@@ -51,6 +53,7 @@ impl Image {
 pub fn render(
     items: &[RenderItem],
     water: &[WaterItem],
+    clouds: &[CloudItem],
     particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
@@ -65,6 +68,7 @@ pub fn render(
     render_with_adapter(
         items,
         water,
+        clouds,
         particles,
         camera,
         camera_model,
@@ -88,6 +92,7 @@ pub fn render(
 pub fn render_with_adapter(
     items: &[RenderItem],
     water: &[WaterItem],
+    clouds: &[CloudItem],
     particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
@@ -149,6 +154,7 @@ pub fn render_with_adapter(
             target_size: [width, height],
             items,
             water,
+            clouds,
             particles,
             view_projection,
             camera_position: camera_model.w_axis.truncate(),

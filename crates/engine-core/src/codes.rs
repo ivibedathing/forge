@@ -183,6 +183,12 @@ registry! {
     TREE_TOO_COMPLEX = "tree_too_complex", Input,
         "a Tree's parameters would generate more vertices than the engine will grow";
 
+    // ── Clouds (M20) ───────────────────────────────────────────────────
+    CLOUD_WITH_MESH = "cloud_with_mesh", Input,
+        "a Cloud entity owns its own geometry; it may not also have a Mesh or a Material";
+    CLOUD_TOO_COMPLEX = "cloud_too_complex", Input,
+        "a Cloud's parameters would generate more vertices than the engine will grow";
+
     // ── Input (M11) ────────────────────────────────────────────────────
     INPUT_UNREADABLE = "input_unreadable", Input,
         "the input timeline file could not be read";

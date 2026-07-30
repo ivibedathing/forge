@@ -1576,6 +1576,179 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A cloud: a cumulus, a raft of stratocumulus, a storm anvil, a torn wisp.\n\nA recipe rather than a mesh reference, like [`Tree`] — the engine grows it\ninto a cluster of lobes, each of which grows smaller lobes on itself, seeded\nso two clouds with the same parameters and different seeds are different\nclouds. The entity owns that geometry, sized by `Transform.scale` like a\nwater surface, so a `Cloud` entity carries **no** `Mesh` and **no**\n`Material` (`cloud_with_mesh`). A cloud is not a GGX surface: what a\n`Material` describes, `color` / `shade_color` / `density` / `feather`\ndescribe instead.\n\nNon-uniform scale is the normal case, not an edge case — `scale: [24, 12,\n24]` is what makes a cumulus wider than it is tall, and it oblates the lobes\nwith it.\n\nShading is three cheap stand-ins for multiple scattering, none of which is\nvolumetric: wrapped diffuse between `shade_color` and `color`, a forward-\nscattering silver lining when the camera looks toward the sun, and an alpha\nthat fades toward each lobe's own silhouette. Clouds do not cast shadows\n(the engine has one shadow cascade and it is fitted to the camera, not to a\ncloud at altitude) and are not lit by `PointLight`s.",
+        "properties": {
+          "children": {
+            "default": 3,
+            "description": "Lobes grown on each lobe of the previous generation. `[0, 8]`.",
+            "format": "uint32",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "color": {
+            "default": [
+              1.0,
+              0.9800000190734863,
+              0.949999988079071
+            ],
+            "description": "Linear RGB of the sunlit side. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "density": {
+            "default": 0.8999999761581421,
+            "description": "How opaque the cloud is where it is thickest, `[0, 1]`. Lobes do not\nwrite depth, so overlapping ones accumulate — which is a cheap stand-in\nfor optical depth, and why a wisp wants a much lower value than a storm.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "detail": {
+            "default": 2,
+            "description": "Icosphere subdivisions per lobe: 12, 42, 162 or 642 vertices. `[0, 3]`.\nThis is the quality dial, and `2` is plenty for anything at cloud\ndistance.",
+            "format": "uint32",
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "drift": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "World-space metres per second the cloud travels, evaluated against the\nscene clock (`--time`, else `steps / timestep_hz`) — so a drifting sky\nis as reproducible as a wave, and a script is not needed to move it.\n\nThe cloud's *shape* never changes with time. Regenerating lobes per\nframe would mint a new mesh every frame and defeat the renderer's upload\ncache; in this engine, generated geometry is made once.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "drift_wrap": {
+            "default": 0.0,
+            "description": "Metres after which a drifting cloud recycles to where it started. `>= 0`;\n`0` (the default) lets it drift away for good.\n\nWrapping *teleports* the cloud, so it wants to be wider than the view or\nfar enough out that fog has already eaten it before it jumps.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "feather": {
+            "default": 3.0,
+            "description": "How crisp the cloud's edges are, `[0, 8]`. Alpha follows\n`1 - (1 - facing)^feather` as the surface turns away from the camera, so\n**higher is crisper** and low values are wispy: 1 fades the whole\nsurface proportionally, 3 keeps the body opaque and thins only the last\nfew degrees before the silhouette.\n\nIt is doing two jobs. A real cloud's silhouette is where it thins out,\nnot where its geometry stops — and the same fade is what hides the\nboundaries *between* two interpenetrating lobes, since each of them\nvanishes exactly where its surface turns away.",
+            "format": "float",
+            "maximum": 8.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "flatten": {
+            "default": 0.0,
+            "description": "How much the cloud sits on a flat base, `[0, 1]`. `0` is a puffball with\nlobes scattered through its whole box; `1` seats every lobe on the base\nplane and folds what hangs below onto it.\n\nA cumulus has a flat bottom because condensation begins at one altitude,\nwhich is why every fair-weather cloud in a field shares a base — it is\nthe cheapest of this component's cues and one of the most legible.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "jitter": {
+            "default": 0.30000001192092896,
+            "description": "How much every jittered quantity — lobe radius, placement, child size —\nvaries, as a fraction. `[0, 1)`; `0` is a diagram.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "levels": {
+            "default": 2,
+            "description": "Generations of smaller lobes piled on the base ones. `[0, 3]`: `0` is a\ncluster of plain spheres, `2` reads as cauliflower, `3` is expensive.",
+            "format": "uint32",
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lobe_ratio": {
+            "default": 0.550000011920929,
+            "description": "Child lobe radius as a fraction of its parent's, `(0, 1]`. This is the\ndial that makes the silhouette detailed at more than one scale — at 1\nevery lobe is the same size and the cloud reads as popcorn.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 1.0,
+            "type": "number"
+          },
+          "lobe_size": {
+            "default": 0.41999998688697815,
+            "description": "Diameter of a base lobe as a fraction of the cloud's own size, `(0, 1]`.\nLarge values give a few fat billows, small ones a curdled texture.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 1.0,
+            "type": "number"
+          },
+          "lobes": {
+            "default": 6,
+            "description": "Lobes in the base cluster, spread over the footprint on a golden-angle\nspiral. `[1, 32]`; a handful reads as one cumulus, a dozen or more as a\nraft.",
+            "format": "uint32",
+            "maximum": 32,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rise": {
+            "default": 0.3499999940395355,
+            "description": "How strongly child lobes are biased toward the sky, `[0, 1]`. A cumulus\nis a convection cell: its detail is on top, where the air is still\nrising, and its underside is smooth. At `0` children scatter in every\ndirection and the cloud reads as a sea urchin.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "default": 0,
+            "description": "Seeds every random draw. Two clouds with the same parameters and\ndifferent seeds are different clouds; the same seed always regrows the\nsame cloud.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "shade_color": {
+            "default": [
+              0.41999998688697815,
+              0.46000000834465027,
+              0.5799999833106995
+            ],
+            "description": "Linear RGB of the self-shadowed side, each component `[0, 1]`.\n\nBlue-grey rather than grey by default, and that is the point: the\nunderside of a cloud is lit by the sky above it, not by the sun it is\nhiding from. Darkening this toward slate is most of what makes a storm.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": {
+            "const": "Cloud",
+            "type": "string"
+          },
+          "wobble": {
+            "default": 0.11999999731779099,
+            "description": "Smooth radial distortion of each lobe, as a fraction of its radius.\n`[0, 1)`; a little is what stops a lobe from reading as a ball.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -1598,7 +1771,8 @@
     "HudRect",
     "ParticleEmitter",
     "Tree",
-    "Water"
+    "Water",
+    "Cloud"
   ],
   "scene": {
     "$defs": {
@@ -3021,6 +3195,179 @@
                 },
                 "maxItems": 8,
                 "type": "array"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A cloud: a cumulus, a raft of stratocumulus, a storm anvil, a torn wisp.\n\nA recipe rather than a mesh reference, like [`Tree`] — the engine grows it\ninto a cluster of lobes, each of which grows smaller lobes on itself, seeded\nso two clouds with the same parameters and different seeds are different\nclouds. The entity owns that geometry, sized by `Transform.scale` like a\nwater surface, so a `Cloud` entity carries **no** `Mesh` and **no**\n`Material` (`cloud_with_mesh`). A cloud is not a GGX surface: what a\n`Material` describes, `color` / `shade_color` / `density` / `feather`\ndescribe instead.\n\nNon-uniform scale is the normal case, not an edge case — `scale: [24, 12,\n24]` is what makes a cumulus wider than it is tall, and it oblates the lobes\nwith it.\n\nShading is three cheap stand-ins for multiple scattering, none of which is\nvolumetric: wrapped diffuse between `shade_color` and `color`, a forward-\nscattering silver lining when the camera looks toward the sun, and an alpha\nthat fades toward each lobe's own silhouette. Clouds do not cast shadows\n(the engine has one shadow cascade and it is fitted to the camera, not to a\ncloud at altitude) and are not lit by `PointLight`s.",
+            "properties": {
+              "children": {
+                "default": 3,
+                "description": "Lobes grown on each lobe of the previous generation. `[0, 8]`.",
+                "format": "uint32",
+                "maximum": 8,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "color": {
+                "default": [
+                  1.0,
+                  0.9800000190734863,
+                  0.949999988079071
+                ],
+                "description": "Linear RGB of the sunlit side. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "density": {
+                "default": 0.8999999761581421,
+                "description": "How opaque the cloud is where it is thickest, `[0, 1]`. Lobes do not\nwrite depth, so overlapping ones accumulate — which is a cheap stand-in\nfor optical depth, and why a wisp wants a much lower value than a storm.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "detail": {
+                "default": 2,
+                "description": "Icosphere subdivisions per lobe: 12, 42, 162 or 642 vertices. `[0, 3]`.\nThis is the quality dial, and `2` is plenty for anything at cloud\ndistance.",
+                "format": "uint32",
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "drift": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "World-space metres per second the cloud travels, evaluated against the\nscene clock (`--time`, else `steps / timestep_hz`) — so a drifting sky\nis as reproducible as a wave, and a script is not needed to move it.\n\nThe cloud's *shape* never changes with time. Regenerating lobes per\nframe would mint a new mesh every frame and defeat the renderer's upload\ncache; in this engine, generated geometry is made once.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "drift_wrap": {
+                "default": 0.0,
+                "description": "Metres after which a drifting cloud recycles to where it started. `>= 0`;\n`0` (the default) lets it drift away for good.\n\nWrapping *teleports* the cloud, so it wants to be wider than the view or\nfar enough out that fog has already eaten it before it jumps.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "feather": {
+                "default": 3.0,
+                "description": "How crisp the cloud's edges are, `[0, 8]`. Alpha follows\n`1 - (1 - facing)^feather` as the surface turns away from the camera, so\n**higher is crisper** and low values are wispy: 1 fades the whole\nsurface proportionally, 3 keeps the body opaque and thins only the last\nfew degrees before the silhouette.\n\nIt is doing two jobs. A real cloud's silhouette is where it thins out,\nnot where its geometry stops — and the same fade is what hides the\nboundaries *between* two interpenetrating lobes, since each of them\nvanishes exactly where its surface turns away.",
+                "format": "float",
+                "maximum": 8.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "flatten": {
+                "default": 0.0,
+                "description": "How much the cloud sits on a flat base, `[0, 1]`. `0` is a puffball with\nlobes scattered through its whole box; `1` seats every lobe on the base\nplane and folds what hangs below onto it.\n\nA cumulus has a flat bottom because condensation begins at one altitude,\nwhich is why every fair-weather cloud in a field shares a base — it is\nthe cheapest of this component's cues and one of the most legible.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "jitter": {
+                "default": 0.30000001192092896,
+                "description": "How much every jittered quantity — lobe radius, placement, child size —\nvaries, as a fraction. `[0, 1)`; `0` is a diagram.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "levels": {
+                "default": 2,
+                "description": "Generations of smaller lobes piled on the base ones. `[0, 3]`: `0` is a\ncluster of plain spheres, `2` reads as cauliflower, `3` is expensive.",
+                "format": "uint32",
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "lobe_ratio": {
+                "default": 0.550000011920929,
+                "description": "Child lobe radius as a fraction of its parent's, `(0, 1]`. This is the\ndial that makes the silhouette detailed at more than one scale — at 1\nevery lobe is the same size and the cloud reads as popcorn.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "maximum": 1.0,
+                "type": "number"
+              },
+              "lobe_size": {
+                "default": 0.41999998688697815,
+                "description": "Diameter of a base lobe as a fraction of the cloud's own size, `(0, 1]`.\nLarge values give a few fat billows, small ones a curdled texture.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "maximum": 1.0,
+                "type": "number"
+              },
+              "lobes": {
+                "default": 6,
+                "description": "Lobes in the base cluster, spread over the footprint on a golden-angle\nspiral. `[1, 32]`; a handful reads as one cumulus, a dozen or more as a\nraft.",
+                "format": "uint32",
+                "maximum": 32,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "rise": {
+                "default": 0.3499999940395355,
+                "description": "How strongly child lobes are biased toward the sky, `[0, 1]`. A cumulus\nis a convection cell: its detail is on top, where the air is still\nrising, and its underside is smooth. At `0` children scatter in every\ndirection and the cloud reads as a sea urchin.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "seed": {
+                "default": 0,
+                "description": "Seeds every random draw. Two clouds with the same parameters and\ndifferent seeds are different clouds; the same seed always regrows the\nsame cloud.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "shade_color": {
+                "default": [
+                  0.41999998688697815,
+                  0.46000000834465027,
+                  0.5799999833106995
+                ],
+                "description": "Linear RGB of the self-shadowed side, each component `[0, 1]`.\n\nBlue-grey rather than grey by default, and that is the point: the\nunderside of a cloud is lit by the sky above it, not by the sun it is\nhiding from. Darkening this toward slate is most of what makes a storm.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": {
+                "const": "Cloud",
+                "type": "string"
+              },
+              "wobble": {
+                "default": 0.11999999731779099,
+                "description": "Smooth radial distortion of each lobe, as a fraction of its radius.\n`[0, 1)`; a little is what stops a lobe from reading as a ball.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
               }
             },
             "required": [

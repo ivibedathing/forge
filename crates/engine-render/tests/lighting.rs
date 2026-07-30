@@ -31,6 +31,7 @@ fn render(source: &str) -> Image {
     offscreen::render(
         &items,
         &scene.water_items(),
+        &scene.cloud_items(),
         &[],
         &camera,
         camera_transform.matrix(),

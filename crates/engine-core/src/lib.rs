@@ -6,6 +6,7 @@
 //! this, and must stay usable on a machine with no GPU.
 
 pub mod animation;
+pub mod cloud;
 pub mod codes;
 pub mod components;
 pub mod contact;
