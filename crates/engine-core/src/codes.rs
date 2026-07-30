@@ -92,6 +92,8 @@ registry! {
         "more than one DirectionalLight in the scene";
     MULTIPLE_AMBIENT_LIGHTS = "multiple_ambient_lights", Input,
         "more than one AmbientLight in the scene";
+    TOO_MANY_POINT_LIGHTS = "too_many_point_lights", Input,
+        "a scene may carry at most 8 PointLight components";
     VALIDATION_FAILED = "validation_failed", Input,
         "summary error after per-diagnostic reports; see the preceding lines";
 

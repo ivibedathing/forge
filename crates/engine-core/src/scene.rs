@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use glam::Vec3;
 
 use crate::components::{
-    AmbientLight, Camera, ComponentData, DirectionalLight, HudRect, HudText, Name, Transform,
+    AmbientLight, Camera, ComponentData, DirectionalLight, HudRect, HudText, Name, PointLight,
+    Transform, MAX_POINT_LIGHTS,
 };
 use crate::error::{EngineError, Result};
 use crate::validate;
@@ -176,19 +177,47 @@ impl HudItems {
 /// not extraction, is what rejects multiple suns. `sun` pairs the component
 /// with the world-space direction the light *travels* (the entity's
 /// `transform.quat() * -Z`).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LightRig {
     pub sun: Option<(DirectionalLight, Vec3)>,
     pub ambient: Option<AmbientLight>,
+    /// Every [`PointLight`] paired with its world position, in entity-name
+    /// order — the uniform array is built from this, and a light's index in it
+    /// must not depend on archetype iteration. Validation caps the length at
+    /// [`MAX_POINT_LIGHTS`].
+    pub points: Vec<(PointLight, Vec3)>,
+}
+
+/// One point light resolved for upload: color premultiplied by intensity.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ResolvedPointLight {
+    pub position: Vec3,
+    pub color: Vec3,
+    pub range: f32,
 }
 
 /// Concrete lighting values, ready for a uniform buffer: colors are
 /// premultiplied by intensity, the direction is normalized travel direction.
+///
+/// Point lights ride in a fixed-size array with a count rather than a `Vec`,
+/// which keeps this **`Copy`**. That matters: the viewer resolves lights every
+/// frame, and the shader's array is fixed-size regardless, so a heap allocation
+/// per frame would buy nothing but a per-frame allocation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResolvedLights {
     pub sun_direction: Vec3,
     pub sun_color: Vec3,
     pub ambient: Vec3,
+    /// Only the first `point_count` entries are meaningful.
+    pub points: [ResolvedPointLight; MAX_POINT_LIGHTS],
+    pub point_count: usize,
+}
+
+impl ResolvedLights {
+    /// The live point lights — the slice every consumer should read.
+    pub fn live_points(&self) -> &[ResolvedPointLight] {
+        &self.points[..self.point_count.min(MAX_POINT_LIGHTS)]
+    }
 }
 
 impl LightRig {
@@ -207,11 +236,15 @@ impl LightRig {
     /// white ambient 0.15); at least one light component → exactly what the
     /// scene wrote, absent means off.
     pub fn resolved(&self) -> ResolvedLights {
-        if self.sun.is_none() && self.ambient.is_none() {
+        // A `PointLight` counts as lighting the scene, so a campfire-only scene
+        // stays dark outside its firelight instead of getting a free sun.
+        if self.sun.is_none() && self.ambient.is_none() && self.points.is_empty() {
             return ResolvedLights {
                 sun_direction: Self::fallback_sun_direction(),
                 sun_color: Vec3::ONE,
                 ambient: Vec3::splat(0.15),
+                points: [ResolvedPointLight::default(); MAX_POINT_LIGHTS],
+                point_count: 0,
             };
         }
 
@@ -220,6 +253,17 @@ impl LightRig {
             None => (Vec3::ZERO, Vec3::NEG_Z),
         };
 
+        // Validation caps the count, so the surplus a `zip` would drop here can
+        // only exist on a scene that never loaded.
+        let mut points = [ResolvedPointLight::default(); MAX_POINT_LIGHTS];
+        for (slot, (light, position)) in points.iter_mut().zip(self.points.iter()) {
+            *slot = ResolvedPointLight {
+                position: *position,
+                color: light.color * light.intensity,
+                range: light.range,
+            };
+        }
+
         ResolvedLights {
             sun_direction,
             sun_color,
@@ -227,6 +271,8 @@ impl LightRig {
                 .ambient
                 .map(|a| a.color * a.intensity)
                 .unwrap_or(Vec3::ZERO),
+            points,
+            point_count: self.points.len().min(MAX_POINT_LIGHTS),
         }
     }
 }
@@ -481,7 +527,24 @@ impl Scene {
             .next()
             .map(|ambient| *ambient);
 
-        LightRig { sun, ambient }
+        // Point lights are plural, so unlike the sun their order is visible in
+        // the uniform array — sort by entity name, the same determinism rule
+        // wheels and collision layers follow.
+        let mut points: Vec<(String, (PointLight, Vec3))> = self
+            .world
+            .query::<(Entity, &PointLight, &Name)>()
+            .iter()
+            .map(|(entity, light, name)| {
+                (name.0.clone(), (*light, self.transform_of(entity).position))
+            })
+            .collect();
+        points.sort_by(|a, b| a.0.cmp(&b.0));
+
+        LightRig {
+            sun,
+            ambient,
+            points: points.into_iter().map(|(_, light)| light).collect(),
+        }
     }
 
     fn transform_of(&self, entity: Entity) -> Transform {

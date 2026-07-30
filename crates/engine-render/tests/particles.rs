@@ -8,6 +8,7 @@
 //!
 //! Like the other render tests, every test skips cleanly without a GPU.
 
+use engine_core::components::ParticleBlend;
 use engine_core::math::Vec3;
 use engine_core::mesh::BuiltinAssets;
 use engine_core::particles::ParticleInstance;
@@ -66,6 +67,9 @@ fn particle(position: Vec3, color: Vec3) -> ParticleInstance {
         size: 1.0,
         color,
         alpha: 1.0,
+        velocity: Vec3::ZERO,
+        stretch: 0.0,
+        blend: ParticleBlend::Alpha,
     }
 }
 
@@ -114,10 +118,8 @@ fn alpha_zero_particles_change_nothing() {
     }
     let empty = render(&[]);
     let invisible = render(&[ParticleInstance {
-        position: Vec3::ZERO,
-        size: 1.0,
-        color: Vec3::new(1.0, 1.0, 1.0),
         alpha: 0.0,
+        ..particle(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0))
     }]);
     // A fully faded particle still draws its quad, but blends to nothing —
     // byte-identical output is what keeps end-of-life particles invisible
@@ -145,5 +147,168 @@ fn nearer_particles_draw_over_farther_ones() {
     assert!(
         r >= 250 && g <= 60,
         "the nearer red sprite must win the center pixel, got r={r} g={g}"
+    );
+}
+
+// ── M17: additive blending and velocity stretching ──────────────────────────
+
+#[test]
+fn additive_particles_only_ever_brighten() {
+    if !gpu_available() {
+        return;
+    }
+    // The defining property of the additive path, and the reason fire uses it:
+    // an additive sprite adds light to what is behind it, so no pixel it
+    // touches can come out darker than it went in. An alpha-blended dark sprite
+    // would darken the same pixels.
+    let empty = render(&[]);
+    let lit = render(&[ParticleInstance {
+        blend: ParticleBlend::Additive,
+        ..particle(Vec3::ZERO, Vec3::new(0.5, 0.25, 0.05))
+    }]);
+
+    let mut brightened = 0usize;
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let before = empty.pixel(x, y);
+            let after = lit.pixel(x, y);
+            for channel in 0..3 {
+                assert!(
+                    after[channel] >= before[channel],
+                    "additive blending darkened ({x}, {y}) channel {channel}: \
+                     {} -> {}",
+                    before[channel],
+                    after[channel]
+                );
+            }
+            if after[..3] != before[..3] {
+                brightened += 1;
+            }
+        }
+    }
+    assert!(
+        brightened > 100,
+        "the sprite should have brightened a disc of pixels, only {brightened} changed"
+    );
+}
+
+#[test]
+fn stacked_additive_particles_climb_toward_white() {
+    if !gpu_available() {
+        return;
+    }
+    // Why fire is additive rather than "orange smoke": overlapping flame gets
+    // *hotter*. Four dim orange sprites on the same spot must sum brighter than
+    // one — under alpha blending they would converge on the sprite's own color
+    // instead, however many you stack.
+    let dim = ParticleInstance {
+        alpha: 0.3,
+        blend: ParticleBlend::Additive,
+        ..particle(Vec3::ZERO, Vec3::new(0.6, 0.3, 0.08))
+    };
+    let one = render(&[dim]);
+    let four = render(&[dim, dim, dim, dim]);
+
+    let single = one.pixel(CENTER.0, CENTER.1);
+    let stacked = four.pixel(CENTER.0, CENTER.1);
+    assert!(
+        stacked[0] > single[0] && stacked[1] > single[1],
+        "stacking additive sprites must accumulate: {single:?} -> {stacked:?}"
+    );
+}
+
+#[test]
+fn additive_particles_draw_after_alpha_blended_ones() {
+    if !gpu_available() {
+        return;
+    }
+    // Documented ordering: alpha first, additive after, regardless of depth —
+    // a flame glows through the smoke above it. The dark alpha sprite is nearer
+    // the camera, so a purely back-to-front pass would let it hide the flame;
+    // the split pass must let the flame through anyway.
+    let image = render(&[
+        ParticleInstance {
+            blend: ParticleBlend::Additive,
+            ..particle(Vec3::new(0.0, 0.0, -0.5), Vec3::new(1.0, 0.5, 0.1))
+        },
+        ParticleInstance {
+            alpha: 0.9,
+            ..particle(Vec3::new(0.0, 0.0, 0.5), Vec3::new(0.02, 0.02, 0.02))
+        },
+    ]);
+    let [r, ..] = image.pixel(CENTER.0, CENTER.1);
+    assert!(
+        r > 120,
+        "the additive sprite must survive the alpha sprite in front of it, got r={r}"
+    );
+}
+
+#[test]
+fn stretching_elongates_a_sprite_along_its_velocity() {
+    if !gpu_available() {
+        return;
+    }
+    // A stretched sprite covers more of its direction of travel and no more
+    // across it. The velocity is world +Y and the camera looks down -Z, so
+    // "along" is screen-vertical and "across" is screen-horizontal.
+    // A small sprite, so there is frame left to grow into: at size 1.0 the disc
+    // already spans the whole 256-pixel view.
+    let small = ParticleInstance {
+        size: 0.2,
+        ..particle(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0))
+    };
+    let round = render(&[small]);
+    let streak = render(&[ParticleInstance {
+        velocity: Vec3::new(0.0, 4.0, 0.0),
+        stretch: 0.15,
+        ..small
+    }]);
+
+    // Measured against the empty frame, not an absolute threshold: the
+    // background here is the renderer's clear color, which is not black.
+    let background = render(&[]);
+    let lit = |image: &Image, along: bool| -> usize {
+        (0..SIZE)
+            .filter(|&i| {
+                let (x, y) = if along {
+                    (CENTER.0, i)
+                } else {
+                    (i, CENTER.1)
+                };
+                image.pixel(x, y)[0] as i32 - background.pixel(x, y)[0] as i32 > 4
+            })
+            .count()
+    };
+
+    assert!(
+        lit(&streak, true) > lit(&round, true) + 20,
+        "stretching must lengthen the sprite along its velocity: {} -> {}",
+        lit(&round, true),
+        lit(&streak, true)
+    );
+    assert_eq!(
+        lit(&streak, false),
+        lit(&round, false),
+        "stretching must not widen the sprite across its velocity"
+    );
+}
+
+#[test]
+fn zero_stretch_is_identical_to_no_velocity_data() {
+    if !gpu_available() {
+        return;
+    }
+    // The bit-exactness pin for the M13 sprites: a fast-moving particle that
+    // never asked to be stretched must render byte for byte as it did before
+    // the stretch path existed, whatever its velocity happens to be.
+    let still = render(&[particle(Vec3::ZERO, Vec3::new(0.8, 0.4, 0.1))]);
+    let moving = render(&[ParticleInstance {
+        velocity: Vec3::new(3.0, -7.0, 2.0),
+        stretch: 0.0,
+        ..particle(Vec3::ZERO, Vec3::new(0.8, 0.4, 0.1))
+    }]);
+    assert_eq!(
+        still.pixels, moving.pixels,
+        "velocity must not affect an unstretched sprite"
     );
 }

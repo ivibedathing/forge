@@ -266,6 +266,17 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "PointLight" => {
+            let Ok(mut c) = world.get::<&mut PointLight>(entity) else {
+                return false;
+            };
+            match field {
+                "color" => c.color = v3,
+                "intensity" => c.intensity = scalar,
+                "range" => c.range = scalar,
+                _ => return false,
+            }
+        }
         "RigidBody" => {
             let Ok(mut c) = world.get::<&mut RigidBody>(entity) else {
                 return false;
@@ -374,6 +385,15 @@ pub fn set_field(
                 "end_color" => c.end_color = v3,
                 "start_alpha" => c.start_alpha = scalar,
                 "end_alpha" => c.end_alpha = scalar,
+                // M17. `blend` is absent on purpose: it is a string enum, and
+                // this function animates numbers.
+                "radius" => c.radius = scalar,
+                "speed_jitter" => c.speed_jitter = scalar,
+                "size_jitter" => c.size_jitter = scalar,
+                "lifetime_jitter" => c.lifetime_jitter = scalar,
+                "turbulence" => c.turbulence = scalar,
+                "turbulence_scale" => c.turbulence_scale = scalar,
+                "stretch" => c.stretch = scalar,
                 _ => return false,
             }
         }
@@ -827,6 +847,7 @@ mod tests {
                 {"type":"Camera"},
                 {"type":"DirectionalLight"},
                 {"type":"AmbientLight"},
+                {"type":"PointLight"},
                 {"type":"RigidBody","body":"kinematic"},
                 {"type":"Collider","shape":"sphere","radius":0.5},
                 {"type":"Breakable","fragments":[{"mesh":"builtin:cube"}]},

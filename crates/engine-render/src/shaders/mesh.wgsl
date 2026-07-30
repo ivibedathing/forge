@@ -32,6 +32,15 @@ struct ObjectUniform {
     surface: vec4<f32>,
 };
 
+struct PointLightData {
+    // xyz = world position, w = range in world units.
+    position_range: vec4<f32>,
+    // rgb = color premultiplied by intensity; a unused.
+    color: vec4<f32>,
+};
+
+const MAX_POINT_LIGHTS: u32 = 8u;
+
 struct FrameUniform {
     camera_pos: vec4<f32>,
     sun_direction: vec4<f32>,
@@ -46,6 +55,9 @@ struct FrameUniform {
     sky_ground: vec4<f32>,
     // x = fog density, y = shadows on, z = shadow-map texel size, w = sky on.
     params: vec4<f32>,
+    // x = live point-light count; y, z, w unused.
+    params2: vec4<f32>,
+    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,
 };
 
 @group(0) @binding(0) var<uniform> object: ObjectUniform;
@@ -142,6 +154,87 @@ fn sky_ambient(n: vec3<f32>) -> vec3<f32> {
     let env = mix(frame.sky_ground.rgb, frame.sky_zenith.rgb, up);
     let mean = max((frame.sky_ground.rgb + frame.sky_zenith.rgb) * 0.5, vec3<f32>(1e-4));
     return frame.ambient.rgb * (env / mean);
+}
+
+/// One light's contribution, split so a transparent surface can attenuate the
+/// diffuse half and keep the specular half — the same rule the sun follows.
+struct LightSample {
+    diffuse: vec3<f32>,
+    specular: vec3<f32>,
+};
+
+/// Distance attenuation for a point light: inverse-square, windowed to reach
+/// exactly zero at `range`.
+///
+/// The window is the standard `(1 - (d/r)⁴)²` form. Two properties earn it:
+/// it is 1 near the light (so the physical falloff is untouched where it
+/// matters) and both it and its derivative vanish at `range` (so a surface
+/// crossing the boundary does not step). The `max` on the denominator is what
+/// stops a fragment *at* the light's position from returning infinity.
+fn point_light_falloff(distance: f32, range: f32) -> f32 {
+    let ratio = clamp(distance / range, 0.0, 1.0);
+    let ratio4 = ratio * ratio * ratio * ratio;
+    let window = 1.0 - ratio4;
+    return (window * window) / max(distance * distance, 1e-4);
+}
+
+/// The full BRDF for one point light.
+///
+/// This deliberately **re-derives** the GGX terms rather than sharing code with
+/// the sun path above. The four lines computing the sun's contribution are
+/// pinned byte-for-byte against eleven committed baselines, and factoring them
+/// into a function both lights call would rewrite them — which is exactly the
+/// kind of "equal on paper" restructuring that has already moved a baseline by
+/// one ULP. Duplicated math that cannot disturb the default path is the cheaper
+/// of the two costs.
+fn evaluate_point_light(
+    light: PointLightData,
+    world_position: vec3<f32>,
+    n: vec3<f32>,
+    v: vec3<f32>,
+    n_dot_v: f32,
+    diffuse_color: vec3<f32>,
+    f0: vec3<f32>,
+    roughness: f32,
+) -> LightSample {
+    var out: LightSample;
+    out.diffuse = vec3<f32>(0.0);
+    out.specular = vec3<f32>(0.0);
+
+    let to_light = light.position_range.xyz - world_position;
+    let distance = length(to_light);
+    let range = light.position_range.w;
+    if distance >= range {
+        return out;
+    }
+
+    let l = to_light / max(distance, 1e-4);
+    let n_dot_l = max(dot(n, l), 0.0);
+    if n_dot_l <= 0.0 {
+        return out;
+    }
+
+    let h = normalize(v + l);
+    let n_dot_h = max(dot(n, h), 0.0);
+    let v_dot_h = max(dot(v, h), 0.0);
+
+    let alpha = roughness * roughness;
+    let alpha2 = alpha * alpha;
+    let d_denom = n_dot_h * n_dot_h * (alpha2 - 1.0) + 1.0;
+    let d = alpha2 / (PI * d_denom * d_denom);
+
+    let ggx_v = n_dot_l * sqrt(n_dot_v * n_dot_v * (1.0 - alpha2) + alpha2);
+    let ggx_l = n_dot_v * sqrt(n_dot_l * n_dot_l * (1.0 - alpha2) + alpha2);
+    let visibility = 0.5 / max(ggx_v + ggx_l, 1e-5);
+
+    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
+
+    // Same punctual-light convention as the sun: the Lambertian 1/pi is folded
+    // into the light, so `intensity` reads as brightness rather than as flux.
+    let radiance = light.color.rgb * point_light_falloff(distance, range) * n_dot_l;
+    out.diffuse = diffuse_color * radiance;
+    out.specular = d * visibility * fresnel * radiance;
+    return out;
 }
 
 @fragment
@@ -276,6 +369,45 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         } else {
             color = lit_diffuse + lit_specular + fill + reflection + emissive;
         }
+    }
+
+    // Point lights (M17), on their own branch after everything above, so a
+    // scene with none of them never executes a line of this and lands on the
+    // byte-exact path. They are added to the finished color rather than folded
+    // into it: firelight is *extra* light, and a scene keeps its sun, its
+    // ambient, and its sky reflection whether or not a campfire is burning.
+    //
+    // No shadowing — the engine has one shadow map and it belongs to the sun.
+    // For the case this exists to serve that is nearly free: the fire sits in
+    // the open, and what would cast into its light (the logs) is also what is
+    // brightest, so the missing occlusion reads as the coals glowing.
+    let point_count = u32(frame.params2.x);
+    if point_count > 0u {
+        // Light that passed through a transmissive surface did not scatter off
+        // it, matching the sun path's `body`.
+        let body = diffuse * (1.0 - transmission);
+        var point_diffuse = vec3<f32>(0.0);
+        var point_specular = vec3<f32>(0.0);
+        for (var i = 0u; i < MAX_POINT_LIGHTS; i = i + 1u) {
+            if i >= point_count {
+                break;
+            }
+            let sample = evaluate_point_light(
+                frame.point_lights[i],
+                in.world_position,
+                n,
+                v,
+                n_dot_v,
+                body,
+                f0,
+                roughness,
+            );
+            point_diffuse = point_diffuse + sample.diffuse;
+            point_specular = point_specular + sample.specular;
+        }
+        // Premultiply the diffuse half on a blended surface, exactly as the sun
+        // path does, so glass lit by a lamp does not turn opaque.
+        color = color + point_diffuse * out_alpha + point_specular;
     }
 
     // Fog last, so it takes emissive and specular with it — a distant fire

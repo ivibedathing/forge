@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M16 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, and M16 environment (sky, fog, shadows, MSAA, transparency)** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M17 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), and M17 fire + point lights** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -34,6 +34,12 @@ engine list-animations <scene-or-clip> [--schema]
 # physics suspends/drives the chassis and writes the wheel's Transform back (steer/spin/bounce)
 # ParticleEmitter component (M13): seeded deterministic smoke/sparks — cone spray around local
 # -Z, advanced by --steps, rendered as soft alpha-blended billboards; never baked or traced
+#   M17 adds the fire fields: "blend": "additive", "radius" (disc emission), "speed_jitter"/
+#   "size_jitter"/"lifetime_jitter", "turbulence"+"turbulence_scale", "stretch" — all default
+#   to the M13 behaviour, down to which random numbers the emitter draws
+# PointLight component (M17): local light, inverse-square windowed at "range", up to 8 per
+#   scene; no shadows. Scripts drive any light's intensity/color (world.set_light_intensity /
+#   set_light_color), which is what lets a fire light the ground it stands on
 # Scene-level "environment" block (M16): {"sky", "sky_zenith"/"sky_horizon"/"sky_ground",
 # "fog_density", "shadows", "shadow_distance", "samples"} — all default off, so a scene that
 # omits it renders byte-identically to the pre-M16 engine. Material gains "alpha" (flat) and
@@ -455,6 +461,61 @@ sky runs blue upward, fog grows with distance, blending shows what is behind, MS
 interiors exact, and an absent block equals an all-defaults one) and fixture
 `verify/m16_environment.json` + baseline, pinned by a CLI test.
 
+Fire and point lights (M17, design in `fire-and-lights-design.md`). Two halves of one problem: the
+tour's campfire was a cone of identical orange sprites, and its own doc named script-driven lights
+as the upgrade that would move the scene most.
+
+**`ParticleEmitter` gains five fire fields**, each fixing one reason a particle cone does not read
+as flame: `blend: "additive"` (overlapping flame *brightens* — alpha blending can only render
+orange smoke), `radius` (a disc of coals instead of a single apex), `speed_jitter`/`size_jitter`/
+`lifetime_jitter` (a population born identical dies at one height, drawing a flat top on the
+flame), `turbulence`+`turbulence_scale` (hot gas curls), and `stretch` (a moving ember covers more
+than its width during an exposure). **Every default is the M13 behaviour, down to which random
+numbers the emitter draws**: the draw order is a format contract — direction → disc → speed → size
+→ lifetime → turbulence — and each step is *skipped*, not defaulted, when its field is zero, since
+a defaulted draw would shift every subsequent one and move every particle baseline
+(`defaulted_fire_fields_consume_no_randomness` pins it by construction). Turbulence is smooth value
+noise sampled along each particle's own path plus a per-particle offset drawn at birth — smooth
+because per-step randomness makes a particle *vibrate* rather than arc, per-particle because
+otherwise every particle follows one shared braid; the integer hash is spelled out in-repo like the
+xorshift, so no dependency upgrade can change what a scene looks like. A particle's lifespan and
+size scale are now fixed **at birth**, so retiming an emitter mid-run affects new particles only.
+Additive is a **second pipeline** over the same shader and instance buffer (the sorted list is
+stable-partitioned on the CPU), *not* one premultiplied pipeline — that alternative works and saves
+a pipeline object, but it moves the multiply by alpha into the shader for every particle including
+the ones under existing baselines. Additive sprites draw after *all* alpha ones regardless of
+depth, so a flame glows through the smoke above it, which is what firelight scattering in that
+smoke looks like. `stretch` is in **seconds** of travel and elongates along the velocity's
+*screen-space* projection, so a particle flying at the camera stays round.
+
+**`PointLight`** is a local light — position only, no orientation, many per scene up to
+`MAX_POINT_LIGHTS` (8, beyond which `too_many_point_lights` rather than a light that silently never
+shines). Inverse-square falloff windowed by `(1 − (d/r)⁴)²`: the window is what makes a light
+*local*, and past `range` the contribution is byte-identical to no light at all — without a hard
+horizon a lantern in one room lifts the black level of the next. `intensity` is brightness at one
+unit of distance. No shadows (the engine has one shadow map and it belongs to the sun). Lights are
+ordered by entity name, since the uniform array is fixed-size and an index must not depend on
+archetype iteration; a `PointLight` counts as lighting the scene, so a campfire-only scene stays
+dark outside its firelight. Contributions are **added to the finished color** on their own branch
+after every M16 feature — firelight is *extra* light, and
+`a_point_light_is_extra_light_not_replacement_light` walks every pixel of a sunlit scene to prove
+adding a lamp never darkens one. Scripts reach any light by name through
+`world.light_intensity`/`set_light_intensity`/`light_color`/`set_light_color` (all three light
+components — the fields mean the same thing on each); intensity errors on negative/NaN/overflow at
+the call, color *clamps* to `[0, 1]`, and both bake change-based for all three kinds.
+
+**Two places here are deliberately more repetitive than they look.** `evaluate_point_light` in
+`mesh.wgsl` re-derives the GGX terms instead of sharing a function with the sun path, and
+`particles.wgsl` writes the un-stretched quad expansion out twice rather than lerping. Both are
+guarding the M16 ULP sensitivity: factoring them would rewrite the four lines M16 declares
+untouchable, and "equal on paper" is not enough when FMA contraction depends on surrounding code.
+The check that actually settles a bit-exactness question is an **A/B between binaries**, not a
+diff against a baseline: build the CLI at `main` and in the worktree, render the same scenes with
+both, `cmp` the PNGs. Doing that here found a 1-pixel `m14_break.png` diff that turned out to be
+**pre-existing drift on `main`** — all 19 scene/step combinations were byte-identical between the
+two builds. Fixture `verify/m17_fire.json` + `scripts/m17_fire.rhai` + baseline at `--steps 240`,
+pinned by a CLI test that also bakes and revalidates the run.
+
 Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
 with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,
@@ -464,10 +525,12 @@ by hand with `diff-render`, not by a CLI test). **Its growth contract is a test*
 component the tour does not use, so a new component's commit adds an entity here — there is no
 allowlist, deliberately. Station 04 fires all three `Breakable` triggers in one run (collision at
 ~585, `break_entity` at 601, `explode` at 636). What is real: particles, physics, fragments, and
-since M16 the water and ice (real `Material.transmission`, not opaque stand-ins). What is still
-faked and named as such in the doc: animals (scaled spheres on parametric loops), the sky (a
-gradient, not scattering), and the blast (no light — nothing can drive a light from a script).
-Refraction and script-driven lights are the upgrades that would move this scene most now.
+since M16 the water and ice (real `Material.transmission`, not opaque stand-ins), and since M17 the
+campfire — layered additive flame, turbulent smoke, streaked embers, and a `PointLight` the tour's
+effects script flickers off the same signal that drives the emission rates. What is still faked and
+named as such in the doc: animals (scaled spheres on parametric loops) and the sky (a gradient, not
+scattering). The blast at station 04 still emits no light, which is now a wiring job rather than a
+missing feature. Refraction is the upgrade that would move this scene most now.
 **Building it found a physics bug** now fixed and regression-tested: priming the broad-phase BVH
 before the first step (vehicle worlds did this so wheel rays hit ground on step 0) consumed the
 pair events, and rapier's `NarrowPhase::register_pairs` is private — so every collider **already
@@ -582,8 +645,9 @@ error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ �
 lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ →
 ~~M8 physics~~ → ~~M9 animation (A0–A1)~~ → ~~M10 scripting~~ — **the roadmap is complete.**
 Remaining deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF +
-GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16 — refraction and
-scene-color sampling for transmissive materials, shadow cascades, and lights a script can drive.
+GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17 — refraction and
+scene-color sampling for transmissive materials, shadow cascades, shadows from point lights, spot
+lights, and a light on the tour's explosion (~~lights a script can drive~~ landed in M17).
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

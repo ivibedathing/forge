@@ -1441,6 +1441,107 @@ fn the_m12_hud_fixture_pins_the_component_overlay() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ── fire and point lights (M17) ────────────────────────────────────────
+
+/// The M17 fixture: a campfire that is additive layered flame, turbulent
+/// smoke, streaked embers, and — the new half — a `PointLight` a script
+/// flickers, all of which has to be reproducible enough to sit under a pinned
+/// PNG.
+///
+/// The render half proves determinism through the whole new stack at once: disc
+/// emission, three jitter draws, the noise field, two blend pipelines, stretched
+/// billboards, and the point-light branch in the mesh shader. The bake half
+/// proves a script-driven light is scene state, like a velocity or a gauge
+/// width, and lands back in a file that still validates.
+#[test]
+fn the_m17_fire_fixture_pins_additive_flame_and_firelight() {
+    let scene = repo_path("examples/scenes/verify/m17_fire.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m17_fire.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "240"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+    } else {
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+    }
+
+    // The bake half needs no GPU.
+    let dir = std::env::temp_dir().join(format!("engine-m17-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let baked_path = repo_path("examples/scenes/verify/m17_baked.json");
+    let bake = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "240"])
+        .arg("--bake")
+        .arg(&baked_path)
+        .output()
+        .unwrap();
+    assert_eq!(bake.status.code(), Some(0), "{bake:?}");
+
+    let baked: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&baked_path).unwrap()).unwrap();
+    let component = |entity: &str, kind: &str| -> serde_json::Value {
+        baked["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == entity)
+            .and_then(|e| {
+                e["components"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|c| c["type"] == kind)
+            })
+            .cloned()
+            .unwrap()
+    };
+
+    // The script writes intensity, color, and emission rates every step, so all
+    // of them differ from the file's rest values and all of them bake.
+    let light = component("FireLight", "PointLight");
+    let intensity = light["intensity"].as_f64().unwrap();
+    assert!(
+        intensity > 0.0 && (intensity - 2.6).abs() > 1e-6,
+        "the flickering light's intensity should have been written, got {intensity}"
+    );
+    assert!(
+        light["color"].is_array(),
+        "a script-written light color must bake as an array, got {light}"
+    );
+    let rate = component("Fire", "ParticleEmitter")["rate"].as_f64().unwrap();
+    assert!(
+        (rate - 210.0).abs() > 1e-6,
+        "the flame's driven rate should have been written, got {rate}"
+    );
+
+    // The point of baking is that the result is a scene again.
+    let revalidate = engine().arg("validate").arg(&baked_path).output().unwrap();
+    assert_eq!(
+        revalidate.status.code(),
+        Some(0),
+        "a baked fire must still validate: {}",
+        String::from_utf8_lossy(&revalidate.stderr)
+    );
+
+    std::fs::remove_file(&baked_path).ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ── collision (M12) ────────────────────────────────────────────────────
 
 /// End to end: a dynamic box drops onto a trimesh ground (geometry borrowed

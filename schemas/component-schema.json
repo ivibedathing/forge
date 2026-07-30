@@ -121,6 +121,14 @@
           "center"
         ],
         "type": "string"
+      },
+      "ParticleBlend": {
+        "description": "How a particle's color combines with what is already on screen.\n\nNOTE: leave these variants undocumented. A doc comment on an enum *variant*\nmakes schemars emit oneOf/const instead of a flat `\"enum\": [...]`, which\nblinds the validation walk's closed-vocabulary check — the same trap\n[`ColliderShapeKind`] carries a note about.",
+        "enum": [
+          "alpha",
+          "additive"
+        ],
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -389,6 +397,51 @@
           },
           "type": {
             "const": "AmbientLight",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A local light that shines in every direction from its entity's position,\nfalling off with distance (M17).\n\nUnlike the sun, there may be **many** per scene — up to\n[`MAX_POINT_LIGHTS`], beyond which the scene is invalid\n(`too_many_point_lights`) rather than silently missing the extras. It has no\norientation, so its `Transform.rotation` and `scale` are ignored; only\n`position` is read. Point lights do not cast shadows (the engine has one\nshadow map, and it belongs to the sun) and are not attenuated by fog.\n\nThis is the component that lets a fire light the ground around it: its\n`intensity` and `color` are in the curated script API\n(`world.light_intensity` / `set_light_intensity` / `light_color` /\n`set_light_color`), so the same flicker signal that drives a flame's\nemission rate can drive the light it casts.\n\nPresence counts as \"the scene lit itself\": a scene whose only light is a\n`PointLight` gets no fallback sun, same as with any other light component.",
+        "properties": {
+          "color": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Linear RGB, each component in `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "intensity": {
+            "default": 1.0,
+            "description": "Brightness at one unit of distance. `>= 0`.\n\nFalloff is inverse-square, so this is the value the surface of a sphere\none metre away receives — which makes `intensity` comparable to\n`DirectionalLight.intensity` at exactly that distance and four times\ndimmer at two metres. A campfire is a few units; a candle is a fraction.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "range": {
+            "default": 10.0,
+            "description": "Distance in world units at which the light reaches exactly zero. `> 0`.\n\nInverse-square falloff never truly reaches zero, so a range is what\nkeeps a light local: the physical curve is multiplied by a window that\nsmoothly closes at `range`. Without it, every light in a scene would\ncontribute a little to every surface, and a lantern in one room would\nlift the black level of the next.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "type": {
+            "const": "PointLight",
             "type": "string"
           }
         },
@@ -937,7 +990,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "A deterministic particle emitter (M13): smoke, sparks, dust.\n\nParticles spray from the entity's position into a cone around its local\n**−Z** — the same aiming convention the camera and lights use, so a rising\nsmoke plume is `\"rotation\": [90, 0, 0]`. Each particle is born with\n`start_*` values and reaches its `end_*` values as it dies; the billboard\nrenders as a soft unlit disc, alpha-blended over the scene.\n\nParticles are simulation state on the fixed step clock, advanced by\n`--steps` exactly like physics (`--time` poses animations, it does not\nadvance particles). The state is derived and disposable — never baked,\nnever traced — and the `seed` makes it reproducible: same file, same\nsteps, same particles, so screenshots of smoke diff-render bit-exactly.",
+        "description": "A deterministic particle emitter (M13): smoke, sparks, dust — and, with the\nM17 fields, fire.\n\nParticles spray from the entity's position into a cone around its local\n**−Z** — the same aiming convention the camera and lights use, so a rising\nsmoke plume is `\"rotation\": [90, 0, 0]`. Each particle is born with\n`start_*` values and reaches its `end_*` values as it dies; the billboard\nrenders as a soft unlit disc, alpha-blended over the scene.\n\nParticles are simulation state on the fixed step clock, advanced by\n`--steps` exactly like physics (`--time` poses animations, it does not\nadvance particles). The state is derived and disposable — never baked,\nnever traced — and the `seed` makes it reproducible: same file, same\nsteps, same particles, so screenshots of smoke diff-render bit-exactly.\n\n# The fire fields (M17)\n\nA cone of identical sprites reads as a sparkler, not a flame. Five fields\nfix that, and **every one of them defaults to the M13 behaviour** — a\npre-M17 emitter is byte-identical, down to which random numbers it draws:\n`radius` spreads emission over a fire bed, the three `*_jitter` fields\nbreak the lockstep of a population born identical, `turbulence` makes\nflames lick, `stretch` turns round puffs into motion-aligned tongues and\nember streaks, and `blend: \"additive\"` makes overlapping flame get\n*brighter* instead of merely more opaque, which is the single biggest\ndifference between fire and orange smoke.\n\n**Random draws are skipped, not defaulted, when a field is off.** Every\njitter field consumes the emitter's RNG only when it is non-zero, in the\ndocumented order (direction → disc → speed → size → lifetime →\nturbulence). That is what keeps every baseline blessed before M17 exact,\nand it is the same discipline as not consuming the RNG on a capped spawn.",
         "properties": {
           "acceleration": {
             "default": [
@@ -953,6 +1006,11 @@
             "maxItems": 3,
             "minItems": 3,
             "type": "array"
+          },
+          "blend": {
+            "$ref": "#/$defs/ParticleBlend",
+            "default": "alpha",
+            "description": "How the billboard combines with the scene behind it. `\"alpha\"` (default)\noccludes what it covers; `\"additive\"` adds light to it, so overlapping\nsprites brighten toward white and a thin one is nearly invisible.\n\nFire, sparks, and magic are additive; smoke, dust, and spray are not.\nAdditive particles draw after every alpha-blended one, so a flame glows\n*through* the smoke above it rather than being occluded by it — the\napproximation is deliberate and it is what a real fire looks like,\nsince that smoke is genuinely lit from below."
           },
           "drag": {
             "default": 0.0,
@@ -1000,6 +1058,14 @@
             "format": "float",
             "type": "number"
           },
+          "lifetime_jitter": {
+            "default": 0.0,
+            "description": "Fraction by which each particle's lifespan varies from `lifetime`,\n`[0, 1)`. The most valuable of the three for fire: identical lifespans\nput the whole population's fade at one height, which draws a flat top\non the flame, and varying them is what makes it ragged.\n\nA particle's lifespan is fixed **at birth**, so animating `lifetime`\nmid-run retimes new particles and leaves live ones alone.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          },
           "max_particles": {
             "default": 1024,
             "description": "Cap on live particles; spawns beyond it are dropped (deterministically).\n`[1, 65536]`.",
@@ -1007,6 +1073,13 @@
             "maximum": 65536,
             "minimum": 1,
             "type": "integer"
+          },
+          "radius": {
+            "default": 0.0,
+            "description": "Radius of the disc particles are born on, in world units, centred on the\nentity and lying in the plane **perpendicular to the aim** (local XY).\n`>= 0`; 0 (default) emits from the single point.\n\nA campfire is a bed of coals, not a nozzle: emitting a flame from one\npoint gives a cone with a visible apex, and no amount of `spread` hides\nit. Like `Wheel.offset`, this is rotated by the entity's rotation but\n**not** scaled by its `Transform.scale`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
           },
           "rate": {
             "default": 10.0,
@@ -1022,10 +1095,26 @@
             "minimum": 0,
             "type": "integer"
           },
+          "size_jitter": {
+            "default": 0.0,
+            "description": "Fraction by which each particle's size varies from `start_size` /\n`end_size`, `[0, 1]`. One multiplier scales both, so a particle keeps\nits authored growth curve and only its scale changes.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
           "speed": {
             "default": 1.0,
             "description": "Initial speed in units/second along the sampled cone direction. `>= 0`.",
             "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "speed_jitter": {
+            "default": 0.0,
+            "description": "Fraction by which each particle's launch speed varies from `speed`,\n`[0, 1]`: 0.3 means every particle draws uniformly from ±30%.",
+            "format": "float",
+            "maximum": 1.0,
             "minimum": 0.0,
             "type": "number"
           },
@@ -1069,6 +1158,27 @@
             "format": "float",
             "type": "number"
           },
+          "stretch": {
+            "default": 0.0,
+            "description": "Seconds of travel to stretch the billboard along its own velocity.\n`>= 0`; 0 (default) keeps sprites round.\n\nThe sprite grows along its direction of motion by the distance the\nparticle covers in this many seconds, so the same value stretches a\nfast ember into a streak and leaves slow smoke nearly circular — which\nis what a camera does. Flame tongues want a little (~0.05), sparks want\na lot (~0.2).",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "turbulence": {
+            "default": 0.0,
+            "description": "Strength of a swirling world-space acceleration field, units/s².\n`>= 0`; 0 (default) means none.\n\nThis is what separates a flame from a jet of orange dots: hot gas is\nunstable and curls. The field is smooth value noise sampled along each\nparticle's own path (see `turbulence_scale`), so a particle wanders\ncoherently rather than vibrating — and it is generated by an integer\nhash specified in this repo, so it is exactly as reproducible as the\nspray directions.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "turbulence_scale": {
+            "default": 1.0,
+            "description": "Size in world units of one cell of the turbulence field. `> 0`.\n\nSmall values curl the flame tightly (candle), large ones sway the whole\nplume (bonfire in wind). Roughly: a particle's direction changes over\nthis distance travelled.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
           "type": {
             "const": "ParticleEmitter",
             "type": "string"
@@ -1089,6 +1199,7 @@
     "Material",
     "DirectionalLight",
     "AmbientLight",
+    "PointLight",
     "RigidBody",
     "Collider",
     "Breakable",
@@ -1398,6 +1509,51 @@
               },
               "type": {
                 "const": "AmbientLight",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A local light that shines in every direction from its entity's position,\nfalling off with distance (M17).\n\nUnlike the sun, there may be **many** per scene — up to\n[`MAX_POINT_LIGHTS`], beyond which the scene is invalid\n(`too_many_point_lights`) rather than silently missing the extras. It has no\norientation, so its `Transform.rotation` and `scale` are ignored; only\n`position` is read. Point lights do not cast shadows (the engine has one\nshadow map, and it belongs to the sun) and are not attenuated by fog.\n\nThis is the component that lets a fire light the ground around it: its\n`intensity` and `color` are in the curated script API\n(`world.light_intensity` / `set_light_intensity` / `light_color` /\n`set_light_color`), so the same flicker signal that drives a flame's\nemission rate can drive the light it casts.\n\nPresence counts as \"the scene lit itself\": a scene whose only light is a\n`PointLight` gets no fallback sun, same as with any other light component.",
+            "properties": {
+              "color": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Linear RGB, each component in `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "intensity": {
+                "default": 1.0,
+                "description": "Brightness at one unit of distance. `>= 0`.\n\nFalloff is inverse-square, so this is the value the surface of a sphere\none metre away receives — which makes `intensity` comparable to\n`DirectionalLight.intensity` at exactly that distance and four times\ndimmer at two metres. A campfire is a few units; a candle is a fraction.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "range": {
+                "default": 10.0,
+                "description": "Distance in world units at which the light reaches exactly zero. `> 0`.\n\nInverse-square falloff never truly reaches zero, so a range is what\nkeeps a light local: the physical curve is multiplied by a window that\nsmoothly closes at `range`. Without it, every light in a scene would\ncontribute a little to every surface, and a lantern in one room would\nlift the black level of the next.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "type": {
+                "const": "PointLight",
                 "type": "string"
               }
             },
@@ -1946,7 +2102,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "A deterministic particle emitter (M13): smoke, sparks, dust.\n\nParticles spray from the entity's position into a cone around its local\n**−Z** — the same aiming convention the camera and lights use, so a rising\nsmoke plume is `\"rotation\": [90, 0, 0]`. Each particle is born with\n`start_*` values and reaches its `end_*` values as it dies; the billboard\nrenders as a soft unlit disc, alpha-blended over the scene.\n\nParticles are simulation state on the fixed step clock, advanced by\n`--steps` exactly like physics (`--time` poses animations, it does not\nadvance particles). The state is derived and disposable — never baked,\nnever traced — and the `seed` makes it reproducible: same file, same\nsteps, same particles, so screenshots of smoke diff-render bit-exactly.",
+            "description": "A deterministic particle emitter (M13): smoke, sparks, dust — and, with the\nM17 fields, fire.\n\nParticles spray from the entity's position into a cone around its local\n**−Z** — the same aiming convention the camera and lights use, so a rising\nsmoke plume is `\"rotation\": [90, 0, 0]`. Each particle is born with\n`start_*` values and reaches its `end_*` values as it dies; the billboard\nrenders as a soft unlit disc, alpha-blended over the scene.\n\nParticles are simulation state on the fixed step clock, advanced by\n`--steps` exactly like physics (`--time` poses animations, it does not\nadvance particles). The state is derived and disposable — never baked,\nnever traced — and the `seed` makes it reproducible: same file, same\nsteps, same particles, so screenshots of smoke diff-render bit-exactly.\n\n# The fire fields (M17)\n\nA cone of identical sprites reads as a sparkler, not a flame. Five fields\nfix that, and **every one of them defaults to the M13 behaviour** — a\npre-M17 emitter is byte-identical, down to which random numbers it draws:\n`radius` spreads emission over a fire bed, the three `*_jitter` fields\nbreak the lockstep of a population born identical, `turbulence` makes\nflames lick, `stretch` turns round puffs into motion-aligned tongues and\nember streaks, and `blend: \"additive\"` makes overlapping flame get\n*brighter* instead of merely more opaque, which is the single biggest\ndifference between fire and orange smoke.\n\n**Random draws are skipped, not defaulted, when a field is off.** Every\njitter field consumes the emitter's RNG only when it is non-zero, in the\ndocumented order (direction → disc → speed → size → lifetime →\nturbulence). That is what keeps every baseline blessed before M17 exact,\nand it is the same discipline as not consuming the RNG on a capped spawn.",
             "properties": {
               "acceleration": {
                 "default": [
@@ -1962,6 +2118,11 @@
                 "maxItems": 3,
                 "minItems": 3,
                 "type": "array"
+              },
+              "blend": {
+                "$ref": "#/$defs/ParticleBlend",
+                "default": "alpha",
+                "description": "How the billboard combines with the scene behind it. `\"alpha\"` (default)\noccludes what it covers; `\"additive\"` adds light to it, so overlapping\nsprites brighten toward white and a thin one is nearly invisible.\n\nFire, sparks, and magic are additive; smoke, dust, and spray are not.\nAdditive particles draw after every alpha-blended one, so a flame glows\n*through* the smoke above it rather than being occluded by it — the\napproximation is deliberate and it is what a real fire looks like,\nsince that smoke is genuinely lit from below."
               },
               "drag": {
                 "default": 0.0,
@@ -2009,6 +2170,14 @@
                 "format": "float",
                 "type": "number"
               },
+              "lifetime_jitter": {
+                "default": 0.0,
+                "description": "Fraction by which each particle's lifespan varies from `lifetime`,\n`[0, 1)`. The most valuable of the three for fire: identical lifespans\nput the whole population's fade at one height, which draws a flat top\non the flame, and varying them is what makes it ragged.\n\nA particle's lifespan is fixed **at birth**, so animating `lifetime`\nmid-run retimes new particles and leaves live ones alone.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              },
               "max_particles": {
                 "default": 1024,
                 "description": "Cap on live particles; spawns beyond it are dropped (deterministically).\n`[1, 65536]`.",
@@ -2016,6 +2185,13 @@
                 "maximum": 65536,
                 "minimum": 1,
                 "type": "integer"
+              },
+              "radius": {
+                "default": 0.0,
+                "description": "Radius of the disc particles are born on, in world units, centred on the\nentity and lying in the plane **perpendicular to the aim** (local XY).\n`>= 0`; 0 (default) emits from the single point.\n\nA campfire is a bed of coals, not a nozzle: emitting a flame from one\npoint gives a cone with a visible apex, and no amount of `spread` hides\nit. Like `Wheel.offset`, this is rotated by the entity's rotation but\n**not** scaled by its `Transform.scale`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
               },
               "rate": {
                 "default": 10.0,
@@ -2031,10 +2207,26 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "size_jitter": {
+                "default": 0.0,
+                "description": "Fraction by which each particle's size varies from `start_size` /\n`end_size`, `[0, 1]`. One multiplier scales both, so a particle keeps\nits authored growth curve and only its scale changes.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
               "speed": {
                 "default": 1.0,
                 "description": "Initial speed in units/second along the sampled cone direction. `>= 0`.",
                 "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "speed_jitter": {
+                "default": 0.0,
+                "description": "Fraction by which each particle's launch speed varies from `speed`,\n`[0, 1]`: 0.3 means every particle draws uniformly from ±30%.",
+                "format": "float",
+                "maximum": 1.0,
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -2074,6 +2266,27 @@
               "start_size": {
                 "default": 0.20000000298023224,
                 "description": "Billboard half-size in world units at birth. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "stretch": {
+                "default": 0.0,
+                "description": "Seconds of travel to stretch the billboard along its own velocity.\n`>= 0`; 0 (default) keeps sprites round.\n\nThe sprite grows along its direction of motion by the distance the\nparticle covers in this many seconds, so the same value stretches a\nfast ember into a streak and leaves slow smoke nearly circular — which\nis what a camera does. Flame tongues want a little (~0.05), sparks want\na lot (~0.2).",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "turbulence": {
+                "default": 0.0,
+                "description": "Strength of a swirling world-space acceleration field, units/s².\n`>= 0`; 0 (default) means none.\n\nThis is what separates a flame from a jet of orange dots: hot gas is\nunstable and curls. The field is smooth value noise sampled along each\nparticle's own path (see `turbulence_scale`), so a particle wanders\ncoherently rather than vibrating — and it is generated by an integer\nhash specified in this repo, so it is exactly as reproducible as the\nspray directions.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "turbulence_scale": {
+                "default": 1.0,
+                "description": "Size in world units of one cell of the turbulence field. `> 0`.\n\nSmall values curl the flame tightly (candle), large ones sway the whole\nplume (bonfire in wind). Roughly: a particle's direction changes over\nthis distance travelled.",
                 "exclusiveMinimum": 0.0,
                 "format": "float",
                 "type": "number"
@@ -2285,6 +2498,14 @@
           "bottom_left",
           "bottom_right",
           "center"
+        ],
+        "type": "string"
+      },
+      "ParticleBlend": {
+        "description": "How a particle's color combines with what is already on screen.\n\nNOTE: leave these variants undocumented. A doc comment on an enum *variant*\nmakes schemars emit oneOf/const instead of a flat `\"enum\": [...]`, which\nblinds the validation walk's closed-vocabulary check — the same trap\n[`ColliderShapeKind`] carries a note about.",
+        "enum": [
+          "alpha",
+          "additive"
         ],
         "type": "string"
       },

@@ -953,6 +953,55 @@ opts into none of it. Pixel-level coverage lives in `engine-render/tests/environ
 
 ---
 
+## M17 — fire and point lights
+
+**Scene:** `examples/scenes/verify/m17_fire.json` + `verify/scripts/m17_fire.rhai` — a night
+campfire seen from 3.6 m: stone ring, three logs, an emissive coal bed, five emitters (a white-hot
+`FireBase`, the `Fire` body, breakaway `FireTongues`, alpha-blended `Smoke`, streaked `Embers`) and
+a `FireLight` the script flickers. The scene is deliberately dark — a 0.16-intensity moon and a
+0.035 ambient — so that what the point light does is unambiguous.
+
+```
+engine validate examples/scenes/verify/m17_fire.json
+engine diff-render examples/scenes/verify/m17_fire.json \
+    examples/scenes/verify/baselines/m17_fire.png --steps 240
+#   pinned by cli.rs::the_m17_fire_fixture_pins_additive_flame_and_firelight
+
+# The bake half: a script-driven light is scene state, and a baked fire is a scene again.
+engine simulate examples/scenes/verify/m17_fire.json --steps 240 \
+    --bake examples/scenes/verify/m17_baked.json
+engine validate examples/scenes/verify/m17_baked.json
+```
+
+**The check that matters most is not in this list.** Every M17 field defaults to the pre-M17
+behaviour, so the pass condition includes *twelve baselines that must not move*. A diff against a
+committed baseline is the wrong instrument for that — a baseline can have drifted for unrelated
+reasons, and during this milestone one had (`m14_break.png` was already one pixel off on `main`).
+The right instrument is an **A/B between binaries**:
+
+```bash
+# Build the CLI at main and in the worktree, render the same scenes with both, cmp the bytes.
+for spec in "verify/m4_lighting.json" "verify/m8_drop.json --steps 300" \
+            "verify/m13_smoke.json --steps 180" "verify/m16_environment.json" \
+            "showcase_tour.json --steps 270 --width 640 --height 360" ; do
+  main/target/release/engine     screenshot $spec --out /tmp/a.png
+  worktree/target/release/engine screenshot $spec --out /tmp/b.png
+  cmp /tmp/a.png /tmp/b.png || echo "REGRESSION: $spec"
+done
+```
+
+**What this regresses:** disc emission and the three jitter draws (including that each is *skipped*,
+not defaulted, when off — the RNG draw order is a format contract), the in-repo noise field and its
+smoothness, per-particle lifespan and size fixed at birth, the additive pipeline and the
+alpha-then-additive draw order, velocity-stretched billboards, the point-light array and its
+name-ordering, windowed inverse-square falloff reaching exactly zero at `range`, the script light
+API across all three light components, and change-based baking of `intensity` and `color`. Pixel
+coverage is `engine-render/tests/point_lights.rs` (six tests) and the M17 half of
+`engine-render/tests/particles.rs` (five); the GPU-free simulation half is in
+`engine-core/src/particles.rs`.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):
@@ -966,6 +1015,7 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 | M8 | ⬤ | ⬤ | ⬤ | | ⬤ | | | ⬤ |
 | M9 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | | ⬤ |
 | M10 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M17 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)

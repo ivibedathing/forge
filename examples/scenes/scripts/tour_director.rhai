@@ -8,7 +8,7 @@
 // diff-render baseline.
 //
 //   station 0   0-179    forest      meshes, materials, lighting, animation
-//   station 1 180-359    campfire    particles, emissive
+//   station 1 180-359    campfire    particles, emissive, point light
 //   station 2 360-539    water/ice   PBR response, scripted waves, spray
 //   station 3 540-719    breaking    rigid bodies, fragments, explosion
 //   station 4 720-899    the world   vehicle, wheels, HUD, camera
@@ -54,7 +54,7 @@ fn step(world, step) {
     ];
     let systems = [
         "MESHES . GLTF . MATERIALS . LIGHTING . ANIMATION",
-        "PARTICLES . EMISSIVE . SCRIPTED FLICKER",
+        "ADDITIVE FIRE . TURBULENCE . FIRELIGHT . EMBERS",
         "PBR RESPONSE . SCRIPTED WAVES . SPRAY . FROST",
         "RIGID BODIES . COLLISION . FRAGMENTS . BLAST",
         "VEHICLE . WHEELS . HUD . CAMERA . ALL OF IT",

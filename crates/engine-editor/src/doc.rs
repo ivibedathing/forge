@@ -59,6 +59,7 @@ impl SceneDoc {
             lights: engine_core::scene::LightRig {
                 sun: None,
                 ambient: None,
+                points: Vec::new(),
             }
             .resolved(),
             environment: Default::default(),

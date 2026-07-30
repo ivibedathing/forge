@@ -255,6 +255,71 @@ impl Default for AmbientLight {
     }
 }
 
+/// A local light that shines in every direction from its entity's position,
+/// falling off with distance (M17).
+///
+/// Unlike the sun, there may be **many** per scene — up to
+/// [`MAX_POINT_LIGHTS`], beyond which the scene is invalid
+/// (`too_many_point_lights`) rather than silently missing the extras. It has no
+/// orientation, so its `Transform.rotation` and `scale` are ignored; only
+/// `position` is read. Point lights do not cast shadows (the engine has one
+/// shadow map, and it belongs to the sun) and are not attenuated by fog.
+///
+/// This is the component that lets a fire light the ground around it: its
+/// `intensity` and `color` are in the curated script API
+/// (`world.light_intensity` / `set_light_intensity` / `light_color` /
+/// `set_light_color`), so the same flicker signal that drives a flame's
+/// emission rate can drive the light it casts.
+///
+/// Presence counts as "the scene lit itself": a scene whose only light is a
+/// `PointLight` gets no fallback sun, same as with any other light component.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct PointLight {
+    /// Linear RGB, each component in `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// Brightness at one unit of distance. `>= 0`.
+    ///
+    /// Falloff is inverse-square, so this is the value the surface of a sphere
+    /// one metre away receives — which makes `intensity` comparable to
+    /// `DirectionalLight.intensity` at exactly that distance and four times
+    /// dimmer at two metres. A campfire is a few units; a candle is a fraction.
+    #[schemars(range(min = 0.0))]
+    pub intensity: f32,
+
+    /// Distance in world units at which the light reaches exactly zero. `> 0`.
+    ///
+    /// Inverse-square falloff never truly reaches zero, so a range is what
+    /// keeps a light local: the physical curve is multiplied by a window that
+    /// smoothly closes at `range`. Without it, every light in a scene would
+    /// contribute a little to every surface, and a lantern in one room would
+    /// lift the black level of the next.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub range: f32,
+}
+
+impl Default for PointLight {
+    fn default() -> Self {
+        Self {
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range: 10.0,
+        }
+    }
+}
+
+/// How many [`PointLight`]s one scene may carry.
+///
+/// The shader holds them in a fixed-size uniform array and tests every one
+/// against every lit fragment, so this is a real cost, not a formality. Eight
+/// is enough for a campfire, a couple of lamps, and a muzzle flash; a scene
+/// that wants a hundred wants a different technique (clustered or deferred
+/// shading), which is a decision to make deliberately rather than by raising
+/// this number until the frame time collapses.
+pub const MAX_POINT_LIGHTS: usize = 8;
+
 /// How a rigid body participates in simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -781,7 +846,22 @@ fn default_friction_slip() -> f32 {
     10.5
 }
 
-/// A deterministic particle emitter (M13): smoke, sparks, dust.
+/// How a particle's color combines with what is already on screen.
+///
+/// NOTE: leave these variants undocumented. A doc comment on an enum *variant*
+/// makes schemars emit oneOf/const instead of a flat `"enum": [...]`, which
+/// blinds the validation walk's closed-vocabulary check — the same trap
+/// [`ColliderShapeKind`] carries a note about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ParticleBlend {
+    #[default]
+    Alpha,
+    Additive,
+}
+
+/// A deterministic particle emitter (M13): smoke, sparks, dust — and, with the
+/// M17 fields, fire.
 ///
 /// Particles spray from the entity's position into a cone around its local
 /// **−Z** — the same aiming convention the camera and lights use, so a rising
@@ -794,6 +874,24 @@ fn default_friction_slip() -> f32 {
 /// advance particles). The state is derived and disposable — never baked,
 /// never traced — and the `seed` makes it reproducible: same file, same
 /// steps, same particles, so screenshots of smoke diff-render bit-exactly.
+///
+/// # The fire fields (M17)
+///
+/// A cone of identical sprites reads as a sparkler, not a flame. Five fields
+/// fix that, and **every one of them defaults to the M13 behaviour** — a
+/// pre-M17 emitter is byte-identical, down to which random numbers it draws:
+/// `radius` spreads emission over a fire bed, the three `*_jitter` fields
+/// break the lockstep of a population born identical, `turbulence` makes
+/// flames lick, `stretch` turns round puffs into motion-aligned tongues and
+/// ember streaks, and `blend: "additive"` makes overlapping flame get
+/// *brighter* instead of merely more opaque, which is the single biggest
+/// difference between fire and orange smoke.
+///
+/// **Random draws are skipped, not defaulted, when a field is off.** Every
+/// jitter field consumes the emitter's RNG only when it is non-zero, in the
+/// documented order (direction → disc → speed → size → lifetime →
+/// turbulence). That is what keeps every baseline blessed before M17 exact,
+/// and it is the same discipline as not consuming the RNG on a capped spawn.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ParticleEmitter {
@@ -859,6 +957,80 @@ pub struct ParticleEmitter {
     /// identical particles; give two otherwise-identical emitters different
     /// seeds so they don't emit in lockstep.
     pub seed: u32,
+
+    /// How the billboard combines with the scene behind it. `"alpha"` (default)
+    /// occludes what it covers; `"additive"` adds light to it, so overlapping
+    /// sprites brighten toward white and a thin one is nearly invisible.
+    ///
+    /// Fire, sparks, and magic are additive; smoke, dust, and spray are not.
+    /// Additive particles draw after every alpha-blended one, so a flame glows
+    /// *through* the smoke above it rather than being occluded by it — the
+    /// approximation is deliberate and it is what a real fire looks like,
+    /// since that smoke is genuinely lit from below.
+    pub blend: ParticleBlend,
+
+    /// Radius of the disc particles are born on, in world units, centred on the
+    /// entity and lying in the plane **perpendicular to the aim** (local XY).
+    /// `>= 0`; 0 (default) emits from the single point.
+    ///
+    /// A campfire is a bed of coals, not a nozzle: emitting a flame from one
+    /// point gives a cone with a visible apex, and no amount of `spread` hides
+    /// it. Like `Wheel.offset`, this is rotated by the entity's rotation but
+    /// **not** scaled by its `Transform.scale`.
+    #[schemars(range(min = 0.0))]
+    pub radius: f32,
+
+    /// Fraction by which each particle's launch speed varies from `speed`,
+    /// `[0, 1]`: 0.3 means every particle draws uniformly from ±30%.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub speed_jitter: f32,
+
+    /// Fraction by which each particle's size varies from `start_size` /
+    /// `end_size`, `[0, 1]`. One multiplier scales both, so a particle keeps
+    /// its authored growth curve and only its scale changes.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub size_jitter: f32,
+
+    /// Fraction by which each particle's lifespan varies from `lifetime`,
+    /// `[0, 1)`. The most valuable of the three for fire: identical lifespans
+    /// put the whole population's fade at one height, which draws a flat top
+    /// on the flame, and varying them is what makes it ragged.
+    ///
+    /// A particle's lifespan is fixed **at birth**, so animating `lifetime`
+    /// mid-run retimes new particles and leaves live ones alone.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub lifetime_jitter: f32,
+
+    /// Strength of a swirling world-space acceleration field, units/s².
+    /// `>= 0`; 0 (default) means none.
+    ///
+    /// This is what separates a flame from a jet of orange dots: hot gas is
+    /// unstable and curls. The field is smooth value noise sampled along each
+    /// particle's own path (see `turbulence_scale`), so a particle wanders
+    /// coherently rather than vibrating — and it is generated by an integer
+    /// hash specified in this repo, so it is exactly as reproducible as the
+    /// spray directions.
+    #[schemars(range(min = 0.0))]
+    pub turbulence: f32,
+
+    /// Size in world units of one cell of the turbulence field. `> 0`.
+    ///
+    /// Small values curl the flame tightly (candle), large ones sway the whole
+    /// plume (bonfire in wind). Roughly: a particle's direction changes over
+    /// this distance travelled.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub turbulence_scale: f32,
+
+    /// Seconds of travel to stretch the billboard along its own velocity.
+    /// `>= 0`; 0 (default) keeps sprites round.
+    ///
+    /// The sprite grows along its direction of motion by the distance the
+    /// particle covers in this many seconds, so the same value stretches a
+    /// fast ember into a streak and leaves slow smoke nearly circular — which
+    /// is what a camera does. Flame tongues want a little (~0.05), sparks want
+    /// a lot (~0.2).
+    #[schemars(range(min = 0.0))]
+    pub stretch: f32,
 }
 
 impl Default for ParticleEmitter {
@@ -878,6 +1050,16 @@ impl Default for ParticleEmitter {
             end_alpha: 0.0,
             max_particles: 1024,
             seed: 0,
+            // Every M17 field defaults to the M13 behaviour: no disc, no
+            // jitter, no turbulence, round sprites, alpha blending.
+            blend: ParticleBlend::Alpha,
+            radius: 0.0,
+            speed_jitter: 0.0,
+            size_jitter: 0.0,
+            lifetime_jitter: 0.0,
+            turbulence: 0.0,
+            turbulence_scale: 1.0,
+            stretch: 0.0,
         }
     }
 }
@@ -942,6 +1124,7 @@ components!(
     Material,
     DirectionalLight,
     AmbientLight,
+    PointLight,
     RigidBody,
     Collider,
     Breakable,
@@ -1033,6 +1216,7 @@ mod tests {
                 "Material",
                 "DirectionalLight",
                 "AmbientLight",
+                "PointLight",
                 "RigidBody",
                 "Collider",
                 "Breakable",

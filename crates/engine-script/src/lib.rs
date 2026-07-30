@@ -22,7 +22,8 @@ use std::path::Path;
 use std::rc::Rc;
 
 use engine_core::components::{
-    Breakable, HudRect, HudText, Name, ParticleEmitter, RigidBody, Script, Transform, Wheel,
+    AmbientLight, Breakable, DirectionalLight, HudRect, HudText, Name, ParticleEmitter, PointLight,
+    RigidBody, Script, Transform, Wheel,
 };
 use engine_core::contact::ContactState;
 use engine_core::input::{self, InputState};
@@ -140,6 +141,41 @@ impl WorldApi {
         f: impl FnOnce(&mut Transform) -> T,
     ) -> std::result::Result<T, Box<EvalAltResult>> {
         self.with_component(name, "Transform", f)
+    }
+
+    /// Light access (M17), across all three light components.
+    ///
+    /// `color` and `intensity` mean the same thing on a `PointLight`, a
+    /// `DirectionalLight`, and an `AmbientLight`, so the script API takes a
+    /// light by name and does not make the author remember which kind it is —
+    /// `world.set_light_intensity("Campfire", x)` and
+    /// `world.set_light_intensity("Sun", x)` are the same call. Point lights
+    /// come first because they are the ones a flicker drives.
+    fn with_light<T>(
+        &mut self,
+        name: &str,
+        point: impl FnOnce(&mut PointLight) -> T,
+        directional: impl FnOnce(&mut DirectionalLight) -> T,
+        ambient: impl FnOnce(&mut AmbientLight) -> T,
+    ) -> std::result::Result<T, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow_mut();
+        if let Ok(mut light) = world.get::<&mut PointLight>(entity) {
+            return Ok(point(&mut light));
+        }
+        if let Ok(mut light) = world.get::<&mut DirectionalLight>(entity) {
+            return Ok(directional(&mut light));
+        }
+        if let Ok(mut light) = world.get::<&mut AmbientLight>(entity) {
+            return Ok(ambient(&mut light));
+        }
+        Err(Box::new(EvalAltResult::ErrorRuntime(
+            format!(
+                "entity {name:?} has no PointLight, DirectionalLight, or AmbientLight"
+            )
+            .into(),
+            Position::NONE,
+        )))
     }
 
     /// The vehicle path: velocity access needs a `RigidBody`; what a write
@@ -580,6 +616,92 @@ fn curated_engine() -> rhai::Engine {
             w.with_component::<ParticleEmitter, _>(name, "ParticleEmitter", |e| {
                 e.rate = stored;
             })
+        },
+    );
+
+    // Lights (M17): the piece that makes a scripted effect light its
+    // surroundings instead of only glowing. A campfire's flicker is one signal,
+    // and it should drive the flame's emission rate, the ember core's size, and
+    // the light the fire casts — before this, the third was impossible and the
+    // showcase tour said so in its own design doc.
+    //
+    // Both fields are validated at the call, like `set_particle_rate` and for
+    // the same reason: intensity and color are baked change-based, so a bad
+    // value must be a located script error rather than a scene file that no
+    // longer validates.
+    engine.register_fn(
+        "light_intensity",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_light(
+                name,
+                |l| f64::from(l.intensity),
+                |l| f64::from(l.intensity),
+                |l| f64::from(l.intensity),
+            )
+        },
+    );
+    engine.register_fn(
+        "set_light_intensity",
+        |w: &mut WorldApi,
+         name: &str,
+         intensity: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            let stored = intensity as f32;
+            if !stored.is_finite() || stored < 0.0 {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!(
+                        "light intensity must be a finite number >= 0, got {intensity}"
+                    )
+                    .into(),
+                    Position::NONE,
+                )));
+            }
+            w.with_light(
+                name,
+                |l| l.intensity = stored,
+                |l| l.intensity = stored,
+                |l| l.intensity = stored,
+            )
+        },
+    );
+    engine.register_fn(
+        "light_color",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.with_light(
+                name,
+                |l| vec3_array(l.color),
+                |l| vec3_array(l.color),
+                |l| vec3_array(l.color),
+            )
+        },
+    );
+    engine.register_fn(
+        "set_light_color",
+        |w: &mut WorldApi,
+         name: &str,
+         r: f64,
+         g: f64,
+         b: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            // Light colors are `[0, 1]` in the schema on all three components,
+            // so unlike intensity this clamps rather than erroring: a flicker
+            // that computes 1.02 has not made a mistake worth halting a run
+            // over, and the alternative is every author writing the same
+            // min/max around every write.
+            let color = glam::Vec3::new(r as f32, g as f32, b as f32);
+            if !color.is_finite() {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("light color must be finite, got [{r}, {g}, {b}]").into(),
+                    Position::NONE,
+                )));
+            }
+            let color = color.clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
+            w.with_light(
+                name,
+                |l| l.color = color,
+                |l| l.color = color,
+                |l| l.color = color,
+            )
         },
     );
 
@@ -1398,6 +1520,135 @@ mod tests {
             .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
             .unwrap_err();
         assert!(error.message.contains("no ParticleEmitter"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn light_accessors_reach_every_kind_of_light() {
+        // One pair of accessors for all three light components, because
+        // `intensity` and `color` mean the same thing on each: a script author
+        // should not have to remember which kind a name refers to.
+        let dir = temp_dir("lights");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                // Read the authored value, then write a multiple of it — proving
+                // both directions on each component.
+                world.set_light_intensity("Fire", world.light_intensity("Fire") * 2.0);
+                world.set_light_color("Fire", 1.0, 0.5, 0.25);
+                world.set_light_intensity("Sun", 0.25);
+                world.set_light_intensity("Fill", world.light_intensity("Fill") * 3.0);
+                // Clamped, not an error: a flicker that overshoots 1.0 has not
+                // made a mistake worth halting the run for.
+                world.set_light_color("Fill", 1.5, -0.5, 0.5);
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Fire","components":[
+                {"type":"Transform","position":[0.0,1.0,0.0]},
+                {"type":"PointLight","intensity":2.0,"range":5.0},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"Sun","components":[{"type":"DirectionalLight","intensity":1.0}]},
+            {"name":"Fill","components":[{"type":"AmbientLight","intensity":0.1}]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+
+        let fire = scene
+            .world
+            .get::<&PointLight>(scene.entity("Fire").unwrap())
+            .unwrap()
+            .clone();
+        assert_eq!(fire.intensity, 4.0);
+        assert_eq!(fire.color, glam::Vec3::new(1.0, 0.5, 0.25));
+        assert_eq!(
+            scene
+                .world
+                .get::<&DirectionalLight>(scene.entity("Sun").unwrap())
+                .unwrap()
+                .intensity,
+            0.25
+        );
+        let fill = scene
+            .world
+            .get::<&AmbientLight>(scene.entity("Fill").unwrap())
+            .unwrap()
+            .clone();
+        assert_eq!(fill.intensity, 0.3);
+        assert_eq!(
+            fill.color,
+            glam::Vec3::new(1.0, 0.0, 0.5),
+            "out-of-range light colors clamp into the schema's [0, 1]"
+        );
+
+        // A negative or non-finite intensity would bake into a file that fails
+        // validation, so it is a located script error — same rule as
+        // `set_particle_rate`.
+        for bad in ["-1.0", "0.0/0.0", "1e300"] {
+            let script = format!("fn step(world, step) {{ world.set_light_intensity(\"Fire\", {bad}); }}");
+            std::fs::write(dir.join("scripts/test.rhai"), &script).unwrap();
+            let mut scene =
+                Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+            let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+            let error = host
+                .step(
+                    &mut scene.world,
+                    0,
+                    &InputState::default(),
+                    &ContactState::default(),
+                )
+                .unwrap_err();
+            assert_eq!(error.error, "script_runtime_error", "{bad}");
+            assert!(
+                error.message.contains("finite number >= 0"),
+                "{bad}: {}",
+                error.message
+            );
+        }
+
+        // An entity with no light at all names all three kinds in its error, so
+        // the fix is obvious from the message.
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) { world.light_intensity("Nothing"); }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Nothing","components":[
+                {"type":"Transform"},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]}
+        ]}"#;
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(&scene.world, &scene_path, 60).unwrap().unwrap();
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("PointLight")
+                && error.message.contains("DirectionalLight")
+                && error.message.contains("AmbientLight"),
+            "{}",
+            error.message
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

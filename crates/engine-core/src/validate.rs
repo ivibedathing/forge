@@ -114,6 +114,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     let mut active_cameras: Vec<(String, String)> = Vec::new();
     let mut directional_lights: Vec<(String, String)> = Vec::new();
     let mut ambient_lights: Vec<(String, String)> = Vec::new();
+    let mut point_lights: Vec<(String, String)> = Vec::new();
     // Collision layers (M12): membership names declared anywhere, every
     // `collides_with` reference (for the unknown-layer warning), and each
     // distinct name with the path that introduced it (for the 32-bit budget).
@@ -270,6 +271,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
             if checked.ambient_light {
                 ambient_lights.push((name.to_string(), component_path.clone()));
+            }
+            if checked.point_light {
+                point_lights.push((name.to_string(), component_path.clone()));
             }
             if type_name == "Mesh" {
                 has_mesh = true;
@@ -536,7 +540,11 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             "DirectionalLight",
             codes::MULTIPLE_DIRECTIONAL_LIGHTS,
         ),
-        (&ambient_lights, "AmbientLight", codes::MULTIPLE_AMBIENT_LIGHTS),
+        (
+            &ambient_lights,
+            "AmbientLight",
+            codes::MULTIPLE_AMBIENT_LIGHTS,
+        ),
     ] {
         if list.len() > 1 {
             let names: Vec<&str> = list.iter().map(|(n, _)| n.as_str()).collect();
@@ -556,6 +564,29 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 .candidates(names),
             );
         }
+    }
+
+    // Point lights are plural by design, but the shader array is fixed-size.
+    // Refusing the scene beats dropping the ninth light silently — an agent
+    // that placed nine and sees eight has no way to tell which was ignored.
+    if point_lights.len() > crate::components::MAX_POINT_LIGHTS {
+        let names: Vec<&str> = point_lights.iter().map(|(n, _)| n.as_str()).collect();
+        let (_, surplus_path) = &point_lights[crate::components::MAX_POINT_LIGHTS];
+        errors.push(
+            cx.err(
+                codes::TOO_MANY_POINT_LIGHTS,
+                format!(
+                    "{} PointLight components in one scene ({}); at most {} are allowed, \
+                     because the shader carries them in a fixed-size array",
+                    point_lights.len(),
+                    names.join(", "),
+                    crate::components::MAX_POINT_LIGHTS,
+                ),
+                surplus_path,
+            )
+            .component("PointLight")
+            .candidates(names),
+        );
     }
 
     // ── Collision layers (M12): 32-bit budget, reference checks ────────
@@ -752,6 +783,7 @@ struct Checked {
     active_camera: bool,
     directional_light: bool,
     ambient_light: bool,
+    point_light: bool,
     /// The parsed component when the shape was clean — what the entity-level
     /// cross-component checks (physics, M8) read.
     parsed: Option<ComponentData>,
@@ -1016,6 +1048,7 @@ fn check_component(
 
         ComponentData::DirectionalLight(_) => checked.directional_light = true,
         ComponentData::AmbientLight(_) => checked.ambient_light = true,
+        ComponentData::PointLight(_) => checked.point_light = true,
         ComponentData::Material(_) => {}
 
         // The flat Collider struct keeps the file walkable; which fields each
@@ -2249,6 +2282,97 @@ mod tests {
         );
 
         assert!(errors.iter().any(|e| e.error == "multiple_ambient_lights"));
+    }
+
+    #[test]
+    fn allows_several_point_lights_but_not_more_than_the_shader_holds() {
+        // Point lights are the one light component that is plural, so the
+        // "more than one" rule must NOT apply to them…
+        let mut entities: Vec<String> = (0..crate::components::MAX_POINT_LIGHTS)
+            .map(|i| {
+                format!(
+                    r#"{{"name":"Lamp{i}","components":[
+                        {{"type":"Transform","position":[{i}.0,1.0,0.0]}},
+                        {{"type":"PointLight","intensity":2.0}}
+                    ]}}"#
+                )
+            })
+            .collect();
+        let source = format!(r#"{{"name":"s","entities":[{}]}}"#, entities.join(","));
+        let errors = validate_source(&source, "s.json");
+        assert!(
+            errors.is_empty(),
+            "{} point lights must be fine, got {errors:?}",
+            crate::components::MAX_POINT_LIGHTS
+        );
+
+        // …but the shader's array is fixed-size, and one past it is an error
+        // rather than a light that silently never shines.
+        entities.push(
+            r#"{"name":"Surplus","components":[
+                {"type":"Transform"},
+                {"type":"PointLight"}
+            ]}"#
+            .to_string(),
+        );
+        let source = format!(r#"{{"name":"s","entities":[{}]}}"#, entities.join(","));
+        let errors = validate_source(&source, "s.json");
+        let surplus = errors
+            .iter()
+            .find(|e| e.error == "too_many_point_lights")
+            .expect("the ninth point light must be reported");
+        assert!(
+            surplus.context().unwrap().line.is_some(),
+            "must point at the surplus component"
+        );
+    }
+
+    #[test]
+    fn rejects_out_of_range_point_light_values() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Lamp","components":[
+                {"type":"Transform"},
+                {"type":"PointLight","intensity":-1.0,"range":0.0,"color":[2.0,0.0,0.0]}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "s.json");
+        let fields: Vec<&str> = errors
+            .iter()
+            .filter(|e| e.error == "value_out_of_range")
+            .filter_map(|e| e.context().and_then(|c| c.field.as_deref()))
+            .collect();
+        // All three at once, the M5 rule: which command you ran must never
+        // change what you learn about a broken scene.
+        for expected in ["intensity", "range", "color"] {
+            assert!(
+                fields.contains(&expected),
+                "expected {expected} out of range, got {fields:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_an_unknown_particle_blend_with_a_suggestion() {
+        // `blend` is the ParticleEmitter's first closed-vocabulary field, so it
+        // rides the same enum path `RigidBody.body` and `Collider.shape` do —
+        // including the typo suggestion, which only works while
+        // `ParticleBlend`'s variants stay undocumented (see components.rs).
+        let source = r#"{"name":"s","entities":[
+            {"name":"Puff","components":[
+                {"type":"Transform"},
+                {"type":"ParticleEmitter","blend":"addative"}
+            ]}
+        ]}"#;
+        let errors = validate_source(source, "s.json");
+        let bad = errors
+            .iter()
+            .find(|e| e.context().and_then(|c| c.field.as_deref()) == Some("blend"))
+            .expect("an unknown blend mode must be reported");
+        assert_eq!(
+            bad.context().unwrap().did_you_mean.as_deref(),
+            Some("additive"),
+            "a near-miss blend mode should be suggested"
+        );
     }
 
     #[test]
