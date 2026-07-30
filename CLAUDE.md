@@ -549,9 +549,13 @@ anything over `MAX_TREE_VERTICES` (100k) with `tree_too_complex` before allocati
 render with no output is the worst failure an agent loop can hit. `meshes_for` caches on the
 component's **exact field bits** (26 words, compared not hashed) and must return the same `Arc` —
 M15's upload cache keys on `Arc` identity. There is no species enum: a species is a set of
-parameters, tabulated in the design doc. Fixture `verify/m18_trees.json` + baseline (twins
+parameters, tabulated in the design doc. Fixture `verify/m19_trees.json` + baseline (twins
 differing only in `seed`, plus a zero-randomness `Diagram` tree), pinned by a CLI test that also
-pins `tree_with_mesh` and `tree_too_complex`.
+pins `tree_with_mesh` and `tree_too_complex`. **Tree baselines are per build profile as well as
+per adapter** — a release build's `sin_cos` routines move 3 pixels of `m19_trees.png` by one
+channel step (measured; Rust does not contract floats, so this is libm, not FMA), so bless from
+the debug binary `cargo test` runs. Every pre-tree fixture is profile-insensitive; the constraint
+arrives with CPU-generated geometry.
 
 Water (M18, design in `water-design.md`). The tour's pond was sixteen `builtin:cube` tiles a script
 bobbed on a shared sine: every tile translated rigidly, so the surface normal was straight up

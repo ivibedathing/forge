@@ -1096,6 +1096,13 @@ double-sided flat-shaded leaves, the exact-bits mesh cache and its `Arc` identit
 schema-driven validation of 24 new fields. The GPU-free half is 12 tests in
 `engine-core/src/tree.rs`; the showcase forest is the applied version.
 
+**Bless from a debug build.** Unlike every earlier fixture, this one is sensitive to the build
+profile: procedural geometry does enough `sin_cos` work that a release build's libm routines move
+three pixels of `m19_trees.png` and one of `showcase_90.png` by one channel step (see
+`tree-design.md` §4 — it is measured, and it is not FMA). The committed baselines are blessed with
+the binary `cargo test` runs, so the pinned test is exact; a release build checking them by hand
+sees those pixels.
+
 **Also re-blessed here:** all six `showcase_*` baselines, since station 01's twelve
 cylinder-and-sphere entities became nine `Tree`s. No other baseline moved — an A/B between the
 `main` binary and the worktree's over all sixteen pre-M19 scene/step combinations was

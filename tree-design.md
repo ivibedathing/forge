@@ -147,6 +147,30 @@ default it) because twelve particle baselines predated those fields. No tree
 baseline predates any tree field, so the simpler contract — draw sequence
 independent of parameter values — is the one worth holding here.
 
+### The one limit: baselines are per build profile, not just per adapter
+
+The RNG is exact. The geometry it drives is not *bit*-identical across
+optimisation levels: a debug build and a release build of the same commit grow
+trees whose vertices differ in the last place, which reaches the frame as **3
+pixels of `m19_trees.png` at one channel step**, and 1 pixel of
+`showcase_90.png`. Measured, not assumed — `tree::generate` hashed in both
+profiles diverges for a jittered oak and agrees exactly for the `Diagram` tree,
+which is the one that turns the randomness off.
+
+Rust does not contract or reassociate float arithmetic, so this is not the
+usual FMA story. What is left is the transcendentals: a branch's every rotation
+is `Quat::from_axis_angle`, which is `sin_cos`, and the optimiser is free to
+reach a different (still correctly-rounded-ish) libm routine than the debug
+build does. No amount of care in this module fixes that short of writing `sin`
+and `cos` out in-repo the way the RNG is written out, which is not worth it for
+one ULP.
+
+So the committed baselines are blessed from the **debug** binary — the profile
+`cargo test` runs, so the pinned CLI test is exact. A release build checking
+them by hand sees the handful of pixels above. Every fixture that predates
+trees is profile-insensitive and unaffected; this constraint arrives with
+CPU-generated geometry and belongs to it.
+
 ## 5. Cost, and the budget error
 
 Branching is exponential, so a plausible-looking edit can ask for a billion
