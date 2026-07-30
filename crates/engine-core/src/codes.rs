@@ -147,6 +147,12 @@ registry! {
     INVALID_ENVIRONMENT_VALUE = "invalid_environment_value", Input,
         "an environment setting is outside its meaningful range";
 
+    // ── Water (M18) ────────────────────────────────────────────────────
+    WATER_WITH_MESH = "water_with_mesh", Input,
+        "a Water entity owns its own surface; it may not also have a Mesh or a Material";
+    WATER_WAVES_SELF_INTERSECT = "water_waves_self_intersect", Input,
+        "the sum of Water wave steepness exceeds 1, which folds the surface through itself";
+
     // ── Scripting (M10) ────────────────────────────────────────────────
     SCRIPT_PARSE_ERROR = "script_parse_error", Input,
         "a script file does not compile";

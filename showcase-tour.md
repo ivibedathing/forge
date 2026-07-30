@@ -52,7 +52,7 @@ moving.
 |-------|---------|-------------------|---------|
 | 0–179 | 01 forest | six trees, four critters running loops, the glTF monolith, its animated beacon | `Mesh` (builtin + glTF), `Material`, `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
 | 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
-| 360–539 | 03 water and ice | a pond of sixteen tiles on a travelling wave, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | low-roughness metallic PBR, `ParticleEmitter` ×3, scripted transforms |
+| 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
 | 540–719 | 04 breaking | a boulder rolls into a crate stack, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
 | 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4, `HudText`, `HudRect`, the camera |
 
@@ -116,18 +116,21 @@ than no showcase:
   casts no shadows, so the logs do not throw one outward across the pit.
 - **Breaking** is real physics on pre-authored fragments — no runtime fracture,
   which is the settled M14 scope.
-- **Water** is sixteen tiles that a script moves on a sine wave, and since M16
-  it is genuinely transmissive: `Material.transmission` at 0.82, so the pond
-  bed and anything in it show through, and the Fresnel term turns the far edge
-  reflective while the near edge stays clear. Still missing: refraction (the
-  bed shows through undistorted) and absorption with depth, so the water is
-  equally clear however deep it is. The tiles now **abut instead of
-  overlapping** — an overlap is invisible between opaque tiles and reads as a
-  grid of seams between transmissive ones, because pixels in the overlap are
-  blended through two surfaces.
+- **Water** is real as of M18: one `Water` entity where sixteen cube tiles used
+  to be. It has its own waves (three Gerstner components plus per-pixel ripple
+  normals), it absorbs with depth between `shallow_color` and `deep_color` so
+  the middle of the pond is darker than its rim, it foams where the surface
+  meets the bed and where a crest pinches, and it reflects the sky with a
+  Fresnel weight. The sixteen tiles were the clearest fake in the tour: each one
+  translated rigidly, so the surface normal pointed straight up everywhere and
+  nothing could catch the light, and their seams were visible in every
+  screenshot. Still missing: refraction — the bed shows through undistorted —
+  and the trees beside the pond are not reflected in it, only the sky is. See
+  `water-design.md`.
 - **Ice** is a pale dielectric at roughness 0.05–0.10 with transmission
-  0.55–0.66. No subsurface scattering and no tinting by thickness, so a thick
-  block is exactly as clear as a thin one.
+  0.55–0.66, and the floating blocks are sorted into the same back-to-front
+  list as the water they sit in. No subsurface scattering and no tinting by
+  thickness, so a thick block is exactly as clear as a thin one.
 - **The animals** are scaled spheres on parametric loops. There is no
   navigation, no steering behaviour, no state machine — scripts have no
   randomness by design, so the variety is sums of sines.

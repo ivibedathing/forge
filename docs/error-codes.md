@@ -57,6 +57,8 @@ build fails.
 | `animation_on_dynamic_body` | 1 | a clip animates the Transform of a dynamic RigidBody; make it kinematic |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
+| `water_with_mesh` | 1 | a Water entity owns its own surface; it may not also have a Mesh or a Material |
+| `water_waves_self_intersect` | 1 | the sum of Water wave steepness exceeds 1, which folds the surface through itself |
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |

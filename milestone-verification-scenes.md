@@ -1002,6 +1002,56 @@ coverage is `engine-render/tests/point_lights.rs` (six tests) and the M17 half o
 
 ---
 
+## M18 — Water: `verify/m18_water.json`
+
+A lake over a bed that slopes from a shoreline down to four metres, with a post, a boulder and a
+transmissive ice floe standing in it. One scene exercises everything the milestone added: Gerstner
+waves displacing the grid in the vertex stage, per-pixel ripple normals, absorption between
+`shallow_color` and `deep_color` against the depth behind the surface, crest foam where the wave
+folds, shore foam where the water thins over the bed and around each object, sky reflection with a
+Fresnel weight, and shadows landing on the surface.
+
+```bash
+cd examples/scenes
+engine validate verify/m18_water.json
+engine diff-render verify/m18_water.json verify/baselines/m18_water.png --steps 120
+```
+
+**Pass condition:** `"pass": true` with `diff_pixels: 0`, and the same for `--time 2.0` in place of
+`--steps 120` — 120 steps at the scene's 60 Hz *is* two seconds, and the renderer has one clock.
+`--steps 0` must **not** match: water at rest is a different picture, which is what proves the two
+agreements above are not both trivially true. All three are pinned by
+`the_m18_water_fixture_pins_waves_depth_and_foam` in the CLI suite.
+
+**What this regresses:** the two-pass frame and its depth copy (including the MSAA path, since the
+fixture asks for `samples: 4`), the wave packing (`Q = steepness/(k·A)` — get it wrong and the
+surface either flattens or folds), analytic normals, the ripple slope field and its distance fade,
+absorption and both foams, the sorted blended list shared with transparent meshes, and the whole
+`--time` / `--steps` clock rule.
+
+**The bit-exactness half is separate and matters more.** Water is opt-in per scene, and seventeen
+milestones of baselines were blessed before it existed. Use the A/B between binaries as in M17, not
+a diff against the baselines:
+
+```bash
+cd examples/scenes    # one scene dir; asset paths are scene-relative
+for spec in "verify/m4_lighting.json" "verify/m8_drop.json --steps 100" \
+            "verify/m13_smoke.json --steps 180" "verify/m14_break.json --steps 240" \
+            "verify/m16_environment.json" "verify/m17_fire.json --steps 240" \
+            "car_track.json --steps 300 --input car_track_lap.input.jsonl" ; do
+  main/target/release/engine     screenshot $spec --out /tmp/a.png --width 400 --height 240
+  worktree/target/release/engine screenshot $spec --out /tmp/b.png --width 400 --height 240
+  cmp /tmp/a.png /tmp/b.png || echo "REGRESSION: $spec"
+done
+```
+
+Fifteen scene/step combinations were byte-identical when this landed. The renderer-side guard is
+`a_scene_with_no_water_is_untouched_by_the_water_pass` in `engine-render/tests/water.rs`, which
+renders a water-free scene at two different times and requires identical bytes — nothing but water
+may read the clock.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):
@@ -1016,6 +1066,7 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 | M9 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | | ⬤ |
 | M10 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M17 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M18 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M17 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), and M17 fire + point lights** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M18 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, and M18 water** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -40,6 +40,10 @@ engine list-animations <scene-or-clip> [--schema]
 # PointLight component (M17): local light, inverse-square windowed at "range", up to 8 per
 #   scene; no shadows. Scripts drive any light's intensity/color (world.set_light_intensity /
 #   set_light_color), which is what lets a fire light the ground it stands on
+# Water component (M18): a body of water — the entity carries no Mesh and no Material, the
+#   component owns a tessellated grid ("segments") sized by Transform.scale, Gerstner "waves"
+#   displaced in the vertex stage, per-pixel detail ripples, depth-based absorption between
+#   "shallow_color" and "deep_color", crest and shore foam; a pure function of (file, time)
 # Scene-level "environment" block (M16): {"sky", "sky_zenith"/"sky_horizon"/"sky_ground",
 # "fog_density", "shadows", "shadow_distance", "samples"} — all default off, so a scene that
 # omits it renders byte-identically to the pre-M16 engine. Material gains "alpha" (flat) and
@@ -516,6 +520,62 @@ both, `cmp` the PNGs. Doing that here found a 1-pixel `m14_break.png` diff that 
 two builds. Fixture `verify/m17_fire.json` + `scripts/m17_fire.rhai` + baseline at `--steps 240`,
 pinned by a CLI test that also bakes and revalidates the run.
 
+Water (M18, design in `water-design.md`). The tour's pond was sixteen `builtin:cube` tiles a script
+bobbed on a shared sine: every tile translated rigidly, so the surface normal was straight up
+everywhere at every moment, there was nothing for the sun or sky to catch, the seams showed, and
+"deep" and "shallow" did not exist. The `Water` component replaces all of that.
+
+**A body of water is one entity with one component.** `Water` owns its surface geometry — a
+tessellated unit grid (`segments`, 1..512, identical to `builtin:plane` at `segments: 1`, generated
+and `Arc`-cached in `engine-core/src/water.rs`) sized by `Transform.scale` — so the entity carries
+**no** `Mesh` and **no** `Material`, and having either is `water_with_mesh`. Waves are evaluated in
+**world space**, so scaling never stretches them and two water entities at the same height form one
+continuous surface. `Scene::water_items` returns name-sorted `WaterItem`s and needs no `MeshSource`.
+
+- **Gerstner waves, displaced in the vertex stage** (`shaders/water.wgsl`), with normals from the
+  analytic derivatives of the same sum. CPU displacement was never close: a 192² grid is 37k
+  vertices and would mint a new `Arc<MeshData>` every frame, defeating M15's geometry cache, which
+  keys on that `Arc`'s identity. `Q` is packed as `steepness / (k · A)`, which makes each wave's
+  contribution to the horizontal Jacobian equal to its own `steepness` — so **sum of steepness ≤ 1
+  is exactly the non-folding condition**, enforced as `water_waves_self_intersect` with the
+  arithmetic in the message. Dividing `Q` by the wave count (as most references do) would make the
+  same file calmer as waves were added and leave the rule meaning nothing.
+- **Detail is a slope field with no height behind it**: four golden-angle-rotated sine trains at
+  deep-water dispersion speeds, perturbing the normal only. Two numbers in it were found by looking
+  at renders and are load-bearing — the base amplitude (`0.010 · wavelength`; the first attempt was
+  ~4× steeper and rendered white noise, since the layers are in phase *somewhere* and a slope field
+  is a shaken mirror) and the **fade with view distance**, without which sub-pixel ripples alias
+  into sparkle that reads as broken rather than as low quality. Nothing physical may depend on these
+  normals, which is what licenses a slope field with no surface under it.
+- **The frame gains a pass, but only when there is water.** Absorption and shore foam need the depth
+  behind the surface and a pass cannot sample its own depth attachment, so a water scene renders as
+  opaque (depth stored) → depth copy (`shaders/depth_resolve.wgsl`, one fullscreen triangle into a
+  single-sampled `R32Float`, `textureLoad`, sample 0 under MSAA) → water and transparency →
+  particles. `water_present` gates the split: with no water the pass structure, attachments, and
+  load/store ops are the exact pre-M18 ones. Water sorts into the **same** back-to-front `Blended`
+  list as transparent meshes, because an ice floe in a pond is transparent geometry *inside* a
+  water surface and two passes would fix which always draws over the other.
+- **The clock.** Water is a pure function of (file, `time`), and `time` is the reproducible clock:
+  `--time T` when given, otherwise `steps / timestep_hz` (`scene_time` in the CLI); the viewer uses
+  whole fixed steps since load. That is what lets water sit under a `diff-render` baseline, and the
+  M18 CLI test pins it from both directions (`--steps 120` at 60 Hz and `--time 2.0` are the same
+  bytes; a run with neither must *not* match).
+- **`mesh.wgsl` is untouched.** `water.wgsl` duplicates `FrameUniform` and the shadow lookup rather
+  than sharing them, following the `sky.wgsl` precedent, because of the M16 ULP sensitivity above;
+  only `sky_common.wgsl` is shared, prepended at pipeline build, so the reflected sky cannot drift
+  from the sky drawn behind it. The body is lit with the **up** normal while the view-facing normal
+  drives reflection, Fresnel, and specular — conflating them made water black from below (caught by
+  `a_surface_is_visible_from_underneath`).
+
+Not here, deliberately: refraction (what is behind is absorbed and tinted, never bent), scene
+reflections (sky and sun only), a CPU wave evaluator and therefore no buoyancy (`water.rs` is where
+the Rust mirror goes, with an agreement test, when a boat needs to float), and point lights on
+water. Verified by `engine-render/tests/water.rs` (six GPU-skipping pixel tests, including
+`a_scene_with_no_water_is_untouched_by_the_water_pass`) and fixture `verify/m18_water.json` +
+baseline at `--steps 120`, pinned by a CLI test. The bit-exactness of the seventeen earlier
+baselines was checked the way this repo has learned to check it — an A/B between binaries built at
+`main` and here, fifteen scene/step combinations, all byte-identical.
+
 Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
 with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,
@@ -524,13 +584,16 @@ by hand with `diff-render`, not by a CLI test). **Its growth contract is a test*
 `repo_contracts.rs::showcase_tour_uses_every_component_the_engine_has` fails on any schema
 component the tour does not use, so a new component's commit adds an entity here — there is no
 allowlist, deliberately. Station 04 fires all three `Breakable` triggers in one run (collision at
-~585, `break_entity` at 601, `explode` at 636). What is real: particles, physics, fragments, and
-since M16 the water and ice (real `Material.transmission`, not opaque stand-ins), and since M17 the
-campfire — layered additive flame, turbulent smoke, streaked embers, and a `PointLight` the tour's
-effects script flickers off the same signal that drives the emission rates. What is still faked and
-named as such in the doc: animals (scaled spheres on parametric loops) and the sky (a gradient, not
-scattering). The blast at station 04 still emits no light, which is now a wiring job rather than a
-missing feature. Refraction is the upgrade that would move this scene most now.
+~585, `break_entity` at 601, `explode` at 636). What is real: particles, physics, fragments, the ice
+(real `Material.transmission`, not an opaque stand-in), since M17 the campfire — layered additive
+flame, turbulent smoke, streaked embers, and a `PointLight` the tour's effects script flickers off
+the same signal that drives the emission rates — and since M18 the pond, one `Water` entity where
+sixteen script-bobbed cube tiles used to be (the wave loop is gone from `tour_effects.rhai`, and the
+`PondBed` under it was retuned at the same time: absorption has nothing to reveal over a black bed).
+What is still faked and named as such in the doc: animals (scaled spheres on parametric loops) and
+the sky (a gradient, not scattering). The blast at station 04 still emits no light, which is now a
+wiring job rather than a missing feature. Refraction is the upgrade that would move this scene most
+now, and water is its loudest customer.
 **Building it found a physics bug** now fixed and regression-tested: priming the broad-phase BVH
 before the first step (vehicle worlds did this so wheel rays hit ground on step 0) consumed the
 pair events, and rapier's `NarrowPhase::register_pairs` is private — so every collider **already
@@ -645,9 +708,10 @@ error convention~~ → ~~M2 JSON scenes + ECS~~ → ~~M3 glTF/texture assets~~ �
 lighting~~ → ~~M5 validation hardening~~ → ~~M6 diff-render~~ → ~~M7 GUI editor (E0–E2)~~ →
 ~~M8 physics~~ → ~~M9 animation (A0–A1)~~ → ~~M10 scripting~~ — **the roadmap is complete.**
 Remaining deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF +
-GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17 — refraction and
-scene-color sampling for transmissive materials, shadow cascades, shadows from point lights, spot
-lights, and a light on the tour's explosion (~~lights a script can drive~~ landed in M17).
+GPU skinning, the M5-era deferrals (--fix, watch mode), and — after M16/M17/M18 — refraction and
+scene-color sampling for transmissive materials (water's loudest missing feature), planar
+reflections, shadow cascades, shadows from point lights, spot lights, a CPU wave evaluator and
+buoyancy, and a light on the tour's explosion (~~lights a script can drive~~ landed in M17).
 Each milestone from M4 on ends by running its fixture from `milestone-verification-scenes.md`.
 
 M1's `engine screenshot` is mostly plumbing that already exists: `Renderer::draw` takes any

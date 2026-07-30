@@ -31,6 +31,10 @@ pub enum Content {
     /// A loaded scene, flattened to a draw list.
     Scene {
         items: Vec<RenderItem>,
+        /// The scene's water surfaces (M18). Refreshed per frame when a
+        /// simulation runs — a script can move a surface — and static
+        /// otherwise, exactly like `items`.
+        water: Vec<engine_core::scene::WaterItem>,
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
@@ -295,6 +299,7 @@ impl ViewerApp {
                 },
                 Content::Scene {
                     items,
+                    water,
                     camera,
                     camera_model,
                     lights,
@@ -397,6 +402,7 @@ impl ViewerApp {
                     if let Ok(fresh) = sim.scene.render_items(&sim.assets) {
                         *items = fresh;
                     }
+                    *water = sim.scene.water_items();
                     *hud_items = sim.scene.hud_items();
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
@@ -411,6 +417,15 @@ impl ViewerApp {
                     .as_ref()
                     .map(|sim| sim.particles.instances(&sim.scene.world))
                     .unwrap_or_default();
+                // Whole fixed steps, converted to seconds — the reproducible
+                // clock. A scene with nothing to simulate has no clock at all
+                // and its water sits at its t = 0 pose.
+                let simulated_time = simulation
+                    .as_ref()
+                    .map(|sim| {
+                        sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32
+                    })
+                    .unwrap_or(0.0);
                 let (width, height) = target.size();
                 let view_projection = scene_renderer::view_projection(
                     camera,
@@ -437,7 +452,9 @@ impl ViewerApp {
                             target: view,
                             msaa: msaa.as_ref(),
                             depth,
+                            target_size: [width, height],
                             items,
+                            water,
                             particles: &particles,
                             view_projection,
                             camera_position: camera_model.w_axis.truncate(),
@@ -445,6 +462,13 @@ impl ViewerApp {
                             camera_up: camera_model.y_axis.truncate(),
                             lights: *lights,
                             environment: *environment,
+                            // The viewer's water runs on the *simulated* clock,
+                            // not on wall time: whole fixed steps taken since
+                            // load. Flying around a lake for a minute and then
+                            // screenshotting the same step number gives the same
+                            // waves, which is the property the FPS readout is
+                            // deliberately excluded from.
+                            time: simulated_time,
                             clear: scene_renderer::DEFAULT_CLEAR,
                             hud: canvas.as_ref(),
                         },
