@@ -154,13 +154,20 @@ impl SceneDoc {
                         self.items = items;
                         self.water = scene.water_items();
                         self.clouds = scene.cloud_items();
-                        self.lights = scene.lights().resolved();
+                        // At rest, like particles: the viewport shows the
+                        // scene at scene time zero, so a `daylight` block
+                        // renders at exactly the `time_of_day` the file
+                        // names. Editing that field is how you move the sun
+                        // here, which is the honest answer — there is no
+                        // gizmo for a sun the file does not aim.
+                        let (lights, environment) = scene.resolved_at(0.0);
+                        self.lights = lights;
                         // MSAA is the viewport's own business, not the
                         // scene's: the sample count is baked into the
                         // renderer's pipelines and this one is built once.
                         self.environment = engine_core::scene::EnvironmentSettings {
                             samples: 1,
-                            ..scene.environment
+                            ..environment
                         };
                     }
                     Err(e) => self.diagnostics.push(e),

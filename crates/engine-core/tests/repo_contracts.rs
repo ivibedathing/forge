@@ -93,6 +93,17 @@ fn showcase_tour_scene_is_valid() {
 /// component. Adding an entity that uses it to `showcase_tour.json` is the
 /// fix; there is no allowlist to append to, because an allowlist is how a
 /// contract like this quietly stops meaning anything.
+///
+/// **One exception exists, and it is derived rather than declared.** M21's
+/// `daylight` block *synthesizes* the sun and the ambient term, and the engine
+/// refuses a scene that also authors them (`daylight_and_directional_light`,
+/// and the `daylight_overrides_sky` warning). So `DirectionalLight` and
+/// `AmbientLight` became the first components that **cannot** share a scene
+/// with another feature — which is a hole in this contract's premise, not in
+/// the tour. The exemption below is computed from the same rule validation
+/// enforces, so it disappears by itself if `drives_sun` / `drives_sky` are
+/// ever turned off in the tour. It is not a list of components someone could
+/// not be bothered to add.
 #[test]
 fn showcase_tour_uses_every_component_the_engine_has() {
     let schema: serde_json::Value =
@@ -114,16 +125,74 @@ fn showcase_tour_uses_every_component_the_engine_has() {
         .filter_map(|component| component["type"].as_str())
         .collect();
 
+    // Components the scene is *forbidden* to carry, because its `daylight`
+    // block already owns what they mean.
+    let daylight = &scene["daylight"];
+    let drives = |field: &str| {
+        !daylight.is_null() && daylight[field].as_bool().unwrap_or(true)
+    };
+    let mut owned_by_daylight: Vec<&str> = Vec::new();
+    if drives("drives_sun") {
+        owned_by_daylight.push("DirectionalLight");
+    }
+    if drives("drives_sky") {
+        owned_by_daylight.push("AmbientLight");
+    }
+
     let missing: Vec<&str> = known
         .iter()
         .copied()
-        .filter(|name| !used.contains(name))
+        .filter(|name| !used.contains(name) && !owned_by_daylight.contains(name))
         .collect();
     assert!(
         missing.is_empty(),
         "examples/scenes/showcase_tour.json shows off every engine system, and \
          these components are not in it: {missing:?}\n\
          Add an entity that uses each one — see showcase-tour.md."
+    );
+
+    // The exemption cuts both ways: if the tour stops driving the sun, it owes
+    // the demo a real `DirectionalLight` again.
+    for name in owned_by_daylight {
+        assert!(
+            !used.contains(name),
+            "the tour's daylight block owns {name}, so the scene must not also \
+             author one — validation rejects that combination outright"
+        );
+    }
+}
+
+/// The same growth contract, one level up: every **scene-level block** the
+/// format has should be exercised by the tour too.
+///
+/// `daylight` is a block rather than a component, so the component walk above
+/// would never have noticed it missing — which is exactly the kind of gap a
+/// growth contract exists to close before an agent finds it.
+#[test]
+fn showcase_tour_uses_every_scene_block_the_format_has() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&engine_core::schema::canonical_json()).unwrap();
+    let known: Vec<&str> = schema["scene"]["properties"]
+        .as_object()
+        .expect("the scene schema publishes its top-level fields")
+        .keys()
+        .map(String::as_str)
+        .collect();
+
+    let scene: serde_json::Value =
+        serde_json::from_str(&repo_file("examples/scenes/showcase_tour.json")).unwrap();
+    let object = scene.as_object().expect("a scene file is an object");
+
+    let missing: Vec<&str> = known
+        .iter()
+        .copied()
+        .filter(|field| !object.contains_key(*field))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "examples/scenes/showcase_tour.json should exercise every scene-level \
+         block, and these are absent: {missing:?}\n\
+         Add each one — see showcase-tour.md."
     );
 }
 

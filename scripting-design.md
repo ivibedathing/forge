@@ -91,13 +91,20 @@ fn step(world, step) {
 | `world.hud_text(name)` / `world.set_hud_text(name, text)` | (M12) `HudText.text` — the component readout; unlike `world.hud` lines this is scene state, so it bakes under the change-based rule |
 | `world.hud_rect_size(name)` (returns `[w, h]`) / `world.set_hud_rect_size(name, w, h)` | (M12) `HudRect.size` in pixels — the gauge-bar primitive; bakes like any component field |
 | `world.particle_rate(name)` / `world.set_particle_rate(name, rate)` | (M13) `ParticleEmitter.rate` in particles/sec — the one emitter parameter scripts drive, so an effect can answer to gameplay (a skidding tire smokes, a rolling one does not). Takes effect on the same step (the emitter re-reads `rate` every step) and bakes like any component field. Rate 0 pauses emission without disturbing live particles, which live out their lifetime. A negative, NaN, or f32-overflowing rate is a runtime error rather than a scene file that bakes and then fails to validate |
+| `world.time_of_day()` | (M21) the scene's hour of the day as a float in `[0, 24)`, from the same reproducible clock the renderer uses (`step * dt`), evaluated once per step so two calls cannot disagree. A scene with no `daylight` block has no time of day, and asking is a runtime error rather than a plausible noon. Read-only, deliberately: a script-settable clock is hidden state (invariant 2) |
+| `world.sun_altitude()` | (M21) the sun's altitude in degrees, negative when it is down. Derivable from `time_of_day` only by reimplementing the sun's arc in Rhai, and "turn the lamps on when the sun is down" is *the* use case — fading on altitude also survives a change to `sun_elevation`/`sun_azimuth` that an hour threshold would not |
 | `world.touching(name)` | (M12) names of entities the entity's collider is in contact with, as an array of strings — the touching-state left by the **previous** physics step (system order is scripts → physics, so a contact at physics step N is script-visible at step N+1) |
 | `world.contacts_started(name)` | (M12) the subset of `touching` that began on the previous physics step — the "on hit" edge trigger; empty again the step after |
 
 Getters return `[x, y, z]` arrays. A name that resolves to no entity, or an entity without a
 `Transform`, raises a script runtime error naming the entity — deterministic failure over
 silent no-op. Material access and spawning are deferred (§7); velocity access arrived with
-M11's car, contact queries with M12's collision work, and emission rate with M13's particles.
+M11's car, contact queries with M12's collision work, emission rate with M13's particles, and the
+two clock getters with M21's day/night. Note what day/night did **not** need: turning the time into
+light is `set_light_intensity` unchanged, which is why `PointLight` has no `auto_on` field. The one
+thing it wanted and could not have is `Material.emissive` — the M21 fixture's lamp globe carries a
+constant glow because no script can raise one (§7's deferred material access, now with a concrete
+customer).
 Input semantics (key names, the timeline file `--input` replays) live in `input-design.md`.
 
 ## 5. Workspace

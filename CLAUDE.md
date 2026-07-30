@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M20 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, M19 procedural trees, and M20 procedural clouds** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M21 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, M19 procedural trees, M20 procedural clouds, and M21 day/night** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -46,6 +46,9 @@ engine list-animations <scene-or-clip> [--schema]
 #   smaller lobes on itself, sized by Transform.scale; carries no Mesh and no Material
 #   (cloud_with_mesh), shades through its own clouds.wgsl, and "drift" moves it on the same
 #   reproducible clock water uses
+# Scene-level "daylight" block (M21): the time of day as one number — sun/moon arc,
+#   an eight-keyframe color palette, ambient, sky bands, and a fog *scale*; absent means
+#   the pre-M21 engine byte for byte. Scripts read world.time_of_day()/sun_altitude()
 # Water component (M18): a body of water — the entity carries no Mesh and no Material, the
 #   component owns a tessellated grid ("segments") sized by Transform.scale, Gerstner "waves"
 #   displaced in the vertex stage, per-pixel detail ripples, depth-based absorption between
@@ -654,7 +657,80 @@ diffuse curve left **linear**, because applying it in full saturates a white clo
 sharpening the curve instead — the obvious fix — turns a storm cloud into grey rock. Fixture
 `verify/m20_clouds.json` + baseline at `--steps 120`, pinned by a CLI test that also pins
 `cloud_with_mesh` and `cloud_too_complex`; seven GPU-skipping pixel tests in
-`engine-render/tests/clouds.rs`.
+`engine-render/tests/clouds.rs`. The no-pixel-moved claim was settled the usual way — an A/B
+between binaries, twenty scene/step combinations against `main` including all five hours of the
+M21 daylight fixture, all byte-identical.
+
+Day and night (M21, design in `daylight-design.md`). Every scene was pinned at whatever hour its
+author typed, and moving one to dusk meant hand-editing six colors and keeping them consistent.
+`daylight` makes them one number.
+
+**It is a pure CPU function, and that is the whole design.** `engine-core/src/daylight.rs` maps
+`(DaylightSettings, time) -> Daylight`, and `scene::apply_daylight` folds that onto the
+`ResolvedLights` and `EnvironmentSettings` the renderer was going to receive anyway. **No WGSL
+changed, no new uniform, no new pass — `SceneRenderer::draw` takes exactly the types it took
+before.** So M16's untouchable four lines in `mesh.wgsl` cannot be tripped, the whole system is
+GPU-free and unconditionally testable like `particles.rs` and `tree.rs`, and everything downstream
+tracks for free: shadows follow the sun because they always followed the `DirectionalLight`, fog
+recolors at sunset because fog *is* `sky_horizon`, and water reflects a dusk sky because
+`water.wgsl` already reflects whatever the sky uniform says.
+
+`daylight` is a **top-level sibling of `physics` and `environment`**, not a field inside it — it is
+clock-driven and it *produces* environment values, and a `Vec` palette inside `EnvironmentSettings`
+would cost that type its `Copy` and put a clone in the per-frame path. It rides the same clock water
+does (`--time T`, else `steps / timestep_hz`), and **`day_length: 0` (the default) freezes the day**:
+most scenes want a dial, not motion, and a frozen day is reproducible with no `--time` at all.
+`day_length: 24.0` makes an hour a second, which is what the fixture uses.
+
+- **The arc** is artistic with a physical shape: `sun_elevation` (noon altitude) and `sun_azimuth`
+  (noon bearing) replace latitude, date, and axial tilt. **Sunrise is 06:00 and sunset 18:00 at
+  every elevation** — refusing to move them with the season is what makes an 18:00 keyframe *the*
+  sunset keyframe in every scene. Derived once so it is not rediscovered: a noon sun toward −Z makes
+  −Z south, so the sun **rises toward −X and sets toward +X**.
+- **The moon** rides the same arc twelve hours out of phase with its own elevation, color, and
+  intensity. There is still one directional light: **it *is* the dominant body**, direction, color
+  and intensity, with no summing. The bodies swap where their luminances are equal, so brightness is
+  continuous by construction and only hue and direction shift — at the moment there is least light
+  to notice it by. Summing instead would send an orange sunset from the moon's side of the sky for
+  all of twilight; crossfading the direction would aim the light where neither body is. The
+  handoff's invisibility is a **property of the palette**, and a test walks the day at one-minute
+  resolution asserting exactly two swaps, each under 0.08 luminance — brighten the dusk keyframes
+  and it fails, correctly.
+- **The palette** is eight keyframes, all nine fields required (a half-specified keyframe fading to
+  black is worse than an error), interpolated linearly in linear RGB and **wrapping across
+  midnight**. **The noon keyframe is exactly the M16 clear-day defaults**, so the model and every
+  hand-authored scene agree at the one hour anyone can check. Sun intensity lives in the table
+  rather than falling out of `sin(altitude)` because a sunset's redness and its dimness are one
+  decision. **Fog is a `fog_scale` multiplier on the authored `fog_density`**, never an absolute —
+  a scene with `fog_density: 0` stays clear all day, and a daylight block can never switch fog on in
+  a scene that never asked for any.
+- **Ownership.** `drives_sun` (default on) synthesizes the sun, and an authored `DirectionalLight`
+  beside it is `daylight_and_directional_light` — two owners of one sun is what invariant 8 exists
+  to prevent. `drives_sky` (default on) computes the three bands **and the ambient** (ambient *is*
+  the sky's contribution, which is why M16 gates hemispheric ambient on `sky`); authoring either
+  anyway is the `daylight_overrides_sky` warning, `unused_material`-style, naming the fix.
+- **The horizon-sun shadow bug**, which day/night is the first thing to reach: a sun on the horizon
+  casts shadows of unbounded length and one just below it casts them *upward*. `clamp_shadow_
+  elevation` in `scene_renderer.rs` floors the direction used for the **shadow matrix** at 5° while
+  the lighting direction keeps going. Above 5° it returns its input unchanged, which is why it costs
+  every pre-M21 baseline nothing (measured: every shadow-casting fixture aims its sun 24°–33° up).
+- **Scripts** get exactly two read-only getters, `world.time_of_day()` and `world.sun_altitude()`,
+  evaluated once per step from `step * dt`. Turning them into light is the M17 API unchanged — which
+  is why there is no `auto_on` field on `PointLight`. There is deliberately **no setter**: a
+  script-settable clock is hidden state (invariant 2), so "sleep until dawn" is named as not-done
+  rather than smuggled in. Asking a scene with no `daylight` block for the time is a runtime error,
+  not a plausible noon.
+
+Fixture `verify/m21_daylight.json` + `scripts/m21_lamp.rhai` and **five baselines from one file** at
+`--steps 120/390/720/1110/1320` (02:00, 06:30, noon, 18:30, 22:00), pinned by a CLI test that also
+asserts 02:00 does *not* match the noon baseline. `--steps` and not `--time` because the lamp is
+script-driven and scripts run on the step loop. Bless from the **debug** binary (M19's rule — the
+fixture has trees). Not here: a sun disc or a directional horizon glow (so a sunset reddens the whole
+sky evenly — the natural next commit, in `sky_common.wgsl` on its own branch after the untouchable
+lines), stars, clouds, real astronomy, moon shadows, and script-driven `Material.emissive` — which
+the fixture's lamp globe wanted and is a gap this milestone surfaced rather than created.
+**The A/B settled the no-pixel-moved claim**: merge-base binary vs the worktree's, 15 scenes × 5
+step counts = 75 combinations, all byte-identical.
 
 Showcase tour (`showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
@@ -663,7 +739,11 @@ truck}.rhai`) and six 640×360 baselines (`verify/baselines/showcase_*.png`, per
 by hand with `diff-render`, not by a CLI test). **Its growth contract is a test**:
 `repo_contracts.rs::showcase_tour_uses_every_component_the_engine_has` fails on any schema
 component the tour does not use, so a new component's commit adds an entity here — there is no
-allowlist, deliberately. Station 04 fires all three `Breakable` triggers in one run (collision at
+allowlist, deliberately. M21 added `showcase_tour_uses_every_scene_block_the_format_has` beside it,
+since `daylight` is a block and the component walk could never have seen it missing; M21 also put
+the first hole in the component contract's premise, because `drives_sun` makes `DirectionalLight` a
+validation error and two components stopped being addable. That exemption is *computed* from the
+validation rule, not listed, so it evaporates if the tour stops driving the sun. Station 04 fires all three `Breakable` triggers in one run (collision at
 ~585, `break_entity` at 601, `explode` at 636). What is real: particles, physics, fragments, the ice
 (real `Material.transmission`, not an opaque stand-in), since M17 the campfire — layered additive
 flame, turbulent smoke, streaked embers, and a `PointLight` the tour's effects script flickers off

@@ -57,6 +57,9 @@ build fails.
 | `animation_on_dynamic_body` | 1 | a clip animates the Transform of a dynamic RigidBody; make it kinematic |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
+| `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |
+| `daylight_palette_invalid` | 1 | a daylight palette needs at least two keyframes with strictly increasing hours |
+| `daylight_and_directional_light` | 1 | daylight drives the sun, so the scene may not also author a DirectionalLight |
 | `water_with_mesh` | 1 | a Water entity owns its own surface; it may not also have a Mesh or a Material |
 | `water_waves_self_intersect` | 1 | the sum of Water wave steepness exceeds 1, which folds the surface through itself |
 | `script_parse_error` | 1 | a script file does not compile |
@@ -76,6 +79,7 @@ build fails.
 | `unused_material` | 1 | warning: a Material on an entity with no Mesh does nothing |
 | `zero_scale` | 1 | warning: a Transform.scale axis of 0 renders invisibly or degenerate |
 | `unknown_collision_layer` | 1 | warning: collides_with names a layer no collider is a member of |
+| `daylight_overrides_sky` | 1 | warning: daylight computes the sky and ambient, so the authored ones are never read |
 | `scene_unreadable` | 1 | the scene file could not be read |
 | `scene_parse_desync` | 2 | internal bug: the scene passed validation but failed to parse |
 | `entity_not_found` | 1 | no entity has the requested name |

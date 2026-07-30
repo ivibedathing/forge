@@ -350,5 +350,8 @@ truth.
   showcase_tour_uses_every_component_the_engine_has` requires it — which cost
   all six showcase baselines a re-bless and no other baseline anything.
 - And the check this repo has learned actually settles a bit-exactness question:
-  an **A/B between binaries** built at `main` and here, rendering fifteen
-  scene/step combinations and `cmp`-ing the PNGs. All fifteen byte-identical.
+  an **A/B between binaries** built at `main` and here, `cmp`-ing the PNGs.
+  Fifteen scene/step combinations against the branch point, then twenty against
+  `main` after merging M21 daylight in — including all five hours of the
+  daylight fixture, since clouds and the sun now share a frame. All
+  byte-identical.

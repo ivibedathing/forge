@@ -1,12 +1,16 @@
 {
   "name": "showcase_tour",
   "physics": { "gravity": [0.0, -9.81, 0.0], "timestep_hz": 60 },
+  "daylight": {
+    "time_of_day": 16.3,
+    "day_length": 300.0,
+    "sun_elevation": 54.0,
+    "sun_azimuth": 28.0,
+    "moon_elevation": 40.0
+  },
   "environment": {
     "sky": true,
-    "sky_zenith": [0.10, 0.24, 0.58],
-    "sky_horizon": [0.40, 0.54, 0.72],
-    "sky_ground": [0.09, 0.11, 0.09],
-    "fog_density": 0.0045,
+    "fog_density": 0.0024,
     "shadows": true,
     "shadow_distance": 72.0,
     "samples": 4
@@ -727,19 +731,6 @@
       ]
     },
 
-    {
-      "name": "Sun",
-      "components": [
-        { "type": "Transform", "rotation": [-42.0, 35.0, 0.0] },
-        { "type": "DirectionalLight", "color": [1.0, 0.95, 0.86], "intensity": 1.15 }
-      ]
-    },
-    {
-      "name": "Sky",
-      "components": [
-        { "type": "AmbientLight", "color": [0.45, 0.56, 0.72], "intensity": 0.22 }
-      ]
-    },
     {
       "name": "TourCam",
       "components": [

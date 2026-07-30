@@ -3377,6 +3377,194 @@
           }
         ]
       },
+      "DaylightKeyframe": {
+        "additionalProperties": false,
+        "description": "One entry in the day's color table.\n\nThe palette carries the **sun's** color and intensity, not the directional\nlight's in general — the moon has its own two fields on\n[`DaylightSettings`], because it does not meaningfully change color through\na night and would otherwise need repeating in every night keyframe.",
+        "properties": {
+          "ambient_color": {
+            "description": "Linear RGB chromaticity of the ambient fill.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "ambient_intensity": {
+            "description": "Brightness of the ambient fill.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "fog_scale": {
+            "description": "Multiplier on the scene's authored `environment.fog_density`.\n\nA **scale**, not a density, deliberately (design §5): a scene with\n`fog_density: 0` stays clear all day however misty the palette's dawn\nis, and a scene that wants fog authors it once and gets the dawn\nthickening for free. An absolute density here would mean a daylight\nblock silently switching fog on in a scene that never asked for any.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "hour": {
+            "description": "Hours in `[0, 24)`.",
+            "format": "float",
+            "maximum": 24.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "sky_ground": {
+            "description": "Color below the horizon.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sky_horizon": {
+            "description": "Sky color at the horizon — which is also the fog color, since\n`environment` has one field for both.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sky_zenith": {
+            "description": "Sky color straight overhead. Unclamped above 1, like\n`environment.sky_zenith`: a sky is a light source, and clamping it to\nreflectance range makes noon look like dusk.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sun_color": {
+            "description": "Linear RGB chromaticity of direct sunlight at this hour.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sun_intensity": {
+            "description": "Brightness of direct sunlight at this hour.\n\nIt lives in the table rather than falling out of `sin(altitude)`\nbecause a sunset's redness and its dimness are one artistic decision,\nand splitting them across a physical falloff and a color curve means\nretuning a dusk in two places that then disagree.\n\n**Keep it near zero at the horizon hours.** The sun/moon handoff\n(§ [`Daylight`]) switches the light's direction where the two bodies\ncontribute equally, and how visible that switch is *is* the sun's\nintensity there. A test pins it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "hour",
+          "sun_color",
+          "sun_intensity",
+          "ambient_color",
+          "ambient_intensity",
+          "sky_zenith",
+          "sky_horizon",
+          "sky_ground",
+          "fog_scale"
+        ],
+        "type": "object"
+      },
+      "DaylightSettings": {
+        "additionalProperties": false,
+        "description": "The scene-level `daylight` block — a sibling of `physics` and\n`environment`, not a field inside either.\n\nIt sits outside `environment` for two reasons (design §2). Conceptually\nthis is a *clock-driven system*, closer to `physics`, and it **produces**\nenvironment values rather than being one. Mechanically, `EnvironmentSettings`\nis `Copy` because lights resolve every frame in the viewer; an optional\nkeyframe palette is a `Vec`, and hanging it there would cost that type its\n`Copy` and put a clone in the per-frame path.\n\n**A scene with no `daylight` block renders exactly as it did before this\nmodule existed, byte for byte.** That is the M16 contract repeated, and it\nis why nineteen existing baselines did not move.",
+        "properties": {
+          "day_length": {
+            "default": 0.0,
+            "description": "Seconds of scene time per full 24-hour cycle. `0` (the default) freezes\nthe day, which is what most scenes want: a dial, not motion, and a\nscreenshot reproducible from the file with no `--time` at all.\n\n`24.0` makes an hour a second, so `--time 6.5` is 6:30 in the morning.\nThat is the unit the fixtures use because it reads itself.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "drives_sky": {
+            "default": true,
+            "description": "Compute `environment.sky_zenith` / `sky_horizon` / `sky_ground` **and\nthe ambient term** from the palette.\n\nAmbient rides with the sky rather than with the sun because it *is*\nthe sky's contribution — which is why M16 gates hemispheric ambient on\n`sky` in the first place. A scene that authored non-default band colors\nor its own `AmbientLight` and leaves this on gets the\n`daylight_overrides_sky` warning.",
+            "type": "boolean"
+          },
+          "drives_sun": {
+            "default": true,
+            "description": "Synthesize the sun's direction, color, and intensity.\n\nWith this on (the default) a scene needs **no** `DirectionalLight`\nentity, and authoring one anyway is `daylight_and_directional_light`.\nTwo owners of one sun is what invariant 8 exists to prevent: a rotation\nin a text file that is silently ignored, or silently overwritten, is a\nvalue that does not mean what it says.\n\nSet it `false` and daylight paints the sky, ambient, and fog only,\nleaving a hand-aimed `DirectionalLight` its job. That is the artist\nscene, and it is one field.",
+            "type": "boolean"
+          },
+          "moon_color": {
+            "default": [
+              0.550000011920929,
+              0.6600000262260437,
+              0.949999988079071
+            ],
+            "description": "Linear RGB chromaticity of moonlight. Magnitude lives in\n`moon_intensity`, like every other light in the engine.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "moon_elevation": {
+            "default": 48.0,
+            "description": "Degrees above the horizon the moon reaches at its highest. It rides the\nsame arc as the sun offset by twelve hours; giving it its own elevation\nis what keeps it from being a mechanical anti-sun.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 90.0,
+            "type": "number"
+          },
+          "moon_intensity": {
+            "default": 0.05999999865889549,
+            "description": "Brightness of moonlight. The default is deliberately tiny: a moonlit\nscene should read as *navigable*, not as a dim afternoon.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "palette": {
+            "description": "The color table over the day. Absent means [`DaylightSettings::builtin_palette`].\n\nEvery field of a keyframe is required: a half-specified keyframe\nsilently interpolating toward black is a worse failure than a\nvalidation error.",
+            "items": {
+              "$ref": "#/$defs/DaylightKeyframe"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sun_azimuth": {
+            "default": 0.0,
+            "description": "Compass bearing of the noon sun in degrees, rotating the whole arc\nabout Y. `0` puts noon toward −Z, matching the engine's aiming\nconvention. Unbounded — it wraps.",
+            "format": "float",
+            "type": "number"
+          },
+          "sun_elevation": {
+            "default": 62.0,
+            "description": "Degrees above the horizon the sun reaches at noon. `90` is overhead,\n`20` is a winter afternoon that never really gets going.\n\nThis one number replaces latitude, longitude, date, and axial tilt.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "maximum": 90.0,
+            "type": "number"
+          },
+          "time_of_day": {
+            "default": 12.0,
+            "description": "Hours in `[0, 24)` — `6.5` is half past six in the morning. When the\nday is cycling this is the hour at scene time zero.",
+            "format": "float",
+            "maximum": 24.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
       "EntityDef": {
         "additionalProperties": false,
         "description": "One entity in a scene file.",
@@ -3667,6 +3855,17 @@
     "additionalProperties": false,
     "description": "A scene file, exactly as it appears on disk.",
     "properties": {
+      "daylight": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DaylightSettings"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The day/night block (M21) — a sibling of `physics` and `environment`,\nnot a field inside either. Absent means the pre-M21 engine exactly:\nnothing computes a sky, and the lights are whatever the entities say."
+      },
       "entities": {
         "items": {
           "$ref": "#/$defs/EntityDef"

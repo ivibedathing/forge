@@ -147,6 +147,14 @@ registry! {
     INVALID_ENVIRONMENT_VALUE = "invalid_environment_value", Input,
         "an environment setting is outside its meaningful range";
 
+    // ── Daylight (M21) ─────────────────────────────────────────────────
+    INVALID_DAYLIGHT_VALUE = "invalid_daylight_value", Input,
+        "a daylight setting is outside its meaningful range";
+    DAYLIGHT_PALETTE_INVALID = "daylight_palette_invalid", Input,
+        "a daylight palette needs at least two keyframes with strictly increasing hours";
+    DAYLIGHT_AND_DIRECTIONAL_LIGHT = "daylight_and_directional_light", Input,
+        "daylight drives the sun, so the scene may not also author a DirectionalLight";
+
     // ── Water (M18) ────────────────────────────────────────────────────
     WATER_WITH_MESH = "water_with_mesh", Input,
         "a Water entity owns its own surface; it may not also have a Mesh or a Material";
@@ -199,6 +207,8 @@ registry! {
         "warning: a Transform.scale axis of 0 renders invisibly or degenerate";
     UNKNOWN_COLLISION_LAYER = "unknown_collision_layer", Input,
         "warning: collides_with names a layer no collider is a member of";
+    DAYLIGHT_OVERRIDES_SKY = "daylight_overrides_sky", Input,
+        "warning: daylight computes the sky and ambient, so the authored ones are never read";
 
     // ── Scene semantics at command time ───────────────────────────────
     SCENE_UNREADABLE = "scene_unreadable", Input,

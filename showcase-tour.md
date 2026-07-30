@@ -102,6 +102,20 @@ to be the test that breaks on the commit that adds a component, and the fix
 is to add an entity that uses it — there is no allowlist, because an
 allowlist is how a contract like this quietly stops meaning anything.
 
+**And every scene-level block.**
+`repo_contracts.rs::showcase_tour_uses_every_scene_block_the_format_has` is the
+same contract one level up, added in M21 because `daylight` is a top-level
+block rather than a component and the component walk would never have noticed
+it missing.
+
+M21 also put the first hole in the component contract's premise. `daylight`
+with `drives_sun` makes a `DirectionalLight` a *validation error*, so the tour
+cannot carry one — two components stopped being addable. The exemption is
+computed from that same validation rule rather than declared as a list, so it
+disappears by itself if the tour ever stops driving the sun, and the test
+asserts the converse too. If a future feature makes another component
+mutually exclusive, extend it the same way: derive, never enumerate.
+
 When a system is bigger than one component — a renderer feature, a shader
 path, a whole subsystem — it does not trip that test, so add it here by hand
 and say so in the table above. A sixth station is cheap: extend `eyes`,
@@ -115,6 +129,13 @@ than no showcase:
 
 - **Fire, smoke, sparks, spray, frost, blast, dust** are real: `ParticleEmitter`
   with scripted rates. Nothing is faked here.
+- **The time of day is real** as of M21. The tour has no `DirectionalLight` and
+  no `AmbientLight` at all: its `daylight` block synthesizes the sun, the
+  ambient, and the sky from one number, and `day_length: 300.0` drifts the
+  15-second run from 16:18 to 17:38 — late afternoon into golden hour, so the
+  light warms and the shadows lengthen while the camera moves. What is faked is
+  unchanged and now more visible: the sky is still a gradient with no idea where
+  the sun is, so the sunset reddens all of it evenly and there is no disc.
 - **The campfire casts real light** as of M17. `FireLight` is a `PointLight`, and
   `tour_effects.rhai` drives its intensity, color, and height from the same
   flicker-times-breath signal that drives the flame's emission rates and the coal

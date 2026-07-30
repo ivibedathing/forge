@@ -16,6 +16,7 @@ use crate::components::{
     AmbientLight, Camera, ComponentData, DirectionalLight, HudRect, HudText, Name, PointLight,
     Transform, MAX_POINT_LIGHTS,
 };
+use crate::daylight::DaylightSettings;
 use crate::error::{EngineError, Result};
 use crate::validate;
 
@@ -34,6 +35,12 @@ pub struct SceneFile {
     /// the pre-M16 renderer exactly (M16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentSettings>,
+
+    /// The day/night block (M21) — a sibling of `physics` and `environment`,
+    /// not a field inside either. Absent means the pre-M21 engine exactly:
+    /// nothing computes a sky, and the lights are whatever the entities say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daylight: Option<DaylightSettings>,
 
     pub entities: Vec<EntityDef>,
 }
@@ -312,6 +319,58 @@ impl LightRig {
     }
 }
 
+/// Fold a day into a scene's lights and environment.
+///
+/// A free function rather than a method because the viewer does not keep a
+/// `Scene` in its render content — it holds the resolved values and re-folds
+/// them every frame against the fixed-step clock. Both paths must agree
+/// exactly, so there is one implementation and no second copy to drift.
+///
+/// `settings` of `None` returns its inputs untouched. That is not a
+/// convenience: it is what makes a scene with no `daylight` block render
+/// byte-identically to the pre-M21 engine, because it is literally the same
+/// values flowing on through the same code.
+pub fn apply_daylight(
+    settings: Option<&DaylightSettings>,
+    time: f32,
+    lights: ResolvedLights,
+    environment: EnvironmentSettings,
+) -> (ResolvedLights, EnvironmentSettings) {
+    let Some(settings) = settings else {
+        return (lights, environment);
+    };
+
+    let day = settings.evaluate(time);
+    let mut lights = lights;
+    let mut environment = environment;
+
+    if settings.drives_sun {
+        // Validation rejects an authored `DirectionalLight` alongside
+        // `drives_sun`, so there is no second owner to reconcile with: the sun
+        // is whatever the day says it is.
+        lights.sun_direction = day.light_direction;
+        lights.sun_color = day.light_color;
+    }
+
+    if settings.drives_sky {
+        environment.sky_zenith = day.sky_zenith;
+        environment.sky_horizon = day.sky_horizon;
+        environment.sky_ground = day.sky_ground;
+        // Ambient rides with the sky rather than with the sun: it *is* the
+        // sky's contribution, which is why M16 gates hemispheric ambient on
+        // `sky` in the first place. A scene keeping its own `AmbientLight`
+        // sets `drives_sky: false`.
+        lights.ambient = day.ambient;
+    }
+
+    // The palette scales the scene's authored density rather than replacing
+    // it, so a scene with `fog_density: 0` stays clear all day however misty
+    // the palette's dawn is.
+    environment.fog_density *= day.fog_scale;
+
+    (lights, environment)
+}
+
 /// A scene loaded into an ECS world.
 pub struct Scene {
     pub name: String,
@@ -323,7 +382,15 @@ pub struct Scene {
 
     /// Scene-level rendering settings (defaults when the file has no
     /// `environment` block), carried for the same reason.
+    ///
+    /// These are what the scene *authored*. When a `daylight` block is
+    /// present it computes some of them, so the values a frame actually
+    /// renders with come from [`Scene::resolved_at`] — not from here.
     pub environment: EnvironmentSettings,
+
+    /// The day/night block (M21), or `None` for a scene that has no opinion
+    /// about the time of day. `None` is the pre-M21 engine exactly.
+    pub daylight: Option<DaylightSettings>,
 
     /// Name lookup, mirroring the [`Name`] component so targeting an entity by
     /// name does not require scanning the world.
@@ -363,6 +430,7 @@ impl Scene {
     pub fn instantiate(file: SceneFile) -> Self {
         let physics = file.physics.unwrap_or_default();
         let environment = file.environment.unwrap_or_default();
+        let daylight = file.daylight;
         let mut world = World::new();
         let mut by_name = HashMap::with_capacity(file.entities.len());
 
@@ -382,9 +450,29 @@ impl Scene {
             name: file.name,
             physics,
             environment,
+            daylight,
             world,
             by_name,
         }
+    }
+
+    /// The lights and environment to render with at `time` seconds of scene
+    /// time — the pair every render path should ask for instead of reading
+    /// `lights().resolved()` and `environment` separately.
+    ///
+    /// With no `daylight` block this returns exactly those two values,
+    /// untouched, which is what makes the absent-block path byte-identical to
+    /// the pre-M21 engine: same values, same types, same code downstream.
+    ///
+    /// With one, the day is evaluated and folded in according to `drives_sun`
+    /// and `drives_sky` (design §6).
+    pub fn resolved_at(&self, time: f32) -> (ResolvedLights, EnvironmentSettings) {
+        apply_daylight(
+            self.daylight.as_ref(),
+            time,
+            self.lights().resolved(),
+            self.environment,
+        )
     }
 
     /// Look up an entity by its stable name.
