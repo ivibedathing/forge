@@ -17,7 +17,7 @@
     "a new baseline that is not listed here fails the build.",
     "",
     "'pinned_by' is 'cli.rs' when a CLI test diff-renders the artifact and fails the build on drift,",
-    "and 'hand' when nothing automated checks it -- 15 of the 25 baselines are in the second group,",
+    "and 'hand' when nothing automated checks it -- 15 of the 26 baselines are in the second group,",
     "which is why the sweep exists. The first run of it found m14_break.png one channel step off in",
     "one pixel: the pre-existing drift CLAUDE.md records under M17, still uncorrected, invisible",
     "until now because no test looks at that PNG."
@@ -182,6 +182,18 @@
       "width": 640,
       "height": 360,
       "milestone": "M19",
+      "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m20_clouds.png",
+      "scene": "examples/scenes/verify/m20_clouds.json",
+      "args": [
+        "--steps",
+        "120"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M20",
       "pinned_by": "cli.rs"
     },
     {

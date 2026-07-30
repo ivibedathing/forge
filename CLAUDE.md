@@ -807,7 +807,7 @@ that previously lived only in prose here, in `milestone-verification-scenes.md`,
 missing from it. NDJSON out, exit 1 on drift, `--filter` to scope, `--bless` to re-bless (from the
 debug binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other binary>` to
 run the A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are
-checked too, GPU-free. Cataloguing this surfaced that **15 of the 25 baselines are pinned by no
+checked too, GPU-free. Cataloguing this surfaced that **15 of the 26 baselines are pinned by no
 test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`, both `m10`, `m11_lap`, `m13_smoke`,
 `m14_break`, and all six `showcase_*`) — the sweep is their only check, and its first run found
 `m14_break.png` still carrying the 1-pixel drift M17 recorded as pre-existing. `m11_lap.png` is

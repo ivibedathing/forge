@@ -411,7 +411,7 @@ fn formatter_edit_of_m4_fixture_changes_exactly_one_line() {
 /// The manifest is what `bin/verify-baselines` loops over, and what makes the
 /// A/B bit-exactness check between two binaries a command rather than a
 /// reconstruction. A baseline missing from it is a baseline nothing re-diffs:
-/// 15 of the 25 have no CLI test looking at them, so the sweep is their only
+/// 15 of the 26 have no CLI test looking at them, so the sweep is their only
 /// check, and it can only check what it can see.
 #[test]
 fn every_committed_baseline_is_listed_in_the_manifest() {
