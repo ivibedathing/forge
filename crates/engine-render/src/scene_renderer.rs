@@ -2204,6 +2204,51 @@ fn camera_forward(view_projection: Mat4) -> Vec3 {
     (unproject(1.0) - unproject(0.0)).normalize_or_zero()
 }
 
+/// How close to the horizon the *shadow* direction is allowed to get, in
+/// degrees. Not a scene field, and not applied to the lighting direction.
+///
+/// See [`clamp_shadow_elevation`].
+const MIN_SHADOW_ELEVATION_DEGREES: f32 = 5.0;
+
+/// Push a light direction down to at least [`MIN_SHADOW_ELEVATION_DEGREES`]
+/// below horizontal, for shadow-map fitting only.
+///
+/// A sun on the horizon casts shadows of unbounded length, and one a hair
+/// below it casts them *upward* — the ground shadowing itself from beneath.
+/// Neither is a problem the ortho fit or a depth bias can solve, because
+/// neither is a precision failure: the geometry really is that shape. M21's
+/// day/night system reaches those angles twice a day, where before M21 no
+/// scene ever did (every shadow-casting fixture in the repo aims its sun
+/// 24°–33° up).
+///
+/// So the shadow direction stops descending near the horizon while the
+/// direction that *lights* the scene keeps going. It is a lie, and it is told
+/// at the moment when direct light is nearly gone and the shadows it would
+/// have cast are far too long and faint to read. Doing it here rather than in
+/// the scene format keeps it out of the file: an author should not have to
+/// know the renderer has a floor.
+///
+/// Above the floor this returns its input unchanged, which is why it costs
+/// every pre-M21 baseline nothing.
+fn clamp_shadow_elevation(travel: Vec3) -> Vec3 {
+    // `travel` points the way the light goes, so a descending sun has
+    // negative Y and "elevation" is `-travel.y`.
+    let floor = MIN_SHADOW_ELEVATION_DEGREES.to_radians().sin();
+    if travel.y <= -floor {
+        return travel;
+    }
+
+    let horizontal = Vec3::new(travel.x, 0.0, travel.z);
+    let Some(bearing) = horizontal.try_normalize() else {
+        // Straight up or straight down: there is no bearing to preserve, and
+        // straight down is already past the floor.
+        return Vec3::NEG_Y;
+    };
+
+    let elevation = MIN_SHADOW_ELEVATION_DEGREES.to_radians();
+    (bearing * elevation.cos() - Vec3::Y * elevation.sin()).normalize()
+}
+
 /// Fit the sun's orthographic frustum around the part of the world the camera
 /// can see, and return world → light clip.
 ///
@@ -2230,7 +2275,7 @@ fn light_view_projection(
     let center = camera_position + camera_forward(view_projection) * radius;
 
     let travel = if sun_direction.length_squared() > 1e-12 {
-        sun_direction.normalize()
+        clamp_shadow_elevation(sun_direction.normalize())
     } else {
         Vec3::NEG_Y
     };
