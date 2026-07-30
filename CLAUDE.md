@@ -292,6 +292,26 @@ envelope, without which the car reads corners correctly and arrives far too fast
 Regenerating the track means regenerating the timeline and re-blessing the baseline — the two
 scripts print the start-line constants `car.rhai` needs.
 
+**The circuit stands in weather.** It ran until recently with **no `environment` block at all**,
+which is the documented default and meant no sky, no fog, and — the one anybody notices — no
+shadow under the car. It now carries `{"sky": true, "fog_density": 0.0012, "shadows": true,
+"shadow_distance": 70.0, "samples": 4}`, keeping the hand-tuned `Sun` as the light it always was;
+`make_car_track.py` also scatters **58 `Tree`s** over the ground by dart-throwing (rejecting any
+candidate within `TREE_CLEARANCE` of the *road's own* centerline, so the treeline re-fits itself
+when the corners move) and rings the track with **six `Cloud`s**. Three things about that are
+load-bearing. **No tree carries a `Collider`** — they are scenery the car reaches only through a
+guardrail, and a colliderless forest is what keeps the drive, `car_track_lap.input.jsonl`, and the
+lap test's pinned HUD strings (`LAP 4`, `LAST 63.70   BEST 59.47`) the ones the bare circuit had;
+the regenerated scene changed **no existing entity**, only added 64. **The clouds ring the circuit
+rather than sitting over it** because `TopCam` looks down from ~270 m, so cloud altitude is nearer
+the lens than the track and a cloud over the infield hides the infield; out at ±200 m they ride the
+horizon from the car and stay out of the map view. **Placement is a hand-rolled LCG in the script**,
+for the reason the engine spells out its own generators: the forest is committed scene data, and
+`random` reshuffling under a Python upgrade would surface as a baseline diff that looks like a
+renderer bug. `m11_lap.png` was re-blessed; nothing else moved. This is also a data point on M22's
+MSAA caveat — 58 trees at `samples: 4` against a *flat* ground plane rendered byte-identically 6
+runs running, so it is relief, not fine geometry alone, that costs this adapter its determinism.
+
 HUD (M11.6 lines + M12 components, `designs/hud-design.md`): two layers, one render path.
 `world.hud(text)` pushes printable-ASCII debug lines, cleared every step — the line HUD is a
 pure function of the step that drew it — and `world.state(key, default)` /

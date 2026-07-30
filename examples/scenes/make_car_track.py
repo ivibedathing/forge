@@ -39,6 +39,14 @@ implementations of one curve start disagreeing about where the road is.
 `--centerline` dumps that same centerline beside the scene: the autopilot that
 authors car_track_lap.input.jsonl steers along it, and it is regenerated
 rather than committed.
+
+The circuit stands in weather now. It ran until recently with no `environment`
+block at all, which is the engine's documented default and meant no sky, no
+fog, and — the visible one — no shadows under the car. The block turns those
+on; a forest scattered everywhere the road is not gives the shadows and the
+fog something to fall across; and six clouds ring the track at altitude. None
+of it is physical: no tree carries a collider, so the drive, the committed lap
+timeline, and every number the lap test pins are the ones the bare circuit had.
 """
 
 import argparse
@@ -129,6 +137,91 @@ BARRIER_RED = [0.85, 0.08, 0.06]
 EARTH = [0.20, 0.17, 0.13]
 VERGE_COLOR = [0.18, 0.19, 0.13]
 GRASS = [0.16, 0.22, 0.14]
+
+
+# ---------------------------------------------------------------------------
+# Weather and scenery
+# ---------------------------------------------------------------------------
+
+# The circuit had no `environment` block at all, which is why nothing cast a
+# shadow: shadows, sky, fog and MSAA all default to off, and a scene that omits
+# the block renders exactly as the pre-M16 engine drew it. The authored `Sun`
+# stays the light it always was — this only asks the renderer to trace it.
+#
+# One cascade, fitted to the camera, cannot cover a 240 m circuit and a car's
+# wheel arches at once. It is sized for the car: from the chase camera the
+# whole shadowed region is the road immediately around it, and the top-down
+# view fades to lit a long way before the far side of the track. That is the
+# documented single-cascade tradeoff, not a misconfiguration.
+SHADOW_DISTANCE = 70.0
+FOG_DENSITY = 0.0012    # ~20% haze at 200 m, which is the width of the infield
+MSAA_SAMPLES = 4
+
+# Trees stand no closer than this to the centerline. The road surface reaches
+# ROAD_WIDTH/2 + VERGE = 5.1 m and the guardrail sits just inside that, so this
+# clears the barrier line by about 7 m: close enough to line the circuit, far
+# enough that nothing leans over the racing line or hides an apex.
+TREE_CLEARANCE = 12.0
+TREE_SPACING = 7.5      # minimum distance between two trunks
+TREE_COUNT = 58
+
+# A species is a set of parameters, not an enum (tree-design.md), so the
+# variation between two oaks is `seed` and the variation between an oak and a
+# spruce is this table. Heights carry a range and each tree draws from it.
+SPECIES = [
+    ("Oak", 0.34, {
+        "height": (5.4, 8.2), "trunk_radius": (0.22, 0.32),
+        "levels": 3, "branches": 5, "branch_angle": 58.0, "branch_start": 0.3,
+        "length_ratio": 0.66, "length_falloff": 0.3, "tropism": 15.0,
+        "crook": 12.0, "jitter": 0.36, "taper": 0.1,
+        "leaf_size": 0.27, "leaves_per_branch": 14,
+        "leaf_color": [0.08, 0.25, 0.08],
+    }),
+    ("Birch", 0.20, {
+        "height": (5.8, 8.0), "trunk_radius": (0.13, 0.18),
+        "levels": 3, "branches": 4, "branch_angle": 44.0, "branch_start": 0.42,
+        "length_ratio": 0.6, "length_falloff": 0.25, "tropism": 9.0,
+        "crook": 7.0, "jitter": 0.3, "taper": 0.12, "flare": 0.2,
+        "leaf_size": 0.22, "leaves_per_branch": 15,
+        "leaf_color": [0.14, 0.31, 0.09],
+    }),
+    # `whorl` is trunk-only by construction, which is what keeps a conifer's
+    # ring of branches from compounding into six figures of vertices.
+    ("Spruce", 0.34, {
+        "height": (6.0, 9.4), "trunk_radius": (0.16, 0.24),
+        "levels": 1, "branches": 12, "whorl": 5, "branch_start": 0.08,
+        "branch_angle": 95.0, "length_ratio": 0.3, "length_falloff": 0.88,
+        "tropism": -16.0, "crook": 6.0, "jitter": 0.3, "taper": 0.08,
+        "leaf": "cluster", "leaf_size": 0.26, "leaves_per_branch": 13,
+        "leaf_color": [0.05, 0.17, 0.07],
+    }),
+    ("Scrub", 0.12, {
+        "height": (0.9, 1.6), "trunk_radius": (0.05, 0.08),
+        "levels": 2, "branches": 5, "branch_angle": 60.0, "branch_start": 0.1,
+        "length_ratio": 0.7, "tropism": 21.0, "crook": 15.0, "jitter": 0.42,
+        "leaf_size": 0.17, "leaves_per_branch": 12,
+        "leaf_color": [0.12, 0.30, 0.09],
+    }),
+]
+
+BARK = [0.20, 0.13, 0.07]
+
+# Clouds ring the circuit rather than sitting over it, and the top-down camera
+# is why. It looks down from about 270 m, so anything at cloud altitude is
+# nearer the lens than the track is and covers more of the frame than its plan
+# size suggests — a cloud parked over the infield hides the infield. Out here
+# they ride the horizon from the car, which is where clouds belong in a
+# ground-level shot, and stay out of the map view entirely.
+#
+#          name          x       y       z       sx     sy     sz   seed
+CLOUDS = [
+    ("CloudNorth",    -30.0,  58.0, -210.0,    98.0,  34.0,  74.0,  5),
+    ("CloudNorthEast", 170.0,  64.0, -150.0,   82.0,  30.0,  66.0, 17),
+    ("CloudEast",      230.0,  52.0,   30.0,   88.0,  32.0,  70.0, 29),
+    ("CloudSouth",      40.0,  61.0,  200.0,  104.0,  36.0,  78.0, 41),
+    ("CloudSouthWest", -170.0, 55.0,  160.0,   76.0,  28.0,  62.0, 53),
+    ("CloudWest",      -235.0, 68.0,  -20.0,   92.0,  30.0,  72.0, 67),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +431,120 @@ def emit_ground(centerline):
     return ground, (center_x, center_z, size_x, size_z)
 
 
+class Rng:
+    """A tiny LCG, written out here for the reason the engine writes out its own.
+
+    The forest this places is committed as scene data, so re-running the script
+    has to land every trunk on the same square meter it landed on before. That
+    is a promise about *this file*, not about an interpreter — `random` is
+    stable in practice but nothing says it must be, and a scene that quietly
+    reshuffles itself under a Python upgrade would be found by a baseline
+    diff, at which point the trees look like a renderer bug.
+    """
+
+    def __init__(self, seed):
+        self.state = seed & 0xFFFFFFFF
+
+    def unit(self):
+        self.state = (self.state * 1664525 + 1013904223) & 0xFFFFFFFF
+        return self.state / 4294967296.0
+
+    def between(self, low, high):
+        return low + (high - low) * self.unit()
+
+    def pick(self, weighted):
+        """One entry from [(item, weight), ...], by weight."""
+        target = self.unit() * sum(weight for _, weight in weighted)
+        for item, weight in weighted:
+            target -= weight
+            if target <= 0.0:
+                return item
+        return weighted[-1][0]
+
+
+def emit_trees(centerline, bounds):
+    """Scatter a forest over the ground, everywhere the circuit is not.
+
+    Dart-throwing rather than a grid: a grid reads as an orchard from the
+    top-down camera, and the rejected candidates cost nothing. Two tests reject
+    a candidate — too near the road, or too near a tree already placed — and
+    the first is why the infield and the outfield fill in without either being
+    described here. The road's shape is the only thing deciding where the
+    treeline runs, so it stays right when the corners move.
+
+    Nothing here gets a `Collider`. These are scenery: the car cannot reach
+    them without going through a guardrail first, and a colliderless forest
+    keeps the drive — and therefore the committed lap timeline and every number
+    the lap test pins — exactly as it was.
+    """
+    center_x, center_z, size_x, size_z = bounds
+    rng = Rng(20260731)
+
+    # Every other centerline sample is enough to test against: they are ~2.5 m
+    # apart and the clearance is 12 m, so no candidate can slip between two.
+    guard = [(p[0], p[2]) for p in centerline[::2]]
+
+    placed = []
+    entities = []
+    counts = {}
+    attempts = 0
+    while len(placed) < TREE_COUNT and attempts < TREE_COUNT * 400:
+        attempts += 1
+        x = center_x + rng.between(-0.5, 0.5) * (size_x - 8.0)
+        z = center_z + rng.between(-0.5, 0.5) * (size_z - 8.0)
+        if min(math.dist((x, z), point) for point in guard) < TREE_CLEARANCE:
+            continue
+        if any(math.dist((x, z), seat) < TREE_SPACING for seat in placed):
+            continue
+
+        name, _, recipe = rng.pick([(s, s[1]) for s in SPECIES])
+        counts[name] = counts.get(name, 0) + 1
+        tree = {"type": "Tree", "seed": (len(placed) * 2654435761) % 100000}
+        for field, value in recipe.items():
+            tree[field] = (round(rng.between(*value), 3)
+                           if isinstance(value, tuple) else value)
+
+        placed.append((x, z))
+        entities.append(entity(f"{name}{counts[name]:02d}", [
+            transform((round(x, 3), 0.0, round(z, 3)),
+                      (0.0, round(rng.between(0.0, 360.0), 1), 0.0),
+                      (1.0, 1.0, 1.0)),
+            tree,
+            # A tree's own Material is its bark. The leaves carry their colour
+            # on the component, since they are a second mesh under one name.
+            material(BARK, roughness=0.95),
+        ]))
+    return entities, counts
+
+
+def emit_clouds():
+    return [
+        entity(name, [
+            transform((x, y, z), (0.0, 0.0, 0.0), (sx, sy, sz)),
+            {
+                "type": "Cloud",
+                "seed": seed,
+                "lobes": 7,
+                "levels": 2,
+                "children": 3,
+                "lobe_size": 0.46,
+                "lobe_ratio": 0.56,
+                "flatten": 0.86,
+                "rise": 0.38,
+                "wobble": 0.15,
+                "jitter": 0.32,
+                "density": 0.88,
+                "feather": 3.0,
+                # Slow, and wrapped, so the sky is still a pure function of the
+                # clock a screenshot names however long the run has been going.
+                "drift": [0.5, 0.0, 0.0],
+                "drift_wrap": 180.0,
+            },
+        ])
+        for name, x, y, z, sx, sy, sz, seed in CLOUDS
+    ]
+
+
 def emit_car(start):
     """The chassis, its four wheels, and the driver script — unchanged physics.
 
@@ -503,12 +710,24 @@ def emit_furniture(bounds, start):
     ]
 
 
-def write_scene(path, entities):
+def write_scene(path, entities, environment=True):
     scene = {
         "name": "car_track",
         "entities": entities,
         "physics": {"gravity": [0.0, -9.81, 0.0], "timestep_hz": 60},
     }
+    if environment:
+        # No sky bands authored: absent means the M16 clear-day defaults, and
+        # the one hour anyone can check is the one to leave alone. `sky` is
+        # also what turns on hemispheric ambient and the reflected sky, so the
+        # asphalt picks up the weather it is standing under.
+        scene["environment"] = {
+            "sky": True,
+            "fog_density": FOG_DENSITY,
+            "shadows": True,
+            "shadow_distance": SHADOW_DISTANCE,
+            "samples": MSAA_SAMPLES,
+        }
     with open(path, "w") as handle:
         json.dump(scene, handle, indent=2)
         handle.write("\n")
@@ -544,8 +763,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # Pass one: the road alone, which is all the engine needs to answer.
-    write_scene(args.out, [emit_road()])
+    # Pass one: the road alone, which is all the engine needs to answer. No
+    # environment block on this one — it is a throwaway the engine only has to
+    # load, and asking it to raise a sky to answer a geometry question is work
+    # for nothing.
+    write_scene(args.out, [emit_road()], environment=False)
 
     # Pass two: furnish the centerline the engine actually built. The start
     # line and the car both go where the road passes the pit straight, which
@@ -559,6 +781,9 @@ def main():
     ground, bounds = emit_ground(centerline)
     entities = [ground, road]
     entities.extend(emit_barriers(centerline))
+    trees, species_counts = emit_trees(centerline, bounds)
+    entities.extend(trees)
+    entities.extend(emit_clouds())
     entities.extend(emit_car(start))
     entities.extend(emit_furniture(bounds, start))
     write_scene(args.out, entities)
@@ -580,6 +805,8 @@ def main():
     print(f"  scripts/car.rhai: let line_z = {start[2]:.2f}; "
           f"let line_x = {start[0]:.2f};")
     print(f"footprint: {bounds[2]:.0f} x {bounds[3]:.0f}m, {len(entities)} entities")
+    forest = ", ".join(f"{n} {c}" for n, c in sorted(species_counts.items()))
+    print(f"scenery: {len(trees)} trees ({forest}), {len(CLOUDS)} clouds")
 
     problems = check(centerline)
     if problems:

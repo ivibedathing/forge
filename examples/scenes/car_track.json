@@ -10609,6 +10609,3555 @@
       ]
     },
     {
+      "name": "Scrub01",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            107.195,
+            0.0,
+            -26.857
+          ],
+          "rotation": [
+            0.0,
+            127.3,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 0,
+          "height": 1.156,
+          "trunk_radius": 0.071,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 60.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 21.0,
+          "crook": 15.0,
+          "jitter": 0.42,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.12,
+            0.3,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak01",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            116.968,
+            0.0,
+            -68.465
+          ],
+          "rotation": [
+            0.0,
+            251.5,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 35761,
+          "height": 7.905,
+          "trunk_radius": 0.258,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce01",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -106.922,
+            0.0,
+            47.253
+          ],
+          "rotation": [
+            0.0,
+            76.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 71522,
+          "height": 7.457,
+          "trunk_radius": 0.161,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce02",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -103.536,
+            0.0,
+            -2.921
+          ],
+          "rotation": [
+            0.0,
+            151.3,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 7283,
+          "height": 7.82,
+          "trunk_radius": 0.171,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak02",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            63.439,
+            0.0,
+            -0.348
+          ],
+          "rotation": [
+            0.0,
+            218.7,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 43044,
+          "height": 7.994,
+          "trunk_radius": 0.285,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce03",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -93.55,
+            0.0,
+            27.969
+          ],
+          "rotation": [
+            0.0,
+            221.8,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 78805,
+          "height": 7.394,
+          "trunk_radius": 0.235,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Scrub02",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            55.222,
+            0.0,
+            -59.303
+          ],
+          "rotation": [
+            0.0,
+            212.6,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 14566,
+          "height": 0.91,
+          "trunk_radius": 0.054,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 60.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 21.0,
+          "crook": 15.0,
+          "jitter": 0.42,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.12,
+            0.3,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce04",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -96.889,
+            0.0,
+            -60.529
+          ],
+          "rotation": [
+            0.0,
+            255.6,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 50327,
+          "height": 9.021,
+          "trunk_radius": 0.203,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak03",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            22.33,
+            0.0,
+            -29.729
+          ],
+          "rotation": [
+            0.0,
+            307.7,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 86088,
+          "height": 6.915,
+          "trunk_radius": 0.303,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce05",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            5.803,
+            0.0,
+            70.507
+          ],
+          "rotation": [
+            0.0,
+            113.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 21849,
+          "height": 9.198,
+          "trunk_radius": 0.209,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak04",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            68.258,
+            0.0,
+            -56.791
+          ],
+          "rotation": [
+            0.0,
+            301.7,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 57610,
+          "height": 7.139,
+          "trunk_radius": 0.283,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce06",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            112.361,
+            0.0,
+            71.594
+          ],
+          "rotation": [
+            0.0,
+            32.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 93371,
+          "height": 8.817,
+          "trunk_radius": 0.212,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce07",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            85.825,
+            0.0,
+            -56.896
+          ],
+          "rotation": [
+            0.0,
+            141.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 29132,
+          "height": 7.468,
+          "trunk_radius": 0.209,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch01",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -32.832,
+            0.0,
+            40.285
+          ],
+          "rotation": [
+            0.0,
+            234.8,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 64893,
+          "height": 7.623,
+          "trunk_radius": 0.142,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak05",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -58.46,
+            0.0,
+            87.975
+          ],
+          "rotation": [
+            0.0,
+            30.9,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 654,
+          "height": 6.56,
+          "trunk_radius": 0.258,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch02",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -83.025,
+            0.0,
+            91.091
+          ],
+          "rotation": [
+            0.0,
+            220.9,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 36415,
+          "height": 7.938,
+          "trunk_radius": 0.173,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak06",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -49.84,
+            0.0,
+            -3.724
+          ],
+          "rotation": [
+            0.0,
+            166.3,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 72176,
+          "height": 5.58,
+          "trunk_radius": 0.286,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak07",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -103.042,
+            0.0,
+            83.393
+          ],
+          "rotation": [
+            0.0,
+            258.5,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 7937,
+          "height": 6.111,
+          "trunk_radius": 0.305,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak08",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -14.388,
+            0.0,
+            36.108
+          ],
+          "rotation": [
+            0.0,
+            155.1,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 43698,
+          "height": 7.566,
+          "trunk_radius": 0.22,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak09",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -42.946,
+            0.0,
+            87.362
+          ],
+          "rotation": [
+            0.0,
+            36.6,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 79459,
+          "height": 6.424,
+          "trunk_radius": 0.312,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch03",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            87.024,
+            0.0,
+            -74.294
+          ],
+          "rotation": [
+            0.0,
+            41.1,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 15220,
+          "height": 5.826,
+          "trunk_radius": 0.161,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch04",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            96.12,
+            0.0,
+            56.688
+          ],
+          "rotation": [
+            0.0,
+            211.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 50981,
+          "height": 6.128,
+          "trunk_radius": 0.166,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch05",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -74.963,
+            0.0,
+            76.385
+          ],
+          "rotation": [
+            0.0,
+            86.4,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 86742,
+          "height": 7.474,
+          "trunk_radius": 0.169,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Scrub03",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -107.353,
+            0.0,
+            28.832
+          ],
+          "rotation": [
+            0.0,
+            229.8,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 22503,
+          "height": 1.418,
+          "trunk_radius": 0.06,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 60.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 21.0,
+          "crook": 15.0,
+          "jitter": 0.42,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.12,
+            0.3,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak10",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            103.627,
+            0.0,
+            -35.037
+          ],
+          "rotation": [
+            0.0,
+            299.3,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 58264,
+          "height": 6.358,
+          "trunk_radius": 0.31,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce08",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            21.534,
+            0.0,
+            -60.474
+          ],
+          "rotation": [
+            0.0,
+            337.3,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 94025,
+          "height": 7.416,
+          "trunk_radius": 0.187,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak11",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            118.032,
+            0.0,
+            56.678
+          ],
+          "rotation": [
+            0.0,
+            302.9,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 29786,
+          "height": 6.016,
+          "trunk_radius": 0.315,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce09",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            89.573,
+            0.0,
+            85.194
+          ],
+          "rotation": [
+            0.0,
+            188.6,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 65547,
+          "height": 6.259,
+          "trunk_radius": 0.213,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch06",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -82.558,
+            0.0,
+            -59.234
+          ],
+          "rotation": [
+            0.0,
+            180.4,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 1308,
+          "height": 6.144,
+          "trunk_radius": 0.171,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce10",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            81.771,
+            0.0,
+            -41.585
+          ],
+          "rotation": [
+            0.0,
+            191.6,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 37069,
+          "height": 7.852,
+          "trunk_radius": 0.225,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch07",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            105.153,
+            0.0,
+            38.688
+          ],
+          "rotation": [
+            0.0,
+            328.6,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 72830,
+          "height": 6.757,
+          "trunk_radius": 0.148,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch08",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            14.981,
+            0.0,
+            40.321
+          ],
+          "rotation": [
+            0.0,
+            80.8,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 8591,
+          "height": 7.257,
+          "trunk_radius": 0.167,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce11",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -59.52,
+            0.0,
+            -4.42
+          ],
+          "rotation": [
+            0.0,
+            214.2,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 44352,
+          "height": 6.548,
+          "trunk_radius": 0.209,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Scrub04",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -5.754,
+            0.0,
+            78.279
+          ],
+          "rotation": [
+            0.0,
+            69.7,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 80113,
+          "height": 0.952,
+          "trunk_radius": 0.065,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 60.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 21.0,
+          "crook": 15.0,
+          "jitter": 0.42,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.12,
+            0.3,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch09",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            31.355,
+            0.0,
+            -24.52
+          ],
+          "rotation": [
+            0.0,
+            103.4,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 15874,
+          "height": 6.297,
+          "trunk_radius": 0.139,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce12",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -90.462,
+            0.0,
+            -49.161
+          ],
+          "rotation": [
+            0.0,
+            260.8,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 51635,
+          "height": 6.46,
+          "trunk_radius": 0.237,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch10",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            18.481,
+            0.0,
+            -13.235
+          ],
+          "rotation": [
+            0.0,
+            115.3,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 87396,
+          "height": 5.806,
+          "trunk_radius": 0.154,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce13",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            105.612,
+            0.0,
+            -0.512
+          ],
+          "rotation": [
+            0.0,
+            217.8,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 23157,
+          "height": 6.493,
+          "trunk_radius": 0.188,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce14",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -85.218,
+            0.0,
+            -43.357
+          ],
+          "rotation": [
+            0.0,
+            288.7,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 58918,
+          "height": 6.682,
+          "trunk_radius": 0.16,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Scrub05",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -42.085,
+            0.0,
+            45.239
+          ],
+          "rotation": [
+            0.0,
+            261.5,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 94679,
+          "height": 1.201,
+          "trunk_radius": 0.076,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 60.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 21.0,
+          "crook": 15.0,
+          "jitter": 0.42,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.12,
+            0.3,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Scrub06",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -97.205,
+            0.0,
+            -31.961
+          ],
+          "rotation": [
+            0.0,
+            48.9,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 30440,
+          "height": 1.418,
+          "trunk_radius": 0.072,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 60.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 21.0,
+          "crook": 15.0,
+          "jitter": 0.42,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.12,
+            0.3,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch11",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -93.48,
+            0.0,
+            -22.281
+          ],
+          "rotation": [
+            0.0,
+            134.6,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 66201,
+          "height": 7.742,
+          "trunk_radius": 0.155,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce15",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -70.802,
+            0.0,
+            -66.049
+          ],
+          "rotation": [
+            0.0,
+            206.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 1962,
+          "height": 6.089,
+          "trunk_radius": 0.201,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Scrub07",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            55.667,
+            0.0,
+            88.024
+          ],
+          "rotation": [
+            0.0,
+            58.9,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 37723,
+          "height": 1.513,
+          "trunk_radius": 0.06,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 60.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 21.0,
+          "crook": 15.0,
+          "jitter": 0.42,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.12,
+            0.3,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch12",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -65.578,
+            0.0,
+            15.587
+          ],
+          "rotation": [
+            0.0,
+            355.1,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 73484,
+          "height": 7.798,
+          "trunk_radius": 0.134,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Scrub08",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            108.861,
+            0.0,
+            -12.408
+          ],
+          "rotation": [
+            0.0,
+            123.2,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 9245,
+          "height": 0.98,
+          "trunk_radius": 0.076,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 60.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 21.0,
+          "crook": 15.0,
+          "jitter": 0.42,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.12,
+            0.3,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch13",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            100.365,
+            0.0,
+            -50.9
+          ],
+          "rotation": [
+            0.0,
+            320.4,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 45006,
+          "height": 6.943,
+          "trunk_radius": 0.156,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak12",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -10.098,
+            0.0,
+            -16.59
+          ],
+          "rotation": [
+            0.0,
+            152.9,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 80767,
+          "height": 6.333,
+          "trunk_radius": 0.298,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce16",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -45.977,
+            0.0,
+            7.918
+          ],
+          "rotation": [
+            0.0,
+            245.7,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 16528,
+          "height": 6.377,
+          "trunk_radius": 0.209,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Scrub09",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -10.541,
+            0.0,
+            -49.657
+          ],
+          "rotation": [
+            0.0,
+            4.8,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 52289,
+          "height": 1.268,
+          "trunk_radius": 0.062,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 60.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 21.0,
+          "crook": 15.0,
+          "jitter": 0.42,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.12,
+            0.3,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce17",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            86.846,
+            0.0,
+            71.407
+          ],
+          "rotation": [
+            0.0,
+            282.1,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 88050,
+          "height": 8.56,
+          "trunk_radius": 0.182,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce18",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -35.318,
+            0.0,
+            -76.334
+          ],
+          "rotation": [
+            0.0,
+            74.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 23811,
+          "height": 8.78,
+          "trunk_radius": 0.186,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch14",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -0.563,
+            0.0,
+            -17.721
+          ],
+          "rotation": [
+            0.0,
+            67.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 59572,
+          "height": 7.976,
+          "trunk_radius": 0.15,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce19",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            78.953,
+            0.0,
+            76.032
+          ],
+          "rotation": [
+            0.0,
+            260.2,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 95333,
+          "height": 6.841,
+          "trunk_radius": 0.188,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Birch15",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            8.078,
+            0.0,
+            -35.604
+          ],
+          "rotation": [
+            0.0,
+            343.7,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 31094,
+          "height": 7.613,
+          "trunk_radius": 0.156,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak13",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            97.763,
+            0.0,
+            -75.288
+          ],
+          "rotation": [
+            0.0,
+            57.3,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 66855,
+          "height": 7.037,
+          "trunk_radius": 0.284,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Oak14",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -4.728,
+            0.0,
+            -11.202
+          ],
+          "rotation": [
+            0.0,
+            136.1,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 2616,
+          "height": 7.88,
+          "trunk_radius": 0.233,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 15.0,
+          "crook": 12.0,
+          "jitter": 0.36,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Spruce20",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            76.052,
+            0.0,
+            12.544
+          ],
+          "rotation": [
+            0.0,
+            197.3,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 38377,
+          "height": 8.529,
+          "trunk_radius": 0.238,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.13,
+            0.07
+          ],
+          "metallic": 0.0,
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "CloudNorth",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -30.0,
+            58.0,
+            -210.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            98.0,
+            34.0,
+            74.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 5,
+          "lobes": 7,
+          "levels": 2,
+          "children": 3,
+          "lobe_size": 0.46,
+          "lobe_ratio": 0.56,
+          "flatten": 0.86,
+          "rise": 0.38,
+          "wobble": 0.15,
+          "jitter": 0.32,
+          "density": 0.88,
+          "feather": 3.0,
+          "drift": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 180.0
+        }
+      ]
+    },
+    {
+      "name": "CloudNorthEast",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            170.0,
+            64.0,
+            -150.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            82.0,
+            30.0,
+            66.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 17,
+          "lobes": 7,
+          "levels": 2,
+          "children": 3,
+          "lobe_size": 0.46,
+          "lobe_ratio": 0.56,
+          "flatten": 0.86,
+          "rise": 0.38,
+          "wobble": 0.15,
+          "jitter": 0.32,
+          "density": 0.88,
+          "feather": 3.0,
+          "drift": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 180.0
+        }
+      ]
+    },
+    {
+      "name": "CloudEast",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            230.0,
+            52.0,
+            30.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            88.0,
+            32.0,
+            70.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 29,
+          "lobes": 7,
+          "levels": 2,
+          "children": 3,
+          "lobe_size": 0.46,
+          "lobe_ratio": 0.56,
+          "flatten": 0.86,
+          "rise": 0.38,
+          "wobble": 0.15,
+          "jitter": 0.32,
+          "density": 0.88,
+          "feather": 3.0,
+          "drift": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 180.0
+        }
+      ]
+    },
+    {
+      "name": "CloudSouth",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            40.0,
+            61.0,
+            200.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            104.0,
+            36.0,
+            78.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 41,
+          "lobes": 7,
+          "levels": 2,
+          "children": 3,
+          "lobe_size": 0.46,
+          "lobe_ratio": 0.56,
+          "flatten": 0.86,
+          "rise": 0.38,
+          "wobble": 0.15,
+          "jitter": 0.32,
+          "density": 0.88,
+          "feather": 3.0,
+          "drift": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 180.0
+        }
+      ]
+    },
+    {
+      "name": "CloudSouthWest",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -170.0,
+            55.0,
+            160.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            76.0,
+            28.0,
+            62.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 53,
+          "lobes": 7,
+          "levels": 2,
+          "children": 3,
+          "lobe_size": 0.46,
+          "lobe_ratio": 0.56,
+          "flatten": 0.86,
+          "rise": 0.38,
+          "wobble": 0.15,
+          "jitter": 0.32,
+          "density": 0.88,
+          "feather": 3.0,
+          "drift": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 180.0
+        }
+      ]
+    },
+    {
+      "name": "CloudWest",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -235.0,
+            68.0,
+            -20.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            92.0,
+            30.0,
+            72.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 67,
+          "lobes": 7,
+          "levels": 2,
+          "children": 3,
+          "lobe_size": 0.46,
+          "lobe_ratio": 0.56,
+          "flatten": 0.86,
+          "rise": 0.38,
+          "wobble": 0.15,
+          "jitter": 0.32,
+          "density": 0.88,
+          "feather": 3.0,
+          "drift": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 180.0
+        }
+      ]
+    },
+    {
       "name": "Car",
       "components": [
         {
@@ -11197,5 +14746,12 @@
       0.0
     ],
     "timestep_hz": 60
+  },
+  "environment": {
+    "sky": true,
+    "fog_density": 0.0012,
+    "shadows": true,
+    "shadow_distance": 70.0,
+    "samples": 4
   }
 }
