@@ -11,3 +11,6 @@
 
 # Python bytecode from the scene generators
 __pycache__/
+
+# Worktrees for parallel sessions live here; they are checkouts, not content.
+.claude/worktrees/

@@ -404,3 +404,50 @@ fn formatter_edit_of_m4_fixture_changes_exactly_one_line() {
         "unexpected: {errors:?}"
     );
 }
+
+/// Every committed baseline is listed in `verify/baselines.json`, with the
+/// scene it comes from.
+///
+/// The manifest is what `bin/verify-baselines` loops over, and what makes the
+/// A/B bit-exactness check between two binaries a command rather than a
+/// reconstruction. A baseline missing from it is a baseline nothing re-diffs:
+/// 15 of the 25 have no CLI test looking at them, so the sweep is their only
+/// check, and it can only check what it can see.
+#[test]
+fn every_committed_baseline_is_listed_in_the_manifest() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(&repo_file("examples/scenes/verify/baselines.json")).unwrap();
+
+    let mut listed: Vec<String> = Vec::new();
+    for key in ["baselines", "traces"] {
+        for entry in manifest[key].as_array().unwrap() {
+            let artifact = entry[if key == "baselines" { "baseline" } else { "trace" }]
+                .as_str()
+                .unwrap();
+            let scene = entry["scene"].as_str().unwrap();
+            for relative in [artifact, scene] {
+                let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative);
+                assert!(path.exists(), "{relative} is in the manifest but not on disk");
+            }
+            listed.push(artifact.rsplit('/').next().unwrap().to_string());
+        }
+    }
+
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("examples/scenes/verify/baselines");
+    let mut missing: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        if (name.ends_with(".png") || name.ends_with(".jsonl")) && !listed.contains(&name) {
+            missing.push(name);
+        }
+    }
+    missing.sort();
+    assert!(
+        missing.is_empty(),
+        "committed baselines missing from examples/scenes/verify/baselines.json: {missing:?}\n\
+         add each one with the scene and flags that reproduce it — `bin/verify-baselines` \
+         checks exactly what this file lists"
+    );
+}

@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Re-diff every committed baseline, from the manifest that says how.
+
+    bin/verify-baselines                        # check them all
+    bin/verify-baselines --filter m19           # just the trees
+    bin/verify-baselines --bless --filter m19   # re-bless them instead
+    bin/verify-baselines --diff-dir /tmp/d      # write diff PNGs for failures
+    ENGINE=/other/target/debug/engine bin/verify-baselines --render-to /tmp/a
+
+Output is NDJSON on stdout: one object per artifact, then one summary
+object. Exit 0 when everything passed, 1 when something differs, 2 when the
+invocation or the machine is at fault -- the CLI's own convention, so this
+script branches the same way the engine does.
+
+`--render-to DIR` renders each manifest entry to DIR instead of comparing.
+That is the A/B bit-exactness check: render every scene with two binaries
+into two directories and `cmp` them. Comparing against baselines cannot
+answer that question, because a baseline is itself one binary's output.
+"""
+
+import argparse
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+MANIFEST = ROOT / "examples/scenes/verify/baselines.json"
+
+
+def emit(obj):
+    print(json.dumps(obj, sort_keys=True), flush=True)
+
+
+def run(engine, args):
+    return subprocess.run(
+        [engine, *args], cwd=ROOT, capture_output=True, text=True
+    )
+
+
+def gpu_missing(stderr):
+    return "no_gpu_adapter" in stderr or "device_request_failed" in stderr
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--filter", default="", help="substring match on the artifact path")
+    ap.add_argument("--bless", action="store_true", help="rewrite baselines instead of checking")
+    ap.add_argument("--diff-dir", help="write a diff PNG per failing baseline")
+    ap.add_argument("--render-to", help="render into DIR instead of comparing (A/B mode)")
+    ap.add_argument("--skip-traces", action="store_true")
+    args = ap.parse_args()
+
+    engine = os.environ.get("ENGINE", str(ROOT / "bin/engine"))
+    manifest = json.loads(MANIFEST.read_text())
+
+    if args.bless and args.render_to:
+        emit({"error": "invalid_invocation", "message": "--bless and --render-to are exclusive"})
+        return 2
+
+    diff_dir = pathlib.Path(args.diff_dir) if args.diff_dir else None
+    if diff_dir:
+        diff_dir.mkdir(parents=True, exist_ok=True)
+    render_to = pathlib.Path(args.render_to) if args.render_to else None
+    if render_to:
+        render_to.mkdir(parents=True, exist_ok=True)
+
+    checked = failed = skipped = 0
+
+    for entry in manifest["baselines"]:
+        baseline = entry["baseline"]
+        if args.filter and args.filter not in baseline:
+            continue
+        name = pathlib.Path(baseline).name
+
+        if render_to:
+            out = render_to / name
+            result = run(engine, ["screenshot", entry["scene"], "--out", str(out),
+                                  "--width", str(entry["width"]), "--height", str(entry["height"]),
+                                  *entry["args"]])
+            ok = result.returncode == 0
+        elif args.bless:
+            result = run(engine, ["screenshot", entry["scene"], "--out", baseline,
+                                  "--width", str(entry["width"]), "--height", str(entry["height"]),
+                                  *entry["args"]])
+            ok = result.returncode == 0
+        else:
+            cmd = ["diff-render", entry["scene"], baseline, *entry["args"]]
+            if diff_dir:
+                cmd += ["--out", str(diff_dir / f"{pathlib.Path(name).stem}.diff.png")]
+            result = run(engine, cmd)
+            ok = result.returncode == 0
+
+        if not ok and gpu_missing(result.stderr):
+            skipped += 1
+            emit({"artifact": name, "skipped": "no usable GPU"})
+            continue
+
+        checked += 1
+        row = {"artifact": name, "pass": ok, "milestone": entry["milestone"]}
+        # diff-render reports on both pass and fail -- carry its numbers through,
+        # since "how much moved" is the whole diagnosis.
+        if result.stdout.strip():
+            try:
+                report = json.loads(result.stdout.strip())
+                for field in ("diff_pixels", "max_channel_delta", "diff_bounds", "adapter"):
+                    if field in report:
+                        row[field] = report[field]
+            except json.JSONDecodeError:
+                pass
+        if not ok:
+            failed += 1
+            row["stderr"] = result.stderr.strip().splitlines()[-1:] or [""]
+        emit(row)
+
+    if not args.skip_traces and not render_to and not args.bless:
+        for entry in manifest["traces"]:
+            trace = entry["trace"]
+            if args.filter and args.filter not in trace:
+                continue
+            name = pathlib.Path(trace).name
+            with tempfile.TemporaryDirectory() as tmp:
+                out = pathlib.Path(tmp) / name
+                result = run(engine, ["simulate", entry["scene"], *entry["args"],
+                                      "--trace", str(out)])
+                if result.returncode != 0:
+                    checked += 1
+                    failed += 1
+                    emit({"artifact": name, "pass": False,
+                          "stderr": result.stderr.strip().splitlines()[-1:]})
+                    continue
+                same = out.read_bytes() == (ROOT / trace).read_bytes()
+            checked += 1
+            failed += 0 if same else 1
+            emit({"artifact": name, "pass": same, "milestone": entry["milestone"]})
+
+    emit({"checked": checked, "failed": failed, "skipped": skipped,
+          "mode": "bless" if args.bless else ("render" if render_to else "diff"),
+          "engine": engine})
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
