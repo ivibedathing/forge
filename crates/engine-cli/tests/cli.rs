@@ -2282,6 +2282,63 @@ fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
     }
 }
 
+/// The tour does not end; it comes round. The director used to clamp its
+/// station index at the last one, so past step 900 the segment-local `t` swept
+/// 0→1 forever and the camera replayed the finale's own three seconds over and
+/// over while the fire, the truck and the daylight all went on moving. The key
+/// path is a closed cycle now — six legs, the last of which flies home — so
+/// one 1080-step lap puts the camera back on the key it opened with and the
+/// stations come round again with the world in the state it reached.
+///
+/// This is checked through `simulate` rather than a baseline because the
+/// second lap has no committed PNG and should not get one: what is pinned is
+/// that the camera *moves on*, not what it happens to see.
+#[test]
+fn the_showcase_tour_keeps_touring_past_its_fifteen_seconds() {
+    let scene = repo_path("examples/scenes/showcase_tour.json");
+    let camera_at = |steps: &str| -> ([f64; 3], String) {
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", steps])
+            .args(["--entity", "TourCam"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+        let p = &report["entities"][0]["position"];
+        let axis = |i: usize| p[i].as_f64().expect("the camera reports a position");
+        (
+            [axis(0), axis(1), axis(2)],
+            report["hud"][0].as_str().unwrap().to_string(),
+        )
+    };
+    let apart = |a: [f64; 3], b: [f64; 3]| {
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    };
+
+    // The opening key, and where the fifteen seconds leave the camera.
+    let opening = [-27.0, 7.5, -20.5];
+    let (finale, _) = camera_at("900");
+    assert!(
+        apart(finale, opening) > 40.0,
+        "the tour should end its fifteen seconds a long way from where it began: {finale:?}"
+    );
+
+    // A lap later it is home, having travelled rather than looped in place.
+    let (home, line) = camera_at("1080");
+    assert!(
+        apart(home, opening) < 0.25,
+        "one lap should return the camera to its opening key, not to {home:?}"
+    );
+    assert_eq!(line, "TOUR LAP 2  06 THE WAY BACK");
+
+    // And the stations themselves come round: 90 steps into the new lap is
+    // the forest again, framed exactly as station 01 frames it.
+    let (_, line) = camera_at("1170");
+    assert_eq!(line, "TOUR LAP 2  01 FOREST");
+}
+
 /// The tour drives a vehicle around a world full of resting bodies — the
 /// combination that used to silently disable every other collider's
 /// contacts. The crates start flush on the ground, so if the first step

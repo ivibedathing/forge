@@ -41,20 +41,25 @@ not match the sky it fades into reads as a grey wall, and one field cannot be
 set inconsistently with itself.
 
 900 steps at 60 Hz — exactly fifteen seconds — split into five 180-step
-stations. `scripts/tour_director.rhai` holds the whole timeline: six camera
-keys, six aim points, the station captions, and the three timed events the
+stations. `scripts/tour_director.rhai` holds the whole timeline: seven camera
+keys, seven aim points, the station captions, and the three timed events the
 breaking station is built around. The dolly runs the full segment while the
 aim stays pinned on the current station for its first two thirds, so each
 station is *looked at* rather than driven past, and the camera never stops
 moving.
 
+The seventh key is the first one again, because the path is a **closed cycle**
+of six legs and not five legs that stop — see [past the fifteen
+seconds](#past-the-fifteen-seconds).
+
 | steps | station | what is on screen | systems |
 |-------|---------|-------------------|---------|
-| 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — four critters running loops, the glTF monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), `Material`, `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
+| 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — under fissured bark, four critters running loops, the granite monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), `Material` (`albedo_map`, `normal_map`, `Material.asset`), `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
 | 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
 | 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
-| 540–719 | 04 breaking | a boulder rolls into a crate stack, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
-| 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4, `HudText`, `HudRect`, the camera |
+| 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
+| 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4 (tread `normal_map`), `Material.orm_map`, `HudText`, `HudRect`, the camera |
+| 900–1079 | 06 the way back | the descent home, over the burning fire and the debris field, and then all of the above again | the loop |
 
 Running underneath all five, from the `environment` block rather than from any
 component: a gradient sky with the sun in it, distance fog, sun shadows from
@@ -98,6 +103,48 @@ in the order the design doc lists them:
 Which crate each trigger claims is float-level detail that moves between
 optimisation levels; the CLI test pins the *sequence*, not the casualties.
 
+### Past the fifteen seconds
+
+The tour is fifteen seconds long and the world it is touring is not. In
+`run-scene` the clock keeps going, and it used to go somewhere silly: the
+director clamped its station index at the last one, so `local` swept 0→1
+forever and the camera replayed the finale's own three-second leg on repeat
+while the fire burned, the truck drove and the daylight kept warming. The
+symptom was the camera; the cause was that the key path had an end.
+
+So it does not have one. The path is a cycle of six legs over seven keys —
+the seventh being the first again — and `p = step % 1080` is the lap position
+the whole director reads instead of the step. Leg 5 is the flight home:
+900–1079 descends from the wide finale over the burning fire and the debris
+field back to the forest key, and then the five stations run again.
+
+Three properties are load-bearing:
+
+- **The first lap is arithmetically untouched.** For `step < 1080` the
+  modulo is the identity, so every expression a committed baseline was
+  blessed from is the same expression evaluated on the same integer. The six
+  showcase baselines diff at zero pixels across this change, which is how it
+  was checked. The same care is why the time bar picks a *numerator and
+  denominator* rather than scaling a fraction — `320 * x / n` and
+  `320 * (x / n)` are not the same float.
+- **Nothing resets.** A lap is a camera move, not a replay: the crates stay
+  broken, the fragments stay where they settled, the daylight keeps
+  advancing (`day_length: 300`, so lap two is dusk and lap three is night),
+  and `Breakable` stays one-shot. The tour is not a loop of a film; it is a
+  camera that keeps going round a world that keeps running. Station 04 on a
+  later lap shows a debris field rather than a stack of crates, and that is
+  the honest thing for it to show.
+- **The leg is captioned like a station**, "06 THE WAY BACK / NOTHING RESET .
+  THE WORLD KEPT RUNNING", because an uncaptioned three seconds reads as the
+  narration having broken. The HUD line switches from `TOUR 900/900` to
+  `TOUR LAP 2`, which is also what makes the lap visible to `simulate` with
+  no pixels involved — `the_showcase_tour_keeps_touring_past_its_fifteen_seconds`
+  pins exactly that plus the camera's return to its opening key.
+
+The second lap has no committed baseline and should not get one. What is
+worth pinning is that the camera *moves on*; what it happens to see two laps
+in is a function of a world that has been running for forty-five seconds.
+
 ## The growth contract
 
 **Every component the engine has must appear in this scene.**
@@ -124,9 +171,13 @@ mutually exclusive, extend it the same way: derive, never enumerate.
 
 When a system is bigger than one component — a renderer feature, a shader
 path, a whole subsystem — it does not trip that test, so add it here by hand
-and say so in the table above. A sixth station is cheap: extend `eyes`,
-`aims`, `titles` and `systems` in `tour_director.rhai` by one entry each and
-change `seg` so the run still totals fifteen seconds.
+and say so in the table above. Another station is cheap, with one thing to
+remember since the path closed: insert its key into `eyes` and `aims` *before*
+the wrap entry (they end with a copy of the first key, and it has to stay
+last), its caption into `titles` and `systems` before the way-back one, and
+then set `total` and `cycle` — `seg` times the station count, and `seg` times
+one more than that. Keeping the run at fifteen seconds instead means shrinking
+`seg`, which re-blesses all six baselines; growing the tour does not.
 
 ## What is honest and what is faked
 
@@ -171,15 +222,40 @@ than no showcase:
   `water-design.md`.
 - **Ice** is a pale dielectric at roughness 0.05–0.10 with transmission
   0.55–0.66, and the floating blocks are sorted into the same back-to-front
-  list as the water they sit in. No subsurface scattering and no tinting by
-  thickness, so a thick block is exactly as clear as a thin one.
+  list as the water they sit in. As of M26 it **refracts** — `ior: 1.31` with a
+  `thickness` that scales with each block and a faint blue-green `attenuation`,
+  so a thick block is not as clear as a thin one. No subsurface scattering, and
+  the ice carries no texture maps deliberately: refraction is what this station
+  is showing and a frost normal map competes with it for the same pixels.
 - **The trees are real geometry** as of M19 — swept tubes on wandering
   polylines, recursively branched, with taper and a root flare, and a seed per
-  tree so no two are the same individual. What is missing is surface: there is
-  no bark texture and no leaf texture (the engine has neither), so bark is a
-  flat brown dielectric and a leaf is a folded blade that gets its variation
-  from shading alone. No wind, no LOD, and no collision — you can walk the
-  truck through a trunk.
+  tree so no two are the same individual — and as of the M26 material pass they
+  have **surface**: bark is an `albedo_map` and a `normal_map` of fissures, and
+  seven of the nine trees share one `materials/bark.json` file. The leaves are
+  what is still flat: a leaf is a folded blade shaded by its own geometry, and
+  `Tree::leaf_material` has no map fields to hang an alpha-cut leaf card off,
+  so giving them one is an engine change and not an authoring job. No wind, no
+  LOD, and no collision — you can walk the truck through a trunk.
+- **Everything else with a `Mesh` is textured too**, and the interesting part is
+  what the maps are *not*. Bark, crate, granite and tread all serve more than
+  one entity at more than one colour, so each map is near-neutral and bright and
+  the material's `albedo` carries the hue: `albedo_map` is **multiplied** by
+  `albedo`, so a map with its own strong colour can only be tinted toward black
+  and one bark file could not serve both an oak and a birch. The truck is the
+  one entity that texture is *only* relief and reflectance — `plate_normal` for
+  the panel seams and their rivets, `plate_orm` scuffing the paint's roughness,
+  and the red left where the file says it. Untextured on purpose: the critters
+  and the beacon (stand-ins with nothing to be a surface of), the ice, and
+  `Terrain` and `Road`, whose own texture systems are generative and whose map
+  support M26 did not build.
+- **`builtin:cube`'s faces do not agree on which way `u` runs** — it is vertical
+  on ±X and horizontal on ±Z — which is why the crates are a *framed* panel with
+  a centre batten rather than plain boards: a border is invariant under that,
+  and boards that change direction between the side of a crate and its end are
+  what a real crate does anyway. Anything strongly directional on a cube draws
+  one thing on two faces and another on the other two. `Tree` tubes are the
+  well-behaved case: `u` runs around the ring and `v` along the branch, so a
+  fissure is simply something that varies fast in `u`.
 - **The animals** are scaled spheres on parametric loops. There is no
   navigation, no steering behaviour, no state machine — scripts have no
   randomness by design, so the variety is sums of sines.
@@ -207,9 +283,10 @@ than no showcase:
   need cascades, which M16 does not have.
 
 Refraction is the upgrade that would move this scene most now, and the water is
-its loudest customer. For the forest it is textured bark and alpha-cut leaves —
-the same missing feature seen from the other side, since the renderer has no
-texture-mapped materials at all yet. For the sky it is the cloud *layer* of
+its loudest customer — the ice took it in M26 and the pond still cannot, since
+`Water` has no `Material` to put an `ior` on. For the forest it is alpha-cut
+leaves: the bark is textured and the canopy is the last flat surface in the
+frame. For the sky it is the cloud *layer* of
 `cloud-design.md` §9: overcast and cirrus belong to the dome, would ride into
 the water reflection for free through `sky_common.wgsl`, and unlike the cloud
 objects would be visible from a camera that never looks up.
@@ -223,9 +300,10 @@ The viewer draws an FPS readout in the top-right (`run-scene`, averaged over
 engine run-scene examples/scenes/showcase_tour.json
 ```
 
-The tour runs its fifteen seconds and then keeps going: the camera parks at
-the last key, the truck keeps circling, the fire keeps burning. Breaks are
-one-shot, so it does not loop.
+The tour runs its fifteen seconds and then keeps touring: the camera flies
+home and takes the stations round again on an eighteen-second lap, while the
+truck keeps circling, the fire keeps burning and the day keeps setting. Breaks
+are one-shot, so a later lap finds a debris field where the crate stack was.
 
 Two headless numbers are worth watching alongside it, because they separate
 simulation cost from frame cost:

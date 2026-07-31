@@ -49,7 +49,14 @@
             0.155,
             0.172
           ],
-          "roughness": 0.88
+          "roughness": 0.88,
+          "albedo_map": "../textures/deck.png",
+          "normal_map": "../textures/deck_normal.png",
+          "orm_map": "../textures/deck_orm.png",
+          "uv_scale": [
+            20.0,
+            20.0
+          ]
         },
         {
           "type": "Collider",
@@ -164,7 +171,13 @@
             0.31,
             0.33
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            0.839,
+            18.065
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -195,7 +208,13 @@
             0.31,
             0.33
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            18.065,
+            0.839
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -226,7 +245,13 @@
             0.115,
             0.132
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            4.194,
+            4.194
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -257,7 +282,13 @@
             0.115,
             0.132
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            4.194,
+            4.194
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -288,7 +319,13 @@
             0.115,
             0.132
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            4.194,
+            4.194
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -319,7 +356,13 @@
             0.115,
             0.132
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            4.194,
+            4.194
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -350,7 +393,13 @@
             0.31,
             0.33
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            1.613,
+            1.613
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -381,7 +430,14 @@
             0.285,
             0.305
           ],
-          "roughness": 0.85
+          "roughness": 0.7,
+          "metallic": 0.25,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            36.5,
+            2.0
+          ]
         },
         {
           "type": "Collider",
@@ -422,7 +478,14 @@
             0.285,
             0.305
           ],
-          "roughness": 0.85
+          "roughness": 0.7,
+          "metallic": 0.25,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            2.0,
+            36.5
+          ]
         },
         {
           "type": "Collider",
@@ -463,7 +526,14 @@
             0.285,
             0.305
           ],
-          "roughness": 0.85
+          "roughness": 0.7,
+          "metallic": 0.25,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            2.0,
+            36.5
+          ]
         },
         {
           "type": "Collider",
@@ -504,7 +574,14 @@
             0.285,
             0.305
           ],
-          "roughness": 0.85
+          "roughness": 0.7,
+          "metallic": 0.25,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            36.5,
+            2.0
+          ]
         },
         {
           "type": "Collider",
@@ -540,12 +617,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -581,12 +653,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -622,12 +689,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -663,12 +725,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -704,12 +761,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -745,12 +797,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -786,12 +833,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -827,12 +869,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -868,12 +905,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -909,12 +941,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -950,12 +977,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -996,7 +1018,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            7.5,
+            0.938
+          ]
         },
         {
           "type": "Collider",
@@ -1037,7 +1065,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            0.938,
+            6.875
+          ]
         },
         {
           "type": "Collider",
@@ -1078,7 +1112,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            0.938,
+            6.875
+          ]
         },
         {
           "type": "Collider",
@@ -1119,7 +1159,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            5.625,
+            0.938
+          ]
         },
         {
           "type": "Collider",
@@ -1160,7 +1206,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            0.938,
+            5.0
+          ]
         },
         {
           "type": "Collider",
@@ -1201,7 +1253,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            0.938,
+            5.0
+          ]
         },
         {
           "type": "Collider",
@@ -1238,16 +1296,22 @@
         {
           "type": "Material",
           "albedo": [
-            0.43,
-            0.095,
-            0.055
+            0.95,
+            0.93,
+            0.91
           ],
           "roughness": 0.45,
           "metallic": 0.25,
           "emissive": [
-            0.22,
-            0.02,
+            0.08,
+            0.012,
             0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -1372,16 +1436,22 @@
         {
           "type": "Material",
           "albedo": [
-            0.43,
-            0.095,
-            0.055
+            0.95,
+            0.93,
+            0.91
           ],
           "roughness": 0.45,
           "metallic": 0.25,
           "emissive": [
-            0.22,
-            0.02,
+            0.08,
+            0.012,
             0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -1506,16 +1576,22 @@
         {
           "type": "Material",
           "albedo": [
-            0.43,
-            0.095,
-            0.055
+            0.95,
+            0.93,
+            0.91
           ],
           "roughness": 0.45,
           "metallic": 0.25,
           "emissive": [
-            0.22,
-            0.02,
+            0.08,
+            0.012,
             0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -1640,16 +1716,22 @@
         {
           "type": "Material",
           "albedo": [
-            0.43,
-            0.095,
-            0.055
+            0.95,
+            0.93,
+            0.91
           ],
           "roughness": 0.45,
           "metallic": 0.25,
           "emissive": [
-            0.22,
-            0.02,
+            0.08,
+            0.012,
             0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -1779,7 +1861,13 @@
             0.11
           ],
           "roughness": 0.5,
-          "metallic": 0.6
+          "metallic": 0.6,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            3.75
+          ]
         },
         {
           "type": "Collider",
@@ -1880,7 +1968,13 @@
             0.11
           ],
           "roughness": 0.5,
-          "metallic": 0.6
+          "metallic": 0.6,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            3.75
+          ]
         },
         {
           "type": "Collider",
@@ -1981,7 +2075,13 @@
             0.11
           ],
           "roughness": 0.5,
-          "metallic": 0.6
+          "metallic": 0.6,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            3.75
+          ]
         },
         {
           "type": "Collider",
@@ -2082,7 +2182,13 @@
             0.11
           ],
           "roughness": 0.5,
-          "metallic": 0.6
+          "metallic": 0.6,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            3.75
+          ]
         },
         {
           "type": "Collider",
@@ -2215,7 +2321,13 @@
             0.62
           ],
           "roughness": 0.6,
-          "metallic": 0.1
+          "metallic": 0.1,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            2.0,
+            1.0
+          ]
         }
       ]
     },
@@ -2278,7 +2390,12 @@
             0.055
           ],
           "roughness": 0.35,
-          "metallic": 0.85
+          "metallic": 0.85,
+          "normal_map": "../textures/plate_normal.png",
+          "uv_scale": [
+            1.0,
+            2.0
+          ]
         }
       ]
     },
@@ -2315,6 +2432,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -2494,6 +2618,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -2673,6 +2804,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -2852,6 +2990,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3031,6 +3176,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3210,6 +3362,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3389,6 +3548,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3568,6 +3734,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3747,6 +3920,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3926,6 +4106,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -4789,12 +4976,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4826,12 +5008,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4863,12 +5040,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4900,12 +5072,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4937,12 +5104,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4974,12 +5136,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -5011,12 +5168,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -5048,12 +5200,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
