@@ -253,6 +253,35 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Print where every HUD element ends up on screen (M31).
+    ///
+    /// This is the command the UI system is really for. An agent authoring a
+    /// menu cannot see it move; what it needs is the answer to "where did the
+    /// Start button end up", so it can write a timeline cursor that lands on
+    /// it. `engine road-centerline` publishes the samples a ribbon was built
+    /// from for exactly this reason, and the failure it prevents is the same:
+    /// a caller re-deriving geometry the engine already computed, and the two
+    /// drifting.
+    ///
+    /// A pure function of (file, viewport) at rest, like `engine inspect`:
+    /// no `--steps`, no `--input`, no cursor. What a script has since done to
+    /// the layout is `simulate`'s question.
+    UiLayout {
+        scene: PathBuf,
+        /// The framebuffer to lay out against. A pixel-authored UI is
+        /// resolution-dependent by construction, so the size is part of the
+        /// question — these default to the same 960×540 `simulate` hit-tests
+        /// against.
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
+        /// Narrow to named elements; repeatable. Unknown names are reported
+        /// all at once.
+        #[arg(long)]
+        entity: Vec<String>,
+    },
+
     /// Ask a terrain patch how high the ground is at a world XZ position.
     ///
     /// The same sampler `world.terrain_height` answers with, so a prop placed
@@ -470,6 +499,12 @@ fn main() {
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
+        Command::UiLayout {
+            scene,
+            width,
+            height,
+            entity,
+        } => ui_layout(scene, width, height, entity),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
         Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Import {
@@ -843,6 +878,94 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
             "shoulder": road.road.shoulder,
             "closed": road.road.closed,
             "points": points,
+        })
+    );
+    Ok(())
+}
+
+/// `engine ui-layout <scene> [--width W --height H] [--entity N]...` (M31).
+///
+/// Reports the rectangle the layout engine puts every HUD element in — the
+/// same function `hud::rasterize` draws from and the same one the hit test
+/// uses, so the report cannot disagree with the picture.
+///
+/// **Name-sorted**, following `simulate --entity`'s contract rather than draw
+/// order: a report is read by name, and draw order is already visible in the
+/// render. `depth` and `parent` carry the tree for anything that wants it.
+fn ui_layout(
+    scene_path: PathBuf,
+    width: Option<u32>,
+    height: Option<u32>,
+    entities: Vec<String>,
+) -> Result<()> {
+    let scene = load_scene(&scene_path)?;
+    let assets = engine_assets::AssetServer::for_scene(&scene_path);
+    let view = engine_core::input::Viewport::DEFAULT;
+    let (width, height) = (width.unwrap_or(view.width), height.unwrap_or(view.height));
+
+    let tree = scene.hud_tree(&assets);
+    let layout = engine_core::ui::layout(&tree, width, height);
+
+    // Unknown names all at once, the M25 rule — an agent fixing one typo at a
+    // time is an agent running the command four times.
+    if !entities.is_empty() {
+        let unknown: Vec<&String> = entities
+            .iter()
+            .filter(|name| tree.index_of(name).is_none())
+            .collect();
+        if !unknown.is_empty() {
+            let known: Vec<&str> = tree.nodes.iter().map(|n| n.entity.as_str()).collect();
+            let mut error = EngineError::new(
+                codes::ENTITY_NOT_FOUND,
+                format!(
+                    "no HUD element on {}",
+                    unknown
+                        .iter()
+                        .map(|n| format!("{n:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .file(scene_path.display().to_string());
+            if let Some(first) = unknown.first() {
+                error = error.entity(first.as_str()).suggest_from(first, known);
+            }
+            return Err(error);
+        }
+    }
+
+    let mut elements: Vec<serde_json::Value> = layout
+        .placed
+        .iter()
+        .filter(|placed| entities.is_empty() || entities.contains(&tree.nodes[placed.node].entity))
+        .map(|placed| {
+            let node = &tree.nodes[placed.node];
+            serde_json::json!({
+                "entity": node.entity,
+                "kind": node.kind.name(),
+                "parent": placed.parent,
+                "depth": placed.depth,
+                "rect": [
+                    placed.rect.x,
+                    placed.rect.y,
+                    placed.rect.width,
+                    placed.rect.height,
+                ],
+                "visible": placed.visible,
+                "interactive": node
+                    .interact
+                    .as_ref()
+                    .is_some_and(|interact| !interact.disabled),
+            })
+        })
+        .collect();
+    elements.sort_by(|a, b| a["entity"].as_str().cmp(&b["entity"].as_str()));
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "viewport": [width, height],
+            "elements": elements,
         })
     );
     Ok(())

@@ -618,12 +618,23 @@ fn place_children(
     depth: usize,
     out: &mut Vec<PlacedElement>,
 ) {
+    // **Flow order is file order; draw order is (class, file order).** These
+    // are two different orderings of one sibling set and conflating them is a
+    // bug with a very confusing symptom: the class sort exists so text reads
+    // over the backgrounds it sits on, and running a *column* in that order
+    // stacks every panel above every label regardless of how the file reads.
+    // So positions are computed in file order here, and the results are
+    // emitted in draw order below.
+    let mut in_file_order = children.to_vec();
+    in_file_order.sort_unstable();
+
     // Hidden children are out of the flow entirely (they take no space), so
     // the cursor only advances for visible ones.
     let mut cursor = 0.0f32;
     let mut first = true;
+    let mut boxes: Vec<(usize, Box2)> = Vec::with_capacity(in_file_order.len());
 
-    for &child in children {
+    for &child in &in_file_order {
         let node = &tree.nodes[child];
         let size = resolved_size(
             container,
@@ -689,8 +700,18 @@ fn place_children(
             }
         };
 
-        let box2 = Box2 { position, size };
-        let effective_visible = parent_visible && visible;
+        boxes.push((child, Box2 { position, size }));
+    }
+
+    // Now emit in draw order — `children` arrives already sorted by
+    // `(class, file order)`, which is the ordering the M12 collapse is about.
+    for &child in children {
+        let node = &tree.nodes[child];
+        let box2 = boxes
+            .iter()
+            .find_map(|(index, box2)| (*index == child).then_some(*box2))
+            .expect("every child was positioned above");
+        let effective_visible = parent_visible && node.kind.visible();
         out.push(PlacedElement {
             node: child,
             rect: box2.rounded(),
@@ -1012,6 +1033,41 @@ mod tests {
         assert_eq!((panel_rect.width, panel_rect.height), (30, 23));
         assert_eq!(out.of(&scene, "A").unwrap().rect.y, 5);
         assert_eq!(out.of(&scene, "B").unwrap().rect.y, 12);
+    }
+
+    /// Flow order is file order even though *draw* order sorts panels under
+    /// text. Conflating the two stacks every button above every label in a
+    /// column, regardless of how the file reads — which is what the fixture
+    /// caught the first time it was laid out.
+    #[test]
+    fn a_column_flows_in_file_order_not_draw_order() {
+        let mut p = panel(HudLayout::Column);
+        p.width = Some(100.0);
+        let mut title = label("TITLE");
+        title.parent = Some("P".into());
+        let mut button = panel(HudLayout::Free);
+        button.parent = Some("P".into());
+        button.height = Some(10.0);
+        button.width = Some(40.0);
+
+        let scene = tree(vec![
+            node("P", HudKind::Panel(p)),
+            // The text is first in the file, so it must be first in the flow…
+            node("Title", HudKind::Text(title)),
+            node("Button", HudKind::Panel(button)),
+        ]);
+        let out = layout(&scene, 200, 200);
+        assert_eq!(out.of(&scene, "Title").unwrap().rect.y, 0);
+        assert_eq!(out.of(&scene, "Button").unwrap().rect.y, 8);
+
+        // …while draw order still puts the panel under the text, so a label
+        // over a button reads.
+        let order: Vec<&str> = out
+            .placed
+            .iter()
+            .map(|p| scene.nodes[p.node].entity.as_str())
+            .collect();
+        assert_eq!(order, ["P", "Button", "Title"]);
     }
 
     #[test]

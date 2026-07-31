@@ -68,11 +68,51 @@ pub fn run(
     // same kind as `world.state` and the contact state: replay-deterministic,
     // reset by a fresh run, never baked.
     let mut interaction = engine_core::ui::Interaction::default();
+    // Whether there is an overlay at all, checked once: a scene without one
+    // must take exactly the pre-M31 path, per-step and per-frame.
+    let hud_present = !scene.hud_tree(&assets).is_empty();
 
     for step in 1..=steps {
+        let step_index = u64::from(step) - 1;
+        let held = input.map_or(&no_keys, |t| t.held_at(step_index));
+
+        // Hit-testing runs before scripts, against the layout for the frame
+        // this command is rendering — `view` is the real size for commands
+        // that render and `Viewport::DEFAULT` for the ones that do not (M28's
+        // rule, which M31 inherits rather than revisits). The cursor is a
+        // *fraction*, so this is where it becomes pixels.
+        //
+        // Outside the script branch, because hover and press tints are a
+        // property of the *components*: a menu that lights up under the
+        // pointer needs no script at all, and a scene with no `Script` would
+        // otherwise render its buttons permanently untouched. Gated on there
+        // being an overlay, so a scene without one takes exactly the pre-M31
+        // path rather than laying out an empty tree every step.
+        if hud_present {
+            let pointer = Pointer::resolve(
+                held,
+                view,
+                scene
+                    .camera(view.camera.as_deref())
+                    .ok()
+                    .map(|(camera, transform)| (camera, transform.matrix())),
+            );
+            let frame = glam::Vec2::new(view.width as f32, view.height as f32);
+            let tree = scene.hud_tree(&assets);
+            let layout = engine_core::ui::layout(&tree, view.width, view.height);
+            // `MouseLeft` alone drives the widget model. The other two buttons
+            // stay available raw through `world.mouse`, because a right-click
+            // is a context action in every UI ever written and making it press
+            // a button would be a surprise with no way to opt out of it.
+            interaction.update(
+                &tree,
+                &layout,
+                pointer.cursor * frame,
+                held.is_held(PRIMARY),
+            );
+        }
+
         if let Some(scripts) = &scripts {
-            let step_index = u64::from(step) - 1;
-            let held = input.map_or(&no_keys, |t| t.held_at(step_index));
             // The pointer is resolved against the camera *this* step will be
             // scripted with, through the same `Scene::camera` selection the
             // render makes — so what a script aims at is what the picture
@@ -85,27 +125,6 @@ pub fn run(
                     .ok()
                     .map(|(camera, transform)| (camera, transform.matrix())),
             );
-            // Hit-testing runs before scripts, against the layout for the
-            // frame this command is rendering — `view` is the real size for
-            // commands that render and `Viewport::DEFAULT` for the ones that
-            // do not (M28's rule, which M31 inherits rather than revisits).
-            // The cursor is a *fraction*, so this is where it becomes pixels.
-            let frame = glam::Vec2::new(view.width as f32, view.height as f32);
-            let tree = scene.hud_tree(&assets);
-            if !tree.is_empty() {
-                let layout = engine_core::ui::layout(&tree, view.width, view.height);
-                // `MouseLeft` alone drives the widget model. The other two
-                // buttons stay available raw through `world.mouse`, because a
-                // right-click is a context action in every UI ever written and
-                // making it press a button would be a surprise with no way to
-                // opt out of it.
-                interaction.update(
-                    &tree,
-                    &layout,
-                    pointer.cursor * frame,
-                    held.is_held(PRIMARY),
-                );
-            }
             hud = scripts.step(
                 &mut scene.world,
                 step_index,

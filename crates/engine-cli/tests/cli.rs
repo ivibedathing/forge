@@ -4510,3 +4510,336 @@ fn a_skeletal_player_on_an_unrigged_file_says_so() {
         "got {codes:?}"
     );
 }
+
+// ── The UI system (M31) ───────────────────────────────────────────────────
+
+fn ui_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m31_ui.json")
+}
+
+fn ui_timeline() -> PathBuf {
+    repo_path("examples/scenes/verify/m31_ui.input.jsonl")
+}
+
+#[test]
+fn the_ui_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(ui_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// `engine ui-layout` publishes the rectangle the renderer draws and the hit
+/// test uses, which is the whole point of the command: an agent authoring a
+/// menu cannot see it move.
+///
+/// The assertions are about *relationships*, not coordinates, so the fixture
+/// stays re-authorable: the hugging panel is exactly its column, the column's
+/// children stack in file order (not draw order — the class sort would put
+/// both buttons above both labels), and only the two buttons are interactive.
+#[test]
+fn ui_layout_reports_the_tree_it_laid_out() {
+    let report = json_stdout(
+        &engine()
+            .arg("ui-layout")
+            .arg(ui_scene())
+            .arg("--width")
+            .arg("640")
+            .arg("--height")
+            .arg("360")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(report["viewport"], serde_json::json!([640, 360]));
+
+    let of = |name: &str| {
+        report["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == name)
+            .unwrap_or_else(|| panic!("no element named {name}"))
+            .clone()
+    };
+    let rect = |name: &str| {
+        let e = of(name);
+        let r = e["rect"].as_array().unwrap().clone();
+        (
+            r[0].as_i64().unwrap(),
+            r[1].as_i64().unwrap(),
+            r[2].as_i64().unwrap(),
+            r[3].as_i64().unwrap(),
+        )
+    };
+
+    // Name-sorted, the `simulate --entity` contract.
+    let names: Vec<&str> = report["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["entity"].as_str().unwrap())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted, "elements are name-sorted");
+
+    // The backdrop stretches to the whole frame.
+    assert_eq!(rect("Dim"), (0, 0, 640, 360));
+
+    // Hug sizing: the panel *is* its column, and the nine-sliced frame
+    // stretches over exactly that. Three entities, one rectangle — which is
+    // the thing that cannot be expressed with hand-computed offsets.
+    assert_eq!(rect("Menu"), rect("Column"));
+    assert_eq!(rect("Menu"), rect("Frame"));
+
+    // Flow order is file order: title, body, then the two buttons, top to
+    // bottom. Draw order sorts panels under text, and using that ordering for
+    // the flow would stack both buttons above both labels.
+    let ys = |name: &str| rect(name).1;
+    assert!(ys("Title") < ys("Body"), "title above body");
+    assert!(ys("Body") < ys("Resume"), "body above the first button");
+    assert!(ys("Resume") < ys("Quit"), "first button above the second");
+
+    // Both buttons span the column's content width, because they stretch on
+    // the cross axis; the title does not.
+    assert_eq!(rect("Resume").2, rect("Quit").2);
+    assert_eq!(rect("Resume").2, rect("Body").2);
+
+    // Only the buttons are interactive, and every element is visible.
+    for element in report["elements"].as_array().unwrap() {
+        let name = element["entity"].as_str().unwrap();
+        let expected = name == "Resume" || name == "Quit";
+        assert_eq!(element["interactive"], expected, "{name}");
+        assert_eq!(element["visible"], true, "{name}");
+    }
+
+    // Unknown names are reported all at once, with a suggestion.
+    let bad = engine()
+        .arg("ui-layout")
+        .arg(ui_scene())
+        .arg("--entity")
+        .arg("Quitt")
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(1));
+    let error = &stderr_lines(&bad)[0];
+    assert_eq!(error["error"], "entity_not_found");
+    assert_eq!(error["did_you_mean"], "Quit");
+}
+
+/// The loop `ui-layout` exists to close, closed in a test: take the reported
+/// rectangle, turn it into the *fraction* a timeline carries, and confirm the
+/// click lands.
+///
+/// This is the one place the pixel report and the fractional cursor have to
+/// agree, and they are computed by different code — the report by the layout
+/// engine, the cursor by M28's timeline parser through `Pointer`.
+#[test]
+fn a_cursor_derived_from_the_reported_rect_hits_that_element() {
+    let (width, height) = (640u32, 360u32);
+    let report = json_stdout(
+        &engine()
+            .arg("ui-layout")
+            .arg(ui_scene())
+            .arg("--width")
+            .arg(width.to_string())
+            .arg("--height")
+            .arg(height.to_string())
+            .arg("--entity")
+            .arg("Quit")
+            .output()
+            .unwrap(),
+    );
+    let rect = report["elements"][0]["rect"].as_array().unwrap().clone();
+    let (x, y, w, h) = (
+        rect[0].as_f64().unwrap(),
+        rect[1].as_f64().unwrap(),
+        rect[2].as_f64().unwrap(),
+        rect[3].as_f64().unwrap(),
+    );
+
+    // The centre of the button, as a fraction of the frame, quantized the way
+    // a recorded timeline is.
+    let fx = ((x + w / 2.0) / f64::from(width) * 1000.0).round() / 1000.0;
+    let fy = ((y + h / 2.0) / f64::from(height) * 1000.0).round() / 1000.0;
+
+    // The committed timeline must already aim there — if this fails, the
+    // fixture's layout moved and the timeline needs re-deriving.
+    let timeline = std::fs::read_to_string(ui_timeline()).unwrap();
+    let last = timeline.lines().last().unwrap();
+    let last: serde_json::Value = serde_json::from_str(last).unwrap();
+    assert_eq!(
+        last["cursor"],
+        serde_json::json!([fx, fy]),
+        "the timeline's final cursor should be the centre of Quit"
+    );
+    assert_eq!(last["held"], serde_json::json!(["MouseLeft"]));
+}
+
+/// The fixture rendered: a menu over a 3D scene with the second button held
+/// down, pinned bit-exactly.
+///
+/// The pressed button is the assertion. It is the state hardest to reach and
+/// the one nothing else pins: it requires the timeline's cursor to have landed
+/// on the right rectangle, the press capture to have survived from the step it
+/// started on, and the press tint to have been multiplied into the panel's own
+/// colour before the rasterizer ever saw it.
+///
+/// Aimed at its subject with no terrain in frame (M22's rule), so it carries a
+/// hard pin rather than a `diff_args` tolerance.
+#[test]
+fn the_m31_ui_fixture_pins_a_pressed_button_over_a_3d_scene() {
+    let baseline = repo_path("examples/scenes/verify/baselines/m31_ui.png");
+    let diff = engine()
+        .arg("diff-render")
+        .arg(ui_scene())
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("30")
+        .arg("--input")
+        .arg(ui_timeline())
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// Adding a `HudInteract` must move no pixel until a cursor arrives on it:
+/// the tints default to `[1, 1, 1]`, so an untouched button renders exactly as
+/// it would with no interaction in the scene at all.
+///
+/// Tested against `--steps 0`, which never runs the simulation and so never
+/// touches the interaction state, versus a full run whose cursor is parked in
+/// a corner. The fixture is otherwise static — no particles, no water, no
+/// daylight — so the two frames may differ only in what the pointer did.
+///
+/// (The centre of the frame, which is where M28 puts an absent cursor, is over
+/// the first button in this fixture — so "no `--input`" is emphatically *not*
+/// the untouched case here, and using it as one is the mistake this comment
+/// exists to stop the next person repeating.)
+#[test]
+fn an_untouched_button_renders_as_if_it_had_no_interact() {
+    let dir = std::env::temp_dir().join(format!("engine-m31-untouched-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // A timeline that parks the cursor in the corner, clear of the menu.
+    let away = dir.join("away.input.jsonl");
+    std::fs::write(
+        &away,
+        "{\"step\": 0, \"held\": [], \"cursor\": [0.02, 0.02]}\n",
+    )
+    .unwrap();
+
+    let shot = |name: &str, steps: &str, input: Option<&std::path::Path>| {
+        let out = dir.join(name);
+        let mut command = engine();
+        command
+            .arg("screenshot")
+            .arg(ui_scene())
+            .arg("--out")
+            .arg(&out)
+            .arg("--steps")
+            .arg(steps)
+            .arg("--width")
+            .arg("640")
+            .arg("--height")
+            .arg("360");
+        if let Some(input) = input {
+            command.arg("--input").arg(input);
+        }
+        (command.output().unwrap(), out)
+    };
+
+    let (ran, away_png) = shot("away.png", "30", Some(&away));
+    if !ran.status.success() {
+        let stderr = String::from_utf8_lossy(&ran.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "screenshot failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    }
+    let (rest, rest_png) = shot("rest.png", "0", None);
+    assert!(rest.status.success());
+
+    assert_eq!(
+        std::fs::read(&away_png).unwrap(),
+        std::fs::read(&rest_png).unwrap(),
+        "a pointer over no interactive element tints nothing"
+    );
+}
+
+/// The other half of the same claim: a pointer that *is* over a button changes
+/// the frame. Without this, the test above would pass just as well if tinting
+/// were never wired up at all.
+#[test]
+fn a_hovered_button_is_a_different_frame_from_an_untouched_one() {
+    let dir = std::env::temp_dir().join(format!("engine-m31-hover-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, cursor: &str, held: &str| {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!("{{\"step\": 0, \"held\": [{held}], \"cursor\": {cursor}}}\n"),
+        )
+        .unwrap();
+        path
+    };
+    let away = write("away.jsonl", "[0.02, 0.02]", "");
+    // The centre of Quit, per `engine ui-layout`.
+    let over = write("over.jsonl", "[0.5, 0.653]", "");
+    let down = write("down.jsonl", "[0.5, 0.653]", "\"MouseLeft\"");
+
+    let shot = |name: &str, input: &std::path::Path| {
+        let out = dir.join(name);
+        let output = engine()
+            .arg("screenshot")
+            .arg(ui_scene())
+            .arg("--out")
+            .arg(&out)
+            .arg("--steps")
+            .arg("30")
+            .arg("--input")
+            .arg(input)
+            .arg("--width")
+            .arg("640")
+            .arg("--height")
+            .arg("360")
+            .output()
+            .unwrap();
+        (output, out)
+    };
+
+    let (first, away_png) = shot("away.png", &away);
+    if !first.status.success() {
+        let stderr = String::from_utf8_lossy(&first.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "screenshot failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    }
+    let (_, over_png) = shot("over.png", &over);
+    let (_, down_png) = shot("down.png", &down);
+
+    let away_bytes = std::fs::read(&away_png).unwrap();
+    let over_bytes = std::fs::read(&over_png).unwrap();
+    let down_bytes = std::fs::read(&down_png).unwrap();
+    assert_ne!(away_bytes, over_bytes, "hover must brighten the button");
+    assert_ne!(over_bytes, down_bytes, "press must differ from hover");
+}

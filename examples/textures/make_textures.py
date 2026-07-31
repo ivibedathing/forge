@@ -631,6 +631,73 @@ def drone_eye(size=128):
     return size, size, pixels
 
 
+def ui_frame():
+    """A 32x32 nine-slice panel frame for `HudImage` (M31).
+
+    Built for a 12-pixel inset on every side, which leaves an 8x8 middle. Three
+    properties matter and each is a rule the UI design states:
+
+    - The corners carry the detail (a bevel and a stud) and the edges carry
+      only a bar, so the corners survive being copied 1:1 while the edges tile.
+    - The middle is a flat, *slightly* transparent fill, so a panel drawn over
+      a 3D scene reads as a panel rather than as a hole, and so the tiling
+      middle cannot show a seam -- a constant tiles perfectly at any size.
+    - It is near-neutral and bright, because `tint` *multiplies*: a frame with
+      its own strong colour can only be tinted toward black, so one file could
+      not serve a dark menu and a warm one. The material system's authoring
+      rule for `albedo_map`, here for the same reason.
+    """
+    size = 32
+    inset = 12
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            # Distance into the border from whichever edge is nearest.
+            edge = min(x, y, size - 1 - x, size - 1 - y)
+            if edge >= inset:
+                # The tiling middle: flat, so it cannot seam.
+                value, alpha = 0.62, 0.86
+            elif edge == 0:
+                value, alpha = 0.30, 1.0  # outer keyline
+            elif edge < 3:
+                value, alpha = 0.95, 1.0  # bright bevel
+            elif edge < 6:
+                value, alpha = 0.72, 1.0
+            else:
+                value, alpha = 0.55, 0.95  # inner falloff toward the fill
+            # A stud in each corner, inside the bevel: detail that only reads
+            # correctly because corners are never scaled or tiled.
+            for cx, cy in ((6, 6), (size - 7, 6), (6, size - 7), (size - 7, size - 7)):
+                if math.hypot(x - cx, y - cy) < 2.2:
+                    value, alpha = 1.0, 1.0
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes((int(255 * value),) * 3) + bytes((int(255 * alpha),))
+    return size, size, pixels
+
+
+def ui_icon():
+    """A 16x16 opaque glyph for the tour's station card (M31).
+
+    A ring with a dot -- deliberately simple, and deliberately *not*
+    nine-sliced: an icon is drawn at its authored size, which is the case a
+    plain stretch is for.
+    """
+    size = 16
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            u = (x + 0.5) / size * 2.0 - 1.0
+            v = (y + 0.5) / size * 2.0 - 1.0
+            radius = math.hypot(u, v)
+            ring = 0.42 < radius < 0.72
+            dot = radius < 0.18
+            value = 1.0 if (ring or dot) else 0.0
+            alpha = 1.0 if (ring or dot) else 0.0
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes((int(255 * value),) * 3) + bytes((int(255 * alpha),))
+    return size, size, pixels
+
+
 if __name__ == "__main__":
     for name, make in [
         ("checker.png", checker),
@@ -654,6 +721,8 @@ if __name__ == "__main__":
         ("barrel.png", barrel),
         ("barrel_normal.png", barrel_normal),
         ("drone_eye.png", drone_eye),
+        ("ui_frame.png", ui_frame),
+        ("ui_icon.png", ui_icon),
     ]:
         width, height, pixels = make()
         write_png(HERE / name, width, height, pixels)
