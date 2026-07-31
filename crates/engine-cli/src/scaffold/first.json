@@ -1,0 +1,90 @@
+{
+  "name": "first",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.19, 0.36, 0.66],
+    "sky_horizon": [0.70, 0.76, 0.80],
+    "sky_ground": [0.24, 0.22, 0.18],
+    "fog_density": 0.0025,
+    "shadows": true,
+    "shadow_distance": 70.0,
+    "samples": 4
+  },
+  "physics": {
+    "gravity": [0.0, -9.81, 0.0],
+    "timestep_hz": 60
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "components": [
+        { "type": "Transform", "position": [0.0, 4.5, 16.0], "rotation": [-9.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 55.0, "near": 0.1, "far": 400.0, "active": true }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-38.0, 27.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.96, 0.89], "intensity": 1.25 }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [
+        { "type": "AmbientLight", "color": [0.66, 0.71, 0.79], "intensity": 0.34 }
+      ]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0], "scale": [90.0, 1.0, 90.0] },
+        { "type": "Terrain",
+          "segments": 160,
+          "seed": 7,
+          "height": 2.6,
+          "feature_scale": 30.0,
+          "octaves": 4,
+          "warp": 0.45,
+          "texture_scale": 3.0,
+          "color_variation": 0.35,
+          "bump": 0.3,
+          "layers": [
+            { "albedo": [0.11, 0.15, 0.07], "roughness": 0.95 },
+            { "albedo": [0.13, 0.10, 0.07], "roughness": 0.94,
+              "slope_range": [26.0, 90.0], "slope_blend": 9.0, "noise": 0.9 }
+          ] },
+        { "type": "Collider", "shape": "trimesh", "friction": 0.9, "layers": ["ground"] }
+      ]
+    },
+    {
+      "name": "SpinningCube",
+      "components": [
+        { "type": "Transform", "position": [-3.2, 0.45, 1.5], "scale": [1.2, 1.2, 1.2] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.78, 0.24, 0.16], "roughness": 0.55 },
+        { "type": "Script", "source": "scripts/spin.rhai" }
+      ]
+    },
+    {
+      "name": "Ball",
+      "components": [
+        { "type": "Transform", "position": [1.6, 6.0, 2.4], "scale": [0.8, 0.8, 0.8] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.20, 0.32, 0.72], "roughness": 0.4 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "sphere", "radius": 0.8,
+          "friction": 0.8, "restitution": 0.35, "collides_with": ["ground"] }
+      ]
+    },
+    {
+      "name": "Oak",
+      "components": [
+        { "type": "Transform", "position": [6.4, 0.78, -2.0] },
+        { "type": "Tree", "seed": 4, "height": 6.5, "leaves_per_branch": 12,
+          "leaf_size": 0.3, "leaf_color": [0.14, 0.24, 0.08] },
+        { "type": "Material", "albedo": [0.19, 0.14, 0.10], "roughness": 0.9 }
+      ]
+    }
+  ]
+}

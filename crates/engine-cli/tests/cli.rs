@@ -2717,3 +2717,90 @@ fn the_m23_road_fixture_pins_markings_and_a_drivable_surface() {
     assert_eq!(report["pass"], true, "{report}");
     assert_eq!(report["diff_pixels"], 0, "{report}");
 }
+
+// ── engine init / engine agent-guide (distribution) ────────────────────────
+//
+// The scaffold is what someone gets who installed a binary and has no
+// checkout. If it does not validate and render, the first thing a new user
+// sees is a failure in code they did not write.
+
+/// A fresh empty directory for one test, removed first so reruns are clean.
+fn scratch_dir(test: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("engine-init-{}-{test}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+#[test]
+fn init_scaffolds_a_scene_that_validates() {
+    let dir = scratch_dir("validates");
+    let output = engine().arg("init").arg(&dir).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    assert_eq!(report["created"], dir.display().to_string());
+    assert!(
+        report["next"].as_array().is_some_and(|n| !n.is_empty()),
+        "the result should tell an agent what to run next: {report}"
+    );
+
+    for name in ["AGENTS.md", "CLAUDE.md", ".gitignore", "first.json", "scripts/spin.rhai"] {
+        assert!(dir.join(name).exists(), "{name} should have been written");
+    }
+
+    // The scene references its script relatively, so this also pins that the
+    // scaffold's layout resolves — a scene one directory down would not.
+    let validate = engine()
+        .arg("validate")
+        .arg(dir.join("first.json"))
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(
+        validate.status.code(),
+        Some(0),
+        "the scaffolded scene must validate with no warnings: {:?}",
+        stderr_lines(&validate)
+    );
+}
+
+#[test]
+fn init_refuses_a_directory_that_already_holds_files() {
+    let dir = scratch_dir("occupied");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("CLAUDE.md"), "mine, not the scaffold's").unwrap();
+
+    let output = engine().arg("init").arg(&dir).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout_of(&output).is_empty(), "failure writes nothing to stdout");
+    assert_eq!(codes_of(&stderr_lines(&output)), ["init_target_not_empty"]);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(),
+        "mine, not the scaffold's",
+        "refusing must not have overwritten anything"
+    );
+
+    let forced = engine().arg("init").arg(&dir).arg("--force").output().unwrap();
+    assert_eq!(forced.status.code(), Some(0), "{:?}", stderr_lines(&forced));
+    assert!(std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap().contains("AGENTS.md"));
+}
+
+#[test]
+fn agent_guide_is_documentation_not_a_result() {
+    let output = engine().arg("agent-guide").output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "documentation writes nothing to stderr");
+
+    let guide = stdout_of(&output);
+    assert!(guide.contains("engine screenshot"), "the guide must teach the loop");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&guide).is_err(),
+        "agent-guide is markdown, a documented exception to the stdout contract"
+    );
+
+    // The binary carries the guide, and `init` writes that same text — one
+    // source of truth, so a fix to one cannot miss the other.
+    let dir = scratch_dir("guide");
+    engine().arg("init").arg(&dir).output().unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), guide);
+}

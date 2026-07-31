@@ -24,8 +24,11 @@ that breaks a rule here fails the build before it ships.
   nothing else, ever. Even an internal panic speaks this protocol (the panic
   hook re-renders it as `internal_panic`, backtrace escaped inside the JSON
   string when `RUST_BACKTRACE` is set).
-- `--help` and `--version` are documentation, not results, and are exempt:
-  human-readable prose, exit 0.
+- `--help`, `--version`, and `engine agent-guide` are documentation, not
+  results, and are exempt: human-readable prose, exit 0. `agent-guide` prints
+  the markdown orientation an agent needs to work here, which is the one thing
+  a caller wants unwrapped — a JSON string holding a 200-line document with
+  every newline escaped serves nobody.
 
 ## Exit codes
 
@@ -99,7 +102,17 @@ engine build [--check]                       # --check: type-check only, ~half t
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 engine list-components                       # scene + component JSON Schemas
 engine info                                  # selected GPU adapter
+engine init [dir] [--force]                  # scaffold a project; refuses a non-empty dir
+engine agent-guide                           # the agent orientation, as markdown
 ```
+
+`engine init` writes a starter scene, a script, and the agent orientation under
+the names an agent's tool already reads (`AGENTS.md`, `CLAUDE.md`). Its stdout
+object carries `created`, the `files` written, and a `next` array of the
+commands to run — enough for an agent to continue without reading this
+document. It **refuses a directory that already holds anything** unless
+`--force` (`init_target_not_empty`, exit 2), because the names it writes are
+exactly the names a project already has.
 
 `engine edit` is a windowed command and exempt from the streams contract
 while its window is open; on a fatal failure it still exits with one

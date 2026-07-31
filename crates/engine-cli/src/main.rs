@@ -10,6 +10,7 @@
 
 mod app;
 mod build;
+mod scaffold;
 mod simulate;
 
 use std::path::PathBuf;
@@ -226,6 +227,25 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Scaffold a new project: a starter scene, a script, and the agent
+    /// orientation under the names Claude Code and Codex already read.
+    Init {
+        /// Where to scaffold. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// Write even if the directory already holds files, overwriting any
+        /// scaffolded name that collides.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Print the agent orientation: the loop, the CLI contract, the scene
+    /// format, and the conventions that are easy to get wrong.
+    ///
+    /// Documentation rather than a result, so it prints markdown to stdout
+    /// like `--help` does — see docs/cli-contract.md.
+    AgentGuide,
+
     /// Print the component and scene JSON Schemas.
     ListComponents,
 
@@ -343,6 +363,11 @@ fn main() {
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
+        Command::Init { dir, force } => scaffold::init(dir, force),
+        Command::AgentGuide => {
+            print!("{}", scaffold::AGENT_GUIDE);
+            Ok(())
+        }
         Command::ListComponents => {
             print!("{}", engine_core::schema::canonical_json());
             Ok(())

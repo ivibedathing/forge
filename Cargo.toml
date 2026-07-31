@@ -11,9 +11,16 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/ivibedathing/forge"
+description = "An agent-native 3D engine: JSON scenes, structured errors, headless PNG rendering."
+# crates.io refuses any crate with a git dependency, and engine-editor pins
+# egui to a master rev (see below), so `cargo install engine-cli` cannot work
+# until egui 0.36 ships and that pin becomes a version. Until then the
+# from-source path is `cargo install --git`, and the binary path is the
+# prebuilt release artifacts. Revisit this flag with the egui pin.
 publish = false
 
 [workspace.dependencies]

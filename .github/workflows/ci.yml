@@ -1,0 +1,51 @@
+# The check a contributor's change has to pass.
+#
+# `cargo test --workspace` is the real check, not `cargo build`: the render
+# tests draw offscreen and assert on pixel values. On a CI runner with no
+# usable GPU adapter they skip cleanly rather than fail, so what this job
+# actually proves is that everything GPU-free — validation, physics, the
+# geometry generators, the formatter, the CLI contract — still holds. Renders
+# are verified locally against baselines, which are per-adapter artifacts and
+# cannot be pinned from here.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux windowing dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The gate. Everything below it is advisory: the workspace is not
+      # currently rustfmt- or clippy-clean, and turning either into a blocking
+      # check means a first commit that reformats every crate — which is
+      # exactly the kind of wide diff this repo's ULP-sensitive shader and
+      # geometry code should not be buried under. Make them blocking on the
+      # commit that actually cleans them up, not before.
+      - run: cargo test --workspace --locked
+
+      - run: cargo fmt --all -- --check
+        continue-on-error: true
+      - run: cargo clippy --workspace --all-targets
+        continue-on-error: true
