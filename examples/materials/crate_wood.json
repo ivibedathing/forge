@@ -1,0 +1,8 @@
+{
+  "albedo": [0.30, 0.225, 0.135],
+  "roughness": 0.9,
+  "albedo_map": "../textures/crate.png",
+  "normal_map": "../textures/crate_normal.png",
+  "normal_strength": 1.0,
+  "uv_scale": [1.0, 1.0]
+}

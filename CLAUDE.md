@@ -745,7 +745,10 @@ is what drawing the object second under `Less` gives.
 
 Residue, recorded rather than hidden: `showcase_646.png`, the blast frame, still comes back as two
 images ~100 pixels apart (delta ≤ 18) in the distant tree canopy. It is the only baseline with a
-`diff_args` tolerance in `baselines.json` (`--threshold 24`). **The general rule: fine geometry
+`diff_args` tolerance in `baselines.json` (`--threshold 24`). `showcase_810.png` has since been
+seen to flake the same way **once** — 29 pixels at a channel delta of 1, along the treeline, clean on
+the next three runs — so it is the same residue and not a second bug; it is left without a tolerance
+deliberately, since one flake in four sweeps is worth re-running rather than blessing away. **The general rule: fine geometry
 against relief under MSAA is where this adapter stops being reproducible, so a new fixture wanting a
 hard pin should aim its camera at its subject rather than across a landscape.** Verified by
 `engine-render/tests/terrain.rs` (including `a_flat_single_layer_patch_is_exactly_a_painted_plane`,
@@ -969,8 +972,12 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
 - **Seven of the nine trees share `examples/materials/bark.json`**, the tour's use of `Material.asset`.
   Birch and the dead snag stay inline: same maps, different tint, and `asset` is exclusive with every
   other field so a shared file cannot be tinted per entity.
-- **`builtin:cube`'s faces disagree on which way `u` runs** — vertical on ±X, horizontal on ±Z — so
-  anything strongly directional on a cube draws one thing on two faces and another on the other two.
+- **`builtin:cube`'s faces disagree on which way `u` runs** — and they disagree **in pairs, not in
+  axes**: `mesh.rs` builds them as `quad(+X, Y, Z)` / `quad(−X, Z, Y)` / `quad(+Z, X, Y)` /
+  `quad(−Z, Y, X)`, so `u` is vertical on +X and *horizontal* on −X. Anything strongly directional on
+  a cube therefore draws differently on all four sides, and a box's tiling is a property of the
+  **face** you care about rather than of the box (the arena shooter's four perimeter walls carry four
+  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`).
   The crate texture is a *framed* panel with a centre batten for that reason: a border is invariant
   under it. `Tree` tubes are the well-behaved case (`u` around the ring, `v` along the branch), which
   is also why bark fissures must vary in `u` — transposed, a trunk wears tyre tread.
