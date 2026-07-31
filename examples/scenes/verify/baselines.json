@@ -374,6 +374,32 @@
       "height": 360,
       "milestone": "M26",
       "pinned_by": "hand"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m27_water_refraction.png",
+      "scene": "examples/scenes/verify/m27_water_refraction.json",
+      "args": [
+        "--steps",
+        "120"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M27",
+      "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m27_water_grazing.png",
+      "scene": "examples/scenes/verify/m27_water_refraction.json",
+      "args": [
+        "--steps",
+        "120",
+        "--camera",
+        "CameraGrazing"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M27",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [

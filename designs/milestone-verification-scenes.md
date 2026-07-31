@@ -1222,6 +1222,45 @@ this fixture, which the `main` binary cannot parse.
 
 ---
 
+## M27 — Water refraction: `verify/m27_water_refraction.json`
+
+A clear pool over a bed of dark bars crossed by a red and a blue rail, with two posts and a boulder
+standing through the surface. The bed is a *grid* on purpose: refraction is a displacement, so a
+uniform bed cannot show it, and the displacement runs along the view direction — bars laid across
+that axis move, bars laid along it barely do.
+
+**Two baselines from one file**, via a second camera:
+
+```
+engine screenshot verify/m27_water_refraction.json --steps 120 --out m27_water_refraction.png
+engine screenshot verify/m27_water_refraction.json --steps 120 --camera CameraGrazing \
+    --out m27_water_grazing.png
+```
+
+- `Camera` looks down at the pool at 24°, where the grid is what refraction acts on. This is the
+  frame that goes visibly wrong if the exit point is stepped along the refracted ray by the view
+  ray's path length instead of solved to the bed's depth — the bars dice into rectangular blocks.
+- `CameraGrazing` looks across at 8°, where the boulder and posts stand *in* the water. This is the
+  framing the depth-validated sample exists for: dropping the check moves ~22k pixels of it by up
+  to 99. On the overhead camera it moves **zero**, which is why the second camera is here at all.
+
+Per M22's rule both cameras aim at the subject with no terrain in frame, so both carry hard
+bit-exact pins rather than a tolerance; four consecutive sweeps came back at zero differing pixels.
+Pinned by `cli.rs::the_m27_water_refraction_fixture_pins_a_bent_bed_and_a_clean_waterline`, which
+also drops `ior` back to its default and requires the baseline to *stop* matching — a splice that
+silently did nothing would otherwise pass every other assertion.
+
+What it covers: the spliced refracting-water pipeline and its four anchors against `water.wgsl`,
+the bed-depth solve, the depth-validated sample, the IOR riding in `clock.z`, and the
+colour-copy/split-pass gate extended from `Material::refracts()` to `Water::refracts()`.
+
+**The bit-exactness half** is the A/B between binaries: every committed scene this milestone did not
+edit renders byte for byte as it did at `main`. Not compared are the ones whose *inputs* changed —
+the six showcase frames, whose pond now carries an `ior`, and this fixture, which the `main` binary
+cannot parse.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):
@@ -1239,6 +1278,7 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 | M19 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M23 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M26 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M27 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)

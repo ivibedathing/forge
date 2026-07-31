@@ -3524,3 +3524,80 @@ fn import_writes_material_files_and_the_textures_they_reference() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// M27: the water refraction fixture, from two cameras in one file.
+///
+/// Both baselines are hard bit-exact pins with no tolerance, which is
+/// deliberate and only defensible because the fixture obeys M22's rule — it
+/// aims at its subject, with no terrain anywhere in frame. Four consecutive
+/// sweeps came back at zero differing pixels.
+///
+/// The two cameras pin two different halves of the design:
+///
+/// - `Camera` looks down at the pool, where the bed's grid of bars is the
+///   thing refraction acts on. This is the frame that would go wrong if the
+///   exit point were stepped along the refracted ray by the view ray's path
+///   length instead of solved to the bed's depth — the bars scramble into
+///   blocks, which is what the first implementation drew.
+/// - `CameraGrazing` looks across it at 8°, where the boulder and the posts
+///   stand *in* the water. That is the framing the depth-validated sample
+///   exists for: dropping the check moves ~22k pixels of it by up to 99, as
+///   the water behind each object drags the object's colour out across itself.
+#[test]
+fn the_m27_water_refraction_fixture_pins_a_bent_bed_and_a_clean_waterline() {
+    let scene = repo_path("examples/scenes/verify/m27_water_refraction.json");
+
+    for (baseline, extra) in [
+        ("m27_water_refraction.png", Vec::new()),
+        ("m27_water_grazing.png", vec!["--camera", "CameraGrazing"]),
+    ] {
+        let baseline = repo_path(&format!("examples/scenes/verify/baselines/{baseline}"));
+        let diff = engine()
+            .arg("diff-render")
+            .arg(&scene)
+            .arg(&baseline)
+            .args(["--steps", "120"])
+            .args(&extra)
+            .output()
+            .unwrap();
+        if !diff.status.success() {
+            let stderr = String::from_utf8_lossy(&diff.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "diff-render failed for a non-GPU reason: {stderr}"
+            );
+            eprintln!("skipping render pin: no usable GPU on this machine");
+            return;
+        }
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+    }
+
+    // The claim the whole milestone rests on: `ior` is the only reason this
+    // scene renders differently from the M18 surface. Drop it back to the
+    // default and the committed baseline must stop matching — otherwise the
+    // pins above would pass just as well with refraction wired to nothing,
+    // which is the failure mode a splice makes easy to miss.
+    let source = std::fs::read_to_string(&scene).unwrap();
+    let unrefracted = source.replace(r#""ior": 1.33"#, r#""ior": 1.0"#);
+    assert_ne!(source, unrefracted, "the fixture must author `ior` explicitly");
+    let plain = scene.with_file_name("m27_unrefracted.json");
+    std::fs::write(&plain, unrefracted).unwrap();
+
+    let report = engine()
+        .arg("diff-render")
+        .arg(&plain)
+        .arg(repo_path(
+            "examples/scenes/verify/baselines/m27_water_refraction.png",
+        ))
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout_of(&report).trim()).unwrap();
+    let _ = std::fs::remove_file(&plain);
+    assert_eq!(
+        parsed["pass"], false,
+        "with `ior` back at its default the baseline must not match: {parsed}"
+    );
+}
