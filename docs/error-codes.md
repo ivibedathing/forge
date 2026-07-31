@@ -90,6 +90,12 @@ build fails.
 | `meadow_terrain_invalid` | 1 | a Meadow's "terrain" must name an entity that has a Terrain component |
 | `meadow_stages_invalid` | 1 | a Meadow needs at least two life-cycle stages with strictly increasing "at" |
 | `too_many_growth_stages` | 1 | a Meadow has more life-cycle stages than the shader's table holds |
+| `hud_parent_not_found` | 1 | a HUD element's "parent" names no entity in the scene |
+| `hud_parent_not_panel` | 1 | a HUD element's "parent" must name an entity that has a HudPanel |
+| `hud_parent_cycle` | 1 | a chain of HUD "parent" references loops back on itself |
+| `hud_nesting_too_deep` | 1 | a HUD element nests deeper than the layout engine will resolve |
+| `hud_interact_without_element` | 1 | a HudInteract needs a HudPanel, HudRect, HudImage or HudText on the same entity to be the hit box |
+| `hud_image_slice_too_large` | 1 | a HudImage's nine-slice insets are larger than the source image |
 | `input_unreadable` | 1 | the input timeline file could not be read |
 | `input_parse_error` | 1 | an input timeline line is not a valid {"step", "held"} object |
 | `unknown_key` | 1 | an input timeline holds a name that is no known key |

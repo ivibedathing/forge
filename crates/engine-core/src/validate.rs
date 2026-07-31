@@ -141,6 +141,14 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     // wheel pass's shape.
     let mut meadows: Vec<(String, crate::components::Meadow, String)> = Vec::new();
     let mut terrain_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // One HUD element awaiting the cross-entity pass (M31): its owner, the
+    // component that owns the `parent` reference, the reference itself, and
+    // the component-s JSON path. Collected across all four kinds because
+    // `parent` means the same on every one of them, so one pass checks them
+    // all -- four near-identical passes is how two of them start disagreeing.
+    type HudRef = (String, &'static str, Option<String>, String);
+    let mut hud_elements: Vec<HudRef> = Vec::new();
+    let mut hud_panel_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for (entity_index, entity) in entities.iter().enumerate() {
         let entity_path = format!("/entities/{entity_index}");
@@ -263,6 +271,11 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut terrain: Option<(crate::components::Terrain, String)> = None;
         let mut road: Option<(crate::components::Road, String)> = None;
         let mut meadow: Option<(crate::components::Meadow, String)> = None;
+        // Whether this entity carries anything a `HudInteract` could use as
+        // its hit box (M31).
+        let mut has_hud_element = false;
+        let mut hud_interact_path: Option<String> = None;
+        let mut hud_image: Option<(crate::components::HudImage, String)> = None;
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
@@ -364,6 +377,32 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 Some(ComponentData::Meadow(m)) => {
                     meadows.push((name.to_string(), m.clone(), component_path.clone()));
                     meadow = Some((m, component_path));
+                }
+                Some(ComponentData::HudPanel(p)) => {
+                    has_hud_element = true;
+                    hud_panel_names.insert(name.to_string());
+                    hud_elements.push((name.to_string(), "HudPanel", p.parent, component_path));
+                }
+                Some(ComponentData::HudRect(r)) => {
+                    has_hud_element = true;
+                    hud_elements.push((name.to_string(), "HudRect", r.parent, component_path));
+                }
+                Some(ComponentData::HudImage(i)) => {
+                    has_hud_element = true;
+                    hud_elements.push((
+                        name.to_string(),
+                        "HudImage",
+                        i.parent.clone(),
+                        component_path.clone(),
+                    ));
+                    hud_image = Some((i, component_path));
+                }
+                Some(ComponentData::HudText(t)) => {
+                    has_hud_element = true;
+                    hud_elements.push((name.to_string(), "HudText", t.parent, component_path));
+                }
+                Some(ComponentData::HudInteract(_)) => {
+                    hud_interact_path = Some(component_path);
                 }
                 _ => {}
             }
@@ -861,6 +900,38 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
+        // ── HudInteract needs something to hit (M31) ──────────────────
+        //
+        // A `HudInteract` carries no geometry: the hit box *is* the laid-out
+        // rectangle of the element on its own entity. With no element there is
+        // no rectangle, so the component could only ever be a button nobody
+        // can click — which is silent, and looks exactly like a broken hit
+        // test.
+        if let Some(path) = &hud_interact_path {
+            if !has_hud_element {
+                errors.push(
+                    cx.err(
+                        codes::HUD_INTERACT_WITHOUT_ELEMENT,
+                        format!(
+                            "entity {name:?} has a HudInteract but no HudPanel, HudRect, \
+                             HudImage or HudText; the hit box is the element's own \
+                             laid-out rectangle, so there is nothing here to click"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("HudInteract"),
+                );
+            }
+        }
+
+        // `hud_image_slice_too_large` is deliberately *not* here: comparing an
+        // inset against the source needs the PNG's dimensions, and engine-core
+        // cannot decode one. It lives in the engine-assets pass beside
+        // `texture_too_large`, which is where every check that has to open a
+        // file lives.
+        let _ = &hud_image;
+
         // Legal but almost certainly wrong: dead data from editing the wrong
         // entity. A warning, because rendering it is well-defined. A `Tree`
         // counts as geometry here — the entity's Material is its bark. A Water,
@@ -1151,6 +1222,122 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 .field("terrain")
                 .suggest_from(ground, terrain_names.iter().map(String::as_str)),
             );
+        }
+    }
+
+    // ── HUD parent pass (M31): the tree the layout engine will walk ────
+    //
+    // The wheel pass's shape, for the wheel pass's reason. `parent` is a name
+    // in a flat file (the `Wheel.vehicle` precedent), so nothing about the
+    // file's *structure* can guarantee it resolves, that its target is a
+    // container, or that the chain terminates. All three are checked here
+    // rather than guarded at layout time, because a hung layout with no output
+    // is the worst failure an agent loop can hit — `tree_too_complex`'s
+    // argument.
+    for (owner, component, parent, component_path) in &hud_elements {
+        let Some(parent) = parent else {
+            continue;
+        };
+        let parent_path = format!("{component_path}/parent");
+        if !seen_names.contains(&parent.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::HUD_PARENT_NOT_FOUND,
+                    format!(
+                        "the {component} on {owner:?} names parent {parent:?}, which is \
+                         not an entity in this scene"
+                    ),
+                    &parent_path,
+                )
+                .entity(owner)
+                .component(*component)
+                .field("parent")
+                .suggest_from(parent, seen_names.iter().copied()),
+            );
+        } else if !hud_panel_names.contains(parent.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::HUD_PARENT_NOT_PANEL,
+                    format!(
+                        "the {component} on {owner:?} names parent {parent:?}, but that \
+                         entity has no HudPanel; only a panel lays children out, so the \
+                         name must be one"
+                    ),
+                    &parent_path,
+                )
+                .entity(owner)
+                .component(*component)
+                .field("parent")
+                .suggest_from(parent, hud_panel_names.iter().map(String::as_str)),
+            );
+        }
+    }
+
+    // Cycles and depth, walked over the resolved graph. Both are reported with
+    // the whole chain, because "A's parent is B" is not enough to find the ring
+    // when the ring is five elements long.
+    {
+        let parent_of: std::collections::BTreeMap<&str, &str> = hud_elements
+            .iter()
+            .filter_map(|(owner, _, parent, _)| {
+                let parent = parent.as_deref()?;
+                hud_panel_names
+                    .contains(parent)
+                    .then_some((owner.as_str(), parent))
+            })
+            .collect();
+
+        for (owner, component, parent, component_path) in &hud_elements {
+            if parent.is_none() {
+                continue;
+            }
+            let parent_path = format!("{component_path}/parent");
+            let mut chain = vec![owner.as_str()];
+            let mut current = owner.as_str();
+            loop {
+                let Some(&next) = parent_of.get(current) else {
+                    break;
+                };
+                if let Some(at) = chain.iter().position(|seen| *seen == next) {
+                    let ring: Vec<&str> = chain[at..].to_vec();
+                    errors.push(
+                        cx.err(
+                            codes::HUD_PARENT_CYCLE,
+                            format!(
+                                "the {component} on {owner:?} is inside a parent cycle: {} → {next}; \
+                                 a HUD element cannot be its own ancestor",
+                                ring.join(" → ")
+                            ),
+                            &parent_path,
+                        )
+                        .entity(owner)
+                        .component(*component)
+                        .field("parent"),
+                    );
+                    break;
+                }
+                chain.push(next);
+                if chain.len() > crate::ui::MAX_HUD_DEPTH {
+                    errors.push(
+                        cx.err(
+                            codes::HUD_NESTING_TOO_DEEP,
+                            format!(
+                                "the {component} on {owner:?} nests {} levels deep, past the \
+                                 limit of {}; flatten the chain {}",
+                                chain.len() - 1,
+                                crate::ui::MAX_HUD_DEPTH,
+                                chain.join(" → ")
+                            ),
+                            &parent_path,
+                        )
+                        .entity(owner)
+                        .component(*component)
+                        .field("parent"),
+                    );
+                    break;
+                }
+                current = next;
+            }
         }
     }
 
@@ -3360,6 +3547,132 @@ mod tests {
     #[test]
     fn accepts_a_valid_scene() {
         assert!(validate_source(VALID, "test.json").is_empty());
+    }
+
+    /// A menu built the way the design intends must validate clean — the
+    /// counterpart to every rejection test below, and the thing that would
+    /// break if a new rule were too eager.
+    #[test]
+    fn accepts_a_parented_hud_tree() {
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Menu", "components": [
+                { "type": "HudPanel", "layout": "column", "padding": 12, "gap": 8,
+                  "anchor": "center", "opacity": 0.9 } ] },
+            { "name": "Title", "components": [
+                { "type": "HudText", "text": "PAUSED", "parent": "Menu", "size": 24 } ] },
+            { "name": "Resume", "components": [
+                { "type": "HudRect", "size": [160, 32], "parent": "Menu", "stretch": [true, false] },
+                { "type": "HudInteract", "hover_tint": [1.3, 1.3, 1.3] } ] }
+          ]
+        }"#;
+        assert_eq!(codes_of(source), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_parent_must_name_an_entity_that_has_a_panel() {
+        let missing = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Label", "components": [
+                { "type": "HudText", "text": "x", "parent": "Menyu" } ] },
+            { "name": "Menu", "components": [ { "type": "HudPanel" } ] }
+          ]
+        }"#;
+        let errors = validate_source(missing, "test.json");
+        assert_eq!(errors[0].error, codes::HUD_PARENT_NOT_FOUND);
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("Menu"),
+            "a near-miss parent name suggests the real one"
+        );
+
+        // An entity that exists but is not a container: only a panel lays
+        // children out, so this would silently do nothing.
+        let not_a_panel = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Label", "components": [
+                { "type": "HudText", "text": "x", "parent": "Bar" } ] },
+            { "name": "Bar", "components": [ { "type": "HudRect", "size": [4, 4] } ] }
+          ]
+        }"#;
+        assert_eq!(codes_of(not_a_panel), [codes::HUD_PARENT_NOT_PANEL]);
+    }
+
+    /// A cycle would be an infinite walk at layout time, so it is refused
+    /// here. The message must name the ring — "A's parent is B" does not
+    /// locate a five-element loop.
+    #[test]
+    fn a_parent_cycle_is_refused_and_names_its_ring() {
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "A", "components": [ { "type": "HudPanel", "parent": "B" } ] },
+            { "name": "B", "components": [ { "type": "HudPanel", "parent": "C" } ] },
+            { "name": "C", "components": [ { "type": "HudPanel", "parent": "A" } ] }
+          ]
+        }"#;
+        let errors = validate_source(source, "test.json");
+        assert!(errors.iter().all(|e| e.error == codes::HUD_PARENT_CYCLE));
+        assert!(
+            errors[0].message.contains("A → B → C"),
+            "the ring should be spelled out, got: {}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn nesting_past_the_cap_is_refused() {
+        let mut entities = Vec::new();
+        for level in 0..=(crate::ui::MAX_HUD_DEPTH + 2) {
+            let parent = if level == 0 {
+                String::new()
+            } else {
+                format!(r#", "parent": "P{}""#, level - 1)
+            };
+            entities.push(format!(
+                r#"{{ "name": "P{level}", "components": [ {{ "type": "HudPanel"{parent} }} ] }}"#
+            ));
+        }
+        let source = format!(
+            r#"{{ "name": "s", "entities": [{}] }}"#,
+            entities.join(",\n")
+        );
+        let codes = codes_of(&source);
+        assert!(
+            codes.contains(&codes::HUD_NESTING_TOO_DEEP),
+            "expected a depth error, got {codes:?}"
+        );
+    }
+
+    /// A `HudInteract` with no element has no rectangle to be, so it is a
+    /// button nobody can ever click — silent, and indistinguishable from a
+    /// broken hit test.
+    #[test]
+    fn an_interact_needs_an_element_to_be_the_hit_box() {
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Ghost", "components": [ { "type": "HudInteract" } ] }
+          ]
+        }"#;
+        assert_eq!(codes_of(source), [codes::HUD_INTERACT_WITHOUT_ELEMENT]);
+
+        // On any of the four elements it is fine — the rule is about having a
+        // rectangle, not about which kind of rectangle.
+        for element in [
+            r#"{ "type": "HudPanel" }"#,
+            r#"{ "type": "HudRect", "size": [1, 1] }"#,
+            r#"{ "type": "HudText", "text": "x" }"#,
+        ] {
+            let source = format!(
+                r#"{{ "name": "s", "entities": [
+                    {{ "name": "B", "components": [ {element}, {{ "type": "HudInteract" }} ] }} ] }}"#
+            );
+            assert_eq!(codes_of(&source), Vec::<&str>::new(), "with {element}");
+        }
     }
 
     #[test]
