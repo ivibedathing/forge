@@ -95,6 +95,7 @@ mod tests {
             mesh: std::sync::Arc::new(BuiltinMesh::Cube.data()),
             model: Mat4::from_translation(position),
             material: Material::default(),
+            textures: Default::default(),
             terrain: None,
         }
     }

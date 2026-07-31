@@ -345,6 +345,24 @@ impl engine_core::mesh::MeshSource for StubbedFileAssets {
     }
 }
 
+/// And a stub for the texture half of the draw list (M26): one white texel,
+/// whatever was asked for. This test counts draw calls, and a draw call does
+/// not care what is in the map.
+impl engine_core::texture::TextureSource for StubbedFileAssets {
+    fn load_texture(
+        &self,
+        _asset: &str,
+        space: engine_core::texture::ColorSpace,
+    ) -> engine_core::error::Result<std::sync::Arc<engine_core::texture::TextureData>> {
+        Ok(std::sync::Arc::new(engine_core::texture::TextureData::new(
+            1,
+            1,
+            vec![255, 255, 255, 255],
+            space,
+        )))
+    }
+}
+
 #[test]
 fn demo_scene_loads_and_draws_everything() {
     // The truck's mesh existence check resolves relative to the scene path,
@@ -449,5 +467,105 @@ fn every_committed_baseline_is_listed_in_the_manifest() {
         "committed baselines missing from examples/scenes/verify/baselines.json: {missing:?}\n\
          add each one with the scene and flags that reproduce it — `bin/verify-baselines` \
          checks exactly what this file lists"
+    );
+}
+
+/// Every asset a committed scene references is itself **committed** — not
+/// merely present on the machine that wrote the scene.
+///
+/// This is the mistake M26 shipped for exactly one commit: `.gitignore` carries
+/// a blanket `*.png` to keep render output out of the repo, the material
+/// textures are `.png`, and they were generated into the working tree by their
+/// own script. Every local check passed — the files were right there — and a
+/// fresh clone failed to validate the showcase tour.
+///
+/// Nothing but git can tell "on disk" from "in the repo", so this shells out to
+/// it and skips cleanly where it cannot (a tarball install has no repo, and the
+/// distribution design ships those deliberately).
+#[test]
+fn every_asset_a_committed_scene_references_is_committed() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let Ok(listing) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", "examples"])
+        .output()
+    else {
+        eprintln!("skipping: no git on this machine");
+        return;
+    };
+    if !listing.status.success() {
+        eprintln!("skipping: not a git checkout");
+        return;
+    }
+    let tracked: std::collections::HashSet<String> = String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect();
+
+    // Every reference any committed scene makes, as a repo-relative path.
+    let mut missing: Vec<String> = Vec::new();
+    for scene in tracked.iter().filter(|p| {
+        p.starts_with("examples/scenes/")
+            && p.ends_with(".json")
+            && !p.contains("baselines")
+            // The one scene that is committed **broken** and must stay that
+            // way: a missing mesh reference is one of the seven planted errors
+            // `m5_broken_stays_broken` pins it for.
+            && !p.ends_with("m5_broken.json")
+    }) {
+        let Ok(source) = std::fs::read_to_string(root.join(scene)) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&source) else {
+            continue;
+        };
+        let dir = Path::new(scene).parent().unwrap_or(Path::new(""));
+
+        // Any string field that looks like a relative file reference. Blunt on
+        // purpose: a new component with a new asset field is covered the day it
+        // exists, with no list to keep.
+        let mut stack = vec![&value];
+        while let Some(node) = stack.pop() {
+            match node {
+                serde_json::Value::Object(map) => stack.extend(map.values()),
+                serde_json::Value::Array(items) => stack.extend(items.iter()),
+                serde_json::Value::String(text) => {
+                    let looks_like_a_file = [".png", ".gltf", ".glb", ".json", ".rhai", ".jsonl"]
+                        .iter()
+                        .any(|ext| text.ends_with(ext));
+                    if !looks_like_a_file || text.starts_with("builtin:") {
+                        continue;
+                    }
+                    let joined = dir.join(text);
+                    // Lexical normalization: the reference may climb out of the
+                    // scene's own directory, which is ordinary.
+                    let joined = joined.to_string_lossy().into_owned();
+                    let mut parts: Vec<&str> = Vec::new();
+                    for part in joined.split('/') {
+                        match part {
+                            "." | "" => {}
+                            ".." => {
+                                parts.pop();
+                            }
+                            other => parts.push(other),
+                        }
+                    }
+                    let normalized = parts.join("/");
+                    if !tracked.contains(&normalized) {
+                        missing.push(format!("{scene} references untracked {normalized}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "a committed scene references files that are not in the repo, so a fresh \
+         clone cannot validate or render it:\n  {}",
+        missing.join("\n  ")
     );
 }
