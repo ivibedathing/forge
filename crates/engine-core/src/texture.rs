@@ -298,6 +298,56 @@ pub trait TextureSource {
     fn load_texture(&self, asset: &str, space: ColorSpace) -> Result<Arc<TextureData>>;
 }
 
+/// Everything the draw list needs to resolve: geometry and textures.
+///
+/// One parameter rather than two, with a blanket impl, so every existing caller
+/// of `Scene::render_items` keeps passing exactly what it passed before.
+pub trait AssetSource: crate::mesh::MeshSource + TextureSource {}
+impl<T: crate::mesh::MeshSource + TextureSource + ?Sized> AssetSource for T {}
+
+/// The four maps a material can carry, resolved to shared pixels (M26).
+///
+/// `Arc`, and the *same* `Arc` for one asset, for M15's reason: the renderer
+/// keys its uploaded GPU textures on that identity.
+#[derive(Debug, Clone, Default)]
+pub struct MaterialTextures {
+    pub albedo: Option<Arc<TextureData>>,
+    pub orm: Option<Arc<TextureData>>,
+    pub normal: Option<Arc<TextureData>>,
+    pub emissive: Option<Arc<TextureData>>,
+}
+
+impl MaterialTextures {
+    /// Whether anything is bound — the test that routes a draw to the textured
+    /// pipeline variant.
+    pub fn any(&self) -> bool {
+        self.albedo.is_some()
+            || self.orm.is_some()
+            || self.normal.is_some()
+            || self.emissive.is_some()
+    }
+
+    /// Resolve a material's maps through `textures`.
+    pub fn resolve(
+        material: &crate::components::Material,
+        textures: &dyn TextureSource,
+    ) -> Result<Self> {
+        let mut out = Self::default();
+        for (field, asset, space) in material.maps() {
+            let loaded = textures
+                .load_texture(asset, space)
+                .map_err(|e| e.component("Material").field(field))?;
+            match field {
+                "albedo_map" => out.albedo = Some(loaded),
+                "orm_map" => out.orm = Some(loaded),
+                "normal_map" => out.normal = Some(loaded),
+                _ => out.emissive = Some(loaded),
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// A [`TextureSource`] with nothing behind it — for GPU-less contexts that have
 /// no asset directory. Every reference is an error, which is what a scene with
 /// texture maps rendered through a mesh-only context should get.
@@ -309,6 +359,12 @@ impl TextureSource for NoTextures {
             crate::codes::ASSET_NOT_FOUND,
             format!("cannot load texture {asset:?}: this context has no asset directory"),
         ))
+    }
+}
+
+impl TextureSource for crate::mesh::BuiltinAssets {
+    fn load_texture(&self, asset: &str, space: ColorSpace) -> Result<Arc<TextureData>> {
+        NoTextures.load_texture(asset, space)
     }
 }
 

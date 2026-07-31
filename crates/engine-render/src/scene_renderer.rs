@@ -67,7 +67,41 @@ struct ObjectUniform {
     /// Fixed-size table, `terrain.x` entries live. Unused slots are zeroed and
     /// never read — the shader loops to the count.
     terrain_layers: [TerrainLayerUniform; MAX_TERRAIN_LAYERS],
+
+    /// Material maps (M26), appended at the end for the reason terrain's
+    /// fields were: every field above keeps the offset the shader already reads
+    /// it from. xy = uv scale, zw = uv offset.
+    map_uv: [f32; 4],
+    /// x = which maps are bound, as bits; y = alpha cutoff, z = normal
+    /// strength, w = ior.
+    map_params: [f32; 4],
+    /// x = thickness in metres; yzw = per-channel attenuation.
+    map_volume: [f32; 4],
 }
+
+/// Which map slots a draw has bound, as the bits `map_params.x` carries.
+fn map_bits(textures: &engine_core::texture::MaterialTextures) -> u32 {
+    let mut bits = 0;
+    if textures.albedo.is_some() {
+        bits |= MAP_ALBEDO;
+    }
+    if textures.orm.is_some() {
+        bits |= MAP_ORM;
+    }
+    if textures.normal.is_some() {
+        bits |= MAP_NORMAL;
+    }
+    if textures.emissive.is_some() {
+        bits |= MAP_EMISSIVE;
+    }
+    bits
+}
+
+/// The bits `map_params.x` carries, matching `textured.wgsl`.
+const MAP_ALBEDO: u32 = 1;
+const MAP_ORM: u32 = 2;
+const MAP_NORMAL: u32 = 4;
+const MAP_EMISSIVE: u32 = 8;
 
 /// One terrain layer as the object uniform carries it, matching WGSL
 /// `TerrainLayer`.
@@ -451,6 +485,73 @@ impl ShadowMap {
     }
 }
 
+/// One uploaded texture with its mip chain, cached across frames.
+///
+/// `_source` keeps the `TextureData` alive for exactly the reason `CachedMesh`
+/// keeps its geometry: the cache is keyed on that allocation's address, and a
+/// strong reference is what stops a freed texture's address from being reused
+/// by a *different* one and silently colliding.
+struct CachedTexture {
+    _source: Arc<engine_core::texture::TextureData>,
+    view: wgpu::TextureView,
+    last_used: u64,
+}
+
+/// A material's four map slots as one bind group, cached on the identities of
+/// the textures in it.
+///
+/// Keyed on the `Arc` addresses rather than on the entity, because two entities
+/// sharing a `materials/*.json` share its pixels and should share its bind
+/// group — which is most of the point of shareable materials.
+struct CachedMaterial {
+    bind_group: wgpu::BindGroup,
+    last_used: u64,
+}
+
+/// The 1×1 white bound in a material slot with no map.
+///
+/// **Written, not merely allocated.** The reads sit behind the `map_params`
+/// bits so nothing should ever sample it — but "should" is doing work there,
+/// and an unwritten texture's contents are whatever the allocator last had.
+/// Leaving it undefined cost an afternoon: a slot that was in fact being bound
+/// rendered as a stable magenta that looked exactly like a mip-chain bug.
+fn white_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("material-white"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &[255u8, 255, 255, 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
 /// A 1×1 texture of `format`, bound wherever a frame does not have the real
 /// thing. Never read: every sampler of it sits behind a branch that is off.
 fn placeholder_texture(
@@ -538,10 +639,20 @@ pub struct SceneRenderer {
     /// with `alpha < 1` or `transmission > 0`.
     transparent_pipeline: wgpu::RenderPipeline,
     /// `pipeline` with the terrain material generator spliced into its shader
-    /// (M22) — see `with_terrain` for why this is a separate module rather than
+    /// (M22) — see `with_surface` for why this is a separate module rather than
     /// a branch inside the shared one.
     terrain_pipeline: wgpu::RenderPipeline,
+    /// `pipeline` and `transparent_pipeline` with texture sampling spliced in
+    /// (M26), for materials that carry any map.
+    textured_pipeline: wgpu::RenderPipeline,
+    textured_transparent_pipeline: wgpu::RenderPipeline,
+    /// Group 3 for a textured draw: four maps and their sampler.
+    material_layout: wgpu::BindGroupLayout,
+    map_sampler: wgpu::Sampler,
     shadow_pipeline: wgpu::RenderPipeline,
+    /// The caster pass for `alpha_cutoff` materials (M26): the same depth-only
+    /// pass with the smallest fragment stage that can `discard`.
+    shadow_cutout_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     water_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
@@ -583,6 +694,14 @@ pub struct SceneRenderer {
     /// scenes which never do pay nothing for it.
     shadow_map: Option<ShadowMap>,
     meshes: HashMap<usize, CachedMesh>,
+    /// Uploaded material maps, keyed on the `Arc<TextureData>` identity — M15's
+    /// rule, which is why `TextureSource` must hand back the same `Arc`.
+    textures: HashMap<usize, CachedTexture>,
+    /// Material bind groups, keyed on the four slots' texture identities.
+    materials: HashMap<[usize; 4], CachedMaterial>,
+    /// The 1×1 white bound in a slot with no map, made on the first textured
+    /// frame — a scene with no maps never allocates it.
+    white_texture: Option<wgpu::TextureView>,
     frame_uniform: Uniforms,
     /// Object uniforms for the whole draw list, one per `object_stride` bytes.
     objects: Option<Uniforms>,
@@ -810,6 +929,62 @@ impl SceneRenderer {
             cache: None,
         });
 
+        // Group 3 for a textured mesh (M26): the four maps and one sampler.
+        // Every slot is always present in the layout, with a 1×1 white bound
+        // where a material has no map, because WGSL binds unconditionally and
+        // the reads sit behind the `map_params` bits.
+        let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("material-maps"),
+            entries: &[0u32, 1, 2, 3]
+                .map(|binding| wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                })
+                .into_iter()
+                .chain([wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                }])
+                .collect::<Vec<_>>(),
+        });
+        let map_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material-sampler"),
+            // Repeat on both axes, because tiling is what a material texture is
+            // for: `ClampToEdge` would make `uv_scale: [20, 20]` draw one
+            // stretched copy surrounded by smeared border pixels.
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            // Anisotropy is pinned at 1 (off) in v1. It measurably improves
+            // exactly the grazing-angle tiling this milestone is for, and it is
+            // also a per-adapter *quality* setting — which is where this repo
+            // has repeatedly found reproducibility to die. A baseline should be
+            // a function of the scene, not of the driver's filtering.
+            anisotropy_clamp: 1,
+            ..Default::default()
+        });
+
+        let textured_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("textured-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&object_layout),
+                Some(&frame_layout),
+                Some(&frame_textures_layout),
+                Some(&material_layout),
+            ],
+            immediate_size: 0,
+        });
+
         // The terrain twin of the mesh pipeline (M22): identical in every
         // respect except its shader module, which is `mesh.wgsl` with the
         // generative material spliced in by `with_terrain`.
@@ -821,9 +996,7 @@ impl SceneRenderer {
         // by construction rather than by hoping.
         let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terrain-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_terrain(include_str!(
-                "shaders/mesh.wgsl"
-            )))),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_terrain())),
         });
         let terrain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("terrain-pipeline"),
@@ -860,6 +1033,62 @@ impl SceneRenderer {
             multiview_mask: None,
             cache: None,
         });
+
+        // The textured twins (M26). Same states as the plain and blended mesh
+        // pipelines exactly — a textured surface is not a differently-composited
+        // surface, it is a differently-*resolved* one — with a fourth bind group
+        // for the maps and a third vertex slot for the UVs they are read at.
+        let textured_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("textured-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_textures())),
+        });
+        let textured_pipeline_for = |label: &str, blend: wgpu::BlendState, depth_write: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&textured_layout),
+                vertex: wgpu::VertexState {
+                    module: &textured_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &vertex_layouts,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &textured_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(depth_write),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample,
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let textured_pipeline = textured_pipeline_for(
+            "textured-pipeline",
+            wgpu::BlendState::REPLACE,
+            true,
+        );
+        let textured_transparent_pipeline = textured_pipeline_for(
+            "textured-transparent-pipeline",
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            false,
+        );
 
         // The blended twin of the mesh pipeline: same shader, same layout,
         // same geometry. What differs is that it must not write depth (two
@@ -904,6 +1133,13 @@ impl SceneRenderer {
 
         let shadow_pipeline =
             Self::shadow_pipeline(device, &object_layout, &frame_layout, &vertex_layouts[..1]);
+        let shadow_cutout_pipeline = Self::shadow_cutout_pipeline(
+            device,
+            &object_layout,
+            &frame_layout,
+            &material_layout,
+            &vertex_layouts,
+        );
         let sky_pipeline = Self::sky_pipeline(device, &frame_layout, format, multisample);
 
         // Water (M18). Its own uniform, its own shader, and the mesh pass's
@@ -1134,7 +1370,12 @@ impl SceneRenderer {
             pipeline,
             transparent_pipeline,
             terrain_pipeline,
+            textured_pipeline,
+            textured_transparent_pipeline,
+            material_layout,
+            map_sampler,
             shadow_pipeline,
+            shadow_cutout_pipeline,
             sky_pipeline,
             water_pipeline,
             cloud_pipeline,
@@ -1162,6 +1403,9 @@ impl SceneRenderer {
             frame_textures: None,
             shadow_map: None,
             meshes: HashMap::new(),
+            textures: HashMap::new(),
+            materials: HashMap::new(),
+            white_texture: None,
             frame_uniform,
             objects: None,
             object_stride,
@@ -1225,6 +1469,76 @@ impl SceneRenderer {
                 // A slope-scaled hardware bias on top of the shader's, which
                 // is what keeps large ground-facing polygons from self-
                 // shadowing in bands.
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    /// The caster pass for alpha-cut materials (M26).
+    ///
+    /// Identical to [`Self::shadow_pipeline`] in every state that matters —
+    /// front-face culled, the same slope-scaled bias, no colour target — and
+    /// different only in having a fragment stage at all. Two pipelines rather
+    /// than one with a branch, so the depth-only pass every current scene casts
+    /// through is the one it always was.
+    fn shadow_cutout_pipeline(
+        device: &wgpu::Device,
+        object_layout: &wgpu::BindGroupLayout,
+        frame_layout: &wgpu::BindGroupLayout,
+        material_layout: &wgpu::BindGroupLayout,
+        vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
+    ) -> wgpu::RenderPipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow-cutout-shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadow_cutout.wgsl").into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow-cutout-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(object_layout),
+                Some(frame_layout),
+                Some(material_layout),
+            ],
+            immediate_size: 0,
+        });
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow-cutout-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: vertex_layouts,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                // A cut-out card is a *sheet*: culling its front faces the way
+                // solid casters are culled would delete it from the map
+                // entirely whenever the sun is on its front side, and the
+                // peeling margin that trick buys is meaningless on geometry
+                // with no thickness.
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
                 bias: wgpu::DepthBiasState {
                     constant: 2,
                     slope_scale: 2.0,
@@ -1767,6 +2081,21 @@ impl SceneRenderer {
             .map(|item| self.upload_mesh(device, &item.surface.mesh))
             .collect();
 
+        // Material maps (M26), on the same terms: uploaded once per distinct
+        // texture, and one bind group per distinct *set* of them — so two
+        // entities sharing a `materials/*.json` share both.
+        let material_keys: Vec<Option<[usize; 4]>> = items
+            .iter()
+            .map(|item| self.ensure_material(device, queue, &item.textures))
+            .collect();
+        // Which casters have to test their alpha. `alpha_cutoff` alone is not
+        // enough: with no albedo map there is no alpha to test, and such a
+        // material casts through the ordinary depth-only pipeline.
+        let cutout: Vec<bool> = items
+            .iter()
+            .map(|item| item.material.alpha_cutoff > 0.0 && item.textures.albedo.is_some())
+            .collect();
+
         // Every entity's uniforms in one buffer, one write, addressed during
         // the pass by dynamic offset.
         //
@@ -1805,6 +2134,24 @@ impl SceneRenderer {
                     },
                     terrain_seed: [item.terrain.as_ref().map_or(0, |t| t.seed), 0, 0, 0],
                     terrain_layers: terrain_layers(item.terrain.as_ref()),
+                    map_uv: [
+                        material.uv_scale.x,
+                        material.uv_scale.y,
+                        material.uv_offset.x,
+                        material.uv_offset.y,
+                    ],
+                    map_params: [
+                        map_bits(&item.textures) as f32,
+                        material.alpha_cutoff,
+                        material.normal_strength,
+                        material.ior,
+                    ],
+                    map_volume: [
+                        material.thickness,
+                        material.attenuation.x,
+                        material.attenuation.y,
+                        material.attenuation.z,
+                    ],
                 },
             );
         }
@@ -1826,6 +2173,10 @@ impl SceneRenderer {
                     terrain: [0.0; 4],
                     terrain_seed: [0; 4],
                     terrain_layers: terrain_layers(None),
+                    // A road takes no maps in v1: its group 3 is its markings.
+                    map_uv: [1.0, 1.0, 0.0, 0.0],
+                    map_params: [0.0, 0.0, 1.0, 1.0],
+                    map_volume: [0.0, 1.0, 1.0, 1.0],
                 },
             );
         }
@@ -2115,7 +2466,40 @@ impl SceneRenderer {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 };
                 for &index in &opaque {
+                    if cutout[index] {
+                        continue;
+                    }
                     cast(&mut shadow_pass, index, &self.meshes[&keys[index]]);
+                }
+                // Cut-out casters after the solid ones, in one run: the switch
+                // costs one pipeline change a frame, and a scene with no
+                // `alpha_cutoff` never enters this loop.
+                let mut switched = false;
+                for &index in &opaque {
+                    if !cutout[index] {
+                        continue;
+                    }
+                    let Some(key) = material_keys[index] else { continue };
+                    if !switched {
+                        shadow_pass.set_pipeline(&self.shadow_cutout_pipeline);
+                        shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                        switched = true;
+                    }
+                    let mesh = &self.meshes[&keys[index]];
+                    shadow_pass.set_bind_group(
+                        0,
+                        &objects.bind_group,
+                        &[(index as u64 * self.object_stride) as u32],
+                    );
+                    shadow_pass.set_bind_group(2, &self.materials[&key].bind_group, &[]);
+                    shadow_pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    shadow_pass.set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
+                    shadow_pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
+                    shadow_pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+                if switched {
+                    shadow_pass.set_pipeline(&self.shadow_pipeline);
                 }
                 // Roads cast too — an embankment's shadow across the valley
                 // below it is most of what makes an elevated road read as
@@ -2266,10 +2650,40 @@ impl SceneRenderer {
                     pass.set_pipeline(&self.pipeline);
                 }
                 for &index in &opaque {
-                    if items[index].terrain.is_none() {
+                    if items[index].terrain.is_none() && material_keys[index].is_none() {
                         draw(&mut pass, index);
                     }
                 }
+
+                // Textured draws last in the opaque run, in one group, for the
+                // reason terrain draws first in one group: the pipeline
+                // switches at most once a frame rather than once an entity. A
+                // scene with no maps never enters this loop and therefore never
+                // leaves `self.pipeline` — which is what keeps every baseline
+                // blessed before M26 issuing exactly the draws it always did.
+                let mut textured = false;
+                for &index in &opaque {
+                    let Some(key) = material_keys[index] else { continue };
+                    if !textured {
+                        pass.set_pipeline(&self.textured_pipeline);
+                        textured = true;
+                    }
+                    let mesh = &self.meshes[&keys[index]];
+                    pass.set_bind_group(
+                        0,
+                        &objects.bind_group,
+                        &[(index as u64 * self.object_stride) as u32],
+                    );
+                    pass.set_bind_group(3, &self.materials[&key].bind_group, &[]);
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
+                    pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+                // Nothing after this assumes a bound pipeline: the road block
+                // and `draw_blended` each set their own.
+                let _ = textured;
             }
 
             // Roads, still in the opaque pass: they write depth like any solid
@@ -2314,6 +2728,7 @@ impl SceneRenderer {
                     &keys,
                     &water_keys,
                     &cloud_keys,
+                    &material_keys,
                     frame_textures,
                 );
                 self.draw_particles(&mut pass, particle_count, alpha_particles);
@@ -2376,6 +2791,7 @@ impl SceneRenderer {
                 &keys,
                 &water_keys,
                 &cloud_keys,
+                &material_keys,
                 frame_textures,
             );
             self.draw_particles(&mut pass, particle_count, alpha_particles);
@@ -2418,6 +2834,10 @@ impl SceneRenderer {
         let frame_index = self.frame_index;
         self.meshes
             .retain(|_, mesh| frame_index - mesh.last_used < MESH_CACHE_LIFETIME);
+        self.materials
+            .retain(|_, material| frame_index - material.last_used < MESH_CACHE_LIFETIME);
+        self.textures
+            .retain(|_, texture| frame_index - texture.last_used < MESH_CACHE_LIFETIME);
     }
 
     /// Build group 2 — the shadow map, the depth copy, the colour copy — if it
@@ -2493,19 +2913,27 @@ impl SceneRenderer {
         keys: &[usize],
         water_keys: &[usize],
         cloud_keys: &[usize],
+        material_keys: &[Option<[usize; 4]>],
         frame_textures: &wgpu::BindGroup,
     ) {
-        // 0 = transparent mesh, 1 = water, 2 = cloud.
+        // 0 = transparent mesh, 1 = water, 2 = cloud, 3 = textured transparent
+        // mesh.
         let mut current: Option<u8> = None;
         for entry in blended {
             match *entry {
                 Blended::Mesh(index) => {
                     let Some(objects) = &self.objects else { continue };
-                    if current != Some(0) {
-                        pass.set_pipeline(&self.transparent_pipeline);
+                    let material = material_keys[index];
+                    let kind = if material.is_some() { 3 } else { 0 };
+                    if current != Some(kind) {
+                        pass.set_pipeline(if material.is_some() {
+                            &self.textured_transparent_pipeline
+                        } else {
+                            &self.transparent_pipeline
+                        });
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
                         pass.set_bind_group(2, frame_textures, &[]);
-                        current = Some(0);
+                        current = Some(kind);
                     }
                     let mesh = &self.meshes[&keys[index]];
                     pass.set_bind_group(
@@ -2515,6 +2943,10 @@ impl SceneRenderer {
                     );
                     pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                     pass.set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
+                    if let Some(key) = material {
+                        pass.set_bind_group(3, &self.materials[&key].bind_group, &[]);
+                        pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
+                    }
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
@@ -2588,6 +3020,147 @@ impl SceneRenderer {
             pass.set_pipeline(&self.additive_particle_pipeline);
             pass.draw(0..6, alpha_particles..particle_count);
         }
+    }
+
+    /// Upload a material map with its whole mip chain if this is the first time
+    /// it has been seen, and return its cache key.
+    ///
+    /// The chain was generated on the CPU at load — see
+    /// `engine_core::texture::TextureData` for why — so this is a write per
+    /// level and no blit chain. The **format is decided by the colour space the
+    /// slot loaded it in**, which is the one place that decision becomes a GPU
+    /// fact: sRGB for a colour map so the sampler decodes, linear for data.
+    fn upload_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        data: &Arc<engine_core::texture::TextureData>,
+    ) -> usize {
+        let key = Arc::as_ptr(data) as usize;
+        let frame_index = self.frame_index;
+        self.textures
+            .entry(key)
+            .and_modify(|texture| texture.last_used = frame_index)
+            .or_insert_with(|| {
+                let format = match data.space {
+                    engine_core::texture::ColorSpace::Srgb => wgpu::TextureFormat::Rgba8UnormSrgb,
+                    engine_core::texture::ColorSpace::Linear => wgpu::TextureFormat::Rgba8Unorm,
+                };
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("material-map"),
+                    size: wgpu::Extent3d {
+                        width: data.width,
+                        height: data.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: data.mips.len() as u32,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                for (level, pixels) in data.mips.iter().enumerate() {
+                    let (width, height) = data.level_size(level);
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &texture,
+                            mip_level: level as u32,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        pixels,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(width * 4),
+                            rows_per_image: None,
+                        },
+                        wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                CachedTexture {
+                    _source: Arc::clone(data),
+                    view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    last_used: frame_index,
+                }
+            });
+        key
+    }
+
+    /// The bind group for one material's maps, uploading anything new.
+    ///
+    /// Returns `None` for a material with no maps at all — such a draw goes to
+    /// the plain pipeline, which has no group 3 to bind.
+    fn ensure_material(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        maps: &engine_core::texture::MaterialTextures,
+    ) -> Option<[usize; 4]> {
+        if !maps.any() {
+            return None;
+        }
+        let slots = [&maps.albedo, &maps.orm, &maps.normal, &maps.emissive];
+        let key = slots.map(|slot| match slot {
+            Some(data) => self.upload_texture(device, queue, data),
+            None => 0,
+        });
+
+        let frame_index = self.frame_index;
+        if let Some(held) = self.materials.get_mut(&key) {
+            held.last_used = frame_index;
+            return Some(key);
+        }
+
+        if self.white_texture.is_none() {
+            self.white_texture = Some(white_texture(device, queue));
+        }
+        let white = self.white_texture.as_ref().expect("just made");
+        let views: Vec<&wgpu::TextureView> = key
+            .iter()
+            .map(|slot| match self.textures.get(slot) {
+                Some(texture) => &texture.view,
+                None => white,
+            })
+            .collect();
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material-maps"),
+            layout: &self.material_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(views[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(views[2]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(views[3]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.map_sampler),
+                },
+            ],
+        });
+        self.materials.insert(
+            key,
+            CachedMaterial {
+                bind_group,
+                last_used: frame_index,
+            },
+        );
+        Some(key)
     }
 
     /// Upload `geometry` if this is the first time it has been seen, and
@@ -2939,95 +3512,240 @@ fn with_sky_common(source: &str) -> std::borrow::Cow<'static, str> {
     std::borrow::Cow::Owned(combined)
 }
 
-/// The mesh shader with terrain's generative material spliced in (M22).
+// ── The surface-resolution seam ──────────────────────────────────────────────
+//
+// M22 discovered this extension point and did not name it; M26 has a second
+// producer at it, so it is named here.
+//
+// Everything in `mesh.wgsl` after a surface is resolved — the GGX lobe, the
+// shadow lookup, the sky ambient, the point-light loop, the fog, the blend — is
+// shared, and what varies is only where `albedo`, `metallic`, `roughness`,
+// `emissive` and the shading normal come from. A producer supplies those; the
+// lighting body never changes.
+//
+// What a producer may *not* do is edit `mesh.wgsl`: M16's four untouchable lines
+// have to reach the compiler surrounded by the code they already shipped in, and
+// putting terrain's branch inline moved one pixel by one unit in each of three
+// committed fixtures (see `shaders/terrain.wgsl`). So the file on disk stays
+// what it was, the plain mesh pipeline compiles it unchanged — byte-identical by
+// construction, not by measurement — and a variant is assembled by anchored
+// substitution. Every anchor is asserted to appear exactly once: reword
+// `mesh.wgsl` and this fails loudly at startup rather than silently rendering
+// terrain as flat grey or a texture as untextured.
+
+/// The anchors a producer may replace, as they appear in `mesh.wgsl`.
+mod anchor {
+    /// The object uniform's last field, where a variant appends its own.
+    pub const UNIFORM_TAIL: &str = "    // x = alpha, y = transmission; z and w unused.\n\
+                                    \x20   surface: vec4<f32>,\n\
+                                    };\n";
+    /// The whole vertex stage, for a producer that needs another attribute.
+    pub const VERTEX_STAGE: &str = "struct VertexOut {\n\
+        \x20   @builtin(position) clip_position: vec4<f32>,\n\
+        \x20   @location(0) world_position: vec3<f32>,\n\
+        \x20   @location(1) normal: vec3<f32>,\n\
+        };\n\
+        \n\
+        @vertex\n\
+        fn vs_main(\n\
+        \x20   @location(0) position: vec3<f32>,\n\
+        \x20   @location(1) normal: vec3<f32>,\n\
+        ) -> VertexOut {\n\
+        \x20   var out: VertexOut;\n\
+        \x20   out.clip_position = object.mvp * vec4<f32>(position, 1.0);\n\
+        \x20   out.world_position = (object.model * vec4<f32>(position, 1.0)).xyz;\n\
+        \x20   out.normal = (object.normal_matrix * vec4<f32>(normal, 0.0)).xyz;\n\
+        \x20   return out;\n\
+        }\n";
+    /// The fragment prologue: where albedo, metallic and emissive come from.
+    pub const PROLOGUE: &str = "    let albedo = object.albedo_metallic.rgb;\n\
+                                \x20   let metallic = object.albedo_metallic.w;\n\
+                                \x20   let emissive = object.emissive_roughness.rgb;\n";
+    pub const NORMAL: &str = "    let n = normalize(in.normal);\n";
+    pub const ROUGHNESS: &str = "    let roughness = max(object.emissive_roughness.w, 0.045);\n";
+    /// One of M16's four untouchable lines. A variant may replace it —
+    /// the plain pipeline still compiles the file as it sits on disk — and
+    /// occlusion is the only thing that has ever needed to.
+    pub const AMBIENT: &str = "    let ambient = albedo * frame.ambient.rgb;\n";
+    /// Its counterpart inside the sky branch.
+    pub const FILL: &str = "            fill = albedo * hemisphere;\n";
+}
+
+/// The types the extended object uniform's tail names, declared by every
+/// variant because its field *offsets* are positional — a variant that skipped
+/// the terrain table would read the material's UV transform where the table is.
+const EXTENDED_UNIFORM_TYPES: &str = "const MAX_TERRAIN_LAYERS: u32 = 4u;\n\
+    \n\
+    // One material a terrain paints itself with, claiming a band of world\n\
+    // height and a band of slope (M22).\n\
+    struct TerrainLayer {\n\
+    \x20   // rgb = linear albedo, w = roughness.\n\
+    \x20   albedo_roughness: vec4<f32>,\n\
+    \x20   // x, y = world-Y band in metres; z, w = slope band in degrees.\n\
+    \x20   bands: vec4<f32>,\n\
+    \x20   // x = height fade in metres, y = boundary jitter, z = slope fade\n\
+    \x20   // in degrees; w unused.\n\
+    \x20   blend_noise: vec4<f32>,\n\
+    };\n";
+
+/// The extended object uniform every spliced variant declares.
 ///
-/// Terrain is lit exactly like a mesh — the same GGX lobe, shadow lookup, sky
-/// ambient, point lights and fog — so it shares `mesh.wgsl` rather than
-/// duplicating two hundred lines that would then have to stay in lockstep
-/// forever. What it may not do is *edit* that file: M16's four untouchable lines
-/// have to reach the compiler surrounded by the code they already shipped in,
-/// and putting the branch inline moved one pixel by one unit in each of three
-/// committed fixtures (see `shaders/terrain.wgsl`).
+/// One tail rather than one per producer, because uniform field offsets are
+/// positional: a variant that declared only *its* fields would read terrain's
+/// layer table where the material's UV transform is. Each producer uses what it
+/// needs and ignores the rest; the plain pipeline declares none of it and reads
+/// the shorter struct out of the same buffer, which is legal precisely because
+/// every field it does read is at the offset it always was.
+const EXTENDED_UNIFORM_TAIL: &str = "    // x = alpha, y = transmission; z and w unused.\n\
+    \x20   surface: vec4<f32>,\n\
+    \x20   // Terrain (M22), appended at the end so every field above keeps\n\
+    \x20   // the offset the shader already reads it from. x = live layer\n\
+    \x20   // count, y = texture scale in metres, z = colour variation,\n\
+    \x20   // w = bump.\n\
+    \x20   terrain: vec4<f32>,\n\
+    \x20   // x = the terrain's seed; y, z, w unused.\n\
+    \x20   terrain_seed: vec4<u32>,\n\
+    \x20   terrain_layers: array<TerrainLayer, MAX_TERRAIN_LAYERS>,\n\
+    \x20   // Material maps (M26): xy = uv scale, zw = uv offset.\n\
+    \x20   map_uv: vec4<f32>,\n\
+    \x20   // x = which maps are bound (bit 0 albedo, 1 orm, 2 normal,\n\
+    \x20   // 3 emissive), y = alpha cutoff, z = normal strength, w = ior.\n\
+    \x20   map_params: vec4<f32>,\n\
+    \x20   // x = thickness in metres; yzw = per-channel attenuation.\n\
+    \x20   map_volume: vec4<f32>,\n\
+    };\n";
+
+/// Assemble a variant of the mesh shader: the shared lighting body, with one
+/// producer spliced in at the surface-resolution seam.
 ///
-/// So the file on disk stays the pre-M22 one, the plain mesh pipeline compiles
-/// it unchanged — byte-identical by construction, not by measurement — and this
-/// builds the terrain variant by two anchored substitutions. Both anchors are
-/// asserted: if `mesh.wgsl` is ever reworded, this fails loudly at startup
-/// rather than silently rendering terrain as flat grey.
-fn with_terrain(source: &str) -> std::borrow::Cow<'static, str> {
-    // 1. The object uniform grows the layer table at its end, where it leaves
-    //    every prior field at the offset the shader already reads it from.
-    const UNIFORM_TAIL: &str = "    // x = alpha, y = transmission; z and w unused.\n\
-                                \x20   surface: vec4<f32>,\n\
-                                };\n";
-    // 2. The fragment prologue resolves its surface through the generator
-    //    instead of reading the material directly.
-    const PROLOGUE: &str = "    let albedo = object.albedo_metallic.rgb;\n\
-                            \x20   let metallic = object.albedo_metallic.w;\n\
-                            \x20   let emissive = object.emissive_roughness.rgb;\n";
-    const NORMAL: &str = "    let n = normalize(in.normal);\n";
-    const ROUGHNESS: &str = "    let roughness = max(object.emissive_roughness.w, 0.045);\n";
+/// `prelude` goes ahead of the object uniform (a producer's own declarations
+/// often reference its fields); `substitutions` are (anchor, replacement) pairs.
+fn with_surface(prelude: &str, substitutions: &[(&str, &str)]) -> std::borrow::Cow<'static, str> {
+    let source = include_str!("shaders/mesh.wgsl");
 
     let mut out = source.to_string();
-    for (what, anchor) in [
-        ("the object uniform's tail", UNIFORM_TAIL),
-        ("the fragment prologue", PROLOGUE),
-        ("the surface normal", NORMAL),
-        ("the roughness floor", ROUGHNESS),
-    ] {
+    for (anchor, _) in substitutions.iter().chain(std::iter::once(&(
+        anchor::UNIFORM_TAIL,
+        EXTENDED_UNIFORM_TAIL,
+    ))) {
         assert_eq!(
             source.matches(anchor).count(),
             1,
-            "mesh.wgsl no longer contains {what} exactly once; \
-             with_terrain splices against it and must be updated with it"
+            "mesh.wgsl no longer contains this anchor exactly once, so a spliced \
+             pipeline variant would compile as if its feature were absent:\n{anchor}"
         );
     }
 
-    out = out.replace(
-        UNIFORM_TAIL,
-        "    // x = alpha, y = transmission; z and w unused.\n\
-         \x20   surface: vec4<f32>,\n\
-         \x20   // Terrain (M22), appended at the end so every field above keeps\n\
-         \x20   // the offset the shader already reads it from. x = live layer\n\
-         \x20   // count, y = texture scale in metres, z = colour variation,\n\
-         \x20   // w = bump.\n\
-         \x20   terrain: vec4<f32>,\n\
-         \x20   // x = the terrain's seed; y, z, w unused.\n\
-         \x20   terrain_seed: vec4<u32>,\n\
-         \x20   terrain_layers: array<TerrainLayer, MAX_TERRAIN_LAYERS>,\n\
-         };\n",
-    );
-
-    // The generator's own declarations go ahead of the uniform that now holds
-    // its layer table.
+    out = out.replace(anchor::UNIFORM_TAIL, EXTENDED_UNIFORM_TAIL);
     out = out.replace(
         "struct ObjectUniform {",
-        &format!(
-            "{}\nstruct ObjectUniform {{",
-            include_str!("shaders/terrain.wgsl")
-        ),
+        &format!("{EXTENDED_UNIFORM_TYPES}\n{prelude}\nstruct ObjectUniform {{"),
     );
-
-    out = out.replace(
-        PROLOGUE,
-        "    let generated = terrain_surface(\n\
-         \x20       in.world_position,\n\
-         \x20       normalize(in.normal),\n\
-         \x20       length(frame.camera_pos.xyz - in.world_position),\n\
-         \x20       object.albedo_metallic.rgb,\n\
-         \x20       object.emissive_roughness.w,\n\
-         \x20   );\n\
-         \x20   let albedo = generated.albedo;\n\
-         \x20   let metallic = object.albedo_metallic.w;\n\
-         \x20   let emissive = object.emissive_roughness.rgb;\n",
-    );
-    out = out.replace(NORMAL, "    let n = generated.normal;\n");
-    out = out.replace(
-        ROUGHNESS,
-        "    let roughness = max(generated.roughness, 0.045);\n",
-    );
+    for (anchor, replacement) in substitutions {
+        out = out.replace(anchor, replacement);
+    }
 
     std::borrow::Cow::Owned(out)
+}
+
+/// The mesh shader with terrain's generative material spliced in (M22).
+fn with_terrain() -> std::borrow::Cow<'static, str> {
+    with_surface(
+        include_str!("shaders/terrain.wgsl"),
+        &[
+            (
+                anchor::PROLOGUE,
+                "    let generated = terrain_surface(\n\
+                 \x20       in.world_position,\n\
+                 \x20       normalize(in.normal),\n\
+                 \x20       length(frame.camera_pos.xyz - in.world_position),\n\
+                 \x20       object.albedo_metallic.rgb,\n\
+                 \x20       object.emissive_roughness.w,\n\
+                 \x20   );\n\
+                 \x20   let albedo = generated.albedo;\n\
+                 \x20   let metallic = object.albedo_metallic.w;\n\
+                 \x20   let emissive = object.emissive_roughness.rgb;\n",
+            ),
+            (anchor::NORMAL, "    let n = generated.normal;\n"),
+            (
+                anchor::ROUGHNESS,
+                "    let roughness = max(generated.roughness, 0.045);\n",
+            ),
+        ],
+    )
+}
+
+/// The mesh shader with texture sampling spliced in (M26).
+///
+/// The second producer at the seam, and the one that proves the seam is worth
+/// naming: it needs a vertex attribute the plain stage does not carry, and it
+/// touches the occlusion half of the ambient terms, and it still shares every
+/// line of the lighting body.
+fn with_textures() -> std::borrow::Cow<'static, str> {
+    with_surface(
+        include_str!("shaders/textured.wgsl"),
+        &[
+            (
+                anchor::VERTEX_STAGE,
+                "struct VertexOut {\n\
+                 \x20   @builtin(position) clip_position: vec4<f32>,\n\
+                 \x20   @location(0) world_position: vec3<f32>,\n\
+                 \x20   @location(1) normal: vec3<f32>,\n\
+                 \x20   @location(2) uv: vec2<f32>,\n\
+                 };\n\
+                 \n\
+                 @vertex\n\
+                 fn vs_main(\n\
+                 \x20   @location(0) position: vec3<f32>,\n\
+                 \x20   @location(1) normal: vec3<f32>,\n\
+                 \x20   @location(2) uv: vec2<f32>,\n\
+                 ) -> VertexOut {\n\
+                 \x20   var out: VertexOut;\n\
+                 \x20   out.clip_position = object.mvp * vec4<f32>(position, 1.0);\n\
+                 \x20   out.world_position = (object.model * vec4<f32>(position, 1.0)).xyz;\n\
+                 \x20   out.normal = (object.normal_matrix * vec4<f32>(normal, 0.0)).xyz;\n\
+                 \x20   out.uv = uv * object.map_uv.xy + object.map_uv.zw;\n\
+                 \x20   return out;\n\
+                 }\n",
+            ),
+            (
+                anchor::PROLOGUE,
+                "    let sampled = sample_maps(in.uv);\n\
+                 \x20   // A cut pixel leaves before anything is lit — and its\n\
+                 \x20   // shadow leaves through the caster pipeline that runs\n\
+                 \x20   // this same test.\n\
+                 \x20   if object.map_params.y > 0.0 && sampled.alpha < object.map_params.y {\n\
+                 \x20       discard;\n\
+                 \x20   }\n\
+                 \x20   let albedo = object.albedo_metallic.rgb * sampled.albedo;\n\
+                 \x20   let metallic = object.albedo_metallic.w * sampled.metallic;\n\
+                 \x20   let emissive = object.emissive_roughness.rgb * sampled.emissive;\n",
+            ),
+            (
+                anchor::NORMAL,
+                "    let n = perturb_normal(\n\
+                 \x20       normalize(in.normal),\n\
+                 \x20       in.world_position,\n\
+                 \x20       in.uv,\n\
+                 \x20   );\n",
+            ),
+            (
+                anchor::ROUGHNESS,
+                "    let roughness = max(object.emissive_roughness.w * sampled.roughness, 0.045);\n",
+            ),
+            // Occlusion multiplies the ambient terms and **never** the direct
+            // sun: that is the whole difference between ambient occlusion and a
+            // second shadow map.
+            (
+                anchor::AMBIENT,
+                "    let ambient = albedo * frame.ambient.rgb * sampled.occlusion;\n",
+            ),
+            (
+                anchor::FILL,
+                "            fill = albedo * hemisphere * sampled.occlusion;\n",
+            ),
+        ],
+    )
 }
 
 /// A buffer holding `contents`, created once and never rewritten — the shape
@@ -3291,5 +4009,35 @@ pub fn color_from(v: Vec3) -> wgpu::Color {
         g: v.y as f64,
         b: v.z as f64,
         a: 1.0,
+    }
+}
+
+#[cfg(test)]
+mod seam_tests {
+    /// The anchors are asserted at pipeline build, but only for *presence*.
+    /// This pins that each producer's substitution actually landed — a splice
+    /// that silently did nothing renders the feature as if it were absent,
+    /// which is the failure mode hardest to spot in a render.
+    #[test]
+    fn every_producer_actually_replaces_what_it_claims() {
+        let terrain = super::with_terrain();
+        assert!(terrain.contains("let albedo = generated.albedo;"));
+        assert!(terrain.contains("let n = generated.normal;"));
+        assert!(terrain.contains("terrain_layers: array<TerrainLayer"));
+
+        let textured = super::with_textures();
+        for expected in [
+            "let sampled = sample_maps(in.uv);",
+            "sampled.metallic",
+            "sampled.roughness",
+            "sampled.occlusion",
+            "let n = perturb_normal(",
+            "@location(2) uv: vec2<f32>,",
+            "map_params: vec4<f32>,",
+        ] {
+            assert!(textured.contains(expected), "textured splice lost {expected:?}");
+        }
+        // And the shared lighting body is still the one from the file.
+        assert!(textured.contains("let base_color = direct + ambient + emissive;"));
     }
 }
