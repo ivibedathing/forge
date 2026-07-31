@@ -277,20 +277,17 @@ struct HudTarget {
 /// `Depth32Float` (possibly multisampled) → single-sampled `R32Float`. Water is
 /// the only thing that reads it, so it is allocated the first time a scene has
 /// any, and resized when the target does.
+///
+/// Since M26 the view rides in the shared frame-textures group rather than in a
+/// group of its own — see [`FrameTextures`].
 struct SceneDepth {
     view: wgpu::TextureView,
-    bind_group: wgpu::BindGroup,
     width: u32,
     height: u32,
 }
 
 impl SceneDepth {
-    fn new(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        width: u32,
-        height: u32,
-    ) -> Self {
+    fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scene-depth-copy"),
             size: wgpu::Extent3d {
@@ -308,17 +305,8 @@ impl SceneDepth {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("scene-depth-copy"),
-            layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            }],
-        });
         Self {
             view,
-            bind_group,
             width: width.max(1),
             height: height.max(1),
         }
@@ -328,21 +316,100 @@ impl SceneDepth {
     /// Exact rather than grow-only: the shader converts pixel coordinates to
     /// UVs with this texture's own dimensions, so a stale larger copy would
     /// read the wrong pixels rather than merely waste memory.
-    fn ensure<'a>(
-        slot: &'a mut Option<Self>,
+    ///
+    /// Returns whether it reallocated, which is what tells the frame-textures
+    /// bind group that it has to be rebuilt.
+    fn ensure(
+        slot: &mut Option<Self>,
         device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
         width: u32,
         height: u32,
-    ) -> &'a Self {
+    ) -> bool {
         let fits = slot
             .as_ref()
             .is_some_and(|held| held.width == width.max(1) && held.height == height.max(1));
         if !fits {
-            *slot = Some(Self::new(device, layout, width, height));
+            *slot = Some(Self::new(device, width, height));
         }
-        slot.as_ref().expect("just ensured")
+        !fits
     }
+}
+
+/// The opaque pass's colour, copied where a refracting surface can read it
+/// (M26). Allocated the first time a scene refracts anything and resized with
+/// the target, exactly like [`SceneDepth`], and for the same reason: a pass
+/// cannot sample the colour attachment it is drawing into.
+struct SceneColor {
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+}
+
+impl SceneColor {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("scene-color-copy"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            view,
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+
+    fn ensure(
+        slot: &mut Option<Self>,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> bool {
+        let fits = slot
+            .as_ref()
+            .is_some_and(|held| held.width == width.max(1) && held.height == height.max(1));
+        if !fits {
+            *slot = Some(Self::new(device, format, width, height));
+        }
+        !fits
+    }
+}
+
+/// Group 2 for every lit pipeline: the shadow map, the depth copy, and the
+/// colour copy, with their samplers (M26).
+///
+/// They were three groups only because they arrived in three milestones, and
+/// three of four slots is what the budget could not afford — see
+/// `designs/material-system-design.md` §3. Every one of them is frame-scoped:
+/// written once per frame, read by everything, rebuilt only when the render
+/// target resizes or a scene starts casting shadows.
+///
+/// The bind group is cached against `key` so the steady-state frame rebuilds
+/// nothing; a 1×1 placeholder stands in for each texture the frame does not
+/// have, since WGSL binds unconditionally while the reads sit behind a branch.
+struct FrameTextures {
+    bind_group: wgpu::BindGroup,
+    key: FrameTextureKey,
+}
+
+/// What a cached [`FrameTextures`] was built from. The sizes are the copies'
+/// own dimensions, so a resize invalidates the group by construction.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FrameTextureKey {
+    shadows: bool,
+    depth: Option<(u32, u32)>,
+    color: Option<(u32, u32)>,
 }
 
 /// Resolution of the directional shadow map, in texels on a side.
@@ -353,7 +420,7 @@ impl SceneDepth {
 /// for 8192² and blame the engine for the memory.
 const SHADOW_MAP_SIZE: u32 = 2048;
 
-/// The shadow map and the bind group naming it.
+/// The shadow map.
 ///
 /// A 1×1 placeholder stands in when a scene does not cast shadows: WGSL binds
 /// the texture unconditionally, but the sampling is behind `params.y`, so
@@ -361,11 +428,10 @@ const SHADOW_MAP_SIZE: u32 = 2048;
 /// mesh pipeline for both cases instead of two shader permutations.
 struct ShadowMap {
     view: wgpu::TextureView,
-    bind_group: wgpu::BindGroup,
 }
 
 impl ShadowMap {
-    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: u32) -> Self {
+    fn new(device: &wgpu::Device, size: u32) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shadow-map"),
             size: wgpu::Extent3d {
@@ -381,32 +447,33 @@ impl ShadowMap {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("shadow-sampler"),
-            // Linear filtering on a comparison sampler is hardware PCF: each
-            // tap already returns a bilinear blend of four depth *tests*, so
-            // the 3×3 kernel in the shader is effectively 6×6 for free.
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            compare: Some(wgpu::CompareFunction::LessEqual),
-            ..Default::default()
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("shadow-bind-group"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-        Self { view, bind_group }
+        Self { view }
     }
+}
+
+/// A 1×1 texture of `format`, bound wherever a frame does not have the real
+/// thing. Never read: every sampler of it sits behind a branch that is off.
+fn placeholder_texture(
+    device: &wgpu::Device,
+    label: &str,
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 /// Everything one scene render needs beyond the device and queue.
@@ -485,7 +552,6 @@ pub struct SceneRenderer {
     depth_resolve_pipeline: wgpu::RenderPipeline,
     water_layout: wgpu::BindGroupLayout,
     cloud_layout: wgpu::BindGroupLayout,
-    scene_depth_layout: wgpu::BindGroupLayout,
     depth_source_layout: wgpu::BindGroupLayout,
     particle_pipeline: wgpu::RenderPipeline,
     /// Same shader and same instance buffer as `particle_pipeline`, blending
@@ -494,13 +560,25 @@ pub struct SceneRenderer {
     object_layout: wgpu::BindGroupLayout,
     hud_pipeline: wgpu::RenderPipeline,
     hud_layout: wgpu::BindGroupLayout,
-    shadow_layout: wgpu::BindGroupLayout,
+    /// Group 2 everywhere: shadow map, depth copy, colour copy. See
+    /// [`FrameTextures`].
+    frame_textures_layout: wgpu::BindGroupLayout,
+    /// The comparison sampler for the shadow map and the linear one for the
+    /// colour copy. Created once — one sampler per configuration, not one per
+    /// texture.
+    shadow_sampler: wgpu::Sampler,
+    scene_sampler: wgpu::Sampler,
     format: wgpu::TextureFormat,
     samples: u32,
 
     // Everything below persists across frames; see the module doc.
     /// Bound whenever shadows are off. See [`ShadowMap`].
     shadow_placeholder: ShadowMap,
+    /// Bound whenever the frame has no depth or colour copy.
+    depth_placeholder: wgpu::TextureView,
+    color_placeholder: wgpu::TextureView,
+    /// The cached group-2 binding, rebuilt only when one of its textures is.
+    frame_textures: Option<FrameTextures>,
     /// The real map, allocated the first time a scene casts shadows so that
     /// scenes which never do pay nothing for it.
     shadow_map: Option<ShadowMap>,
@@ -526,6 +604,9 @@ pub struct SceneRenderer {
     /// The opaque depth copy the water pass reads, allocated on the first frame
     /// that has any water in it and resized with the target.
     scene_depth: Option<SceneDepth>,
+    /// The opaque colour copy a refracting surface reads (M26), allocated on
+    /// the first frame that has one and resized with the target.
+    scene_color: Option<SceneColor>,
     /// Bind group naming the *source* depth attachment for the resolve pass.
     /// Rebuilt whenever the depth view changes, which is every frame in the
     /// viewer (the swapchain hands out a new one) and once in a screenshot.
@@ -587,36 +668,74 @@ impl SceneRenderer {
         );
         let frame_layout = uniform_layout("frame-uniforms", None);
 
-        // Group 2: the shadow map and its comparison sampler. Always present
-        // in the layout even when a scene casts no shadows — see `ShadowMap`.
-        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("shadow-map"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+        // Group 2: the frame's textures — the shadow map and its comparison
+        // sampler, the opaque depth copy, and the opaque colour copy with the
+        // sampler that reads it (M26). Every entry is always present in the
+        // layout even when the frame has none of them: a bind group layout may
+        // contain entries the shader never references, and the reverse is the
+        // error, so `mesh.wgsl` keeps declaring only bindings 0 and 1 and stays
+        // the file it has been since M4.
+        //
+        // Merging these was a bind-group-budget decision, not a tidiness one:
+        // `downlevel_defaults` caps `max_bind_groups` at 4, and three of them
+        // spent on frame-scoped textures left nowhere for a material.
+        let frame_textures_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("frame-textures"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                    count: None,
-                },
-            ],
-        });
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            // Read with `textureLoad`: no sampler, so nothing
+                            // filters depth across a silhouette.
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh-pipeline-layout"),
             bind_group_layouts: &[
                 Some(&object_layout),
                 Some(&frame_layout),
-                Some(&shadow_layout),
+                Some(&frame_textures_layout),
             ],
             immediate_size: 0,
         });
@@ -787,33 +906,19 @@ impl SceneRenderer {
             Self::shadow_pipeline(device, &object_layout, &frame_layout, &vertex_layouts[..1]);
         let sky_pipeline = Self::sky_pipeline(device, &frame_layout, format, multisample);
 
-        // Water (M18). Its own uniform, its own shader, the mesh pass's frame
-        // and shadow bindings, plus the resolved scene depth at group 3.
+        // Water (M18). Its own uniform, its own shader, and the mesh pass's
+        // frame and frame-texture bindings — the depth it absorbs against
+        // arrives in group 2 with the shadow map since M26, which is what frees
+        // its group 3.
         let water_layout = uniform_layout(
             "water-uniforms",
             Some(std::mem::size_of::<WaterUniform>() as u64),
         );
-        let scene_depth_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("scene-depth"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    // Read with `textureLoad`: no sampler, so nothing filters
-                    // depth across a silhouette.
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
         let water_pipeline = Self::water_pipeline(
             device,
             &water_layout,
             &frame_layout,
-            &shadow_layout,
-            &scene_depth_layout,
+            &frame_textures_layout,
             // Position only: the grid's stored normals are the flat ones, and
             // the real normal comes from the wave derivatives.
             &vertex_layouts[..1],
@@ -848,7 +953,7 @@ impl SceneRenderer {
             device,
             &object_layout,
             &frame_layout,
-            &shadow_layout,
+            &frame_textures_layout,
             &road_layout,
             &vertex_layouts,
             format,
@@ -993,7 +1098,30 @@ impl SceneRenderer {
         let object_stride =
             std::mem::size_of::<ObjectUniform>().next_multiple_of(alignment as usize) as u64;
 
-        let shadow_placeholder = ShadowMap::new(device, &shadow_layout, 1);
+        let shadow_placeholder = ShadowMap::new(device, 1);
+        let depth_placeholder =
+            placeholder_texture(device, "scene-depth-placeholder", wgpu::TextureFormat::R32Float);
+        let color_placeholder = placeholder_texture(device, "scene-color-placeholder", format);
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow-sampler"),
+            // Linear filtering on a comparison sampler is hardware PCF: each
+            // tap already returns a bilinear blend of four depth *tests*, so
+            // the 3×3 kernel in the shader is effectively 6×6 for free.
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let scene_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("scene-color-sampler"),
+            // Clamped, because a refraction offset that runs off the frame has
+            // no data to read and the honest failure is a stretched edge.
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         let water_stride =
             std::mem::size_of::<WaterUniform>().next_multiple_of(alignment as usize) as u64;
@@ -1017,17 +1145,21 @@ impl SceneRenderer {
             depth_resolve_pipeline,
             water_layout,
             cloud_layout,
-            scene_depth_layout,
             depth_source_layout,
             particle_pipeline,
             additive_particle_pipeline,
             object_layout,
             hud_pipeline,
             hud_layout,
-            shadow_layout,
+            frame_textures_layout,
+            shadow_sampler,
+            scene_sampler,
             format,
             samples,
             shadow_placeholder,
+            depth_placeholder,
+            color_placeholder,
+            frame_textures: None,
             shadow_map: None,
             meshes: HashMap::new(),
             frame_uniform,
@@ -1038,6 +1170,7 @@ impl SceneRenderer {
             cloud_objects: None,
             cloud_stride,
             scene_depth: None,
+            scene_color: None,
             depth_source: None,
             particle_instances: None,
             particle_uniform,
@@ -1175,8 +1308,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         water_layout: &wgpu::BindGroupLayout,
         frame_layout: &wgpu::BindGroupLayout,
-        shadow_layout: &wgpu::BindGroupLayout,
-        scene_depth_layout: &wgpu::BindGroupLayout,
+        frame_textures_layout: &wgpu::BindGroupLayout,
         vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
         format: wgpu::TextureFormat,
         multisample: wgpu::MultisampleState,
@@ -1190,8 +1322,7 @@ impl SceneRenderer {
             bind_group_layouts: &[
                 Some(water_layout),
                 Some(frame_layout),
-                Some(shadow_layout),
-                Some(scene_depth_layout),
+                Some(frame_textures_layout),
             ],
             immediate_size: 0,
         });
@@ -1313,7 +1444,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         object_layout: &wgpu::BindGroupLayout,
         frame_layout: &wgpu::BindGroupLayout,
-        shadow_layout: &wgpu::BindGroupLayout,
+        frame_textures_layout: &wgpu::BindGroupLayout,
         road_layout: &wgpu::BindGroupLayout,
         vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
         format: wgpu::TextureFormat,
@@ -1328,7 +1459,7 @@ impl SceneRenderer {
             bind_group_layouts: &[
                 Some(object_layout),
                 Some(frame_layout),
-                Some(shadow_layout),
+                Some(frame_textures_layout),
                 Some(road_layout),
             ],
             immediate_size: 0,
@@ -1572,11 +1703,7 @@ impl SceneRenderer {
 
         // Shadows need a real map; allocate it the first time any scene asks.
         if environment.shadows && self.shadow_map.is_none() {
-            self.shadow_map = Some(ShadowMap::new(
-                device,
-                &self.shadow_layout,
-                SHADOW_MAP_SIZE,
-            ));
+            self.shadow_map = Some(ShadowMap::new(device, SHADOW_MAP_SIZE));
         }
         let light_view_proj = if environment.shadows {
             light_view_projection(
@@ -2019,13 +2146,7 @@ impl SceneRenderer {
         // keeps every baseline blessed before this milestone bit-exact.
         let water_present = !water.is_empty();
         if water_present {
-            SceneDepth::ensure(
-                &mut self.scene_depth,
-                device,
-                &self.scene_depth_layout,
-                target_size[0],
-                target_size[1],
-            );
+            SceneDepth::ensure(&mut self.scene_depth, device, target_size[0], target_size[1]);
             // The source view changes every frame in the viewer (a new
             // swapchain-sized depth texture on resize) and cannot be compared
             // for identity, so this bind group is rebuilt rather than cached.
@@ -2040,6 +2161,15 @@ impl SceneRenderer {
                 }],
             }));
         }
+
+        // Group 2 for every lit pipeline, rebuilt only when one of its textures
+        // was — allocating the shadow map, or a resize reallocating a copy.
+        self.ensure_frame_textures(device, environment.shadows);
+        let frame_textures = &self
+            .frame_textures
+            .as_ref()
+            .expect("just ensured")
+            .bind_group;
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2080,14 +2210,9 @@ impl SceneRenderer {
                 pass.draw(0..3, 0..1);
             }
 
-            let shadows = match (environment.shadows, &self.shadow_map) {
-                (true, Some(map)) => map,
-                _ => &self.shadow_placeholder,
-            };
-
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-            pass.set_bind_group(2, &shadows.bind_group, &[]);
+            pass.set_bind_group(2, frame_textures, &[]);
 
             if let Some(objects) = &self.objects {
                 let draw = |pass: &mut wgpu::RenderPass<'_>, index: usize| {
@@ -2155,7 +2280,7 @@ impl SceneRenderer {
             {
                 pass.set_pipeline(&self.road_pipeline);
                 pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-                pass.set_bind_group(2, &shadows.bind_group, &[]);
+                pass.set_bind_group(2, frame_textures, &[]);
                 for (index, _) in roads.iter().enumerate() {
                     let mesh = &self.meshes[&road_keys[index]];
                     pass.set_bind_group(
@@ -2183,7 +2308,14 @@ impl SceneRenderer {
             // itself. With water in the scene this waits for the second pass,
             // where the depth behind the water is readable.
             if !water_present {
-                self.draw_blended(&mut pass, &blended, &keys, &water_keys, &cloud_keys, shadows);
+                self.draw_blended(
+                    &mut pass,
+                    &blended,
+                    &keys,
+                    &water_keys,
+                    &cloud_keys,
+                    frame_textures,
+                );
                 self.draw_particles(&mut pass, particle_count, alpha_particles);
             }
         }
@@ -2238,11 +2370,14 @@ impl SceneRenderer {
                 multiview_mask: None,
             });
 
-            let shadows = match (environment.shadows, &self.shadow_map) {
-                (true, Some(map)) => map,
-                _ => &self.shadow_placeholder,
-            };
-            self.draw_blended(&mut pass, &blended, &keys, &water_keys, &cloud_keys, shadows);
+            self.draw_blended(
+                &mut pass,
+                &blended,
+                &keys,
+                &water_keys,
+                &cloud_keys,
+                frame_textures,
+            );
             self.draw_particles(&mut pass, particle_count, alpha_particles);
         }
 
@@ -2285,14 +2420,72 @@ impl SceneRenderer {
             .retain(|_, mesh| frame_index - mesh.last_used < MESH_CACHE_LIFETIME);
     }
 
+    /// Build group 2 — the shadow map, the depth copy, the colour copy — if it
+    /// is not already the one this frame needs.
+    ///
+    /// The key is the identity of what it holds, so a steady-state frame
+    /// rebuilds nothing: the group changes when a scene starts casting shadows,
+    /// when a copy is first allocated, and when the target resizes.
+    fn ensure_frame_textures(&mut self, device: &wgpu::Device, shadows: bool) {
+        let shadows = shadows && self.shadow_map.is_some();
+        let key = FrameTextureKey {
+            shadows,
+            depth: self.scene_depth.as_ref().map(|d| (d.width, d.height)),
+            color: self.scene_color.as_ref().map(|c| (c.width, c.height)),
+        };
+        if self.frame_textures.as_ref().is_some_and(|held| held.key == key) {
+            return;
+        }
+
+        let shadow_view = match (shadows, &self.shadow_map) {
+            (true, Some(map)) => &map.view,
+            _ => &self.shadow_placeholder.view,
+        };
+        let depth_view = self
+            .scene_depth
+            .as_ref()
+            .map_or(&self.depth_placeholder, |copy| &copy.view);
+        let color_view = self
+            .scene_color
+            .as_ref()
+            .map_or(&self.color_placeholder, |copy| &copy.view);
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("frame-textures"),
+            layout: &self.frame_textures_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
+                },
+            ],
+        });
+        self.frame_textures = Some(FrameTextures { bind_group, key });
+    }
+
     /// Draw the blended list — transparent meshes and water surfaces
     /// interleaved, back-to-front.
     ///
-    /// Switching between the pipelines re-binds their groups, because the three
-    /// pipeline layouts differ (water has a fourth group, clouds have only
-    /// two) and a pipeline change with an incompatible layout invalidates what
-    /// was bound. Tracking the previous kind keeps that to one switch per run
-    /// of same-kind items.
+    /// Switching between the pipelines re-binds their groups, because the
+    /// pipeline layouts differ (clouds have only two groups) and a pipeline
+    /// change with an incompatible layout invalidates what was bound. Tracking
+    /// the previous kind keeps that to one switch per run of same-kind items.
     fn draw_blended(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -2300,7 +2493,7 @@ impl SceneRenderer {
         keys: &[usize],
         water_keys: &[usize],
         cloud_keys: &[usize],
-        shadows: &ShadowMap,
+        frame_textures: &wgpu::BindGroup,
     ) {
         // 0 = transparent mesh, 1 = water, 2 = cloud.
         let mut current: Option<u8> = None;
@@ -2311,7 +2504,7 @@ impl SceneRenderer {
                     if current != Some(0) {
                         pass.set_pipeline(&self.transparent_pipeline);
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-                        pass.set_bind_group(2, &shadows.bind_group, &[]);
+                        pass.set_bind_group(2, frame_textures, &[]);
                         current = Some(0);
                     }
                     let mesh = &self.meshes[&keys[index]];
@@ -2326,16 +2519,13 @@ impl SceneRenderer {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
                 Blended::Water(index) => {
-                    let (Some(surfaces), Some(scene_depth)) =
-                        (&self.water_objects, &self.scene_depth)
-                    else {
+                    let Some(surfaces) = &self.water_objects else {
                         continue;
                     };
                     if current != Some(1) {
                         pass.set_pipeline(&self.water_pipeline);
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-                        pass.set_bind_group(2, &shadows.bind_group, &[]);
-                        pass.set_bind_group(3, &scene_depth.bind_group, &[]);
+                        pass.set_bind_group(2, frame_textures, &[]);
                         current = Some(1);
                     }
                     let mesh = &self.meshes[&water_keys[index]];

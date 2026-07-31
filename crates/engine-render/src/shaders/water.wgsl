@@ -62,8 +62,11 @@ struct FrameUniform {
 @group(2) @binding(0) var shadow_map: texture_depth_2d;
 @group(2) @binding(1) var shadow_sampler: sampler_comparison;
 // The opaque pass's depth, resolved to a single-sampled R32Float copy. Sampled
-// with `textureLoad`, so there is no sampler and nothing filters it.
-@group(3) @binding(0) var scene_depth: texture_2d<f32>;
+// with `textureLoad`, so there is no sampler and nothing filters it. It rides
+// in the frame-textures group beside the shadow map since M26 — the two are
+// alike in every way that matters to a bind group, and the fourth slot they
+// were costing is what a material needs.
+@group(2) @binding(2) var scene_depth: texture_2d<f32>;
 
 const PI: f32 = 3.14159265358979;
 const TAU: f32 = 6.28318530717959;
