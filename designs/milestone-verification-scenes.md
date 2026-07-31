@@ -1222,6 +1222,29 @@ this fixture, which the `main` binary cannot parse.
 
 ---
 
+## M27 — The mouse: `verify/m27_pointer.json`
+
+A ground plane, two posts for depth, a marker disc, a sphere, and a button plate in the corner of
+the HUD, driven by `verify/m27_pointer.input.jsonl` — a committed cursor path with two held clicks.
+**Two baselines from one file**, at `--steps 40` and `--steps 80`: the first has the cursor
+mid-field with the click *away* from the button, the second has it on the plate with the button
+pressed and the sphere dropped on the marker.
+
+Per M22's rule the camera aims at its subject and there is no terrain in frame, so both carry a hard
+bit-exact pin; three consecutive renders came back `cmp`-identical.
+
+What it covers: the timeline's `cursor` field end to end, the inverse projection behind
+`world.cursor_ground` (the marker *is* the answer, drawn), `set_hud_offset` (the crosshair is two
+rects on the cursor's pixel), `world.mouse` as a held-state predicate, and a menu-style hit test in
+HUD pixels via `viewport_width`/`viewport_height`.
+
+**The bit-exactness half needed no A/B**: no renderer, shader or geometry code was touched — the
+milestone is input, script API and CLI plumbing — and `bin/verify-baselines` reported all 31
+pre-existing artifacts unchanged. (One artifact failed on the first of three sweeps and passed on
+both re-runs: the terrain/MSAA residue M22 documents.)
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):
@@ -1239,6 +1262,7 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 | M19 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M23 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M26 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M27 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)

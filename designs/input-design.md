@@ -79,6 +79,9 @@ game logic, and game logic lives in scripts.
 
 ## 7. Non-goals (v1)
 
+- **The mouse landed in M27** — see `designs/mouse-input-design.md`, which reverses the first
+  item below and nothing else: buttons ride the same `held` set, the cursor is a fraction of
+  the frame carried in the same timeline, and every principle in §2 above is unchanged.
 - No mouse, gamepad, or text input; no key-repeat or pressed/released edge queries (a script
   that needs edges compares against what it did last step via world state).
 - No input in `filmstrip` (it samples animation time, not steps) or the editor (the editor
