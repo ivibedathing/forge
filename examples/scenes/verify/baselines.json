@@ -297,6 +297,10 @@
         "--steps",
         "90"
       ],
+      "diff_args": [
+        "--threshold",
+        "24"
+      ],
       "width": 640,
       "height": 360,
       "milestone": "tour",
@@ -308,6 +312,10 @@
       "args": [
         "--steps",
         "270"
+      ],
+      "diff_args": [
+        "--threshold",
+        "24"
       ],
       "width": 640,
       "height": 360,
@@ -321,6 +329,10 @@
         "--steps",
         "450"
       ],
+      "diff_args": [
+        "--threshold",
+        "24"
+      ],
       "width": 640,
       "height": 360,
       "milestone": "tour",
@@ -332,6 +344,10 @@
       "args": [
         "--steps",
         "585"
+      ],
+      "diff_args": [
+        "--threshold",
+        "24"
       ],
       "width": 640,
       "height": 360,
@@ -361,6 +377,10 @@
         "--steps",
         "810"
       ],
+      "diff_args": [
+        "--threshold",
+        "24"
+      ],
       "width": 640,
       "height": 360,
       "milestone": "tour",
@@ -373,6 +393,18 @@
       "width": 640,
       "height": 360,
       "milestone": "M26",
+      "pinned_by": "hand"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m28_meadow.png",
+      "scene": "examples/scenes/verify/m28_meadow.json",
+      "args": [
+        "--time",
+        "0.7"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M28",
       "pinned_by": "hand"
     }
   ],

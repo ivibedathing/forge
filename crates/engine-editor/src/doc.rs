@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use engine_core::formatter::{self, AddComponent, AddEntity, RemoveComponent, SetComponentField};
-use engine_core::scene::{CloudItem, RenderItem, ResolvedLights, RoadItem, WaterItem};
+use engine_core::scene::{CloudItem, MeadowItem, RenderItem, ResolvedLights, RoadItem, WaterItem};
 use engine_core::{EngineError, Scene, SceneFile};
 
 /// How often the file is re-read. Well under the "reflects within a second"
@@ -42,6 +42,10 @@ pub struct SceneDoc {
     /// no time in it at all — the ribbon a screenshot shows is the ribbon the
     /// editor shows.
     pub roads: Vec<RoadItem>,
+    /// Meadows (M28). Shown at rest like clouds and roads: the life cycle is a
+    /// function of the clock, and the viewport's clock does not run, so what the
+    /// editor draws is the field frozen at the `phase` the file authored.
+    pub meadows: Vec<MeadowItem>,
     pub lights: ResolvedLights,
     /// The scene's own sky, fog and shadow settings, so the viewport shows
     /// what the file says rather than a house style â the editor is a view
@@ -70,6 +74,7 @@ impl SceneDoc {
             water: Vec::new(),
             clouds: Vec::new(),
             roads: Vec::new(),
+            meadows: Vec::new(),
             lights: engine_core::scene::LightRig {
                 sun: None,
                 ambient: None,
@@ -127,6 +132,8 @@ impl SceneDoc {
                 self.water.clear();
                 self.clouds.clear();
                 self.roads.clear();
+                self.meadows.clear();
+                self.meadows.clear();
             }
         }
     }
@@ -137,11 +144,12 @@ impl SceneDoc {
 
         // The exact validation the CLI runs: structural pass, then the asset
         // pass only on structurally clean scenes.
-        let mut diagnostics =
-            engine_core::validate::validate_source(&self.source, &self.display);
+        let mut diagnostics = engine_core::validate::validate_source(&self.source, &self.display);
         if diagnostics.iter().all(EngineError::is_warning) {
-            diagnostics
-                .extend(engine_assets::validate_scene_assets(&self.source, &self.display));
+            diagnostics.extend(engine_assets::validate_scene_assets(
+                &self.source,
+                &self.display,
+            ));
         }
         self.diagnostics = diagnostics;
 
@@ -153,6 +161,7 @@ impl SceneDoc {
         self.water.clear();
         self.clouds.clear();
         self.roads.clear();
+        self.meadows.clear();
         if self.is_valid() {
             if let Ok(scene) = Scene::from_source(&self.source, &self.display) {
                 let assets = engine_assets::AssetServer::for_scene(&self.path);
@@ -170,6 +179,7 @@ impl SceneDoc {
                         let (lights, environment) = scene.resolved_at(0.0);
                         self.lights = lights;
                         self.roads = scene.road_items();
+                        self.meadows = scene.meadow_items();
                         self.lights = scene.lights().resolved();
                         // MSAA is the viewport's own business, not the
                         // scene's: the sample count is baked into the
@@ -358,8 +368,14 @@ mod tests {
             ]
         };
 
-        assert_eq!(doc.add_entity("cylinder", components()).as_deref(), Some("cylinder"));
-        assert_eq!(doc.add_entity("cylinder", components()).as_deref(), Some("cylinder-2"));
+        assert_eq!(
+            doc.add_entity("cylinder", components()).as_deref(),
+            Some("cylinder")
+        );
+        assert_eq!(
+            doc.add_entity("cylinder", components()).as_deref(),
+            Some("cylinder-2")
+        );
 
         assert!(doc.is_valid(), "{:?}", doc.diagnostics);
         assert_eq!(doc.items.len(), 2, "both primitives produce draw items");

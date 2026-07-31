@@ -42,6 +42,9 @@ pub enum Content {
         /// The scene's roads (M23). Refreshed with `water` for the same
         /// reason: a script can move or repaint one.
         roads: Vec<engine_core::scene::RoadItem>,
+        /// The scene's meadows (M28). Refreshed with `roads` for the same
+        /// reason: a script can change what a field is made of between steps.
+        meadows: Vec<engine_core::scene::MeadowItem>,
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
@@ -313,6 +316,7 @@ impl ViewerApp {
                     water,
                     clouds,
                     roads,
+                    meadows,
                     camera,
                     camera_model,
                     lights,
@@ -335,11 +339,7 @@ impl ViewerApp {
 
                     // System order: sample animations → physics → render.
                     if !sim.players.is_empty() {
-                        engine_core::animation::apply_all(
-                            &mut sim.scene,
-                            &sim.players,
-                            sim.t,
-                        );
+                        engine_core::animation::apply_all(&mut sim.scene, &sim.players, sim.t);
                     }
                     if sim.physics.is_some()
                         || sim.scripts.is_some()
@@ -419,6 +419,7 @@ impl ViewerApp {
                     *water = sim.scene.water_items();
                     *clouds = sim.scene.cloud_items();
                     *roads = sim.scene.road_items();
+                    *meadows = sim.scene.meadow_items();
                     *hud_items = sim.scene.hud_items();
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
@@ -438,9 +439,7 @@ impl ViewerApp {
                 // and its water sits at its t = 0 pose.
                 let simulated_time = simulation
                     .as_ref()
-                    .map(|sim| {
-                        sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32
-                    })
+                    .map(|sim| sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32)
                     .unwrap_or(0.0);
                 // Daylight runs on that same clock, for the same reason water
                 // does: the viewer must show what a screenshot at this step
@@ -483,6 +482,7 @@ impl ViewerApp {
                             water,
                             clouds,
                             roads,
+                            meadows,
                             particles: &particles,
                             view_projection,
                             camera_position: camera_model.w_axis.truncate(),

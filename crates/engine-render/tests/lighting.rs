@@ -33,6 +33,7 @@ fn render(source: &str) -> Image {
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &[],
         &camera,
         camera_transform.matrix(),
@@ -194,7 +195,9 @@ fn emissive_bypasses_lighting() {
     let [r, g, b, _] = image.pixel(SIZE / 2, SIZE / 2);
     let expected = [srgb_encode(0.0), srgb_encode(1.0), srgb_encode(0.2)];
     assert!(
-        r.abs_diff(expected[0]) <= 2 && g.abs_diff(expected[1]) <= 2 && b.abs_diff(expected[2]) <= 2,
+        r.abs_diff(expected[0]) <= 2
+            && g.abs_diff(expected[1]) <= 2
+            && b.abs_diff(expected[2]) <= 2,
         "emissive should encode straight to the target: got {:?}, expected ≈{expected:?}",
         [r, g, b]
     );
