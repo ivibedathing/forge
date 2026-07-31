@@ -15,6 +15,19 @@ engine diff-render examples/scenes/showcase_tour.json \
     examples/scenes/verify/baselines/showcase_646.png --steps 646
 ```
 
+The tour shows M29's `Meadow` too: a 24 × 14 m field of ground cover in front of station 04, on a
+`cycle_length: 5.0` so three whole generations pass during the fifteen seconds — green at step 585,
+flowering at 646. It is the tour's clearest demonstration that a recipe component can be a function
+of the clock rather than a fixed shape.
+
+**It also cost the tour its bit-exact pins.** A meadow at `samples: 4` is not byte-reproducible on
+this adapter (see `meadow-design.md` §9), the tour is `samples: 4`, and the field is visible in all
+six frames — removing the entity changes 875–3649 pixels in each. The tour without it renders
+identically eight runs running; with it, frames move by up to 203 pixels at delta 20. So all six
+`showcase_*` baselines now carry `"diff_args": ["--threshold", "24", "--max-diff-percent", "0.02"]`,
+where before M29 only `showcase_646` had a tolerance at all. The strict pin on the meadow system
+lives in `verify/m29_meadow.json` instead, which renders at `samples: 1` for exactly this reason.
+
 ## The shape of it
 
 The scene opens with an `environment` block, which is where every M16
@@ -169,7 +182,7 @@ disappears by itself if the tour ever stops driving the sun, and the test
 asserts the converse too. If a future feature makes another component
 mutually exclusive, extend it the same way: derive, never enumerate.
 
-**M27 put the second hole in it, and it has a different shape from M21's.**
+**M30 put the second hole in it, and it has a different shape from M21's.**
 Skeletal animation adds no component at all — a skin is a property of the
 *asset*, and `AnimationPlayer.clip` gained a fragment form rather than a
 `Skeleton` component — so the walk that a component contract keys on can never
@@ -268,11 +281,11 @@ than no showcase:
 - **The animals** are scaled spheres on parametric loops. There is no
   navigation, no steering behaviour, no state machine — scripts have no
   randomness by design, so the variety is sums of sines.
-- **The walker is really skinned** as of M27 — thirteen joints, a one-second
+- **The walker is really skinned** as of M30 — thirteen joints, a one-second
   `Walk` clip out of `rigged_walker.gltf`, posed on the CPU and applied to the
   vertices on the GPU, casting a shadow that walks with it because the skinned
   caster is its own pipeline. It is also the tour's only **skinned *and*
-  textured** draw, which is the composition M27 rebuilt the vertex-stage seam
+  textured** draw, which is the composition M30 rebuilt the vertex-stage seam
   for: `plate_normal` and `plate_orm` panel it, the same two maps the truck
   wears. It is in the frame for stations 01, 02, 04 and 05 (the water station's
   camera is aimed the other way), and it is placed *between* the station-01

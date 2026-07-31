@@ -31,10 +31,10 @@ pub struct MeshData {
     pub indices: Vec<u32>,
 
     /// Which joints move each vertex, as indices into the skin's `joints`
-    /// array (M27) — glTF `JOINTS_0`.
+    /// array (M30) — glTF `JOINTS_0`.
     ///
     /// **Empty for every mesh that is not skinned**, which is every mesh in
-    /// this repo before M27 and every `builtin:` primitive forever: the
+    /// this repo before M30 and every `builtin:` primitive forever: the
     /// renderer uploads these two slots only when they are non-empty, so no
     /// committed vertex buffer and no committed vertex layout changed when
     /// they arrived.

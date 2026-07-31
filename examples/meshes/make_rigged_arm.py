@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate `rigged_arm.gltf`: the fixture M27's skeletal animation is tested against.
+"""Generate `rigged_arm.gltf`: the fixture M30's skeletal animation is tested against.
 
 Text glTF with a base64-embedded buffer, exactly like `pyramid.gltf` and
 `textured_quad.gltf` beside it and for the same reason — a binary blob nobody

@@ -1,4 +1,4 @@
-// GPU skinning (M27): the other half of "CPU skeleton, GPU skin".
+// GPU skinning (M30): the other half of "CPU skeleton, GPU skin".
 //
 // The joint palette is computed on the CPU — `engine_core::skeleton::palette`,
 // which is why `engine list-joints --time` can report where every joint went

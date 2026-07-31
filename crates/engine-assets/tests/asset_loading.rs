@@ -331,7 +331,7 @@ fn one_texture_asset_is_one_arc() {
     assert_eq!(linear.space, ColorSpace::Linear);
 }
 
-// ── Rigs (M27) ────────────────────────────────────────────────────────────
+// ── Rigs (M30) ────────────────────────────────────────────────────────────
 
 #[test]
 fn a_skinned_primitive_carries_its_influences_and_stays_in_skin_space() {
@@ -379,7 +379,7 @@ fn a_skinned_primitives_node_transform_is_not_baked_into_its_vertices() {
 
 #[test]
 fn an_unskinned_file_carries_no_influences_at_all() {
-    // Which is what keeps every mesh committed before M27 uploading exactly
+    // Which is what keeps every mesh committed before M30 uploading exactly
     // the vertex buffers it always did.
     let mesh = engine_assets::load_gltf(&example("meshes/pyramid.gltf")).unwrap();
     assert!(!mesh.is_skinned());
@@ -410,7 +410,7 @@ fn a_fifth_influence_per_vertex_is_refused_rather_than_dropped() {
 
 #[test]
 fn the_draw_list_carries_a_palette_that_moves_with_the_clock() {
-    let path = example("scenes/verify/m27_skeletal.json");
+    let path = example("scenes/verify/m30_skeletal.json");
     let source = std::fs::read_to_string(&path).unwrap();
     let scene = engine_core::Scene::from_source(&source, &path.display().to_string()).unwrap();
     let assets = engine_assets::AssetServer::for_scene(&path);

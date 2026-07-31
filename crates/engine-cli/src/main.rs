@@ -383,7 +383,16 @@ fn main() {
             camera,
             width,
             height,
-        } => screenshot(scene, out, steps, input, time, camera.as_deref(), width, height),
+        } => screenshot(
+            scene,
+            out,
+            steps,
+            input,
+            time,
+            camera.as_deref(),
+            width,
+            height,
+        ),
         Command::DiffRender {
             scene,
             baseline,
@@ -588,9 +597,12 @@ pub(crate) fn report_scene_diagnostics(path: &PathBuf) -> SceneReport {
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
         Err(e) => {
-            EngineError::new(codes::SCENE_UNREADABLE, format!("could not read scene: {e}"))
-                .file(&display)
-                .emit();
+            EngineError::new(
+                codes::SCENE_UNREADABLE,
+                format!("could not read scene: {e}"),
+            )
+            .file(&display)
+            .emit();
             return SceneReport {
                 source: None,
                 errors: 1,
@@ -677,9 +689,8 @@ fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
         let is_material = parsed.as_ref().is_some_and(|v| {
             v.get("entities").is_none()
                 && v.get("tracks").is_none()
-                && v.as_object().is_some_and(|o| {
-                    o.keys().any(|k| material_fields().iter().any(|f| f == k))
-                })
+                && v.as_object()
+                    .is_some_and(|o| o.keys().any(|k| material_fields().iter().any(|f| f == k)))
         });
         if is_clip || is_material {
             let display = path.display().to_string();
@@ -709,7 +720,9 @@ fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
         };
         return Err(EngineError::new(
             codes::VALIDATION_FAILED,
-            format!("{errors} error(s) and {warnings} warning(s) across {files} file(s){strict_note}"),
+            format!(
+                "{errors} error(s) and {warnings} warning(s) across {files} file(s){strict_note}"
+            ),
         ));
     }
 
@@ -856,7 +869,9 @@ fn list_components(component: Option<String>) -> Result<()> {
         .component(&name)
         .suggest_from(
             &name,
-            engine_core::components::ComponentData::NAMES.iter().copied(),
+            engine_core::components::ComponentData::NAMES
+                .iter()
+                .copied(),
         )
     })?;
 
@@ -1097,9 +1112,7 @@ fn import(
         let exists = serde_json::from_str::<serde_json::Value>(&source)
             .ok()
             .and_then(|v| v["entities"].as_array().cloned())
-            .is_some_and(|entities| {
-                entities.iter().any(|e| e["name"] == entity_name.as_str())
-            });
+            .is_some_and(|entities| entities.iter().any(|e| e["name"] == entity_name.as_str()));
         if exists {
             let warning = format!(
                 "{} already has an entity named {entity_name:?}; its material and \
@@ -1148,9 +1161,10 @@ fn import(
 /// than a silently wrong reference.
 fn relative_to(path: &Path, base: &Path) -> Option<String> {
     let path = path.canonicalize().ok()?;
-    let base = base.canonicalize().ok().or_else(|| {
-        std::env::current_dir().ok()
-    })?;
+    let base = base
+        .canonicalize()
+        .ok()
+        .or_else(|| std::env::current_dir().ok())?;
     let mut up = Vec::new();
     let mut candidate = base.as_path();
     loop {
@@ -1255,7 +1269,11 @@ fn diff_render(
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
     let (particles, hud) = if steps > 0 {
-        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
+        // The cursor is a fraction of the frame, and the frame here is the
+        // baseline's own dimensions — the same ones this render uses, so a
+        // mouse-driven fixture is pinned at the size it was blessed at.
+        let view = engine_core::input::Viewport::new(baseline.width, baseline.height, camera_name);
+        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
         (outcome.particles.instances(&scene.world), outcome.hud)
     } else {
         (Vec::new(), Vec::new())
@@ -1271,6 +1289,7 @@ fn diff_render(
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
@@ -1433,9 +1452,8 @@ fn filmstrip(
 ) -> Result<()> {
     let mut scene = load_scene(&scene_path)?;
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
-    let end = end.unwrap_or_else(|| {
-        start + engine_core::animation::longest_duration(&players).max(0.001)
-    });
+    let end = end
+        .unwrap_or_else(|| start + engine_core::animation::longest_duration(&players).max(0.001));
 
     let frames = frames.max(1);
     let columns = columns.max(1).min(frames);
@@ -1464,6 +1482,7 @@ fn filmstrip(
             &scene.water_items(),
             &scene.cloud_items(),
             &scene.road_items(),
+            &scene.meadow_items(),
             &[],
             &camera,
             camera_transform.matrix(),
@@ -1475,9 +1494,8 @@ fn filmstrip(
             &scene.hud_items(),
             &[],
         )?;
-        let tile =
-            image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
-                .expect("offscreen render returns exactly width*height*4 bytes");
+        let tile = image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
+            .expect("offscreen render returns exactly width*height*4 bytes");
         let x = (frame % columns) * tile_width;
         let y = (frame / columns) * tile_height;
         image::imageops::replace(&mut sheet, &tile, i64::from(x), i64::from(y));
@@ -1527,7 +1545,7 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
 
     let display = path.display().to_string();
 
-    // A glTF asked about directly (M27). Sniffing the extension rather than
+    // A glTF asked about directly (M30). Sniffing the extension rather than
     // the contents, because a `.glb` is not text and a `.gltf` is JSON that
     // would otherwise fall through to the scene parser.
     if engine_core::skeleton::is_gltf_path(&display) {
@@ -1540,8 +1558,7 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
     }
 
     let source = std::fs::read_to_string(&path).map_err(|e| {
-        EngineError::new(codes::SCENE_UNREADABLE, format!("could not read: {e}"))
-            .file(&display)
+        EngineError::new(codes::SCENE_UNREADABLE, format!("could not read: {e}")).file(&display)
     })?;
     let sniff: serde_json::Value = serde_json::from_str(&source).unwrap_or_default();
 
@@ -1549,7 +1566,7 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
         serde_json::json!({
             "name": clip.name,
             "source": source_path,
-            // Named since M27, when a second kind arrived: a caller reading
+            // Named since M30, when a second kind arrived: a caller reading
             // `tracks` versus `channels` should not have to guess which.
             "kind": "property",
             "duration": engine_core::animation::duration(clip) as f64,
@@ -1664,7 +1681,7 @@ fn skeletal_clip_report(
     report
 }
 
-/// `engine list-joints` — the command that makes M27 agent-native rather than
+/// `engine list-joints` — the command that makes M30 agent-native rather than
 /// merely present.
 ///
 /// A filmstrip shows that *something* moved; it never shows that the hand
@@ -1851,7 +1868,10 @@ fn screenshot(
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
     let (particles, hud) = if steps > 0 {
-        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
+        // The frame the cursor is measured in is the one about to be
+        // rendered (M28).
+        let view = engine_core::input::Viewport::new(width, height, camera_name);
+        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
         (outcome.particles.instances(&scene.world), outcome.hud)
     } else {
         (Vec::new(), Vec::new())
@@ -1868,6 +1888,7 @@ fn screenshot(
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
@@ -1924,6 +1945,7 @@ fn run_scene(
     // against its own fixed-step clock, so what it stores is the scene as
     // authored, not the scene at one instant.
     let roads = scene.road_items();
+    let meadows = scene.meadow_items();
     let lights = scene.lights().resolved();
     let environment = scene.environment;
     let daylight = scene.daylight.clone();
@@ -1934,17 +1956,15 @@ fn run_scene(
     // stay static (unless a recording was asked for, which needs the step
     // clock running to have steps to record against).
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
-    let scripts =
-        engine_script::ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            scene.physics.timestep_hz,
-            scene.daylight.clone(),
-            &assets,
-        )?;
+    let scripts = engine_script::ScriptHost::build(
+        &scene.world,
+        &scene_path,
+        scene.physics.timestep_hz,
+        scene.daylight.clone(),
+        &assets,
+    )?;
     let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
-    let has_emitters =
-        engine_core::particles::ParticleSystem::scene_has_emitters(&scene.world);
+    let has_emitters = engine_core::particles::ParticleSystem::scene_has_emitters(&scene.world);
     let simulation = if has_physics
         || has_emitters
         || !players.is_empty()
@@ -1952,7 +1972,11 @@ fn run_scene(
         || record_input.is_some()
     {
         let physics = if has_physics {
-            Some(engine_physics::PhysicsWorld::build(&scene.world, &scene.physics, &assets)?)
+            Some(engine_physics::PhysicsWorld::build(
+                &scene.world,
+                &scene.physics,
+                &assets,
+            )?)
         } else {
             None
         };
@@ -1991,6 +2015,7 @@ fn run_scene(
             water,
             clouds,
             roads,
+            meadows,
             camera,
             camera_model: camera_transform.matrix(),
             lights,
@@ -2024,7 +2049,10 @@ fn run_app(mut app: ViewerApp) -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     event_loop.run_app(&mut app).map_err(|e| {
-        EngineError::new(codes::EVENT_LOOP_FAILED, format!("the event loop failed: {e}"))
+        EngineError::new(
+            codes::EVENT_LOOP_FAILED,
+            format!("the event loop failed: {e}"),
+        )
     })?;
 
     // A render error inside the loop exits it cleanly; surface it here.

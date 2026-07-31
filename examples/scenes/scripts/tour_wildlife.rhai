@@ -49,7 +49,7 @@ fn step(world, step) {
         );
     }
 
-    // The walker (M27), on a slow circuit through the forest station. Its
+    // The walker (M30), on a slow circuit through the forest station. Its
     // *legs* are a skeletal clip and this only carries it along the ground —
     // which is the whole division of labour the milestone is about: the pose
     // is a pure function of (files, time) and a script never touches a joint,

@@ -299,7 +299,7 @@ pub trait TextureSource {
 }
 
 /// Everything the draw list needs to resolve: geometry, textures, and — since
-/// M27 — the rig behind a skinned mesh.
+/// M30 — the rig behind a skinned mesh.
 ///
 /// One parameter rather than three, with a blanket impl, so every existing
 /// caller of `Scene::render_items` keeps passing exactly what it passed before.

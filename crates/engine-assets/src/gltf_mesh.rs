@@ -11,7 +11,7 @@
 //! clockwise front faces), so vertices pass through untransformed except for
 //! the node hierarchy.
 //!
-//! **A skinned primitive is the one exception, and it is load-bearing (M27).**
+//! **A skinned primitive is the one exception, and it is load-bearing (M30).**
 //! glTF says the transform of the node referencing a skinned mesh is *ignored*
 //! — joint matrices are already expressed in the skin's space — so a skinned
 //! primitive loads **unbaked**: its vertices must stay in skin space for the
@@ -212,7 +212,7 @@ fn load_primitive(
         .file(display));
     }
 
-    // Skinning influences (M27). `JOINTS_1` is a fifth-through-eighth
+    // Skinning influences (M30). `JOINTS_1` is a fifth-through-eighth
     // influence per vertex, which the palette's four-wide vertex attribute
     // cannot carry: refused rather than dropped, because a dropped influence
     // shows up as a wrist that collapses under rotation and is a very hard

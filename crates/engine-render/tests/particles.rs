@@ -51,6 +51,7 @@ fn render(particles: &[ParticleInstance]) -> Image {
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         particles,
         &camera,
         camera_transform.matrix(),
@@ -274,11 +275,7 @@ fn stretching_elongates_a_sprite_along_its_velocity() {
     let lit = |image: &Image, along: bool| -> usize {
         (0..SIZE)
             .filter(|&i| {
-                let (x, y) = if along {
-                    (CENTER.0, i)
-                } else {
-                    (i, CENTER.1)
-                };
+                let (x, y) = if along { (CENTER.0, i) } else { (i, CENTER.1) };
                 image.pixel(x, y)[0] as i32 - background.pixel(x, y)[0] as i32 > 4
             })
             .count()

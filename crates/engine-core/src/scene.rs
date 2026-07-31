@@ -178,7 +178,7 @@ pub struct RenderItem {
     /// on) with no second copy of any of them, and hands the editor's picking
     /// and selection a surface they already know how to handle.
     pub terrain: Option<crate::components::Terrain>,
-    /// The joint palette this draw is skinned by (M27), computed on the CPU by
+    /// The joint palette this draw is skinned by (M30), computed on the CPU by
     /// [`crate::skeleton::palette`] — **empty for everything that is not a
     /// skinned mesh**, which routes the draw onto the pipelines that compile
     /// `mesh.wgsl` as it sits on disk.
@@ -239,6 +239,25 @@ pub struct RoadItem {
     pub surface: std::sync::Arc<crate::road::RoadSurface>,
     pub model: glam::Mat4,
     pub road: crate::components::Road,
+}
+
+/// One meadow, with its plants grown and placed (M29) — [`WaterItem`]'s
+/// sibling, separate from [`RenderItem`] for the same reasons and one more: a
+/// meadow is drawn **instanced**, so it is the only draw list whose geometry is
+/// a template plus a placement, rather than a mesh.
+///
+/// There is no `model` matrix. `patch.instances` are already in world space,
+/// because placement had to consult the terrain the meadow stands on and a
+/// plant whose height came off the ground cannot then be pushed around by a
+/// transform without leaving it.
+#[derive(Debug, Clone)]
+pub struct MeadowItem {
+    /// The source entity's stable name (invariant 4).
+    pub entity: String,
+    /// The plant template and every copy of it, shared across frames — see
+    /// [`crate::meadow::patch_for`].
+    pub patch: std::sync::Arc<crate::meadow::MeadowPatch>,
+    pub meadow: crate::components::Meadow,
 }
 
 /// The scene's screen-space overlay, extracted as plain data in draw order
@@ -568,9 +587,12 @@ impl Scene {
         match requested {
             Some(name) => {
                 let entity = self.entity(name).ok_or_else(|| {
-                    EngineError::new(crate::codes::ENTITY_NOT_FOUND, format!("no entity named {name:?}"))
-                        .entity(name)
-                        .suggest_from(name, self.names())
+                    EngineError::new(
+                        crate::codes::ENTITY_NOT_FOUND,
+                        format!("no entity named {name:?}"),
+                    )
+                    .entity(name)
+                    .suggest_from(name, self.names())
                 })?;
 
                 let camera = self.world.get::<&Camera>(entity).map(|c| *c).map_err(|_| {
@@ -615,11 +637,14 @@ impl Scene {
     /// [`BuiltinAssets`](crate::mesh::BuiltinAssets). Entities without a `Mesh`
     /// contribute nothing; a `Mesh` whose asset cannot be loaded is an error
     /// rather than a silent omission.
-    pub fn render_items(&self, assets: &dyn crate::texture::AssetSource) -> Result<Vec<RenderItem>> {
+    pub fn render_items(
+        &self,
+        assets: &dyn crate::texture::AssetSource,
+    ) -> Result<Vec<RenderItem>> {
         self.render_items_at(assets, None)
     }
 
-    /// The draw list with every skinned mesh posed at scene time `time` (M27).
+    /// The draw list with every skinned mesh posed at scene time `time` (M30).
     ///
     /// `None` is the **rest pose** — a skinned mesh drawn as its file authored
     /// it, which is what the editor's viewport shows (it shows scenes at rest)
@@ -742,7 +767,7 @@ impl Scene {
         Ok(items)
     }
 
-    /// The joint palette for one skinned entity at scene time `time` (M27), or
+    /// The joint palette for one skinned entity at scene time `time` (M30), or
     /// an empty vector when the mesh turns out to carry no skin after all.
     ///
     /// A mesh with `JOINTS_0` and a file with no `skin` is a malformed export
@@ -872,6 +897,59 @@ impl Scene {
                 mesh: crate::water::surface_grid(water.segments),
                 model: self.transform_of(entity).matrix(),
                 water: water.clone(),
+            })
+            .collect();
+        items.sort_by(|a, b| a.entity.cmp(&b.entity));
+        items
+    }
+
+    /// Flatten the world's meadows into a draw list (M29).
+    ///
+    /// Takes no [`MeshSource`](crate::mesh::MeshSource) and cannot fail, for
+    /// water's reason: the geometry is grown from the component, not loaded.
+    ///
+    /// Time is deliberately absent, as it is for clouds — the life cycle is
+    /// evaluated in the vertex stage from the frame's own clock. That is what
+    /// keeps this a pure function of the file and keeps the patch's `Arc`
+    /// identity stable across frames, which the renderer's upload cache depends
+    /// on. A meadow whose plants were regrown on the CPU each frame would defeat
+    /// M15's geometry cache exactly as CPU wave displacement would have.
+    ///
+    /// A `terrain` naming an entity that is not a `Terrain` falls back to flat
+    /// ground here rather than failing: validation has already refused that file
+    /// (`meadow_terrain_invalid`), and the render path does not re-litigate what
+    /// `validate` owns.
+    ///
+    /// Sorted by entity name, for the reason every other draw list is.
+    pub fn meadow_items(&self) -> Vec<MeadowItem> {
+        let mut items: Vec<MeadowItem> = self
+            .world
+            .query::<(Entity, &crate::components::Meadow)>()
+            .iter()
+            .map(|(entity, meadow)| {
+                let model = self.transform_of(entity).matrix();
+                // Resolve the ground first: the borrows have to outlive the
+                // `patch_for` call that reads through them.
+                let ground_entity = meadow.terrain.as_deref().and_then(|name| self.entity(name));
+                let ground_terrain = ground_entity
+                    .and_then(|e| self.world.get::<&crate::components::Terrain>(e).ok());
+                let ground_transform = ground_entity.map(|e| self.transform_of(e));
+                let ground = match (&ground_terrain, &ground_transform) {
+                    (Some(terrain), Some(transform)) => {
+                        Some(crate::meadow::Ground { terrain, transform })
+                    }
+                    _ => None,
+                };
+
+                MeadowItem {
+                    entity: self
+                        .world
+                        .get::<&Name>(entity)
+                        .map(|n| n.0.clone())
+                        .unwrap_or_default(),
+                    patch: crate::meadow::patch_for(meadow, model, ground),
+                    meadow: meadow.clone(),
+                }
             })
             .collect();
         items.sort_by(|a, b| a.entity.cmp(&b.entity));
@@ -1091,9 +1169,7 @@ mod tests {
             )
             .unwrap();
 
-        let err = scene
-            .render_items(&crate::mesh::BuiltinAssets)
-            .unwrap_err();
+        let err = scene.render_items(&crate::mesh::BuiltinAssets).unwrap_err();
         assert_eq!(err.error, "asset_not_found");
         assert_eq!(err.context().unwrap().entity.as_deref(), Some("Broken"));
     }

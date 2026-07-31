@@ -139,7 +139,7 @@ registry! {
     ANIMATION_ON_DYNAMIC_BODY = "animation_on_dynamic_body", Input,
         "a clip animates the Transform of a dynamic RigidBody; make it kinematic";
 
-    // ── Skeletal animation (M27) ───────────────────────────────────────
+    // ── Skeletal animation (M30) ───────────────────────────────────────
     CLIP_NEEDS_FRAGMENT = "clip_needs_fragment", Input,
         "a glTF clip reference must name a clip: path#ClipName";
     UNKNOWN_CLIP = "unknown_clip", Input,
@@ -217,6 +217,20 @@ registry! {
         "a Cloud entity owns its own geometry; it may not also have a Mesh or a Material";
     CLOUD_TOO_COMPLEX = "cloud_too_complex", Input,
         "a Cloud's parameters would generate more vertices than the engine will grow";
+
+    // ── Meadows (M29) ──────────────────────────────────────────────────
+    MEADOW_WITH_MESH = "meadow_with_mesh", Input,
+        "a Meadow entity owns its own geometry; it may not also have a Mesh or a Material";
+    MEADOW_TOO_COMPLEX = "meadow_too_complex", Input,
+        "a Meadow's density and footprint would grow more triangles than the engine will draw";
+    MEADOW_TERRAIN_NOT_FOUND = "meadow_terrain_not_found", Input,
+        "a Meadow's \"terrain\" names no entity in the scene";
+    MEADOW_TERRAIN_INVALID = "meadow_terrain_invalid", Input,
+        "a Meadow's \"terrain\" must name an entity that has a Terrain component";
+    MEADOW_STAGES_INVALID = "meadow_stages_invalid", Input,
+        "a Meadow needs at least two life-cycle stages with strictly increasing \"at\"";
+    TOO_MANY_GROWTH_STAGES = "too_many_growth_stages", Input,
+        "a Meadow has more life-cycle stages than the shader's table holds";
 
     // ── Input (M11) ────────────────────────────────────────────────────
     INPUT_UNREADABLE = "input_unreadable", Input,

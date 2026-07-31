@@ -877,29 +877,103 @@ def entities():
                 }
             ],
         },
+        # --- the menu (M28) -------------------------------------------------
+        # Every piece is parked at zero size or empty text and laid out by the
+        # script from the live viewport, which is what lets one timeline click
+        # the same button at any window size: the layout is measured from the
+        # centre of the frame, so a *fraction* of the frame lands on it
+        # whatever the pixels are.
         {
-            "name": "CenterText",
+            "name": "MenuVeil",
+            "components": [
+                {
+                    "type": "HudRect",
+                    "anchor": "top_left",
+                    "offset": [0.0, 0.0],
+                    "size": [0.0, 0.0],
+                    "color": [0.015, 0.02, 0.03],
+                    "opacity": 0.78,
+                }
+            ],
+        },
+        {
+            "name": "MenuTitle",
             "components": [
                 {
                     "type": "HudText",
                     "text": "",
-                    "anchor": "center",
-                    "offset": [0.0, -60.0],
+                    "anchor": "top_left",
+                    "offset": [0.0, 0.0],
                     "size": 40.0,
                     "color": [1.0, 0.85, 0.3],
                 }
             ],
         },
         {
-            "name": "HintText",
+            "name": "MenuLine",
             "components": [
                 {
                     "type": "HudText",
-                    "text": "WASD MOVE   ARROWS AIM   SPACE FIRE   R RELOAD",
-                    "anchor": "center",
-                    "offset": [0.0, 120.0],
+                    "text": "",
+                    "anchor": "top_left",
+                    "offset": [0.0, 0.0],
                     "size": 16.0,
                     "color": [0.75, 0.82, 0.9],
+                }
+            ],
+        },
+        {
+            "name": "MenuButton",
+            "components": [
+                {
+                    "type": "HudRect",
+                    "anchor": "top_left",
+                    "offset": [0.0, 0.0],
+                    "size": [0.0, 0.0],
+                    "color": [0.10, 0.13, 0.18],
+                    "opacity": 0.95,
+                }
+            ],
+        },
+        {
+            "name": "MenuButtonText",
+            "components": [
+                {
+                    "type": "HudText",
+                    "text": "",
+                    "anchor": "top_left",
+                    "offset": [0.0, 0.0],
+                    "size": 24.0,
+                    "color": [0.9, 0.95, 1.0],
+                }
+            ],
+        },
+        # The crosshair: two bars the script parks on the cursor's pixel.
+        # Hidden (zero size) whenever the menu is up, since a menu has the
+        # window's own pointer.
+        {
+            "name": "Crosshair",
+            "components": [
+                {
+                    "type": "HudRect",
+                    "anchor": "top_left",
+                    "offset": [0.0, 0.0],
+                    "size": [0.0, 0.0],
+                    "color": [1.0, 0.85, 0.25],
+                    "opacity": 0.9,
+                }
+            ],
+        },
+        {
+            "name": "CrosshairStem",
+            "components": [
+                {
+                    "type": "HudRect",
+                    "anchor": "top_left",
+                    "offset": [0.0, 0.0],
+                    "size": [0.0, 0.0],
+                    "color": [1.0, 0.85, 0.25],
+                    "opacity": 0.9,
                 }
             ],
         },

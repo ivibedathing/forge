@@ -27,7 +27,7 @@ pub struct AssetServer {
     /// was filtered, so one file read as albedo and as ORM really is two
     /// different sets of pixels.
     textures: RefCell<HashMap<(String, ColorSpace), Arc<TextureData>>>,
-    /// Rigs (M27), cached for the same reason as geometry: a palette is
+    /// Rigs (M30), cached for the same reason as geometry: a palette is
     /// recomputed every frame and must not re-parse the `.glb` behind it.
     rigs: RefCell<HashMap<String, Arc<Rig>>>,
 }

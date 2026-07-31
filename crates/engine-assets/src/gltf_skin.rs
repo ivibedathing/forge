@@ -1,4 +1,4 @@
-//! glTF skin and animation extraction (M27 S0).
+//! glTF skin and animation extraction (M30 S0).
 //!
 //! The counterpart to `gltf_mesh.rs`: that module turns a file into geometry,
 //! this one turns the same file into a [`Rig`] — the joint hierarchy and the

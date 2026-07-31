@@ -72,7 +72,7 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                 }
             }
 
-            // A skeletal AnimationPlayer (M27). The reference-level rules —
+            // A skeletal AnimationPlayer (M30). The reference-level rules —
             // the fragment being required, the player and the Mesh naming one
             // file — are engine-core's, because they need no file opened.
             // These three do: the file has to have a skin, the fragment has to

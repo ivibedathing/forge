@@ -1,4 +1,4 @@
-//! Skeletal animation, the CPU half (M27 S0): rigs as data, poses as a pure
+//! Skeletal animation, the CPU half (M30 S0): rigs as data, poses as a pure
 //! function of (files, time).
 //!
 //! `engine-assets` extracts a [`Rig`] out of a glTF file; nothing in this
@@ -271,7 +271,7 @@ pub trait RigSource {
 /// What an `AnimationPlayer.clip` string names.
 ///
 /// One field, both kinds of animation — `animation-system-design.md` §4
-/// specified the fragment form and nothing used it until M27.
+/// specified the fragment form and nothing used it until M30.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipRef<'a> {
     /// A `*.anim.json` property clip (M9).
