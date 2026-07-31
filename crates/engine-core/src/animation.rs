@@ -820,6 +820,15 @@ pub fn load_players(scene: &crate::Scene, scene_path: &Path) -> Result<Vec<Loade
     let base_dir = scene_path.parent().unwrap_or(Path::new(""));
     let mut players = Vec::new();
     for player in scene.world.query::<&AnimationPlayer>().iter() {
+        // Skeletal references (`path#Clip`) name a rig inside a glTF, not a
+        // property clip: they are sampled by `engine_core::skeleton` against
+        // the asset, and there is nothing here to write into a component.
+        if matches!(
+            crate::skeleton::ClipRef::parse(&player.clip),
+            crate::skeleton::ClipRef::Skeletal { .. }
+        ) {
+            continue;
+        }
         let clip = load_clip(&base_dir.join(&player.clip))?;
         players.push(LoadedPlayer {
             player: player.clone(),

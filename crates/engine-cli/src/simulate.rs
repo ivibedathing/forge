@@ -43,14 +43,15 @@ pub fn run(
     view: &Viewport,
     mut trace: Option<&mut dyn Write>,
 ) -> Result<StepRun> {
+    let assets = engine_assets::AssetServer::for_scene(scene_path);
     let mut scripts =
         engine_script::ScriptHost::build(
             &scene.world,
             scene_path,
             scene.physics.timestep_hz,
             scene.daylight.clone(),
+            &assets,
         )?;
-    let assets = engine_assets::AssetServer::for_scene(scene_path);
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
     let mut particles = ParticleSystem::build(&scene.world);
     let dt = 1.0 / scene.physics.timestep_hz.max(1) as f32;

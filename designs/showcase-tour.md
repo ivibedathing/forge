@@ -67,7 +67,7 @@ seconds](#past-the-fifteen-seconds).
 
 | steps | station | what is on screen | systems |
 |-------|---------|-------------------|---------|
-| 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — under fissured bark, four critters running loops, the granite monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), `Material` (`albedo_map`, `normal_map`, `Material.asset`), `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
+| 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — under fissured bark, four critters running loops, a rigged figure walking a circuit in front of them, the granite monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), **skeletal animation** (13 joints, textured), `Material` (`albedo_map`, `normal_map`, `orm_map`, `Material.asset`), `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
 | 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
 | 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
 | 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
@@ -182,6 +182,15 @@ disappears by itself if the tour ever stops driving the sun, and the test
 asserts the converse too. If a future feature makes another component
 mutually exclusive, extend it the same way: derive, never enumerate.
 
+**M30 put the second hole in it, and it has a different shape from M21's.**
+Skeletal animation adds no component at all — a skin is a property of the
+*asset*, and `AnimationPlayer.clip` gained a fragment form rather than a
+`Skeleton` component — so the walk that a component contract keys on can never
+notice that the system exists. M21's hole is an exemption the contract
+computes; this one is a system the contract was never able to see. The tour
+carries a rigged character anyway, because "every system running at once" is
+the tour's claim and a contract that cannot see a system does not weaken it.
+
 When a system is bigger than one component — a renderer feature, a shader
 path, a whole subsystem — it does not trip that test, so add it here by hand
 and say so in the table above. Another station is cheap, with one thing to
@@ -272,6 +281,28 @@ than no showcase:
 - **The animals** are scaled spheres on parametric loops. There is no
   navigation, no steering behaviour, no state machine — scripts have no
   randomness by design, so the variety is sums of sines.
+- **The walker is really skinned** as of M30 — thirteen joints, a one-second
+  `Walk` clip out of `rigged_walker.gltf`, posed on the CPU and applied to the
+  vertices on the GPU, casting a shadow that walks with it because the skinned
+  caster is its own pipeline. It is also the tour's only **skinned *and*
+  textured** draw, which is the composition M30 rebuilt the vertex-stage seam
+  for: `plate_normal` and `plate_orm` panel it, the same two maps the truck
+  wears. It is in the frame for stations 01, 02, 04 and 05 (the water station's
+  camera is aimed the other way), and it is placed *between* the station-01
+  camera and the trees on purpose — a two-metre figure thirty metres back and
+  behind a canopy is a pale smudge, and the point of putting it there is that
+  the legs are legibly legs.
+
+  What is faked about it is everything above the skeleton. There is no
+  locomotion system: `tour_wildlife.rhai` carries it around a circle and the
+  clip plays at a fixed rate, so the stride is *tuned* to the speed rather than
+  driven by it, and nothing stops the feet skating if either is retuned. No
+  foot IK, so it walks through the hills' slopes rather than planting on them
+  — the ground query puts its root on the terrain, which is not the same
+  thing. No blending and no state machine, which is M9's rejection standing:
+  `Idle` is in the file and the tour never crossfades to it, because a
+  crossfade is exactly the nondeterminism that made two clips on one property a
+  validation error.
 - **The blast** still has no light — but as of M17 that is a wiring job rather
   than a missing feature. A `PointLight` at the crate pile, pulsed for a dozen
   steps from `tour_director.rhai` (which already fires the explosion), would do

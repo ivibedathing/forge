@@ -100,12 +100,14 @@ pub fn generate(tree: &Tree) -> (MeshData, MeshData) {
             normals: Vec::new(),
             uvs: Vec::new(),
             indices: Vec::new(),
+            ..MeshData::default()
         },
         leaves: MeshData {
             positions: Vec::new(),
             normals: Vec::new(),
             uvs: Vec::new(),
             indices: Vec::new(),
+            ..MeshData::default()
         },
     };
 

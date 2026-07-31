@@ -38,6 +38,7 @@ fn item(mesh: &Arc<MeshData>, x: f32) -> RenderItem {
         material: Material::default(),
         textures: Default::default(),
         terrain: None,
+        joints: Vec::new(),
     }
 }
 

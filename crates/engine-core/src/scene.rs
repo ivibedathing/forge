@@ -178,6 +178,16 @@ pub struct RenderItem {
     /// on) with no second copy of any of them, and hands the editor's picking
     /// and selection a surface they already know how to handle.
     pub terrain: Option<crate::components::Terrain>,
+    /// The joint palette this draw is skinned by (M30), computed on the CPU by
+    /// [`crate::skeleton::palette`] — **empty for everything that is not a
+    /// skinned mesh**, which routes the draw onto the pipelines that compile
+    /// `mesh.wgsl` as it sits on disk.
+    ///
+    /// The entity's own `model` is *not* folded in: the vertex stage computes
+    /// `model · Σ wᵢ · palette[jᵢ] · position`, because glTF says the transform
+    /// of the node referencing a skinned mesh is ignored and the engine's
+    /// `Transform` is what places the character.
+    pub joints: Vec<glam::Mat4>,
 }
 
 /// One water surface, with its geometry resolved and its transform flattened
@@ -631,6 +641,28 @@ impl Scene {
         &self,
         assets: &dyn crate::texture::AssetSource,
     ) -> Result<Vec<RenderItem>> {
+        self.render_items_at(assets, None)
+    }
+
+    /// The draw list with every skinned mesh posed at scene time `time` (M30).
+    ///
+    /// `None` is the **rest pose** — a skinned mesh drawn as its file authored
+    /// it, which is what the editor's viewport shows (it shows scenes at rest)
+    /// and what an entity with a skin and no `AnimationPlayer` renders at any
+    /// time. `Some(t)` walks each player's clip through the same
+    /// speed/offset/looping arithmetic property clips use, so one clock drives
+    /// both kinds of animation.
+    ///
+    /// It is a separate entry point rather than a parameter on `render_items`
+    /// because the palette is the *only* thing in this list that depends on
+    /// time: everything else was already posed by the caller before it got
+    /// here, so twenty call sites that cannot have a skin would be threading a
+    /// number nothing reads.
+    pub fn render_items_at(
+        &self,
+        assets: &dyn crate::texture::AssetSource,
+        time: Option<f32>,
+    ) -> Result<Vec<RenderItem>> {
         let mut items = Vec::new();
 
         for (entity, mesh) in self
@@ -638,13 +670,20 @@ impl Scene {
             .query::<(Entity, &crate::components::Mesh)>()
             .iter()
         {
-            let data = assets.load_mesh(&mesh.asset).map_err(|e| {
+            let named = |e: crate::error::EngineError| match self.world.get::<&Name>(entity) {
                 // Name the entity so the agent knows which one to fix.
-                match self.world.get::<&Name>(entity) {
-                    Ok(name) => e.entity(name.0.clone()),
-                    Err(_) => e,
-                }
-            })?;
+                Ok(name) => e.entity(name.0.clone()),
+                Err(_) => e,
+            };
+            let data = assets.load_mesh(&mesh.asset).map_err(named)?;
+            let joints = if data.is_skinned() {
+                self.palette_for(entity, &mesh.asset, assets, time)
+                    .map_err(named)?
+            } else {
+                // The overwhelmingly common case, and the one that must cost
+                // nothing: no rig is even asked for.
+                Vec::new()
+            };
 
             let transform = self.transform_of(entity);
             let material = self
@@ -669,6 +708,7 @@ impl Scene {
                 material,
                 textures,
                 terrain: None,
+                joints,
             });
         }
 
@@ -708,6 +748,7 @@ impl Scene {
                 material: bark,
                 textures: bark_textures,
                 terrain: None,
+                joints: Vec::new(),
             });
             if let Some(leaves) = grown.leaves {
                 items.push(RenderItem {
@@ -717,12 +758,60 @@ impl Scene {
                     material: leaf_material,
                     textures: leaf_textures,
                     terrain: None,
+                    joints: Vec::new(),
                 });
             }
         }
         items.extend(self.terrain_items());
 
         Ok(items)
+    }
+
+    /// The joint palette for one skinned entity at scene time `time` (M30), or
+    /// an empty vector when the mesh turns out to carry no skin after all.
+    ///
+    /// A mesh with `JOINTS_0` and a file with no `skin` is a malformed export
+    /// rather than a scene error: it renders unskinned — in bind space, where
+    /// its vertices already are — instead of failing a render that validation
+    /// let through.
+    fn palette_for(
+        &self,
+        entity: Entity,
+        asset: &str,
+        assets: &dyn crate::texture::AssetSource,
+        time: Option<f32>,
+    ) -> Result<Vec<glam::Mat4>> {
+        let rig = assets.load_rig(asset)?;
+        let Some(skin) = &rig.skin else {
+            return Ok(Vec::new());
+        };
+
+        let player = self
+            .world
+            .get::<&crate::components::AnimationPlayer>(entity)
+            .ok()
+            .map(|player| (*player).clone());
+        // A property clip on a skinned entity is legal: it animates components,
+        // not joints, and the rig stays at rest.
+        let clip = player.as_ref().and_then(|player| {
+            match crate::skeleton::ClipRef::parse(&player.clip) {
+                crate::skeleton::ClipRef::Skeletal { clip, .. } => rig.clip_named(clip),
+                crate::skeleton::ClipRef::Property(_) => None,
+            }
+        });
+
+        let local = match (time, &player, clip) {
+            (Some(t), Some(player), Some(clip)) => {
+                crate::animation::local_time(player, crate::skeleton::duration(clip), t)
+            }
+            // No clock, no player, or a player whose clip this file does not
+            // have: the rest pose. It still needs a palette — the vertices are
+            // in skin space, so `global · inverse_bind` is what puts them back
+            // in bind space, and an identity palette would collapse any rig
+            // whose rest pose is not exactly its bind pose.
+            _ => 0.0,
+        };
+        Ok(crate::skeleton::palette(skin, time.and(clip), local))
     }
 
     /// Terrain patches, as draw items with their surfaces generated (M22).
@@ -763,6 +852,7 @@ impl Scene {
                     // producer is the variant the material design defers.
                     textures: crate::texture::MaterialTextures::default(),
                     terrain: Some(terrain.clone()),
+                    joints: Vec::new(),
                 }
             })
             .collect();

@@ -330,3 +330,295 @@ fn one_texture_asset_is_one_arc() {
     assert!(!Arc::ptr_eq(&first, &linear));
     assert_eq!(linear.space, ColorSpace::Linear);
 }
+
+// ── Rigs (M30) ────────────────────────────────────────────────────────────
+
+#[test]
+fn a_skinned_primitive_carries_its_influences_and_stays_in_skin_space() {
+    let mesh = engine_assets::load_gltf(&example("meshes/rigged_arm.gltf")).unwrap();
+
+    assert!(mesh.is_skinned(), "the arm has JOINTS_0 and WEIGHTS_0");
+    assert_eq!(mesh.joint_indices.len(), mesh.positions.len());
+    assert_eq!(mesh.joint_weights.len(), mesh.positions.len());
+    for weights in &mesh.joint_weights {
+        let sum: f32 = weights.iter().sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-5,
+            "glTF weights are normalized per vertex, got {weights:?}"
+        );
+    }
+    for indices in &mesh.joint_indices {
+        assert!(
+            indices.iter().all(|&i| (i as usize) < 3),
+            "the arm has three joints, got {indices:?}"
+        );
+    }
+}
+
+#[test]
+fn a_skinned_primitives_node_transform_is_not_baked_into_its_vertices() {
+    // glTF says the transform of the node referencing a skinned mesh is
+    // ignored: the palette already speaks skin space. Baking it is the bug
+    // this test exists to catch, and its symptom — a character posed correctly
+    // in the wrong place — looks like a scene-authoring mistake rather than a
+    // loader one.
+    let source = std::fs::read_to_string(example("meshes/rigged_arm.gltf")).unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&source).unwrap();
+    let unmoved = engine_assets::load_gltf(&example("meshes/rigged_arm.gltf")).unwrap();
+
+    document["nodes"][0]["translation"] = serde_json::json!([100.0, 0.0, 0.0]);
+    let fixture = Fixture::new("skinned-node-transform");
+    let path = fixture.write("arm.gltf", serde_json::to_string(&document).unwrap());
+    let moved = engine_assets::load_gltf(&path).unwrap();
+
+    assert_eq!(
+        unmoved.positions, moved.positions,
+        "moving the skinned node must not move a single vertex"
+    );
+}
+
+#[test]
+fn an_unskinned_file_carries_no_influences_at_all() {
+    // Which is what keeps every mesh committed before M30 uploading exactly
+    // the vertex buffers it always did.
+    let mesh = engine_assets::load_gltf(&example("meshes/pyramid.gltf")).unwrap();
+    assert!(!mesh.is_skinned());
+    assert!(mesh.joint_indices.is_empty());
+    assert!(mesh.joint_weights.is_empty());
+}
+
+#[test]
+fn a_fifth_influence_per_vertex_is_refused_rather_than_dropped() {
+    let source = std::fs::read_to_string(example("meshes/rigged_arm.gltf")).unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&source).unwrap();
+    // Point JOINTS_1 at the accessor JOINTS_0 already uses: the values are
+    // irrelevant, the attribute's presence is the whole claim.
+    let joints_0 = document["meshes"][0]["primitives"][0]["attributes"]["JOINTS_0"].clone();
+    document["meshes"][0]["primitives"][0]["attributes"]["JOINTS_1"] = joints_0;
+
+    let fixture = Fixture::new("joints-1");
+    let path = fixture.write("arm.gltf", serde_json::to_string(&document).unwrap());
+    let error = engine_assets::load_gltf(&path).unwrap_err();
+
+    assert_eq!(error.error, engine_core::codes::ASSET_UNSUPPORTED);
+    assert!(
+        error.message.contains("JOINTS_1"),
+        "the message has to name the attribute: {}",
+        error.message
+    );
+}
+
+#[test]
+fn the_draw_list_carries_a_palette_that_moves_with_the_clock() {
+    let path = example("scenes/verify/m30_skeletal.json");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let scene = engine_core::Scene::from_source(&source, &path.display().to_string()).unwrap();
+    let assets = engine_assets::AssetServer::for_scene(&path);
+
+    let at = |t: Option<f32>| {
+        let items = scene.render_items_at(&assets, t).unwrap();
+        let find = |name: &str| {
+            items
+                .iter()
+                .find(|item| item.entity == name)
+                .unwrap_or_else(|| panic!("{name} draws"))
+                .joints
+                .clone()
+        };
+        (find("Arm"), find("Rest"), find("Ground"))
+    };
+
+    let (rest_arm, rest_still, ground) = at(None);
+    assert!(
+        ground.is_empty(),
+        "an unskinned mesh carries no palette, which is what keeps it on the \
+         pipeline that compiles mesh.wgsl as it sits on disk"
+    );
+    assert_eq!(rest_arm.len(), 3, "the arm's three joints");
+    assert_eq!(
+        rest_arm, rest_still,
+        "with no clock both arms are the rest pose"
+    );
+
+    // A quarter of the way into Wave, the played arm has moved and the one
+    // with no AnimationPlayer has not.
+    let (waved, still, _) = at(Some(0.25));
+    assert_eq!(still, rest_still, "no player, no motion, at any time");
+    assert_ne!(waved, rest_arm, "the Wave clip poses the played arm");
+}
+
+#[test]
+fn the_rigged_arm_loads_its_skin_in_the_files_joint_order() {
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    let skin = rig.skin.expect("rigged_arm.gltf has a skin");
+
+    assert_eq!(skin.name.as_deref(), Some("ArmRig"));
+    // The skin's own `joints` order, not sorted — a joint's index is written
+    // into the vertex data.
+    let names: Vec<&str> = skin.joints.iter().map(|j| j.name.as_str()).collect();
+    assert_eq!(names, ["Shoulder", "Elbow", "Hand"]);
+
+    assert_eq!(skin.joints[0].parent, None);
+    assert_eq!(skin.joints[1].parent, Some(0));
+    assert_eq!(skin.joints[2].parent, Some(1));
+}
+
+#[test]
+fn the_rest_pose_puts_each_joint_where_the_file_says() {
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    let skin = rig.skin.unwrap();
+    let globals = engine_core::skeleton::joint_globals(&skin, None, 0.0);
+
+    for (index, expected) in [0.0f32, 1.0, 2.0].iter().enumerate() {
+        let position = globals[index].transform_point3(glam::Vec3::ZERO);
+        assert!(
+            (position - glam::Vec3::new(0.0, *expected, 0.0)).length() < 1e-5,
+            "joint {index} is at {position}, expected y={expected}"
+        );
+    }
+
+    // Rest pose == bind pose, so every palette entry is the identity: a
+    // skinned mesh with no clip renders exactly where its vertices sit.
+    for matrix in engine_core::skeleton::palette(&skin, None, 0.0) {
+        assert!(
+            (matrix - glam::Mat4::IDENTITY).abs_diff_eq(glam::Mat4::ZERO, 1e-5),
+            "{matrix} is not the identity"
+        );
+    }
+}
+
+#[test]
+fn the_wave_clip_moves_the_hand_and_returns_it() {
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    let skin = rig.skin.unwrap();
+    let wave = rig.clips.iter().find(|c| c.name == "Wave").unwrap();
+    assert_eq!(engine_core::skeleton::duration(wave), 1.0);
+
+    let hand_at = |t| {
+        engine_core::skeleton::joint_globals(&skin, Some(wave), t)[2]
+            .transform_point3(glam::Vec3::ZERO)
+    };
+
+    let rest = hand_at(0.0);
+    let bent = hand_at(0.5);
+    let back = hand_at(1.0);
+
+    // The claim the milestone makes about itself: motion is verifiable
+    // without a pixel.
+    assert!(
+        (bent - rest).length() > 0.5,
+        "the hand barely moved: {rest} -> {bent}"
+    );
+    // A 60° bend at the elbow swings the hand forward (-Z) and down.
+    assert!(bent.z < -0.8, "the hand did not swing forward: {bent}");
+    assert!(bent.y < rest.y, "the hand did not drop: {bent}");
+    assert!((back - rest).length() < 1e-5, "the clip did not return: {back}");
+}
+
+#[test]
+fn a_channel_outside_the_skin_is_loaded_and_then_ignored() {
+    // `Marker` is a node in the scene that is in no skin. glTF allows the
+    // channel; sampling ignores it; `list-animations` reports it — an ignored
+    // channel nothing names is invisible.
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    let wave = rig.clips.iter().find(|c| c.name == "Wave").unwrap();
+    let skin = rig.skin.unwrap();
+
+    let marker = wave
+        .channels
+        .iter()
+        .find(|c| c.node_name.as_deref() == Some("Marker"))
+        .expect("the Marker channel survived loading");
+    assert!(skin.joint_of_node(marker.node).is_none());
+
+    // Every joint that the elbow rotation does not reach is exactly at rest.
+    let posed = engine_core::skeleton::joint_globals(&skin, Some(wave), 1.0);
+    let rest = engine_core::skeleton::joint_globals(&skin, None, 0.0);
+    assert_eq!(posed[0], rest[0]);
+}
+
+#[test]
+fn every_clip_in_the_file_is_addressable_by_name() {
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    assert_eq!(rig.clip_names(), ["Wave", "Sway"]);
+    assert!(rig.clip_named("Sway").is_some());
+    assert!(rig.clip_named("Walk").is_none());
+}
+
+#[test]
+fn an_unrigged_file_loads_an_empty_rig_rather_than_failing() {
+    // Every mesh in the repo is one of these; "does this file have a rig" is
+    // a question the caller asks, not a failure.
+    let rig = engine_assets::load_rig(&example("meshes/pyramid.gltf")).unwrap();
+    assert!(rig.skin.is_none());
+    assert!(rig.clips.is_empty());
+}
+
+/// A minimal text glTF carrying a skin of `count` joints and nothing else.
+///
+/// No geometry: `load_rig` does not need any, and the point is the joint
+/// budget rather than the mesh.
+fn skin_only_gltf(count: usize) -> String {
+    let nodes: Vec<String> = (0..count)
+        .map(|i| {
+            let children = if i + 1 < count {
+                format!(", \"children\": [{}]", i + 1)
+            } else {
+                String::new()
+            };
+            format!("{{\"name\": \"j{i}\", \"translation\": [0, 1, 0]{children}}}")
+        })
+        .collect();
+    let joints: Vec<String> = (0..count).map(|i| i.to_string()).collect();
+    format!(
+        r#"{{
+          "asset": {{"version": "2.0"}},
+          "scene": 0,
+          "scenes": [{{"nodes": [0]}}],
+          "nodes": [{}],
+          "skins": [{{"name": "Long", "joints": [{}]}}]
+        }}"#,
+        nodes.join(","),
+        joints.join(",")
+    )
+}
+
+#[test]
+fn a_skin_over_the_palette_budget_fails_validation_before_any_device_exists() {
+    // The `MAX_POINT_LIGHTS` / `MAX_ROAD_KERBS` idiom: a fixed-size uniform
+    // gets an error at validate time, never a character that renders
+    // correctly up to joint 128 and explodes past it.
+    let fixture = Fixture::new("too-many-joints");
+    let over = engine_core::skeleton::MAX_JOINTS + 1;
+    fixture.write("long.gltf", skin_only_gltf(over));
+    fixture.write("ok.gltf", skin_only_gltf(engine_core::skeleton::MAX_JOINTS));
+
+    let scene = |asset: &str| {
+        format!(
+            r#"{{"name":"s","entities":[{{"name":"A","components":[
+                {{"type":"Mesh","asset":"{asset}"}},
+                {{"type":"AnimationPlayer","clip":"{asset}#Nope"}}
+            ]}}]}}"#
+        )
+    };
+
+    let path = fixture.write("scene.json", scene("long.gltf"));
+    let errors =
+        engine_assets::validate_scene_assets(&scene("long.gltf"), &path.display().to_string());
+    let codes: Vec<&str> = errors.iter().map(|e| e.error).collect();
+    assert!(
+        codes.contains(&"too_many_joints"),
+        "a {over}-joint skin was accepted: {codes:?}"
+    );
+
+    // Exactly at the limit is fine — the ceiling is inclusive.
+    let path = fixture.write("ok.json", scene("ok.gltf"));
+    let errors =
+        engine_assets::validate_scene_assets(&scene("ok.gltf"), &path.display().to_string());
+    let codes: Vec<&str> = errors.iter().map(|e| e.error).collect();
+    assert!(
+        !codes.contains(&"too_many_joints"),
+        "a {}-joint skin was refused: {codes:?}",
+        engine_core::skeleton::MAX_JOINTS
+    );
+}

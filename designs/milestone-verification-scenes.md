@@ -1281,6 +1281,36 @@ HUD pixels via `viewport_width`/`viewport_height`.
 milestone is input, script API and CLI plumbing — and `bin/verify-baselines` reported all 31
 pre-existing artifacts unchanged. (One artifact failed on the first of three sweeps and passed on
 both re-runs: the terrain/MSAA residue M22 documents.)
+## M30 — Skeletal animation: `verify/m30_skeletal.json`
+
+Two copies of `examples/meshes/rigged_arm.gltf` side by side on a plane, one with an
+`AnimationPlayer` on `#Wave` and one with none, rendered at `--time 0.4`.
+
+**The two arms are the assertion.** They share a file, a mesh and a material, so anything that made
+*both* wrong — a palette that never reached the GPU, a vertex buffer bound a slot out of order —
+would still leave them identical; only real skinning makes one bend and the other stand. And the
+bent arm's **shadow bends with it**, which is the skinned caster earning its pipeline: `shadow.wgsl`
+reads nothing but the model matrix, so without a second one a walking character casts its rest pose.
+
+Per M22's rule the camera aims at its subject rather than across a landscape, so this fixture
+carries a hard bit-exact pin (`the_m30_skeletal_fixture_pins_a_posed_rig_and_its_shadow`).
+
+What it covers: `JOINTS_0`/`WEIGHTS_0` through the loader, a skinned primitive loaded **unbaked**,
+the CPU palette on the draw list, the group-0 palette binding with its own dynamic offset, the
+vertex stage assembled from contributions, the skinned opaque pipeline, and the skinned shadow
+caster. Not covered by the fixture and covered by tests instead: the textured, transparent and
+refracting skinned variants, and the cut-out skinned caster.
+
+**Measured rather than assumed**, since M19 and M20 made CPU-generated geometry per-build-profile:
+this baseline renders **byte-identically from the debug and release binaries**. Three joints of
+slerp is not enough libm to reach a pixel. A rig with a hundred joints may not inherit that, so
+re-measure rather than quote this.
+
+**The bit-exactness half** is the A/B between binaries, and it is the milestone's structural risk
+rather than a formality: S1 rewrote the mechanism that guards M16's four untouchable lines, turning
+whole-stage replacement of the vertex stage into an assembly from per-producer contributions. All
+**29 of 29** committed render artifacts rendered byte for byte as they did at `main`, and the
+producer-less assembly is asserted equal to the stage in `mesh.wgsl` character for character.
 
 ---
 
@@ -1303,6 +1333,7 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 | M26 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M27 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M28 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M30 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)

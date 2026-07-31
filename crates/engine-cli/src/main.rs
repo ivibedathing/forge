@@ -159,13 +159,34 @@ enum Command {
         camera: Option<String>,
     },
 
-    /// Every animation clip reachable from a scene or clip file, as JSON.
+    /// Every animation clip reachable from a scene, a clip file, or a glTF.
     ListAnimations {
-        /// A scene file or a .anim.json clip file.
+        /// A scene file, a .anim.json clip file, or a .gltf/.glb.
         path: Option<PathBuf>,
         /// Print the clip-file JSON Schema instead.
         #[arg(long)]
         schema: bool,
+    },
+
+    /// The skeleton of a rigged glTF, as JSON: every joint's name, parent,
+    /// index and rest transform.
+    ///
+    /// With --time, each joint's *posed* world transform at that moment —
+    /// which is the thing a filmstrip cannot tell you. A contact sheet shows
+    /// that something moved; only this says the hand reached the doorknob.
+    ListJoints {
+        /// A scene file, or a .gltf/.glb directly.
+        path: PathBuf,
+        /// Which skinned entity, when a scene has more than one.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Pose the rig at this scene time instead of reporting the rest pose.
+        #[arg(long, allow_hyphen_values = true)]
+        time: Option<f32>,
+        /// Which clip to pose with, when reading a .gltf/.glb directly. In a
+        /// scene the entity's AnimationPlayer already says.
+        #[arg(long)]
+        clip: Option<String>,
     },
 
     /// Step physics headlessly: build the world, advance N fixed steps.
@@ -415,6 +436,12 @@ fn main() {
             camera.as_deref(),
         ),
         Command::ListAnimations { path, schema } => list_animations(path, schema),
+        Command::ListJoints {
+            path,
+            entity,
+            time,
+            clip,
+        } => list_joints(path, entity, time, clip),
         Command::Edit {
             scene,
             watch,
@@ -1253,8 +1280,8 @@ fn diff_render(
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
-    let items = scene.render_items(&assets)?;
     let render_time = scene_time(time, steps, &scene);
+    let items = scene.render_items_at(&assets, Some(render_time))?;
     let (lights, environment) = scene.resolved_at(render_time);
 
     let (actual, adapter) = engine_render::offscreen::render_with_adapter(
@@ -1442,7 +1469,7 @@ fn filmstrip(
             start + (end - start) * frame as f32 / (frames - 1) as f32
         };
         engine_core::animation::apply_all(&mut scene, &players, t);
-        let items = scene.render_items(&assets)?;
+        let items = scene.render_items_at(&assets, Some(t))?;
         let (lights, environment) = scene.resolved_at(t);
         // Filmstrip samples animation time only; particles advance with
         // --steps, which filmstrip does not take, so none are drawn. Water is
@@ -1517,6 +1544,19 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
     };
 
     let display = path.display().to_string();
+
+    // A glTF asked about directly (M30). Sniffing the extension rather than
+    // the contents, because a `.glb` is not text and a `.gltf` is JSON that
+    // would otherwise fall through to the scene parser.
+    if engine_core::skeleton::is_gltf_path(&display) {
+        let rig = engine_assets::load_rig(&path)?;
+        println!(
+            "{}",
+            serde_json::json!({ "clips": gltf_clip_reports(&rig, &display) })
+        );
+        return Ok(());
+    }
+
     let source = std::fs::read_to_string(&path).map_err(|e| {
         EngineError::new(codes::SCENE_UNREADABLE, format!("could not read: {e}")).file(&display)
     })?;
@@ -1526,6 +1566,9 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
         serde_json::json!({
             "name": clip.name,
             "source": source_path,
+            // Named since M30, when a second kind arrived: a caller reading
+            // `tracks` versus `channels` should not have to guess which.
+            "kind": "property",
             "duration": engine_core::animation::duration(clip) as f64,
             "tracks": clip.tracks.iter().map(|t| serde_json::json!({
                 "entity": t.entity,
@@ -1548,17 +1591,262 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
             })?;
         vec![clip_report(&clip, &display)]
     } else {
-        // A scene: every player's clip.
+        // A scene: every player's clip, property and skeletal alike — one
+        // command answers "what animates here" whichever kind it is.
         let scene = load_scene(&path)?;
         let players = engine_core::animation::load_players(&scene, &path)?;
-        players
+        let mut clips: Vec<serde_json::Value> = players
             .iter()
             .map(|p| clip_report(&p.clip, &p.player.clip))
-            .collect()
+            .collect();
+
+        let assets = engine_assets::AssetServer::for_scene(&path);
+        for skinned in engine_core::skeleton::skinned_entities(&scene, &assets)? {
+            let Some(clip) = skinned.selected_clip() else {
+                continue;
+            };
+            clips.push(skeletal_clip_report(
+                clip,
+                &format!("{}#{}", skinned.asset, clip.name),
+                Some(&skinned.name),
+                skinned.rig.skin.as_ref(),
+            ));
+        }
+        clips
     };
 
     println!("{}", serde_json::json!({ "clips": clips }));
     Ok(())
+}
+
+/// Every clip in a glTF, reported the way a property clip is — same shape, so
+/// one `jq` expression reads both.
+fn gltf_clip_reports(
+    rig: &engine_core::skeleton::Rig,
+    display: &str,
+) -> Vec<serde_json::Value> {
+    rig.clips
+        .iter()
+        .map(|clip| {
+            skeletal_clip_report(
+                clip,
+                &format!("{display}#{}", clip.name),
+                None,
+                rig.skin.as_ref(),
+            )
+        })
+        .collect()
+}
+
+/// One skeletal clip as JSON.
+///
+/// Each channel carries the `joint` it drives — **null when it targets a node
+/// the skin does not use**, which is exactly the case glTF allows and sampling
+/// ignores. An ignored channel nothing reports is invisible; an ignored
+/// channel the CLI names is a fact about the asset. `sampled` is the same
+/// judgement stated outright, so a caller need not re-derive it.
+fn skeletal_clip_report(
+    clip: &engine_core::skeleton::SkeletalClip,
+    source: &str,
+    entity: Option<&str>,
+    skin: Option<&engine_core::skeleton::SkinData>,
+) -> serde_json::Value {
+    let channels: Vec<serde_json::Value> = clip
+        .channels
+        .iter()
+        .map(|channel| {
+            let joint = skin.and_then(|skin| skin.joint_of_node(channel.node));
+            serde_json::json!({
+                "node": channel.node,
+                "node_name": channel.node_name,
+                "joint": joint,
+                "property": channel.property.as_str(),
+                "interpolation": channel.interpolation.as_str(),
+                "keys": channel.times.len(),
+                "sampled": joint.is_some() && channel.is_sampleable(),
+            })
+        })
+        .collect();
+
+    let mut report = serde_json::json!({
+        "name": clip.name,
+        "source": source,
+        "kind": "skeletal",
+        "duration": engine_core::skeleton::duration(clip) as f64,
+        "channels": channels,
+    });
+    if let Some(entity) = entity {
+        report["entity"] = serde_json::Value::String(entity.to_string());
+    }
+    report
+}
+
+/// `engine list-joints` — the command that makes M30 agent-native rather than
+/// merely present.
+///
+/// A filmstrip shows that *something* moved; it never shows that the hand
+/// reached the doorknob. This does, and it needs no `Collider` and no GPU,
+/// which is what separates it from every other way of asking where something
+/// is.
+fn list_joints(
+    path: PathBuf,
+    entity: Option<String>,
+    time: Option<f32>,
+    clip: Option<String>,
+) -> Result<()> {
+    let display = path.display().to_string();
+
+    // A `.gltf`/`.glb` asked about directly reports the rig; a scene reports
+    // every skinned entity's, or one with `--entity`.
+    let rigs: Vec<serde_json::Value> = if engine_core::skeleton::is_gltf_path(&display) {
+        let rig = engine_assets::load_rig(&path)?;
+        let Some(skin) = rig.skin.as_ref() else {
+            return Err(EngineError::new(
+                codes::MESH_HAS_NO_SKIN,
+                format!("glTF file {display:?} carries no skin"),
+            )
+            .file(&display));
+        };
+        let selected = match &clip {
+            Some(name) => Some(rig.clip_named(name).ok_or_else(|| {
+                EngineError::new(
+                    codes::UNKNOWN_CLIP,
+                    format!("glTF file {display:?} has no animation named {name:?}"),
+                )
+                .file(&display)
+                .suggest_from(name, rig.clip_names())
+            })?),
+            None => None,
+        };
+        // No player, so scene time and clip time are the same thing.
+        vec![joint_report(
+            &display,
+            None,
+            skin,
+            selected,
+            time,
+            time,
+            engine_core::components::Transform::default(),
+        )]
+    } else {
+        let scene = load_scene(&path)?;
+        let assets = engine_assets::AssetServer::for_scene(&path);
+        let skinned = engine_core::skeleton::skinned_entities(&scene, &assets)?;
+
+        if let Some(wanted) = &entity {
+            let found = skinned.iter().find(|s| &s.name == wanted).ok_or_else(|| {
+                EngineError::new(
+                    codes::UNKNOWN_ENTITY,
+                    format!("no skinned entity named {wanted:?} in {display}"),
+                )
+                .file(&display)
+                .entity(wanted)
+                .suggest_from(wanted, skinned.iter().map(|s| s.name.as_str()))
+            })?;
+            vec![entity_joint_report(found, time)]
+        } else {
+            skinned
+                .iter()
+                .map(|found| entity_joint_report(found, time))
+                .collect()
+        }
+    };
+
+    println!("{}", serde_json::json!({ "rigs": rigs }));
+    Ok(())
+}
+
+fn entity_joint_report(
+    skinned: &engine_core::skeleton::SkinnedEntity,
+    time: Option<f32>,
+) -> serde_json::Value {
+    let skin = skinned.rig.skin.as_ref().expect("skinned_entities filtered");
+    joint_report(
+        &skinned.asset,
+        Some(&skinned.name),
+        skin,
+        skinned.selected_clip(),
+        time,
+        // The player's speed, offset and looping map scene time onto clip
+        // time, so `--time` here means what it means everywhere else — and
+        // the report carries both, because "why is the pose the same at 0 and
+        // at 1" is answered by the wrap, not by the joints.
+        time.map(|t| skinned.local_time(t)),
+        skinned.transform,
+    )
+}
+
+/// One rig as JSON: the joints in the skin's own order, each with its index.
+///
+/// Order is the skin's, never sorted — a joint's index is written into the
+/// vertex data, so it is a fact about the asset rather than a presentation
+/// choice, and carrying `index` is how the report says so.
+fn joint_report(
+    asset: &str,
+    entity: Option<&str>,
+    skin: &engine_core::skeleton::SkinData,
+    clip: Option<&engine_core::skeleton::SkeletalClip>,
+    time: Option<f32>,
+    clip_time: Option<f32>,
+    transform: engine_core::components::Transform,
+) -> serde_json::Value {
+    // Without `--time`, the rest pose; with it, the pose at that moment.
+    let globals = engine_core::skeleton::joint_globals(
+        skin,
+        clip.filter(|_| clip_time.is_some()),
+        clip_time.unwrap_or(0.0),
+    );
+    // glTF ignores the skinned mesh node's own transform, so the entity's
+    // `Transform` is what puts the rig in the world — and world coordinates
+    // are what a caller assigns to something they want in that hand.
+    let model = transform.matrix();
+
+    let joints: Vec<serde_json::Value> = skin
+        .joints
+        .iter()
+        .zip(&globals)
+        .enumerate()
+        .map(|(index, (joint, global))| {
+            let world = model * *global;
+            let (scale, rotation, translation) = world.to_scale_rotation_translation();
+            serde_json::json!({
+                "index": index,
+                "name": joint.name,
+                "parent": joint.parent,
+                "parent_name": joint.parent.map(|p| skin.joints[p].name.clone()),
+                "rest": {
+                    "position": joint.rest.translation.to_array(),
+                    "rotation": joint.rest.rotation.to_array(),
+                    "scale": joint.rest.scale.to_array(),
+                },
+                "world": {
+                    "position": translation.to_array(),
+                    "rotation": rotation.to_array(),
+                    "scale": scale.to_array(),
+                },
+            })
+        })
+        .collect();
+
+    let mut report = serde_json::json!({
+        "asset": asset,
+        "skin": skin.name,
+        "joint_count": skin.joints.len(),
+        "joints": joints,
+    });
+    if let Some(entity) = entity {
+        report["entity"] = serde_json::Value::String(entity.to_string());
+    }
+    if let Some(clip) = clip {
+        report["clip"] = serde_json::Value::String(clip.name.clone());
+    }
+    if let Some(time) = time {
+        report["time"] = serde_json::json!(time as f64);
+    }
+    if let Some(clip_time) = clip_time {
+        report["clip_time"] = serde_json::json!(clip_time as f64);
+    }
+    report
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1590,9 +1878,9 @@ fn screenshot(
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
-    let items = scene.render_items(&assets)?;
-    let drawn = items.len();
     let render_time = scene_time(time, steps, &scene);
+    let items = scene.render_items_at(&assets, Some(render_time))?;
+    let drawn = items.len();
     let (lights, environment) = scene.resolved_at(render_time);
 
     let image = engine_render::offscreen::render(
@@ -1673,6 +1961,7 @@ fn run_scene(
         &scene_path,
         scene.physics.timestep_hz,
         scene.daylight.clone(),
+        &assets,
     )?;
     let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
     let has_emitters = engine_core::particles::ParticleSystem::scene_has_emitters(&scene.world);

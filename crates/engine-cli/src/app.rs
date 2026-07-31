@@ -441,7 +441,11 @@ impl ViewerApp {
                             sim.accumulator -= dt;
                         }
                     }
-                    if let Ok(fresh) = sim.scene.render_items(&sim.assets) {
+                    // The same whole-fixed-step clock water and daylight run
+                    // on, so a rig walks in the viewer at the pose a
+                    // screenshot at this step number would show.
+                    let posed = sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32;
+                    if let Ok(fresh) = sim.scene.render_items_at(&sim.assets, Some(posed)) {
                         *items = fresh;
                     }
                     *water = sim.scene.water_items();

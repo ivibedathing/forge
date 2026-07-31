@@ -9,11 +9,12 @@ it are still open (§9).
 
 ## Current state
 
-**M0–M29 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M30 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
-M28 the mouse, M29 meadows. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
+M28 the mouse, M29 meadows, M30 skeletal animation. (M7 editor at scope E0–E2 + validation panel +
+`--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -39,7 +40,8 @@ engine simulate <scene.json> --steps N [--input f] [--bake out.json] [--trace t.
 #   without reading the image (M25)
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
-engine list-animations <scene-or-clip> [--schema]
+engine list-animations <scene-or-clip> [--schema]  # glTF clips too, with their channel targets (M27)
+engine list-joints <scene-or-mesh> [--entity Name] [--time T]  # the rig, and where it is (M27)
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
 engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
@@ -195,7 +197,7 @@ a wall-clock accumulator; headless is canonical. Physics tests are GPU-free and 
 
 ## Animation (M9)
 
-Property clips (skeletal glTF deferred like editor E3/E4). Clips are JSON (`*.anim.json`, schema in
+Property clips; skeletal glTF landed in M27 and shares this clock. Clips are JSON (`*.anim.json`, schema in
 `schemas/animation-schema.json`, regenerated via `engine list-animations --schema`), animating
 `Component.field` on entities by name. Pose is a pure function of (files, time) — `--time` on
 screenshot/diff-render is reproducible down to `cmp`-identical PNGs, and t=loop-period equals t=0
@@ -848,7 +850,12 @@ in one of seven consecutive full sweeps, the other six clean. Same residue, same
 tolerance: **the whole tour is in this class, not three named frames**, so a failure on any
 `showcase_*` at a delta of 1 and a couple of dozen pixels is worth a second sweep before it is worth
 debugging. Everything else in the manifest is bit-exact and a failure there is real — the M27
-fixtures, which aim at their subject with no terrain in frame, never flaked across ten sweeps. **The general rule: fine geometry
+fixtures, which aim at their subject with no terrain in frame, never flaked across ten sweeps.
+**M30 measured the rate instead of counting sweeps**, which is the cheaper way to settle one of
+these: ten `--steps 585` renders of the *unchanged* tour came back as **three distinct images from
+the M30 binary and two from `main`'s** — nondeterministic on both sides, so the sweep is a lossy
+instrument and re-running it is a coin flip. When a sweep fails, `md5` N renders of the one frame:
+a stable-but-different render is a real change, a different-every-time render is the adapter. **The general rule: fine geometry
 against relief under MSAA is where this adapter stops being reproducible, so a new fixture wanting a
 hard pin should aim its camera at its subject rather than across a landscape.** Verified by
 `engine-render/tests/terrain.rs` (including `a_flat_single_layer_patch_is_exactly_a_painted_plane`,
@@ -1104,6 +1111,79 @@ including the central one (`reach`'s `+ 0.55` — a rigid vertical wire up each 
 heads are **stretched spikelets** not beads, and the flower colour sits **near the plant's** or it
 scatters as dots. Not here: trampling and thatch (both need history, and history is hidden state), a
 spatial wave across the field, textured or alpha-cut blades, slope-aligned plants, and LOD.
+## Skeletal animation (M30, `designs/skeletal-animation-design.md`)
+
+**CPU skeleton, GPU skin, and both halves of that sentence are forced.** Skinning cannot happen on
+the CPU: posing vertices there mints a new `Arc<MeshData>` every frame and defeats M15's upload
+cache (M18's argument, same answer). The skeleton cannot happen on the GPU without costing the
+milestone its point — a joint palette is a few dozen matrices, and *because* they exist on the CPU
+`engine list-joints --time 0.7` can say where every joint went, a script can put a torch in a hand,
+and the whole sampling path is GPU-free and unconditionally testable the way `daylight.rs` is.
+
+- **No new component.** `AnimationPlayer.clip` gains the fragment form `meshes/robot.glb#Walk` that
+  `animation-system-design.md` §4 specified and nothing had used. A skin is a property of the
+  *asset*, and `Mesh.asset` already names it; a `Skeleton` component would be a second source of
+  truth for what the file contains. The fragment is **required** even when the file has one clip —
+  defaulting is friendly right up until someone exports a second one and which clip plays changes
+  silently. Ownership rules, all validation errors: `skeletal_player_mesh_mismatch`,
+  `clip_needs_fragment`, `mesh_has_no_skin`, `unknown_clip` (with `did_you_mean`), and
+  `too_many_joints` past `MAX_JOINTS` (128) — refused before a device exists rather than a rig that
+  renders correctly up to joint 128.
+- **Rotation is a quaternion here, slerped, shortest-path — the opposite of M9's rule**, and the
+  distinction is *who wrote the numbers*. A property clip's keys were typed by an agent into JSON
+  where `[0, 360, 0]` is a sentence that must actually spin; a skeletal clip's came out of a DCC
+  tool through a specified format where the only correct reading is the spec's. Don't "unify" them.
+- **A skinned primitive loads unbaked.** glTF says the transform of the node referencing a skinned
+  mesh is *ignored* — the palette already speaks skin space — while `gltf_mesh.rs` bakes node
+  transforms for static geometry, which is right for that and exactly wrong here. This is the single
+  most likely thing to be "simplified" back into a bug; the symptom is a character posed correctly
+  in the wrong place, or one that doubles its own root transform. `JOINTS_1` (a fifth influence) is
+  **refused**, not dropped: a dropped influence is a wrist that collapses under rotation.
+- **The palette rides group 0 at binding 1** with its own dynamic offset — `downlevel_defaults` caps
+  `max_bind_groups` at 4 and M26 spent the fourth on materials, so there is nowhere else. Packed as
+  **three `vec4` rows, not `mat4x4`**: a joint matrix's fourth column is always `(0,0,0,1)` and
+  storing it wastes a quarter of the 16 KiB budget. **Joint order is the skin's own `joints` order
+  and must not be sorted** — unlike point lights, a joint's index is written into the vertex data.
+- **The vertex stage is assembled from producer contributions**, not replaced wholesale. Texturing
+  needs a UV the plain stage does not carry and skinning needs two more attributes, and a rigged
+  character is precisely the thing that wants both — whole-stage replacement worked while exactly
+  one producer did it. A `VertexContribution` names attributes, varyings, statements, and at most
+  one expression transformed in place of `position`; `an_unassisted_vertex_stage_is_the_one_in_the_file`
+  asserts the empty assembly equals `mesh.wgsl`'s stage **character for character**, which is what
+  keeps M16's four untouchable lines reachable. The A/B said 29 of 29 committed render artifacts
+  byte-identical.
+- **The skinned pipelines are built lazily**, on the first frame that has a skinned draw — six
+  shader modules is a real startup cost and one scene in this repo has a rig. Same precedent as the
+  shadow map, the 1×1 white texture and the colour copy.
+- **A skinned caster is its own pipeline**, because `shadow.wgsl` reads nothing but the model matrix
+  and a walking character would otherwise cast its **rest pose** — a wrongness that reads as a
+  renderer bug and is a missing pipeline. Both casters are skinned (solid and M26's alpha-cutout).
+  The solid one is front-face culled, M16's peeling margin, which applies to characters too.
+- **Scripts get two read-only getters and no setter**: `world.joint_position(entity, joint)` and
+  `world.joint_transform(entity, joint)` (position plus XYZ Euler degrees, six numbers in one call
+  so the rig is posed once). M21's reason — a script-settable joint is hidden state (invariant 2)
+  and the pose must stay a function of (files, time). Hanging a prop off a hand is then an ordinary
+  `set_position`, which bakes change-based and shows up in the trace. A mistyped joint is a located
+  runtime error with `did_you_mean`, matching `world.key`.
+- **The rest pose still needs a palette.** `render_items(assets)` is the rest pose and
+  `render_items_at(assets, Some(t))` is posed; the tempting shortcut of an identity palette collapses
+  any rig whose rest pose is not exactly its bind pose, since the vertices live in skin space.
+
+Fixture `verify/m27_skeletal.json` at `--time 0.4`: two copies of `examples/meshes/rigged_arm.gltf`,
+one playing `Wave`. **The two arms are the assertion** — they share a file, a mesh and a material, so
+anything that made both wrong would leave them identical; only real skinning makes one bend and the
+other stand, and the bent one's shadow bends with it. **Measured rather than assumed** (§9 warned it
+might go the other way): this baseline is *not* per-build-profile, unlike trees and clouds — three
+joints of slerp is not enough libm to reach a pixel, and a hundred-joint rig may not inherit that.
+Test assets are generated text glTF like `pyramid.gltf`: `make_rigged_arm.py` (3 joints, the fixture)
+and `make_rigged_walker.py` (13 joints in a branching tree, `Walk` + `Idle`, UVs — the tour's
+character, and the only **skinned × textured** draw in the repo).
+
+Not here, deliberately: blending, crossfades and state machines (M9 §8's rejection still standing —
+blending reintroduces exactly the nondeterminism that made two clips on one property an error), IK
+and root motion, retargeting, morph targets, skinned colliders (a skinned mesh is visual; physics
+sees whatever `Collider` the entity carries, posed by its `Transform`), per-joint attachment
+components, and editor picking against the posed mesh — CPU ray picking hits the rest pose.
 
 ## Showcase tour (`designs/showcase-tour.md`)
 
@@ -1129,7 +1209,11 @@ fails on any schema component the tour does not use, so a new component's commit
 beside it, since `daylight` is a block the component walk could never have seen missing. M21 put the
 first hole in the component contract's premise, because `drives_sun` makes `DirectionalLight` a
 validation error and two components stopped being addable; that exemption is *computed* from the
-validation rule, not listed, so it evaporates if the tour stops driving the sun.
+validation rule, not listed, so it evaporates if the tour stops driving the sun. **M27 put the second
+hole in it, with a different shape**: skeletal animation adds no component at all (a skin is a
+property of the asset), so a contract keyed on components can never notice the system exists — M21's
+hole is an exemption the contract computes, this one is a system it was never able to see. The tour
+carries a rigged `Walker` anyway, because "every system running at once" is the claim.
 
 The tour shows M26 too: the ice **refracts** — `ior: 1.31` with a thickness that scales with the
 block and a faint blue-green `attenuation` — and **every `Mesh` in it is textured**, from the four
@@ -1163,6 +1247,18 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
 
 Those edits are why the six showcase baselines were re-blessed — the sweep confirmed the other 25
 held bit-exactly, since no engine code was touched.
+
+**M27 adds the `Walker`** to station 01: thirteen joints out of `examples/meshes/rigged_walker.gltf`
+playing a one-second `Walk`, carried around a circuit by `tour_wildlife.rhai` while the clip does the
+legs — the milestone's division of labour, since no script ever touches a joint. It is the repo's
+only **skinned × textured** draw (`plate_normal` + `plate_orm`, the truck's maps), which is the
+composition the vertex-stage seam was rebuilt for. It stands *between* the station-01 camera and the
+trees deliberately: a two-metre figure thirty metres back behind a canopy is a pale smudge. Five of
+the six showcase baselines were re-blessed for it and `showcase_450` was **byte-identical** — station
+03's camera is aimed the other way, which is the cheap confirmation that one added entity changed
+only the frames it is in. Faked and named as such in the tour doc: the stride is hand-tuned to the
+speed rather than driven by it, there is no foot IK, and `Idle` is in the file but never crossfaded
+to, because a crossfade is the nondeterminism M9 refused.
 
 Station 04 fires all three `Breakable` triggers in one run (collision at ~585, `break_entity` at 601,
 `explode` at 636). What is real: particles, physics, fragments, the ice (real
@@ -1373,7 +1469,7 @@ assets → M4 materials + lighting → M5 validation hardening → M6 diff-rende
 M8 physics → M9 animation (A0–A1) → M10 scripting — **the roadmap is complete.** Each milestone from
 M4 on ends by running its fixture from `designs/milestone-verification-scenes.md`.
 
-Deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF + GPU skinning, the
+Deferred follow-ups: editor E3 (structure edits) / E4 (undo), the
 M5-era deferrals (`--fix`, watch mode), and — after M16–M20 — planar reflections, shadow cascades (which
 is also what cloud shadows need), shadows from point lights, spot lights, a CPU wave evaluator and
 buoyancy, a light on the tour's explosion, a sky-dome cloud layer for cirrus and overcast, and
@@ -1383,7 +1479,10 @@ bark is authored from them. **Alpha-cut leaves are still a missing feature**, no
 and an `alpha_cutoff` mean new `Tree` fields, a schema regeneration, and a validation pass.) After M23: road junctions (two roads crossing wants a patch primitive, not a ribbon), banked
 cross-sections, per-point road width, roads that follow a `Terrain` instead of carrying their own
 heights, and textures for asphalt grain (analytic markings beat a texture for anything periodic, but
-grain is not periodic).
+grain is not periodic). After M27: foot IK (the tour's walker rides the terrain by its root, which
+is not the same as planting on it), a locomotion system that drives clip rate from ground speed
+instead of leaving the stride tuned by hand, skinned collider proxies, and editor picking against
+the posed mesh. **Blending stays rejected**, not deferred — see the design's §1.
 
 ## Out of scope for v1
 
