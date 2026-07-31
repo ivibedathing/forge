@@ -29,7 +29,7 @@
 
 use std::sync::Arc;
 
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 
 use crate::components::{
     HudAlign, HudAnchor, HudImage, HudInteract, HudLayout, HudPanel, HudRect, HudText, HudTextAlign,
@@ -732,6 +732,132 @@ fn place_children(
     }
 }
 
+/// What the pointer is doing to the overlay: hover, an in-flight press, and
+/// the click that press turned into.
+///
+/// Updated once per fixed step, **before scripts**, from M28's cursor and
+/// button set. There is no event queue and no dispatch — a script asks
+/// `world.clicked(name)`, exactly as `world.key` asks about a key. §8 of the
+/// design lists why an `on_click` field was rejected; the short version is
+/// that a button which runs code is a *binding*, and bindings are game logic,
+/// and game logic lives in scripts.
+///
+/// **The press capture is runtime state and is deliberately not baked.** It is
+/// of the same kind as `world.state` and rapier's contact state:
+/// replay-deterministic, reset by a fresh run, and meaningless in a file —
+/// a half-finished click is not a property of the scene.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Interaction {
+    /// The element under the cursor this step.
+    hovered: Option<String>,
+    /// The element a still-held press started on. This is the one thing a
+    /// polled API cannot derive for itself, which is why the engine keeps it.
+    captured: Option<String>,
+    /// The element released over this step — true for exactly one step.
+    clicked: Option<String>,
+    /// Whether a button was down at the end of the previous step, so a press
+    /// edge can be told from a hold.
+    was_down: bool,
+}
+
+impl Interaction {
+    /// Advance one fixed step.
+    ///
+    /// `cursor` is in framebuffer pixels — M28 stores a *fraction*, and the
+    /// caller multiplies by the frame it is laying out against, because that
+    /// caller is the one that knows which frame this is (§7).
+    pub fn update(&mut self, tree: &HudTree, layout: &UiLayout, cursor: Vec2, button_down: bool) {
+        let under = layout
+            .hit(tree, cursor.x, cursor.y)
+            .map(|node| tree.nodes[node].entity.clone());
+
+        self.hovered = under.clone();
+        self.clicked = None;
+
+        match (self.was_down, button_down) {
+            // Press edge: whatever is under the cursor now owns this press.
+            (false, true) => self.captured = under,
+            // Release: a click only if the release landed on the element the
+            // press started on. Pressing a button and sliding off it is how
+            // every UI lets you change your mind.
+            (true, false) => {
+                if self.captured.is_some() && self.captured == under {
+                    self.clicked = self.captured.take();
+                } else {
+                    self.captured = None;
+                }
+            }
+            _ => {}
+        }
+        self.was_down = button_down;
+    }
+
+    /// Is the cursor over this element right now?
+    pub fn hovered(&self, entity: &str) -> bool {
+        self.hovered.as_deref() == Some(entity)
+    }
+
+    /// Did a press start on this element and is it still held? True whether or
+    /// not the cursor has since slid off, which is what makes a slide-off
+    /// release *not* a click while still showing the button as armed.
+    pub fn pressed(&self, entity: &str) -> bool {
+        self.captured.as_deref() == Some(entity)
+    }
+
+    /// Was this element clicked on this exact step?
+    pub fn clicked(&self, entity: &str) -> bool {
+        self.clicked.as_deref() == Some(entity)
+    }
+
+    /// The colour multiplier this element's `HudInteract` asks for right now.
+    ///
+    /// Press wins over hover, since a held button is over its own hover. The
+    /// default tints are `[1, 1, 1]`, so an element that is not being pointed
+    /// at — and every element in a scene with no cursor on it — multiplies by
+    /// one and renders exactly as it would have without the component.
+    pub fn tint(&self, node: &HudNode) -> Vec3 {
+        let Some(interact) = &node.interact else {
+            return Vec3::ONE;
+        };
+        if interact.disabled {
+            return Vec3::ONE;
+        }
+        if self.pressed(&node.entity) {
+            interact.press_tint
+        } else if self.hovered(&node.entity) {
+            interact.hover_tint
+        } else {
+            Vec3::ONE
+        }
+    }
+
+    /// Multiply every interactive element's colour by its current tint.
+    ///
+    /// Applied to the extracted tree just before it is drawn, rather than
+    /// inside the rasterizer: the renderer has no business knowing what a
+    /// pointer is, and `hud::rasterize` stays a pure function of (tree, lines,
+    /// size). Clamped after multiplying, since a hover tint brightens and may
+    /// legally exceed 1.
+    pub fn apply_tints(&self, tree: &mut HudTree) {
+        for node in &mut tree.nodes {
+            if node.interact.is_none() {
+                continue;
+            }
+            let tint = self.tint(node);
+            if tint == Vec3::ONE {
+                continue;
+            }
+            let tinted = |c: Vec3| (c * tint).clamp(Vec3::ZERO, Vec3::ONE);
+            match &mut node.kind {
+                HudKind::Panel(p) => p.color = tinted(p.color),
+                HudKind::Rect(r) => r.color = tinted(r.color),
+                HudKind::Image(i, _) => i.tint = tinted(i.tint),
+                HudKind::Text(t) => t.color = tinted(t.color),
+            }
+        }
+    }
+}
+
 /// Every element's parent chain, for the validation pass's cycle and depth
 /// checks — returned as names so the error message can print the ring.
 ///
@@ -759,7 +885,6 @@ pub fn parent_chain(tree: &HudTree, index: usize) -> Result<Vec<String>, Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::Vec3;
 
     fn panel(layout: HudLayout) -> HudPanel {
         HudPanel {
@@ -1052,6 +1177,147 @@ mod tests {
         assert_eq!(out.hit(&scene, 10.0, 10.0), Some(1), "later wins");
         assert_eq!(out.hit(&scene, 70.0, 70.0), Some(0), "only the under one");
         assert_eq!(out.hit(&scene, 150.0, 150.0), None);
+    }
+
+    fn button(entity: &str, size: [f32; 2], offset: [f32; 2]) -> HudNode {
+        let mut r = rect(size);
+        r.offset = Vec2::from(offset);
+        HudNode {
+            entity: entity.into(),
+            kind: HudKind::Rect(r),
+            interact: Some(HudInteract {
+                hover_tint: Vec3::splat(2.0),
+                press_tint: Vec3::splat(0.5),
+                disabled: false,
+            }),
+        }
+    }
+
+    /// The edge a polled API cannot derive for itself: `clicked` is true for
+    /// exactly one step, and only when the release lands on the element the
+    /// press started on.
+    #[test]
+    fn a_click_is_press_and_release_on_the_same_element_for_one_step() {
+        let scene = tree(vec![button("Go", [40.0, 20.0], [0.0, 0.0])]);
+        let out = layout(&scene, 200, 200);
+        let inside = Vec2::new(10.0, 10.0);
+        let mut state = Interaction::default();
+
+        state.update(&scene, &out, inside, false);
+        assert!(state.hovered("Go") && !state.pressed("Go") && !state.clicked("Go"));
+
+        state.update(&scene, &out, inside, true);
+        assert!(state.pressed("Go"), "the press is captured");
+        assert!(!state.clicked("Go"), "not clicked until released");
+
+        state.update(&scene, &out, inside, true);
+        assert!(state.pressed("Go"), "still held");
+        assert!(!state.clicked("Go"));
+
+        state.update(&scene, &out, inside, false);
+        assert!(state.clicked("Go"), "released over the same element");
+        assert!(!state.pressed("Go"), "the capture is spent");
+
+        state.update(&scene, &out, inside, false);
+        assert!(!state.clicked("Go"), "clicked lasts exactly one step");
+    }
+
+    /// Pressing a button and sliding off it is how every UI lets you change
+    /// your mind, so it must not click.
+    #[test]
+    fn pressing_inside_and_releasing_outside_does_not_click() {
+        let scene = tree(vec![button("Go", [40.0, 20.0], [0.0, 0.0])]);
+        let out = layout(&scene, 200, 200);
+        let mut state = Interaction::default();
+
+        state.update(&scene, &out, Vec2::new(10.0, 10.0), true);
+        assert!(state.pressed("Go"));
+        // Slid off, still holding: armed but no longer hovered.
+        state.update(&scene, &out, Vec2::new(150.0, 150.0), true);
+        assert!(state.pressed("Go"), "the capture survives the slide");
+        assert!(!state.hovered("Go"));
+        state.update(&scene, &out, Vec2::new(150.0, 150.0), false);
+        assert!(!state.clicked("Go"), "released off the element: no click");
+        assert!(!state.pressed("Go"));
+    }
+
+    /// Adding a `HudInteract` must move no pixel until a cursor arrives, which
+    /// is what the `[1, 1, 1]` defaults are for — and press must win over
+    /// hover, since a held button is also under the pointer.
+    #[test]
+    fn tints_apply_on_hover_and_press_and_never_otherwise() {
+        let mut scene = tree(vec![button("Go", [40.0, 20.0], [0.0, 0.0])]);
+        let out = layout(&scene, 200, 200);
+        let mut state = Interaction::default();
+        let color = |t: &HudTree| match &t.nodes[0].kind {
+            HudKind::Rect(r) => r.color,
+            _ => unreachable!(),
+        };
+
+        // Cursor elsewhere: untouched.
+        state.update(&scene, &out, Vec2::new(150.0, 150.0), false);
+        let mut untouched = scene.clone();
+        state.apply_tints(&mut untouched);
+        assert_eq!(color(&untouched), Vec3::ONE);
+
+        // Hover brightens — clamped, since the rect was already white.
+        state.update(&scene, &out, Vec2::new(10.0, 10.0), false);
+        let mut hovered = scene.clone();
+        state.apply_tints(&mut hovered);
+        assert_eq!(color(&hovered), Vec3::ONE, "2× white clamps back to white");
+
+        // Press darkens, and wins over the hover it is also inside.
+        state.update(&scene, &out, Vec2::new(10.0, 10.0), true);
+        let mut pressed = scene.clone();
+        state.apply_tints(&mut pressed);
+        assert_eq!(color(&pressed), Vec3::splat(0.5));
+
+        // A disabled element is not a candidate at all, so nothing tints.
+        if let Some(interact) = &mut scene.nodes[0].interact {
+            interact.disabled = true;
+        }
+        let mut disabled = scene.clone();
+        Interaction::default().apply_tints(&mut disabled);
+        assert_eq!(color(&disabled), Vec3::ONE);
+    }
+
+    /// A modal panel carrying a `HudInteract` swallows clicks to what is under
+    /// it; one without is click-through. That makes "does this menu block the
+    /// game" an authored property rather than an accident.
+    #[test]
+    fn an_interactive_panel_blocks_and_a_bare_one_does_not() {
+        let mut backdrop = panel(HudLayout::Free);
+        backdrop.stretch = [true, true];
+        let mut nodes = vec![
+            HudNode {
+                entity: "Backdrop".into(),
+                kind: HudKind::Panel(backdrop),
+                interact: None,
+            },
+            button("Under", [40.0, 20.0], [0.0, 0.0]),
+        ];
+        // Click-through: the bare backdrop is not a candidate.
+        let scene = tree(nodes.clone());
+        let out = layout(&scene, 200, 200);
+        assert_eq!(out.hit(&scene, 10.0, 10.0), Some(1));
+
+        // The same backdrop with a HudInteract swallows it — and it is later
+        // in draw order than the button only because the button is nested
+        // under nothing, so put it first and give it the interact.
+        nodes[0].interact = Some(HudInteract {
+            hover_tint: Vec3::ONE,
+            press_tint: Vec3::ONE,
+            disabled: false,
+        });
+        nodes.swap(0, 1);
+        let scene = tree(nodes);
+        let out = layout(&scene, 200, 200);
+        assert_eq!(
+            out.hit(&scene, 10.0, 10.0),
+            Some(1),
+            "the topmost interactive element wins, and that is the backdrop"
+        );
+        assert_eq!(scene.nodes[1].entity, "Backdrop");
     }
 
     #[test]

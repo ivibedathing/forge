@@ -84,6 +84,9 @@ pub struct Simulation {
     /// Touching-state from the previous physics step, for script contact
     /// queries — same one-step latency as the headless path.
     pub contacts: engine_core::contact::ContactState,
+    /// What the pointer is doing to the overlay (M31), updated before each
+    /// step's scripts against the window's own size.
+    pub interaction: engine_core::ui::Interaction,
     pub recorder: Option<InputRecorder>,
     pub accumulator: f32,
     pub t: f32,
@@ -404,6 +407,26 @@ impl ViewerApp {
                                         .ok()
                                         .map(|(camera, transform)| (camera, transform.matrix())),
                                 );
+                                // Hit-testing against the window's own size,
+                                // before scripts — the headless path does the
+                                // identical thing against the frame it is
+                                // rendering, so a menu clicked while playing
+                                // is the menu a replayed timeline clicks.
+                                let tree = sim.scene.hud_tree(&sim.assets);
+                                if !tree.is_empty() {
+                                    let layout =
+                                        engine_core::ui::layout(&tree, view_width, view_height);
+                                    let frame = engine_core::math::Vec2::new(
+                                        view_width as f32,
+                                        view_height as f32,
+                                    );
+                                    sim.interaction.update(
+                                        &tree,
+                                        &layout,
+                                        pointer.cursor * frame,
+                                        sim.held.is_held("MouseLeft"),
+                                    );
+                                }
                                 // A failing script ends the session with a
                                 // structured error, like any render failure.
                                 match scripts.step(
@@ -411,6 +434,7 @@ impl ViewerApp {
                                     sim.step_index,
                                     &sim.held,
                                     &pointer,
+                                    &sim.interaction,
                                     &sim.contacts,
                                 ) {
                                     Ok(lines) => sim.hud_lines = lines,

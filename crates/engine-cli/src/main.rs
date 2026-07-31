@@ -1268,15 +1268,23 @@ fn diff_render(
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    let (particles, hud) = if steps > 0 {
+    let (particles, hud, interaction) = if steps > 0 {
         // The cursor is a fraction of the frame, and the frame here is the
         // baseline's own dimensions — the same ones this render uses, so a
         // mouse-driven fixture is pinned at the size it was blessed at.
         let view = engine_core::input::Viewport::new(baseline.width, baseline.height, camera_name);
         let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
-        (outcome.particles.instances(&scene.world), outcome.hud)
+        (
+            outcome.particles.instances(&scene.world),
+            outcome.hud,
+            outcome.interaction,
+        )
     } else {
-        (Vec::new(), Vec::new())
+        (
+            Vec::new(),
+            Vec::new(),
+            engine_core::ui::Interaction::default(),
+        )
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -1298,7 +1306,7 @@ fn diff_render(
         render_time,
         baseline.width,
         baseline.height,
-        &scene.hud_tree(&assets),
+        &tinted_hud(&scene, &assets, &interaction),
         &hud,
     )?;
 
@@ -1382,6 +1390,24 @@ fn scene_time(time: f32, steps: u32, scene: &engine_core::Scene) -> f32 {
         return time;
     }
     steps as f32 / scene.physics.timestep_hz.max(1) as f32
+}
+
+/// The scene's overlay with the pointer's hover and press tints applied (M31).
+///
+/// Applied here, between extraction and the render, rather than inside the
+/// rasterizer: the renderer has no business knowing what a pointer is, and
+/// `hud::rasterize` stays a pure function of (tree, lines, size). With no
+/// cursor over anything — every scene with no `HudInteract`, and every one
+/// rendered at `--steps 0` — every tint is `[1, 1, 1]` and `apply_tints` is a
+/// no-op, which is why no pre-M31 baseline can move through this path.
+fn tinted_hud(
+    scene: &engine_core::Scene,
+    assets: &engine_assets::AssetServer,
+    interaction: &engine_core::ui::Interaction,
+) -> engine_core::ui::HudTree {
+    let mut tree = scene.hud_tree(assets);
+    interaction.apply_tints(&mut tree);
+    tree
 }
 
 fn load_baseline(path: &std::path::Path) -> Result<engine_render::Image> {
@@ -1868,14 +1894,22 @@ fn screenshot(
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    let (particles, hud) = if steps > 0 {
+    let (particles, hud, interaction) = if steps > 0 {
         // The frame the cursor is measured in is the one about to be
         // rendered (M28).
         let view = engine_core::input::Viewport::new(width, height, camera_name);
         let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
-        (outcome.particles.instances(&scene.world), outcome.hud)
+        (
+            outcome.particles.instances(&scene.world),
+            outcome.hud,
+            outcome.interaction,
+        )
     } else {
-        (Vec::new(), Vec::new())
+        (
+            Vec::new(),
+            Vec::new(),
+            engine_core::ui::Interaction::default(),
+        )
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -1898,7 +1932,7 @@ fn screenshot(
         render_time,
         width,
         height,
-        &scene.hud_tree(&assets),
+        &tinted_hud(&scene, &assets, &interaction),
         &hud,
     )?;
 
@@ -1996,6 +2030,7 @@ fn run_scene(
             camera_name: camera_name.map(String::from),
             held: engine_core::input::InputState::default(),
             contacts: engine_core::contact::ContactState::default(),
+            interaction: engine_core::ui::Interaction::default(),
             recorder,
             accumulator: 0.0,
             t: 0.0,
