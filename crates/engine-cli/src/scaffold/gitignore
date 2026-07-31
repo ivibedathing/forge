@@ -1,0 +1,6 @@
+# Renders are output, not source. Keep baselines you deliberately bless.
+*.png
+!baselines/*.png
+/out
+
+.DS_Store

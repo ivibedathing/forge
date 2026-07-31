@@ -1,0 +1,216 @@
+# Building with Forge
+
+Forge is a 3D engine whose primary user is a coding agent rather than a human in
+a GUI editor. Scenes are JSON, errors are structured JSON on stderr, and
+rendering a frame is one headless command that writes a PNG. You author a scene
+by editing a text file, validating it, rendering it, and **looking at the
+image** — using ordinary file edits and bash, with no integration layer.
+
+This file is the whole orientation. Everything in it is reachable from the
+`engine` binary; nothing here needs the engine's source checked out.
+
+## The loop
+
+1. Edit a `.json` scene file.
+2. `engine validate first.json` — every error at once, with file, line,
+   and a JSON Pointer into the offending file.
+3. `engine screenshot first.json --out /tmp/check.png`
+4. **Read the PNG.** You can view images directly. This step is the point of
+   the engine; skipping it means you are authoring blind.
+5. Iterate.
+
+`engine screenshot` is the most important command here. When a scene has
+physics, scripts, or particles, add `--steps N` to advance the fixed clock
+before the frame is drawn — `--steps 0` renders the scene at rest.
+
+## Commands
+
+```
+engine validate <scene.json>... [--strict]        # every error at once; --strict promotes warnings
+engine screenshot <scene.json> --out x.png [--steps N] [--time T] [--camera Name]
+                  [--width W --height H] [--input f.input.jsonl]
+engine diff-render <scene.json> <baseline.png> [--steps N] [--out diff.png]
+                   [--threshold N] [--max-diff-percent P]
+engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
+engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
+engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
+engine road-centerline <scene.json> [--entity Name]
+engine list-components                            # the scene + component JSON Schemas
+engine list-animations <scene-or-clip> [--schema]
+engine run-scene <scene.json> [--record-input f]  # windowed viewer; keyboard reaches scripts
+engine edit <scene.json> [--watch]                # GUI editor: a live view onto the file
+engine info                                       # the selected GPU adapter
+engine agent-guide                                # this document
+```
+
+`engine --help` and `engine <command> --help` are authoritative for flags.
+
+## How the CLI talks to you
+
+- **stdout** is exactly one JSON object on success, and **nothing** on failure.
+- **stderr** is NDJSON: one complete error or warning object per line, always.
+- **Exit 0** success, **1 your files are at fault** (fix the scene and retry),
+  **2 your invocation or environment is at fault** (bad flag, no GPU adapter).
+
+So `engine validate scene.json 2>errors.ndjson; echo $?` and a `jq` over the
+result is a complete integration. Every error line carries a stable `error`
+code — branch on that, never on `message`. Useful fields: `file`, `line`,
+`path` (a JSON Pointer such as `/entities/3/components/0/asset`), `entity`,
+`component`, `field`, and `did_you_mean` when your name is a near miss.
+
+Warnings ride the same stream with `"severity": "warning"` and do not change
+the exit code unless you pass `--strict`.
+
+**Every command reports every error.** `validate`, `screenshot`, and
+`run-scene` run the same validation pipeline, so which command you ran never
+changes what you learn about a broken scene.
+
+## The scene file
+
+```json
+{
+  "name": "first",
+  "environment": { "sky": true, "shadows": true, "samples": 4 },
+  "entities": [
+    {
+      "name": "Camera",
+      "components": [
+        { "type": "Transform", "position": [0.0, 3.0, 12.0], "rotation": [-8.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 55.0, "near": 0.1, "far": 500.0, "active": true }
+      ]
+    }
+  ]
+}
+```
+
+- Entities have a **unique `name`**, and names are the addressing scheme: the
+  CLI, scripts, and animation clips all target entities by name.
+- Components are plain data, internally tagged with `"type"`. One component of
+  a given type per entity.
+- **An absent field is its documented default.** You never have to write a
+  field to get the default behaviour, and adding `{ "type": "Material" }` with
+  nothing else is legal.
+- Asset paths are **relative to the scene file**. Absolute paths are rejected.
+- Scene-level blocks beside `entities`: `physics`, `environment`, `daylight`.
+
+There are no comments in JSON, so anything a scene needs to say about itself
+has to be a real field.
+
+## Discovering what exists
+
+`engine list-components` prints the scene schema and every component schema as
+one JSON object, generated from the engine's own types — it cannot drift from
+what the engine accepts. It is the authoritative field list, including ranges.
+
+Its shape: `.components` is the list of type names, `.component` is a `oneOf`
+over every component schema (discriminated by `.properties.type.const`), and
+`.scene` is the schema for the file as a whole.
+
+```bash
+engine list-components | jq -r '.components[]'                 # every component type
+engine list-components | jq '.component.oneOf[]
+                             | select(.properties.type.const == "Material")'
+engine list-components | jq -r '.component.oneOf[]
+                             | select(.properties.type.const == "Terrain")
+                             | .properties | keys[]'
+engine list-components | jq -r '.scene.properties | keys[]'    # the scene-level blocks
+```
+
+Do this rather than guessing a field name. A guessed field comes back as
+`unknown_field` with a `did_you_mean`, which is a fine way to find out, but the
+schema is faster.
+
+## Built-in meshes
+
+`Mesh.asset` is either a `builtin:` primitive or a `.gltf` / `.glb` path
+relative to the scene:
+
+```
+builtin:cube  builtin:sphere  builtin:cylinder  builtin:plane  builtin:triangle
+```
+
+Several components own their geometry instead of referencing a mesh, and having
+both is a validation error: `Terrain`, `Water`, `Road`, `Tree`, and `Cloud` are
+recipes the engine grows on load. A `Terrain` or `Road` entity carries no `Mesh`
+and no `Material`; a `Collider` with `"shape": "trimesh"` and no `asset` borrows
+that generated surface, which is how ground becomes collidable without a mesh
+file.
+
+## Conventions that will trip you up
+
+- **Cameras and lights aim down their entity's local −Z.** A light with no
+  rotation shines toward −Z, not down. Rising smoke is `"rotation": [90, 0, 0]`.
+- **Colors are linear RGB in `[0, 1]`**, not sRGB bytes. Render targets encode
+  to sRGB on write, so a `0.5` albedo is not a `128` pixel.
+- **`rotation` is XYZ Euler degrees.** The middle angle is clamped to ±90°, so a
+  yaw integrated past that comes back as the `(±180, θ, ±180)` twin and
+  `rotation[1]` stops being "the yaw". In scripts, use `world.forward(name)` for
+  heading math instead of reading `rotation[1]`.
+- **Angular velocity is degrees per second** in the file, everywhere.
+- A scene with **zero light components** gets a documented fallback rig. As soon
+  as any light exists, absent means off — which is the usual reason a first
+  scene renders black.
+- `--steps` advances the fixed simulation clock (physics, scripts, particles).
+  `--time` poses animations, water, and clouds without simulating. **Particles
+  exist only under `--steps`**; a `--steps 0` render draws none.
+
+## Physics
+
+Add a scene-level `"physics"` block for gravity and timestep, a `RigidBody`
+(`dynamic` / `kinematic` / `fixed`) and a `Collider` to an entity. A dynamic body
+with no collider is an error — it would fall through everything.
+
+`engine simulate --steps N` runs the world without drawing it and reports where
+things ended up; `--trace t.jsonl` logs every step, and `--bake out.json` writes
+the settled state back as an ordinary scene. Simulation is deterministic: the
+same file and the same step count give byte-identical results.
+
+## Scripting
+
+A `Script` component (`{ "type": "Script", "source": "scripts/spin.rhai" }`)
+runs `fn step(world, step)` once per fixed step. The curated `world` API is the
+entire universe available to a script — no clock, no file system, no randomness,
+so runs stay reproducible.
+
+```rhai
+fn step(world, step) {
+    let p = world.position("Ball");          // [x, y, z]
+    world.set_position("Ball", p[0], p[1] + 0.01, p[2]);
+    world.hud("y = " + p[1]);                // debug line, cleared each step
+}
+```
+
+Reads and writes by entity name: `position` / `set_position`, `rotation` /
+`set_rotation`, `scale` / `set_scale`, `forward`, `linear_velocity` /
+`set_linear_velocity`, `angular_velocity` / `set_angular_velocity`,
+`look_at`, `key` (keyboard, in the viewer or from a replayed timeline),
+`touching` / `contacts_started`, `terrain_height`, `light_intensity` /
+`set_light_intensity`, `particle_rate` / `set_particle_rate`, `hud`, and
+`state` / `set_state` for numeric memory between steps.
+
+System order per step: animations → scripts → physics → particles → render.
+
+## Rendering the same frame twice
+
+Renders are reproducible on one machine and one GPU adapter, which is what makes
+`engine diff-render` a regression test: render a scene, keep the PNG as a
+baseline, and a later diff-render fails if a pixel moved.
+
+Two limits worth knowing before you build a workflow on it:
+
+- **A baseline is an artifact of the machine that blessed it.** Another GPU, and
+  often another build profile, renders slightly different bytes. Bless your own
+  baselines locally; do not expect one committed from elsewhere to match.
+  Cross-machine comparisons start around `--threshold 3 --max-diff-percent 0.1`.
+- Bless a baseline with `engine screenshot` — there is no separate bless flag.
+
+## When something looks wrong
+
+- **Nothing rendered.** Check the camera is `"active": true` and pointed at the
+  scene (it looks down its own local −Z), and that lights exist.
+- **Geometry is invisible from one side.** Backface culling is on and front
+  faces are counter-clockwise. A wrongly wound triangle renders nothing.
+- **A scene validates but looks off.** Read the warnings on stderr — `zero_scale`
+  and `unused_material` exist precisely for scenes that are legal and wrong.
+- **A field was ignored.** It was probably rejected: check the exit code, and
+  read the schema with `engine list-components`.

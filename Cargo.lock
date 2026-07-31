@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "engine-assets"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "engine-core",
  "glam 0.33.2",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "engine-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "engine-assets",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "engine-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "glam 0.33.2",
  "hecs",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "engine-editor"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "engine-physics"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "engine-core",
  "glam 0.33.2",
@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "engine-render"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "engine-core",
@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "engine-script"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "engine-core",
  "glam 0.33.2",

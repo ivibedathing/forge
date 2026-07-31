@@ -309,6 +309,12 @@ registry! {
     PNG_WRITE_FAILED = "png_write_failed", Environment,
         "the output PNG could not be written";
 
+    // ── engine init ────────────────────────────────────────────────────
+    INIT_TARGET_NOT_EMPTY = "init_target_not_empty", Environment,
+        "the directory to scaffold into already holds files; pass --force to write anyway";
+    INIT_WRITE_FAILED = "init_write_failed", Environment,
+        "a scaffolded file or directory could not be written";
+
     // ── Process-level ──────────────────────────────────────────────────
     INVALID_INVOCATION = "invalid_invocation", Environment,
         "the command line itself could not be parsed";

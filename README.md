@@ -32,11 +32,50 @@ The whole design serves this cycle:
 
 `engine screenshot` is the single most important command in the project — it is what closes the
 loop. `engine diff-render` turns step 5 into a regression test: this scene must look like a
-committed baseline, within tolerance (bit-exact by default), in CI.
+committed baseline, within tolerance (bit-exact by default). Determinism is promised
+same-machine and same-adapter, so a baseline is an artifact of the machine that blessed it —
+bless your own rather than expecting someone else's to match.
+
+## Install
+
+Rendering needs a GPU with a Vulkan, Metal, or DX12 backend. `engine info` reports
+which adapter was selected.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ivibedathing/forge/main/install.sh | sh
+```
+
+That drops the `engine` binary in `~/.local/bin` — no Rust toolchain involved.
+Set `FORGE_INSTALL_DIR` to put it somewhere else, or `FORGE_VERSION` to pin a
+release. Prebuilt binaries exist for macOS (arm64, x86_64) and Linux x86_64;
+Windows x86_64 ships as a zip on the [releases page](https://github.com/ivibedathing/forge/releases).
+
+From source, if you have Rust:
+
+```bash
+cargo install --git https://github.com/ivibedathing/forge engine-cli --locked
+```
+
+(Not on crates.io: the editor pins egui to a git rev while the released line
+still pairs with an older wgpu, and crates.io refuses any crate with a git
+dependency.)
 
 ## Quick start
 
-Requires a recent stable Rust toolchain and a GPU with a Vulkan, Metal, or DX12 backend.
+```bash
+engine init my-scene && cd my-scene
+engine validate first.json
+engine screenshot first.json --out /tmp/first.png --steps 120
+```
+
+Then open `/tmp/first.png`. `engine init` writes a starter scene, a script, and
+the agent orientation as both `AGENTS.md` and `CLAUDE.md` — so pointing Claude
+Code, Codex, or any agent at that directory is the whole setup. The same
+orientation prints from `engine agent-guide`, and `engine list-components`
+dumps every component's schema, so an agent can discover the entire scene
+format from the binary alone.
+
+## Working on the engine itself
 
 ```bash
 git clone https://github.com/ivibedathing/forge
@@ -49,7 +88,8 @@ bin/engine screenshot examples/scenes/demo_scene.json --out /tmp/demo.png
 cargo test --workspace
 ```
 
-`bin/engine` is the CLI without cargo's tax: it checks whether any source is
+`bin/engine` is a development shim, not something an installed copy has — it
+runs the CLI without cargo's tax by checking whether any source is
 newer than the binary (~0.02s warm), rebuilds only if so, and execs. `cargo run -p
 engine-cli --` spends ~8s on freshness checking before every single call, warm
 — which is nothing once and is most of a milestone across the hundreds of

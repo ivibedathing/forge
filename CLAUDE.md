@@ -67,6 +67,8 @@ engine road-centerline <scene.json> [--entity Name]  # where a Road actually wen
 # "transmission" (Fresnel, keeps specular), which move an entity into the blended pass
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode (keyboard reaches
 #   scripts); draws an FPS readout top-right — viewer-only, never in a headless render
+engine init [dir] [--force]              # scaffold a project: starter scene + AGENTS.md/CLAUDE.md
+engine agent-guide                       # the agent orientation as markdown (a stdout exception)
 engine list-components                   # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
 engine run                               # M0 triangle (stack proof)
@@ -968,6 +970,41 @@ resting in contact at load** silently lost its contacts and fell through the wor
 *dropped* from a height were unaffected, which is why every earlier fixture missed it. The
 first-step BVH now goes on a scratch clone (`bvh_cold` in engine-physics); `refresh_queries` is
 documented destructive, with the `--steps 0` query path its only safe caller.
+
+Distribution (`designs/distribution-design.md`): the engine is installable by people who are not
+working on it. Three pieces, and the second is the one that matters.
+
+- **Prebuilt binaries.** `.github/workflows/release.yml` builds `engine` natively on four runners
+  (macos-14/13, ubuntu-22.04, windows-2022) on a `v*` tag and uploads tarballs plus `SHA256SUMS`;
+  `install.sh` (POSIX sh, `curl | sh`) resolves the latest tag, verifies the checksum, and drops
+  the binary in `~/.local/bin`. Linux is built on the *oldest* supported Ubuntu deliberately — the
+  artifact's glibc floor is whatever runner built it. `.github/workflows/ci.yml` runs fmt, clippy
+  and the workspace tests; the render tests skip there for want of an adapter, so **CI proves the
+  GPU-free half only** and baselines stay a local, per-adapter check. **crates.io is closed to
+  this workspace**: `engine-editor` pins egui to a git rev, cargo refuses to publish anything with
+  a git dependency, and `engine-cli` depends on the editor — so `publish = false` is a
+  *consequence*, noted in the workspace manifest, and `cargo install --git` is the toolchain path
+  until egui 0.36 lets that pin become a version.
+- **`engine init [dir]`** scaffolds a project, and it exists because the binary alone is not
+  enough: an agent in an empty directory has no way to know the loop is the point. It writes
+  `AGENTS.md` (Codex/Cursor/Amp) and `CLAUDE.md` (Claude Code, an `@AGENTS.md` import so there is
+  one source of truth), a starter scene, and a script. **The scene sits at the project root, not
+  under `scenes/`** — asset paths resolve relative to the *scene file*, so a nested scene reaches
+  its own scripts through `../scripts/`, which is the first thing anyone copying the layout gets
+  wrong. It refuses a non-empty directory (`init_target_not_empty`, exit 2) unless `--force`,
+  because every name it writes is a name a project already has. Files are `include_str!`'d, so a
+  `curl | sh` install with no checkout carries all of them.
+- **`engine agent-guide`** prints that same `AGENTS.md` text — the binary is self-describing, so
+  `--help` + `agent-guide` + `list-components` is a complete onboarding with no repo. It is
+  **markdown on stdout**, a documented exception beside `--help`/`--version` in
+  `docs/cli-contract.md`; a JSON string holding a 200-line document with every newline escaped
+  serves nobody. A CLI test asserts `init`'s `AGENTS.md` is byte-identical to `agent-guide`'s
+  output, so the two cannot drift.
+
+The guide is written for someone *using* the engine, which is the opposite audience from this
+file — the loop, the stream contract, the scene format, and the conventions that cost time
+(lights aim −Z, colors are linear, `--steps` vs `--time`, particles need `--steps`, baselines are
+per-adapter). Keeping it accurate is part of adding a component, the same way the showcase tour is.
 
 Read `designs/agent-native-engine-design.md` before making structural decisions; it is the source of truth
 for layout, formats, and build order, and several choices in it are still open (§9).
