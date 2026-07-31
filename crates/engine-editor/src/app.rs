@@ -193,19 +193,24 @@ impl EditorApp {
         for (label, result) in finished {
             match result {
                 Ok(asset) => {
-                    let added = self.doc.add_entity(
-                        &asset.base_name,
-                        vec![
-                            (
-                                "Transform".into(),
-                                vec![("position".into(), json!([0.0, 0.0, 0.0]))],
-                            ),
-                            (
-                                "Mesh".into(),
-                                vec![("asset".into(), Value::String(asset.asset))],
-                            ),
-                        ],
-                    );
+                    let mut components = vec![
+                        (
+                            "Transform".into(),
+                            vec![("position".into(), json!([0.0, 0.0, 0.0]))],
+                        ),
+                        (
+                            "Mesh".into(),
+                            vec![("asset".into(), Value::String(asset.asset))],
+                        ),
+                    ];
+                    // The model's own material, if it brought one (M26).
+                    if let Some(material) = asset.material {
+                        components.push((
+                            "Material".into(),
+                            vec![("asset".into(), Value::String(material))],
+                        ));
+                    }
+                    let added = self.doc.add_entity(&asset.base_name, components);
                     if added.is_some() {
                         self.selected = added;
                     }

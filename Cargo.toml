@@ -43,7 +43,19 @@ rapier3d = { version = "=0.34.0", features = ["enhanced-determinism"] }
 # Pinned exactly (scripting-design.md §1): the script API surface is a
 # contract, and interpreter behavior rides in golden traces.
 rhai = "=1.25.1"
-gltf = { version = "1.4", default-features = false, features = ["import", "utils"] }
+gltf = { version = "1.4", default-features = false, features = [
+    "import",
+    "utils",
+    # Material names, so an imported material file is called what the artist
+    # called it rather than material_3.json.
+    "names",
+    # The three material extensions `engine import` maps onto Material's
+    # transmission/ior/thickness fields (M26). Without them the crate's
+    # accessors compile away and a glass model imports as opaque.
+    "KHR_materials_transmission",
+    "KHR_materials_ior",
+    "KHR_materials_volume",
+] }
 schemars = "1.2"
 pollster = "1.0"
 # The public-domain 8×8 pixel font as plain Rust arrays — no binary font

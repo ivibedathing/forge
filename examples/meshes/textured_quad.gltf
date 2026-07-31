@@ -1,0 +1,214 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "forge make_textured_quad.py"
+  },
+  "extensionsUsed": [
+    "KHR_materials_transmission",
+    "KHR_materials_ior",
+    "KHR_materials_volume"
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "Panel"
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Panel",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0,
+          "mode": 4
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        -0.5,
+        -0.5,
+        0.0
+      ],
+      "max": [
+        0.5,
+        0.5,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 48,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 96,
+      "byteLength": 32,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 128,
+      "byteLength": 12,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 140,
+      "byteLength": 78
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 220,
+      "byteLength": 112
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 332,
+      "byteLength": 91
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 424,
+      "byteLength": 75
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 499,
+      "uri": "data:application/octet-stream;base64,AAAAvwAAAL8AAAAAAAAAPwAAAL8AAAAAAAAAPwAAAD8AAAAAAAAAvwAAAD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAEAAgAAAAIAAwCJUE5HDQoaCgAAAA1JSERSAAAACAAAAAgIBgAAAMQPvosAAAAVSURBVHjaY3jWY/MfDTMgY4aRoQAAEj+LYVEyuEUAAAAASUVORK5CYIIAAIlQTkcNChoKAAAADUlIRFIAAAAIAAAACAgGAAAAxA++iwAAADdJREFUeNp9xkERwCAAxMDIQUZlIAMZyKgMZOAonIJ77MziwAa/pMCZFLiSAndS4J8UeJICb1I8v4uegWLJoVwAAAAASUVORK5CYIKJUE5HDQoaCgAAAA1JSERSAAAACAAAAAgIBgAAAMQPvosAAAAiSURBVHjaY7BhYPgfAMQpQFwBxD1AvACItwDxCSBmGBkKAA0HYEGf+BDnAAAAAElFTkSuQmCCAIlQTkcNChoKAAAADUlIRFIAAAAIAAAACAgGAAAAxA++iwAAABJJREFUeNpjaGj4/x8fZhgZCgCFRr+B6jqkzQAAAABJRU5ErkJggg=="
+    }
+  ],
+  "images": [
+    {
+      "bufferView": 4,
+      "mimeType": "image/png"
+    },
+    {
+      "bufferView": 5,
+      "mimeType": "image/png"
+    },
+    {
+      "bufferView": 6,
+      "mimeType": "image/png"
+    },
+    {
+      "bufferView": 7,
+      "mimeType": "image/png"
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    },
+    {
+      "source": 2
+    },
+    {
+      "source": 3
+    }
+  ],
+  "materials": [
+    {
+      "name": "Stained Glass",
+      "alphaMode": "MASK",
+      "alphaCutoff": 0.4,
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 1.0,
+        "roughnessFactor": 1.0,
+        "metallicRoughnessTexture": {
+          "index": 1
+        }
+      },
+      "occlusionTexture": {
+        "index": 2
+      },
+      "normalTexture": {
+        "index": 3,
+        "scale": 0.6
+      },
+      "emissiveFactor": [
+        0.05,
+        0.02,
+        0.0
+      ],
+      "extensions": {
+        "KHR_materials_transmission": {
+          "transmissionFactor": 0.8
+        },
+        "KHR_materials_ior": {
+          "ior": 1.5
+        },
+        "KHR_materials_volume": {
+          "thicknessFactor": 0.4,
+          "attenuationDistance": 2.0,
+          "attenuationColor": [
+            0.4,
+            0.9,
+            0.6
+          ]
+        }
+      }
+    }
+  ]
+}

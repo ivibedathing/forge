@@ -11,11 +11,13 @@
 //! - `asset_unsupported` — the file parses but uses something the engine
 //!   does not implement (non-triangle primitives, meshless files, …)
 
+mod gltf_material;
 mod gltf_mesh;
 mod server;
 mod texture;
 mod validate;
 
+pub use gltf_material::{import_materials, Imported};
 pub use gltf_mesh::load_gltf;
 pub use server::AssetServer;
 pub use texture::load_texture;
