@@ -3772,6 +3772,11 @@ mod anchor {
     /// view-projection it needs to project an exit point.
     pub const FRAME_TAIL: &str =
         "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
+    /// Where the fragment's running colour and alpha are declared.
+    pub const VARS: &str = "    var color = base_color;\n    var out_alpha = 1.0;\n";
+    /// The last line of the fragment stage.
+    pub const RETURN: &str =
+        "    return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);\n";
     /// The composite for a transmissive surface — the one place that decides
     /// what is seen *through* it.
     pub const BLENDED: &str = "            color = (lit_diffuse + fill) * out_alpha + lit_specular + reflection + emissive;\n";
@@ -3992,15 +3997,25 @@ fn refraction_producer() -> Producer {
                  };\n",
             ),
             (
+                anchor::VARS,
+                "    var color = base_color;\n\
+                 \x20   var out_alpha = 1.0;\n\
+                 \x20   // What a refracting surface lets through, held out of the\n\
+                 \x20   // running colour until after fog. The copy it comes from\n\
+                 \x20   // was already fogged at its own depth when the opaque pass\n\
+                 \x20   // drew it, and fogging it a second time here is what turns\n\
+                 \x20   // clear ice into a pale slab.\n\
+                 \x20   var transmitted = vec3<f32>(0.0);\n",
+            ),
+            (
                 anchor::BLENDED,
-                "            let refracting = object.map_params.w != 1.0 \
-|| object.map_volume.x > 0.0;\n\
-                 \x20           if refracting {\n\
+                "            if object.map_params.w != 1.0 || object.map_volume.x > 0.0 {\n\
                  \x20               // The frame behind this surface, bent and\n\
-                 \x20               // absorbed. Composited here rather than left\n\
-                 \x20               // to the blend unit, so the output is opaque\n\
-                 \x20               // and what shows through is the *displaced*\n\
-                 \x20               // background rather than the one straight on.\n\
+                 \x20               // absorbed. Taken from the copy rather than\n\
+                 \x20               // left to the blend unit, which is the whole\n\
+                 \x20               // difference: a blend can only show what is\n\
+                 \x20               // straight behind, and refraction is about\n\
+                 \x20               // what is *not*.\n\
                  \x20               let uv = refracted_uv(\n\
                  \x20                   in.world_position,\n\
                  \x20                   v,\n\
@@ -4008,18 +4023,24 @@ fn refraction_producer() -> Producer {
                  \x20                   object.map_params.w,\n\
                  \x20                   object.map_volume.x,\n\
                  \x20               );\n\
-                 \x20               let behind = absorbed(\n\
+                 \x20               transmitted = absorbed(\n\
                  \x20                   textureSampleLevel(scene_color, scene_sampler, uv, 0.0).rgb,\n\
                  \x20                   object.map_volume.yzw,\n\
                  \x20                   object.map_volume.x,\n\
-                 \x20               );\n\
-                 \x20               color = behind * (1.0 - out_alpha)\n\
-                 \x20                   + (lit_diffuse + fill) * out_alpha\n\
-                 \x20                   + lit_specular + reflection + emissive;\n\
-                 \x20               out_alpha = 1.0;\n\
-                 \x20           } else {\n\
-                 \x20               color = (lit_diffuse + fill) * out_alpha + lit_specular + reflection + emissive;\n\
-                 \x20           }\n",
+                 \x20               ) * (1.0 - out_alpha);\n\
+                 \x20           }\n\
+                 \x20           color = (lit_diffuse + fill) * out_alpha + lit_specular + reflection + emissive;\n",
+            ),
+            (
+                anchor::RETURN,
+                "    // The transmitted background last, and the surface opaque\n\
+                 \x20   // once it carries it: the blend unit must not add the\n\
+                 \x20   // framebuffer's *un*-refracted version on top.\n\
+                 \x20   if any(transmitted > vec3<f32>(0.0)) {\n\
+                 \x20       color = color + transmitted;\n\
+                 \x20       out_alpha = 1.0;\n\
+                 \x20   }\n\
+                 \x20   return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);\n",
             ),
         ],
     }

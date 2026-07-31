@@ -39,6 +39,7 @@ engine terrain-height <scene.json> --at x,z [--entity Name]   # where the ground
 engine inspect <scene.json> [--entity Name]       # every field, with the defaults filled in
 engine list-components [--component Name]         # the scene + component JSON Schemas
 engine list-animations <scene-or-clip> [--schema]
+engine import <model.glb> [--into scene.json]     # a model's materials, as files
 engine run-scene <scene.json> [--record-input f]  # windowed viewer; keyboard reaches scripts
 engine edit <scene.json> [--watch]                # GUI editor: a live view onto the file
 engine info                                       # the selected GPU adapter
@@ -93,6 +94,8 @@ changes what you learn about a broken scene.
   field to get the default behaviour, and adding `{ "type": "Material" }` with
   nothing else is legal.
 - Asset paths are **relative to the scene file**. Absolute paths are rejected.
+  A `materials/*.json` is the exception that proves it: its own texture
+  references are relative to *it*, which is what lets two scenes share one.
 - Scene-level blocks beside `entities`: `physics`, `environment`, `daylight`.
 
 There are no comments in JSON, so anything a scene needs to say about itself
@@ -157,6 +160,37 @@ recipes the engine grows on load. A `Terrain` or `Road` entity carries no `Mesh`
 and no `Material`; a `Collider` with `"shape": "trimesh"` and no `asset` borrows
 that generated surface, which is how ground becomes collidable without a mesh
 file.
+
+## Texture maps and shared materials
+
+A `Material` can carry `albedo_map`, `orm_map` (occlusion / roughness /
+metallic, glTF's packing), `normal_map` and `emissive_map` — `.png` paths
+relative to the scene — with `uv_scale` / `uv_offset` for tiling. Each map
+**multiplies** its factor rather than replacing it, so `albedo` is a tint over
+`albedo_map`: write `"albedo": [1, 1, 1]` beside a map unless you want the 0.8
+default darkening it. `alpha_cutoff` above 0 discards transparent pixels and
+their shadow, which is how a foliage card works. `ior` / `thickness` /
+`attenuation` bend and absorb what is behind a transmissive surface.
+
+You never say which colour space a texture is in: the **slot** decides. Albedo
+and emissive are colours and are decoded; ORM and normal are data and are not.
+
+A material can also *be* a file:
+
+```json
+{ "type": "Material", "asset": "materials/asphalt.json" }
+```
+
+holding the same fields minus the `"type"`. `asset` is exclusive with every
+other field — setting both is `material_asset_with_fields` — because an absent
+field and a field written at its default are the same thing to the parser, so a
+partial override would resolve to something the file does not say. A variant is
+a second file. A material file's own texture paths are relative to **it**, and
+`engine validate materials/asphalt.json` checks one directly.
+
+`engine import model.glb --into scene.json` writes a model's materials out as
+those files, with any embedded textures as PNGs beside them, and splices an
+entity that references them.
 
 ## Conventions that will trip you up
 

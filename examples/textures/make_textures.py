@@ -156,12 +156,98 @@ def leaf(size=128):
     return size, size, pixels
 
 
+def stone_noise(x, y, size, salt):
+    """A hash-based value in [0, 1) — the same discipline as every other
+    generator here: written out, so a Python upgrade cannot reshuffle a
+    committed texture and surface as a renderer regression."""
+    h = (x * 374761393 + y * 668265263 + salt * 2246822519) & 0xFFFFFFFF
+    h = (h ^ (h >> 13)) * 1274126177 & 0xFFFFFFFF
+    return ((h ^ (h >> 16)) & 0xFFFF) / 65536.0
+
+
+def smooth(x, y, size, cell, salt):
+    """Bilinear value noise on a `cell`-sized lattice, wrapping at `size` so
+    the texture tiles."""
+    fx, fy = x / cell, y / cell
+    x0, y0 = int(fx), int(fy)
+    tx, ty = fx - x0, fy - y0
+    # Smoothstep, so the lattice does not show as a grid of creases.
+    tx, ty = tx * tx * (3 - 2 * tx), ty * ty * (3 - 2 * ty)
+    wrap = max(size // cell, 1)
+    def at(ix, iy):
+        return stone_noise(ix % wrap, iy % wrap, size, salt)
+    top = at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx
+    bottom = at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx
+    return top * (1 - ty) + bottom * ty
+
+
+def granite(size=256):
+    """Weathered grey stone, for the showcase tour's monolith.
+
+    Three octaves of wrapping value noise plus a per-texel speckle, which is
+    what reads as mineral grain rather than as fog. Tiles, because the monolith
+    is 4 m wide and 5.5 m tall and a texture that seams would announce itself.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            value = (
+                0.55 * smooth(x, y, size, 64, 1)
+                + 0.30 * smooth(x, y, size, 16, 2)
+                + 0.15 * smooth(x, y, size, 4, 3)
+            )
+            speckle = stone_noise(x, y, size, 7) * 0.14 - 0.07
+            tone = max(0.0, min(1.0, 0.42 + 0.34 * (value - 0.5) + speckle))
+            # A faint warm/cool split so the stone is not a grey ramp.
+            r = int(255 * tone * 1.02)
+            g = int(255 * tone)
+            b = int(255 * tone * 0.97)
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes((min(r, 255), min(g, 255), min(b, 255), 255))
+    return size, size, pixels
+
+
+def granite_normal(size=256, strength=2.2):
+    """The same field's *gradient*, as a tangent-space normal map.
+
+    Derived from the albedo's own noise rather than authored separately, so the
+    bumps line up with the mottling — which is most of what makes stone read as
+    stone instead of as a photograph glued to a box.
+    """
+    def height(x, y):
+        return (
+            0.55 * smooth(x, y, size, 64, 1)
+            + 0.30 * smooth(x, y, size, 16, 2)
+            + 0.15 * smooth(x, y, size, 4, 3)
+        )
+
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            dx = (height((x + 1) % size, y) - height((x - 1) % size, y)) * strength
+            dy = (height(x, (y + 1) % size) - height(x, (y - 1) % size)) * strength
+            nx, ny = -dx, -dy
+            nz = math.sqrt(max(1.0 - min(nx * nx + ny * ny, 0.98), 1e-4))
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes(
+                (
+                    int(round(max(0.0, min(1.0, nx * 0.5 + 0.5)) * 255)),
+                    int(round(max(0.0, min(1.0, ny * 0.5 + 0.5)) * 255)),
+                    int(round(max(0.0, min(1.0, nz * 0.5 + 0.5)) * 255)),
+                    255,
+                )
+            )
+    return size, size, pixels
+
+
 if __name__ == "__main__":
     for name, make in [
         ("checker.png", checker),
         ("panel_orm.png", orm),
         ("bumps_normal.png", bumps),
         ("leaf.png", leaf),
+        ("granite.png", granite),
+        ("granite_normal.png", granite_normal),
     ]:
         width, height, pixels = make()
         write_png(HERE / name, width, height, pixels)
