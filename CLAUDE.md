@@ -802,7 +802,13 @@ images ~100 pixels apart (delta ≤ 18) in the distant tree canopy. It is the on
 `diff_args` tolerance in `baselines.json` (`--threshold 24`). `showcase_810.png` has since been
 seen to flake the same way **once** — 29 pixels at a channel delta of 1, along the treeline, clean on
 the next three runs — so it is the same residue and not a second bug; it is left without a tolerance
-deliberately, since one flake in four sweeps is worth re-running rather than blessing away. **The general rule: fine geometry
+deliberately, since one flake in four sweeps is worth re-running rather than blessing away.
+M27 saw the same signature on **`showcase_450` (22 px) and `showcase_585` (24 px), both at delta 1**,
+in one of seven consecutive full sweeps, the other six clean. Same residue, same verdict, no
+tolerance: **the whole tour is in this class, not three named frames**, so a failure on any
+`showcase_*` at a delta of 1 and a couple of dozen pixels is worth a second sweep before it is worth
+debugging. Everything else in the manifest is bit-exact and a failure there is real — the M27
+fixtures, which aim at their subject with no terrain in frame, never flaked across ten sweeps. **The general rule: fine geometry
 against relief under MSAA is where this adapter stops being reproducible, so a new fixture wanting a
 hard pin should aim its camera at its subject rather than across a landscape.** Verified by
 `engine-render/tests/terrain.rs` (including `a_flat_single_layer_patch_is_exactly_a_painted_plane`,
