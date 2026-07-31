@@ -267,3 +267,230 @@ fn a_scene_with_no_water_is_untouched_by_the_water_pass() {
         "with no water in the scene, scene time must change nothing"
     );
 }
+
+// ── Refraction (M27) ─────────────────────────────────────────────────────────
+//
+// The claims `water-refraction-design.md` makes, in the order it makes them:
+// the field defaults to off, it moves what is behind the surface, it moves it
+// *without* changing how much of it survives, and it does not drag geometry
+// standing in the water sideways across the frame.
+
+/// A pond whose bed is a bright sheet under dark bars, seen steeply enough
+/// that the frame is water over bed rather than reflected sky.
+///
+/// A *pattern* is the point: refraction is a displacement, and a displacement
+/// of a uniform field is invisible by construction. The bars run across the
+/// view direction rather than along it, which is the whole reason there are
+/// bars: the refracted ray's horizontal component points the same way the view
+/// ray's does — away from the camera — so the displacement is along Z, and a
+/// boundary parallel to Z barely moves under it. The first version of this test
+/// split the bed left/right and saw 236 pixels change where this one sees
+/// thousands.
+///
+/// The bed is emissive and its albedo is black, so what the tests read is the
+/// bed's *pattern* and not the sun's angle on it.
+fn patterned_pond(water: &str) -> String {
+    format!(
+        r#"{{
+  "name": "refracting_pond",
+  "environment": {{ "sky": true, "shadows": false, "samples": 1 }},
+  "entities": [
+    {{ "name": "Camera", "components": [
+      {{ "type": "Transform", "position": [0.0, 6.0, 6.0], "rotation": [-45.0, 0.0, 0.0] }},
+      {{ "type": "Camera", "fov": 60.0, "near": 0.1, "far": 100.0, "active": true }} ] }},
+    {{ "name": "Sun", "components": [
+      {{ "type": "Transform", "rotation": [-60.0, 0.0, 0.0] }},
+      {{ "type": "DirectionalLight", "color": [1.0, 1.0, 1.0], "intensity": 1.0 }} ] }},
+    {{ "name": "Fill", "components": [
+      {{ "type": "AmbientLight", "color": [1.0, 1.0, 1.0], "intensity": 0.3 }} ] }},
+    {{ "name": "Bed", "components": [
+      {{ "type": "Transform", "position": [0.0, -1.02, 0.0], "scale": [80.0, 1.0, 80.0] }},
+      {{ "type": "Mesh", "asset": "builtin:plane" }},
+      {{ "type": "Material", "albedo": [0.0, 0.0, 0.0], "emissive": [0.95, 0.95, 0.95] }} ] }},
+    {{ "name": "BarA", "components": [
+      {{ "type": "Transform", "position": [0.0, -1.0, -12.0], "scale": [60.0, 1.0, 2.0] }},
+      {{ "type": "Mesh", "asset": "builtin:plane" }},
+      {{ "type": "Material", "albedo": [0.0, 0.0, 0.0], "emissive": [0.02, 0.02, 0.02] }} ] }},
+    {{ "name": "BarB", "components": [
+      {{ "type": "Transform", "position": [0.0, -1.0, -8.0], "scale": [60.0, 1.0, 2.0] }},
+      {{ "type": "Mesh", "asset": "builtin:plane" }},
+      {{ "type": "Material", "albedo": [0.0, 0.0, 0.0], "emissive": [0.02, 0.02, 0.02] }} ] }},
+    {{ "name": "BarC", "components": [
+      {{ "type": "Transform", "position": [0.0, -1.0, -4.0], "scale": [60.0, 1.0, 2.0] }},
+      {{ "type": "Mesh", "asset": "builtin:plane" }},
+      {{ "type": "Material", "albedo": [0.0, 0.0, 0.0], "emissive": [0.02, 0.02, 0.02] }} ] }},
+    {{ "name": "BarD", "components": [
+      {{ "type": "Transform", "position": [0.0, -1.0, 0.0], "scale": [60.0, 1.0, 2.0] }},
+      {{ "type": "Mesh", "asset": "builtin:plane" }},
+      {{ "type": "Material", "albedo": [0.0, 0.0, 0.0], "emissive": [0.02, 0.02, 0.02] }} ] }},
+    {{ "name": "BarE", "components": [
+      {{ "type": "Transform", "position": [0.0, -1.0, 4.0], "scale": [60.0, 1.0, 2.0] }},
+      {{ "type": "Mesh", "asset": "builtin:plane" }},
+      {{ "type": "Material", "albedo": [0.0, 0.0, 0.0], "emissive": [0.02, 0.02, 0.02] }} ] }},
+    {{ "name": "Lake", "components": [
+      {{ "type": "Transform", "position": [0.0, 0.0, 0.0], "scale": [30.0, 1.0, 30.0] }},
+      {water} ] }}
+  ]
+}}"#
+    )
+}
+
+/// The clear-water body every refraction test uses: absorption turned right
+/// down, because a bed the water has already hidden cannot be seen to bend.
+const CLEAR: &str = r#""segments": 64,
+      "waves": [ {{ "direction": 20.0, "wavelength": 4.0, "amplitude": 0.09, "steepness": 0.4, "speed": 1.5 }} ],
+      "detail": 0.0, "roughness": 0.08, "depth_fade": 40.0, "opacity": 0.35"#;
+
+fn clear_water(extra: &str) -> String {
+    format!(
+        r#"{{ "type": "Water", {}{} }}"#,
+        CLEAR.replace("{{", "{").replace("}}", "}"),
+        extra
+    )
+}
+
+#[test]
+fn the_ior_default_is_no_refraction_at_all() {
+    if !gpu_available() {
+        return;
+    }
+    // The house rule, and the reason M27 re-blessed no committed baseline: a
+    // `Water` that does not mention `ior` must be the M18 surface exactly, down
+    // to the bytes — which is also the assertion that it takes the plain
+    // pipeline rather than the spliced one.
+    let absent = patterned_pond(&clear_water(""));
+    let explicit = patterned_pond(&clear_water(r#", "ior": 1.0"#));
+    assert_eq!(
+        render_at(&absent, 2.0).pixels,
+        render_at(&explicit, 2.0).pixels,
+        "absent `ior` must render byte for byte as `ior: 1.0`"
+    );
+}
+
+#[test]
+fn refraction_displaces_what_is_behind_the_surface() {
+    if !gpu_available() {
+        return;
+    }
+    let straight = render_at(&patterned_pond(&clear_water(r#", "ior": 1.0"#)), 2.0);
+    let bent = render_at(&patterned_pond(&clear_water(r#", "ior": 1.5"#)), 2.0);
+
+    // The bed's light/dark boundary runs under the middle of the water, and
+    // bending the view ray moves where each pixel reads it from. Counted rather
+    // than located: the waves make the boundary a ragged line, so the honest
+    // assertion is that a great many pixels changed, not that one particular
+    // pixel did.
+    let moved = straight
+        .pixels
+        .chunks_exact(4)
+        .zip(bent.pixels.chunks_exact(4))
+        .filter(|(a, b)| a[0].abs_diff(b[0]) > 8)
+        .count();
+    assert!(
+        moved > 500,
+        "refraction should displace the bed across many pixels, but only {moved} changed"
+    );
+}
+
+#[test]
+fn refraction_moves_the_bed_without_changing_how_much_of_it_survives() {
+    if !gpu_available() {
+        return;
+    }
+    // `water-refraction-design.md` §3: water keeps its own absorption model and
+    // gains no `attenuation`, so turning `ior` on changes *where* the bed is
+    // read from and not how much of it comes back. Over a bed of one flat
+    // emissive colour a displacement has nothing to displace, so the two
+    // renders have to agree — and if refraction had brought its own absorption
+    // curve, or dropped the `1 - out_alpha` weighting, this is where it would
+    // show as an overall brightness shift.
+    let flat = |water: String| {
+        patterned_pond(&water).replace(
+            r#""emissive": [0.02, 0.02, 0.02]"#,
+            r#""emissive": [0.95, 0.95, 0.95]"#,
+        )
+    };
+    let straight = render_at(&flat(clear_water(r#", "ior": 1.0"#)), 2.0);
+    let bent = render_at(&flat(clear_water(r#", "ior": 1.5"#)), 2.0);
+
+    let mean = |image: &Image| {
+        image
+            .pixels
+            .chunks_exact(4)
+            .map(|p| luma(p.try_into().unwrap()) as u64)
+            .sum::<u64>() as f64
+            / (SIZE * SIZE) as f64
+    };
+    let (a, b) = (mean(&straight), mean(&bent));
+    assert!(
+        (a - b).abs() < 2.0,
+        "refraction must not change the water's absorption: mean {a:.2} vs {b:.2}"
+    );
+}
+
+#[test]
+fn geometry_standing_in_the_water_does_not_smear_into_it() {
+    if !gpu_available() {
+        return;
+    }
+    // The one place water's refraction is *more* careful than the mesh path
+    // (`water-refraction-design.md` §4). A screen-space offset can reach a
+    // pixel nearer than the refracting surface; water behind an object standing
+    // in it refracts *upward on screen*, straight into that object, and without
+    // the depth check the object's colour is dragged out across the water
+    // around it. Measured on the M27 fixture, dropping the check moves ~22k
+    // pixels by up to 99 — so a smear would be loud here.
+    //
+    // The pillar is pure red and nothing else in the scene is, which makes
+    // "how much red is in the frame" the whole assertion: it must not grow when
+    // the water starts bending, because the pillar is *in front of* the water
+    // that would otherwise sample it.
+    let grazing = |water: String| {
+        format!(
+            r#"{{
+  "name": "pillar_in_water",
+  "environment": {{ "sky": true, "shadows": false, "samples": 1 }},
+  "entities": [
+    {{ "name": "Camera", "components": [
+      {{ "type": "Transform", "position": [0.0, 1.1, 9.0], "rotation": [-7.0, 0.0, 0.0] }},
+      {{ "type": "Camera", "fov": 60.0, "near": 0.1, "far": 200.0, "active": true }} ] }},
+    {{ "name": "Sun", "components": [
+      {{ "type": "Transform", "rotation": [-50.0, 0.0, 0.0] }},
+      {{ "type": "DirectionalLight", "color": [1.0, 1.0, 1.0], "intensity": 1.0 }} ] }},
+    {{ "name": "Fill", "components": [
+      {{ "type": "AmbientLight", "color": [1.0, 1.0, 1.0], "intensity": 0.3 }} ] }},
+    {{ "name": "Bed", "components": [
+      {{ "type": "Transform", "position": [0.0, -1.0, 0.0], "scale": [80.0, 1.0, 80.0] }},
+      {{ "type": "Mesh", "asset": "builtin:plane" }},
+      {{ "type": "Material", "albedo": [0.0, 0.0, 0.0], "emissive": [0.55, 0.55, 0.55] }} ] }},
+    {{ "name": "Pillar", "components": [
+      {{ "type": "Transform", "position": [0.0, 0.0, 0.0], "scale": [1.2, 1.6, 1.2] }},
+      {{ "type": "Mesh", "asset": "builtin:cube" }},
+      {{ "type": "Material", "albedo": [0.0, 0.0, 0.0], "emissive": [0.9, 0.0, 0.0] }} ] }},
+    {{ "name": "Lake", "components": [
+      {{ "type": "Transform", "position": [0.0, 0.0, -10.0], "scale": [80.0, 1.0, 60.0] }},
+      {water} ] }}
+  ]
+}}"#
+        )
+    };
+
+    let red_pixels = |image: &Image| {
+        image
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| p[0] > 90 && p[0] as u32 > p[1] as u32 * 2 + 40)
+            .count()
+    };
+    let straight = red_pixels(&render_at(&grazing(clear_water(r#", "ior": 1.0"#)), 2.0));
+    let bent = red_pixels(&render_at(&grazing(clear_water(r#", "ior": 1.4"#)), 2.0));
+
+    assert!(
+        straight > 200,
+        "the pillar should be plainly in frame, saw {straight} red pixels"
+    );
+    assert!(
+        bent <= straight + straight / 10,
+        "refraction dragged the pillar across the water: {straight} red pixels became {bent}"
+    );
+}
