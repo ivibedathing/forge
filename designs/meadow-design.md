@@ -234,9 +234,12 @@ So the two artifacts take opposite settlements, and the split is the design:
 - **The fixture is `samples: 1` and carries a hard bit-exact pin.** `verify/m28_meadow.json` at
   `--time 0.7`, aimed at its subject with no horizon in frame (M26's rule). Giving up MSAA costs a
   verification fixture some anti-aliasing and buys back the only strict check this system has.
-- **The six showcase baselines take `"diff_args": ["--threshold", "24"]`** — the tolerance M22
-  already chose for `showcase_646`, now measured to cover the meadow's drift with margin. Nine of
-  ten sweeps passed clean before the tolerance and the last six consecutively after it.
+- **The six showcase baselines take `"diff_args": ["--threshold", "24", "--max-diff-percent",
+  "0.02"]`.** The threshold is the one M22 already chose for `showcase_646`; the pixel allowance is
+  new, and it is there because the residual after it is *one or two pixels a long way outside* the
+  threshold rather than a haze just over it. Allowing 0.02% of the frame to differ is a tighter
+  claim than widening the threshold to 40 would have been. Eight consecutive full sweeps of all 34
+  artifacts passed with it.
 
 That is a real loss and it is worth naming: before M28, five of the tour's six frames were bit-exact
 pins. **The next fixture that needs a hard pin on ground cover must render it at `samples: 1`.**

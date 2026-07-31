@@ -2282,6 +2282,63 @@ fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
     }
 }
 
+/// The tour does not end; it comes round. The director used to clamp its
+/// station index at the last one, so past step 900 the segment-local `t` swept
+/// 0→1 forever and the camera replayed the finale's own three seconds over and
+/// over while the fire, the truck and the daylight all went on moving. The key
+/// path is a closed cycle now — six legs, the last of which flies home — so
+/// one 1080-step lap puts the camera back on the key it opened with and the
+/// stations come round again with the world in the state it reached.
+///
+/// This is checked through `simulate` rather than a baseline because the
+/// second lap has no committed PNG and should not get one: what is pinned is
+/// that the camera *moves on*, not what it happens to see.
+#[test]
+fn the_showcase_tour_keeps_touring_past_its_fifteen_seconds() {
+    let scene = repo_path("examples/scenes/showcase_tour.json");
+    let camera_at = |steps: &str| -> ([f64; 3], String) {
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", steps])
+            .args(["--entity", "TourCam"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+        let p = &report["entities"][0]["position"];
+        let axis = |i: usize| p[i].as_f64().expect("the camera reports a position");
+        (
+            [axis(0), axis(1), axis(2)],
+            report["hud"][0].as_str().unwrap().to_string(),
+        )
+    };
+    let apart = |a: [f64; 3], b: [f64; 3]| {
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    };
+
+    // The opening key, and where the fifteen seconds leave the camera.
+    let opening = [-27.0, 7.5, -20.5];
+    let (finale, _) = camera_at("900");
+    assert!(
+        apart(finale, opening) > 40.0,
+        "the tour should end its fifteen seconds a long way from where it began: {finale:?}"
+    );
+
+    // A lap later it is home, having travelled rather than looped in place.
+    let (home, line) = camera_at("1080");
+    assert!(
+        apart(home, opening) < 0.25,
+        "one lap should return the camera to its opening key, not to {home:?}"
+    );
+    assert_eq!(line, "TOUR LAP 2  06 THE WAY BACK");
+
+    // And the stations themselves come round: 90 steps into the new lap is
+    // the forest again, framed exactly as station 01 frames it.
+    let (_, line) = camera_at("1170");
+    assert_eq!(line, "TOUR LAP 2  01 FOREST");
+}
+
 /// The tour drives a vehicle around a world full of resting bodies — the
 /// combination that used to silently disable every other collider's
 /// contacts. The crates start flush on the ground, so if the first step
@@ -3466,4 +3523,81 @@ fn import_writes_material_files_and_the_textures_they_reference() {
     }
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// M27: the water refraction fixture, from two cameras in one file.
+///
+/// Both baselines are hard bit-exact pins with no tolerance, which is
+/// deliberate and only defensible because the fixture obeys M22's rule — it
+/// aims at its subject, with no terrain anywhere in frame. Four consecutive
+/// sweeps came back at zero differing pixels.
+///
+/// The two cameras pin two different halves of the design:
+///
+/// - `Camera` looks down at the pool, where the bed's grid of bars is the
+///   thing refraction acts on. This is the frame that would go wrong if the
+///   exit point were stepped along the refracted ray by the view ray's path
+///   length instead of solved to the bed's depth — the bars scramble into
+///   blocks, which is what the first implementation drew.
+/// - `CameraGrazing` looks across it at 8°, where the boulder and the posts
+///   stand *in* the water. That is the framing the depth-validated sample
+///   exists for: dropping the check moves ~22k pixels of it by up to 99, as
+///   the water behind each object drags the object's colour out across itself.
+#[test]
+fn the_m27_water_refraction_fixture_pins_a_bent_bed_and_a_clean_waterline() {
+    let scene = repo_path("examples/scenes/verify/m27_water_refraction.json");
+
+    for (baseline, extra) in [
+        ("m27_water_refraction.png", Vec::new()),
+        ("m27_water_grazing.png", vec!["--camera", "CameraGrazing"]),
+    ] {
+        let baseline = repo_path(&format!("examples/scenes/verify/baselines/{baseline}"));
+        let diff = engine()
+            .arg("diff-render")
+            .arg(&scene)
+            .arg(&baseline)
+            .args(["--steps", "120"])
+            .args(&extra)
+            .output()
+            .unwrap();
+        if !diff.status.success() {
+            let stderr = String::from_utf8_lossy(&diff.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "diff-render failed for a non-GPU reason: {stderr}"
+            );
+            eprintln!("skipping render pin: no usable GPU on this machine");
+            return;
+        }
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+    }
+
+    // The claim the whole milestone rests on: `ior` is the only reason this
+    // scene renders differently from the M18 surface. Drop it back to the
+    // default and the committed baseline must stop matching — otherwise the
+    // pins above would pass just as well with refraction wired to nothing,
+    // which is the failure mode a splice makes easy to miss.
+    let source = std::fs::read_to_string(&scene).unwrap();
+    let unrefracted = source.replace(r#""ior": 1.33"#, r#""ior": 1.0"#);
+    assert_ne!(source, unrefracted, "the fixture must author `ior` explicitly");
+    let plain = scene.with_file_name("m27_unrefracted.json");
+    std::fs::write(&plain, unrefracted).unwrap();
+
+    let report = engine()
+        .arg("diff-render")
+        .arg(&plain)
+        .arg(repo_path(
+            "examples/scenes/verify/baselines/m27_water_refraction.png",
+        ))
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout_of(&report).trim()).unwrap();
+    let _ = std::fs::remove_file(&plain);
+    assert_eq!(
+        parsed["pass"], false,
+        "with `ior` back at its default the baseline must not match: {parsed}"
+    );
 }

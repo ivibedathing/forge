@@ -1921,6 +1921,14 @@
             "minItems": 3,
             "type": "array"
           },
+          "ior": {
+            "default": 1.0,
+            "description": "Index of refraction, `1.0` (the default) being no bending at all — the\npre-M27 surface, which absorbs and tints what is behind it but never\nmoves it. Range `[1, 3]`; water is 1.33.\n\nUnlike [`Material::ior`] this needs no companion `thickness`: the shader\nalready measures how far the view ray travels through the body to reach\nthe bed, so the bend scales with the water's own depth and a pond bends\nits bed most where it is deepest. It also cannot change how *deep* the\nwater looks — absorption stays [`Water::depth_fade`]'s job — so it can\nbe turned on in a tuned scene without re-tuning it.",
+            "format": "float",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "type": "number"
+          },
           "opacity": {
             "default": 0.9399999976158142,
             "description": "How opaque deep water becomes, `[0, 1]`. 1 hides its bed completely\nhowever clear the shallows are.",
@@ -4191,6 +4199,14 @@
                 "maxItems": 3,
                 "minItems": 3,
                 "type": "array"
+              },
+              "ior": {
+                "default": 1.0,
+                "description": "Index of refraction, `1.0` (the default) being no bending at all — the\npre-M27 surface, which absorbs and tints what is behind it but never\nmoves it. Range `[1, 3]`; water is 1.33.\n\nUnlike [`Material::ior`] this needs no companion `thickness`: the shader\nalready measures how far the view ray travels through the body to reach\nthe bed, so the bend scales with the water's own depth and a pond bends\nits bed most where it is deepest. It also cannot change how *deep* the\nwater looks — absorption stays [`Water::depth_fade`]'s job — so it can\nbe turned on in a tuned scene without re-tuning it.",
+                "format": "float",
+                "maximum": 3.0,
+                "minimum": 1.0,
+                "type": "number"
               },
               "opacity": {
                 "default": 0.9399999976158142,

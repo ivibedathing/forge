@@ -12,6 +12,16 @@
 //   station 2 360-539    water/ice   PBR response, scripted waves, spray
 //   station 3 540-719    breaking    rigid bodies, fragments, explosion
 //   station 4 720-899    the world   vehicle, wheels, HUD, camera
+//   leg 5     900-1079   the way back, and then the whole thing again
+//
+// Past step 900 the camera neither stops nor parks. Leg 5 flies it from the
+// wide finale back down to the forest, and the tour repeats on a 1080-step
+// lap. That return leg is the whole reason the path is a *cycle* of six legs
+// over seven keys (the seventh is the first again) rather than five legs that
+// clamp at the last one — clamping is what made the finale replay its own
+// three seconds over and over while everything else in the world kept moving.
+// Nothing resets on a new lap: the crates stay broken, the fire keeps burning,
+// the truck keeps circling. The camera is the only thing that comes round.
 
 fn ease(t) {
     if t < 0.0 { t = 0.0; }
@@ -25,10 +35,12 @@ fn mix3(a, b, t) {
 
 fn step(world, step) {
     let seg = 180;
-    let total = 900;
+    let total = 900;    // the tour proper: five stations
+    let cycle = 1080;   // one lap of the loop: those five legs plus the way home
 
-    // Six camera keys for five segments: each station's framing, then the
-    // next one's. The camera is *always* travelling; only the aim settles.
+    // Seven camera keys for six legs: each station's framing, the next one's,
+    // and finally the first one again so the path closes. The camera is
+    // *always* travelling; only the aim settles.
     let eyes = [
         [-27.0,  7.5, -20.5],
         [ 16.5,  4.5, -24.0],
@@ -36,6 +48,7 @@ fn step(world, step) {
         [ -1.6,  3.8,  23.5],
         [  3.0, 14.0,  40.0],
         [-20.0, 23.0,  36.0],
+        [-27.0,  7.5, -20.5],
     ];
     let aims = [
         [-13.0, 2.5, -10.0],
@@ -44,6 +57,7 @@ fn step(world, step) {
         [ -1.0, 1.2,  15.0],
         [  0.0, 3.0,   8.0],
         [  0.0, 3.0,   2.0],
+        [-13.0, 2.5, -10.0],
     ];
     let titles = [
         "01 FOREST",
@@ -51,18 +65,23 @@ fn step(world, step) {
         "03 WATER AND ICE",
         "04 BREAKING",
         "05 THE WHOLE WORLD",
+        "06 THE WAY BACK",
     ];
     let systems = [
         "MESHES . GLTF . MATERIALS . LIGHTING . ANIMATION",
         "ADDITIVE FIRE . TURBULENCE . FIRELIGHT . EMBERS",
-        "GERSTNER WAVES . DEPTH . FOAM . SPRAY . FROST",
+        "GERSTNER WAVES . DEPTH . REFRACTION . FOAM . SPRAY . FROST",
         "RIGID BODIES . COLLISION . FRAGMENTS . BLAST",
         "VEHICLE . WHEELS . HUD . CAMERA . ALL OF IT",
+        "NOTHING RESET . THE WORLD KEPT RUNNING",
     ];
 
-    let i = step / seg;
-    if i > 4 { i = 4; }
-    let local = (step % seg).to_float() / seg.to_float();
+    // The lap position, not the step: for the first fifteen seconds the two
+    // are the same integer, which is what keeps this leg of the arithmetic
+    // byte-identical to the run every committed baseline was blessed from.
+    let p = step % cycle;
+    let i = p / seg;
+    let local = (p % seg).to_float() / seg.to_float();
 
     // The dolly runs the whole segment; the aim holds the current station for
     // the first two thirds and only then swings to the next. Moving the eye
@@ -107,11 +126,30 @@ fn step(world, step) {
 
     world.set_hud_text("StationLabel", titles[i]);
     world.set_hud_text("SystemsLabel", systems[i]);
-    world.set_hud_rect_size("TimeBar", 320.0 * (step + 1).to_float() / total.to_float(), 8.0);
+
+    // The bar fills over the fifteen seconds, then over each lap after them.
+    // What is chosen here is the *numerator and denominator*, not a finished
+    // fraction, so the arithmetic below stays the single expression six
+    // blessed baselines were drawn with — 320 * x / n and 320 * (x / n) are
+    // not the same float.
+    let filled = step + 1;
+    let span = total;
+    if step >= total {
+        filled = (step - total) % cycle + 1;
+        span = cycle;
+    }
+    world.set_hud_rect_size("TimeBar", 320.0 * filled.to_float() / span.to_float(), 8.0);
 
     // One line HUD line, so the tour stays observable without pixels:
     // `simulate` and `screenshot` report it, and `--trace` logs every change.
     // The narration itself is HudText components in the lower third — the
     // line panel owns the top-left corner and would draw over them.
-    world.hud("TOUR " + (step + 1) + "/" + total + "  " + titles[i]);
+    // The counter is built separately for the same reason the bar's fraction
+    // is: `fn` bodies get a shallow expression-depth budget in a debug build,
+    // and one more level of parentheses here does not parse.
+    let counter = (step + 1) + "/" + total;
+    if step >= total {
+        counter = "LAP " + (2 + (step - total) / cycle);
+    }
+    world.hud("TOUR " + counter + "  " + titles[i]);
 }

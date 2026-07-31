@@ -1648,6 +1648,30 @@ pub struct Water {
     /// scattered light, so it is opaque where it appears.
     #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub foam_color: Vec3,
+
+    /// Index of refraction, `1.0` (the default) being no bending at all — the
+    /// pre-M27 surface, which absorbs and tints what is behind it but never
+    /// moves it. Range `[1, 3]`; water is 1.33.
+    ///
+    /// Unlike [`Material::ior`] this needs no companion `thickness`: the shader
+    /// already measures how far the view ray travels through the body to reach
+    /// the bed, so the bend scales with the water's own depth and a pond bends
+    /// its bed most where it is deepest. It also cannot change how *deep* the
+    /// water looks — absorption stays [`Water::depth_fade`]'s job — so it can
+    /// be turned on in a tuned scene without re-tuning it.
+    #[schemars(range(min = 1.0, max = 3.0))]
+    pub ior: f32,
+}
+
+impl Water {
+    /// Whether this surface bends what is behind it, and so needs the opaque
+    /// colour copy and the refracting pipeline variant (M27).
+    ///
+    /// The default `1.0` is exactly "no", which is what lets every water
+    /// baseline blessed before this milestone keep compiling the M18 shader.
+    pub fn refracts(&self) -> bool {
+        self.ior != 1.0
+    }
 }
 
 impl Default for Water {
@@ -1668,6 +1692,7 @@ impl Default for Water {
             crest_foam: 0.0,
             shore_foam: 0.0,
             foam_color: Vec3::new(0.86, 0.90, 0.92),
+            ior: 1.0,
         }
     }
 }
