@@ -1568,7 +1568,7 @@ fn screenshot(
     }
     let (particles, hud) = if steps > 0 {
         // The frame the cursor is measured in is the one about to be
-        // rendered (M27).
+        // rendered (M28).
         let view = engine_core::input::Viewport::new(width, height, camera_name);
         let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
         (outcome.particles.instances(&scene.world), outcome.hud)

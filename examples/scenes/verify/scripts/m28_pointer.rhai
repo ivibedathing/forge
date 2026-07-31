@@ -1,4 +1,4 @@
-// M27 fixture: everything the mouse reaches, in one step function.
+// M28 fixture: everything the mouse reaches, in one step function.
 //
 // * the marker sits where the cursor's ray meets the ground, so the render
 //   shows the *inverse projection* working rather than a number;

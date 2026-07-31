@@ -6,7 +6,7 @@
 //   R       reload
 //   Esc     pause
 //
-// The run starts on a title screen and pauses to a menu (M27). Both are
+// The run starts on a title screen and pauses to a menu (M28). Both are
 // ordinary HudText/HudRect components this script lays out from the live
 // viewport and hit-tests in pixels — there is no menu system in the engine,
 // and a menu is game logic like everything else here.

@@ -79,7 +79,7 @@ game logic, and game logic lives in scripts.
 
 ## 7. Non-goals (v1)
 
-- **The mouse landed in M27** — see `designs/mouse-input-design.md`, which reverses the first
+- **The mouse landed in M28** — see `designs/mouse-input-design.md`, which reverses the first
   item below and nothing else: buttons ride the same `held` set, the cursor is a fraction of
   the frame carried in the same timeline, and every principle in §2 above is unchanged.
 - No mouse, gamepad, or text input; no key-repeat or pressed/released edge queries (a script

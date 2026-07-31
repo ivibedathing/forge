@@ -9,10 +9,10 @@ it are still open (§9).
 
 ## Current state
 
-**M0–M27 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M28 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
-M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 the mouse. (M7
+M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M28 the mouse. (M7
 editor at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
@@ -219,14 +219,14 @@ differing from the file's rest value is spliced — which is how script-driven k
 files. Kinematic-vs-fixed contact events are opted in via `ActiveCollisionTypes` (rapier skips them
 by default). Bake next to the scene, not /tmp — relative paths.
 
-## The mouse (M27, `designs/mouse-input-design.md`)
+## The mouse (M28, `designs/mouse-input-design.md`)
 
 M11's §7 said "no mouse"; this reverses that one item and nothing else. **Buttons ride the same
 `held` set the keys do** (`MouseLeft`/`MouseRight`/`MouseMiddle`, own allowlist so `world.key` and
 `world.mouse` each reject the other kind *naming the call that would have worked*), and the cursor
 is a `"cursor": [x, y]` **fraction of the frame**, origin top-left — not pixels, because a timeline
 outlives the window it was recorded in. **An absent `cursor` is the centre of the frame**, so every
-pre-M27 timeline parses unchanged; recorded cursors quantize to three decimals (`CURSOR_SCALE`,
+pre-M28 timeline parses unchanged; recorded cursors quantize to three decimals (`CURSOR_SCALE`,
 written as a scale and not a step of 0.001, or the file says `0.41300002`).
 
 - **The cursor is a point on the frame; the *ray* is the engine's job.** `input::Pointer::resolve`
@@ -243,7 +243,7 @@ written as a scale and not a step of 0.001, or the file says `0.41300002`).
 - **A mouse-driven run is a function of the frame size**, which no earlier input was. `screenshot`
   passes its own size, `diff-render` the baseline's, and `simulate`/`raycast` — which render
   nothing — `Viewport::DEFAULT`, **960×540**. Same aspect ⇒ same ray, so `simulate` and a 16:9
-  screenshot aim identically; a *pixel-sized* HUD hit test is another matter and the M27 CLI test
+  screenshot aim identically; a *pixel-sized* HUD hit test is another matter and the M28 CLI test
   documents exactly that (960×540 misses the arena fixture's 132×26 plate that 640×360 hits).
 - **`set_hud_offset` / `hud_offset`** (either HUD component, offsets mean the same on both) is the
   one non-mouse addition: a HUD that could be resized and re-worded but not *moved* cannot draw a
@@ -254,7 +254,7 @@ written as a scale and not a step of 0.001, or the file says `0.41300002`).
   records nothing, and its "an initial empty set is implicit" rule now compares against the whole
   default state, or the first mouse movement of a session (which happens before any button) is lost.
 
-Fixture `verify/m27_pointer.json` + timeline, **two baselines from one file** (`--steps 40` and
+Fixture `verify/m28_pointer.json` + timeline, **two baselines from one file** (`--steps 40` and
 `--steps 80`). Not here: scroll wheel, relative motion / pointer capture (which is what a
 first-person mouselook needs, and it wants its own milestone), click edges (`world.state`, two
 lines), and cursor visibility control.
@@ -1017,7 +1017,7 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
   `quad(−Z, Y, X)`, so `u` is vertical on +X and *horizontal* on −X. Anything strongly directional on
   a cube therefore draws differently on all four sides, and a box's tiling is a property of the
   **face** you care about rather than of the box (the arena shooter's four perimeter walls carry four
-  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`, which M27 also gave
+  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`, which M28 also gave
   a mouse-driven title/pause/end menu built from ordinary `HudText`/`HudRect`: the layout is measured
   from the **centre** of the frame so one recorded timeline clicks the same button at any window
   size, hiding an element is a zero size or an empty string, and its demo timeline is now authored by

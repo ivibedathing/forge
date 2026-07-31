@@ -97,7 +97,7 @@ struct WorldApi {
     /// has input to offer, so runs without `--input` behave exactly as they
     /// did before input existed.
     input: Rc<InputState>,
-    /// Where the pointer points during this step (M27): the cursor, the frame
+    /// Where the pointer points during this step (M28): the cursor, the frame
     /// it was measured in, and the ray through it. Resolved by the caller
     /// from the camera it is about to render through.
     pointer: Pointer,
@@ -173,7 +173,7 @@ impl WorldApi {
         self.with_component(name, "Transform", f)
     }
 
-    /// The `offset` of whichever HUD component the entity carries (M27).
+    /// The `offset` of whichever HUD component the entity carries (M28).
     ///
     /// `offset` means the same thing on a `HudText` and a `HudRect` — pixels
     /// inward from the anchor — so, like `with_light`, the API takes the name
@@ -366,7 +366,7 @@ fn curated_engine() -> rhai::Engine {
         },
     );
 
-    // The mouse (M27). Buttons ride the same held set the keys do, but the
+    // The mouse (M28). Buttons ride the same held set the keys do, but the
     // namespace splits here: `key` takes key names and `mouse` takes button
     // names, each rejecting the other kind with a suggestion. A script that
     // asks `world.key("MouseLeft")` is told what it did wrong instead of
@@ -753,7 +753,7 @@ fn curated_engine() -> rhai::Engine {
             })
         },
     );
-    // Moving a HUD element (M27), on either kind. A HUD that can be resized
+    // Moving a HUD element (M28), on either kind. A HUD that can be resized
     // and re-worded but not *moved* cannot draw a crosshair, which is the
     // minimum feedback a pointing device needs. Offsets are pixels inward
     // from the element's own anchor, exactly as the component documents them.
@@ -1329,7 +1329,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// M27: the mouse reaches scripts as a button predicate, a cursor, and a
+    /// M28: the mouse reaches scripts as a button predicate, a cursor, and a
     /// point on the ground — and the two namespaces stay apart.
     #[test]
     fn scripts_read_the_mouse_and_aim_at_the_ground_under_the_cursor() {
@@ -1416,7 +1416,7 @@ mod tests {
     }
 
     /// A HUD that can be resized and re-worded but not moved cannot draw a
-    /// crosshair (M27).
+    /// crosshair (M28).
     #[test]
     fn scripts_move_hud_elements_of_either_kind() {
         let dir = temp_dir("hudoffset");

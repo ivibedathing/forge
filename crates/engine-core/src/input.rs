@@ -1,4 +1,4 @@
-//! Keyboard and mouse input (M11, M27): held state and replayable timelines.
+//! Keyboard and mouse input (M11, M28): held state and replayable timelines.
 //!
 //! Input is sampled per fixed step — "is this key held during step N" — on
 //! the same integer clock as physics and scripting; there is no event queue.
@@ -8,7 +8,7 @@
 //! result is traceable, screenshotable, and diff-renderable like everything
 //! else in the engine.
 //!
-//! The mouse (M27, `designs/mouse-input-design.md`) rides the same timeline:
+//! The mouse (M28, `designs/mouse-input-design.md`) rides the same timeline:
 //! its buttons are names in the same `held` set, and its cursor is a
 //! `"cursor": [x, y]` fraction of the frame rather than a pixel, because a
 //! timeline outlives the window it was recorded in.
@@ -36,7 +36,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight",
 ];
 
-/// The mouse buttons (M27). They live in the same held set as the keys — a
+/// The mouse buttons (M28). They live in the same held set as the keys — a
 /// timeline keyframe is one complete snapshot of what the player is doing —
 /// but in their own allowlist, so `world.key` and `world.mouse` can each
 /// reject the other kind with a suggestion instead of reading `false`
@@ -294,7 +294,7 @@ impl InputTimeline {
                 }
             }
 
-            // The cursor (M27). Absent is the centre of the frame, not a
+            // The cursor (M28). Absent is the centre of the frame, not a
             // carry-over from the previous keyframe: a keyframe is a complete
             // snapshot, and a carry-over rule makes line 40 unreadable
             // without line 0.
@@ -372,7 +372,7 @@ impl InputTimeline {
 }
 
 /// The frame a cursor is measured in, and the camera it is measured through
-/// (M27).
+/// (M28).
 ///
 /// A cursor is a fraction of the frame; turning it into a direction needs the
 /// frame's aspect and the camera's field of view. Commands that render know
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn a_timeline_without_a_cursor_reads_as_the_centre_of_the_frame() {
-        // Every timeline committed before M27 says nothing about a cursor and
+        // Every timeline committed before M28 says nothing about a cursor and
         // must keep meaning exactly what it meant.
         let timeline =
             InputTimeline::parse("{\"step\": 0, \"held\": [\"KeyW\"]}\n", "t.input.jsonl").unwrap();

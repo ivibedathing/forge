@@ -1139,20 +1139,20 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-// ── The mouse (M27) ────────────────────────────────────────────────────
+// ── The mouse (M28) ────────────────────────────────────────────────────
 
-/// The M27 fixture, end to end: the committed timeline's cursor drives a
+/// The M28 fixture, end to end: the committed timeline's cursor drives a
 /// marker across the ground through the engine's own inverse projection, and
 /// a held button over the HUD's plate is a click.
 ///
 /// The numbers here are *not* eyeballed — each is where the ray through that
 /// cursor meets the plane, and the two baselines
-/// (`m27_pointer_{aim,click}.png`) are the same run rendered. A regression in
+/// (`m28_pointer_{aim,click}.png`) are the same run rendered. A regression in
 /// the ray, the aspect, or the timeline's cursor field moves them together.
 #[test]
 fn the_mouse_aims_where_the_cursor_points() {
-    let scene = repo_path("examples/scenes/verify/m27_pointer.json");
-    let timeline = repo_path("examples/scenes/verify/m27_pointer.input.jsonl");
+    let scene = repo_path("examples/scenes/verify/m28_pointer.json");
+    let timeline = repo_path("examples/scenes/verify/m28_pointer.input.jsonl");
 
     let at = |steps: &str| {
         let output = engine()
@@ -1199,7 +1199,7 @@ fn the_mouse_aims_where_the_cursor_points() {
     //
     // Through `screenshot` at the baseline's own size, and that is the point
     // rather than an inconvenience: a HUD element is *pixel*-sized, so which
-    // element a cursor is over depends on the frame it is over (M27 §5).
+    // element a cursor is over depends on the frame it is over (M28 §5).
     // `simulate` renders nothing and runs at `Viewport::DEFAULT` — 960x540,
     // the same 16:9 aspect, so it aims the ray identically and misses this
     // 132x26 plate by twelve pixels.
@@ -1236,7 +1236,7 @@ fn the_mouse_aims_where_the_cursor_points() {
 
     // The same timeline with the cursor field ignored would put the marker at
     // the centre of the frame; check the "no --input at all" case does
-    // exactly that, since it is the M27 promise that keyboard-era files and
+    // exactly that, since it is the M28 promise that keyboard-era files and
     // no-input runs are unchanged.
     let output = engine()
         .arg("simulate")

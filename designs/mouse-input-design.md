@@ -1,4 +1,4 @@
-# Mouse input — Design Document (M27)
+# Mouse input — Design Document (M28)
 
 Companion to `input-design.md`, which is the source of truth for how input reaches this engine
 at all. That document's §7 says, in as many words, **"No mouse, gamepad, or text input"**. This

@@ -1,5 +1,5 @@
 {
-  "name": "m27_pointer",
+  "name": "m28_pointer",
   "environment": {
     "sky": true,
     "shadows": true,
@@ -167,7 +167,7 @@
         },
         {
           "type": "Script",
-          "source": "scripts/m27_pointer.rhai"
+          "source": "scripts/m28_pointer.rhai"
         }
       ]
     },

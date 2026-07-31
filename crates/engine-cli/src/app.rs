@@ -111,7 +111,7 @@ impl InputRecorder {
     }
 
     /// Record `held` as the state in effect from `step` onward, if it
-    /// changed. Comparison is against the **quantized** state (M27): the
+    /// changed. Comparison is against the **quantized** state (M28): the
     /// cursor is what the file will say, so a hand that has not moved a
     /// thousandth of the frame records nothing.
     fn sample(&mut self, step: u64, held: &InputState) -> Result<()> {
@@ -362,7 +362,7 @@ impl ViewerApp {
                                 }
                             }
                             if let Some(scripts) = &sim.scripts {
-                                // Where the pointer points this step (M27),
+                                // Where the pointer points this step (M28),
                                 // resolved exactly as the headless path
                                 // resolves it: same camera selection, same
                                 // frame, same function — so what a script
@@ -627,7 +627,7 @@ impl ApplicationHandler for ViewerApp {
                 }
             }
 
-            // The mouse (M27). A cursor position is normalized against the
+            // The mouse (M28). A cursor position is normalized against the
             // window it arrived in, because that is the only coordinate a
             // recorded timeline can carry across window sizes.
             //

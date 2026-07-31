@@ -31,7 +31,7 @@ fn vec2_json(v: glam::Vec2) -> Value {
 /// JSONL trace. No timeline means no keys held, which keeps every pre-input
 /// trace and baseline byte-identical.
 ///
-/// `view` is the frame the timeline's cursor is measured in (M27): the real
+/// `view` is the frame the timeline's cursor is measured in (M28): the real
 /// one for commands that render, [`Viewport::DEFAULT`] for the ones that do
 /// not. It is what turns a cursor into a world ray, so a mouse-driven scene
 /// is a function of it — see `designs/mouse-input-design.md` §5.
@@ -299,7 +299,7 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                     ));
                 }
                 // A moved element is script-driven HUD state like a re-worded
-                // one (M27): a crosshair the run left somewhere reopens
+                // one (M28): a crosshair the run left somewhere reopens
                 // there.
                 if current.offset != rest.offset {
                     edits.push(field_edit("offset", "HudText", vec2_json(current.offset)));
@@ -520,7 +520,7 @@ pub fn simulate_command(
         steps,
         input.as_ref(),
         // `simulate` renders nothing and so has no frame of its own; a
-        // mouse-driven script sees the documented default (M27 §5).
+        // mouse-driven script sees the documented default (M28 §5).
         &Viewport::DEFAULT,
         trace_file.as_mut().map(|f| f as &mut dyn Write),
     )?;

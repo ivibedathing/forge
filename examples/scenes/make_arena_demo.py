@@ -3,7 +3,7 @@
 
 The arena's demo used to be fourteen hand-written lines, because aiming was
 four arrow keys and "hold ArrowUp for two seconds" is a thing a person can
-write down. With the mouse (M27) it is not: aiming is a *point on the frame*,
+write down. With the mouse (M28) it is not: aiming is a *point on the frame*,
 and which pixel is on a drone depends on where the camera happens to be. So
 the timeline is authored the way `make_car_track_lap.py` authors the car's
 lap — a closed loop that replays what it has written so far, asks the engine
@@ -45,7 +45,7 @@ OUT = os.path.join(HERE, "arena_shooter_demo.input.jsonl")
 # The frame the timeline is authored against. A cursor is a fraction of the
 # frame and the ray through it depends on the aspect, so a demo authored at
 # 16:9 replays at any 16:9 size — which is what the doc's screenshot command
-# uses (M27, `designs/mouse-input-design.md` §5).
+# uses (M28, `designs/mouse-input-design.md` §5).
 WIDTH, HEIGHT = 960, 540
 ASPECT = WIDTH / HEIGHT
 
@@ -58,7 +58,7 @@ CHUNK = 6  # steps between decisions — a tenth of a second is 6 steps
 DRONES = 10
 DRONE_HOVER = 0.95  # the altitude they hold; the aim point's height
 
-# The menu the run has to get through first (M27). The button is centred, so
+# The menu the run has to get through first (M28). The button is centred, so
 # these fractions land on it at any frame size.
 PLAY_CURSOR = (0.5, 0.56)
 CLICK_AT = 30  # step the demo presses PLAY

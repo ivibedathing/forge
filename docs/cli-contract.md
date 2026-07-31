@@ -284,7 +284,7 @@ the timeline's file/line.
 with the origin at the top-left corner — not pixels, because a timeline
 outlives the window it was recorded in. Values outside the range clamp to the
 edge; an **absent `cursor` is the centre of the frame** (`[0.5, 0.5]`), so
-every pre-M27 timeline parses unchanged and means what it always meant.
+every pre-M28 timeline parses unchanged and means what it always meant.
 Recorded cursors are quantized to three decimals, which is what the file says
 and therefore what replays.
 

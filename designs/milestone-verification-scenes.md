@@ -1222,10 +1222,10 @@ this fixture, which the `main` binary cannot parse.
 
 ---
 
-## M27 — The mouse: `verify/m27_pointer.json`
+## M28 — The mouse: `verify/m28_pointer.json`
 
 A ground plane, two posts for depth, a marker disc, a sphere, and a button plate in the corner of
-the HUD, driven by `verify/m27_pointer.input.jsonl` — a committed cursor path with two held clicks.
+the HUD, driven by `verify/m28_pointer.input.jsonl` — a committed cursor path with two held clicks.
 **Two baselines from one file**, at `--steps 40` and `--steps 80`: the first has the cursor
 mid-field with the click *away* from the button, the second has it on the plate with the button
 pressed and the sphere dropped on the marker.
@@ -1262,7 +1262,7 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 | M19 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M23 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M26 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
-| M27 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M28 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)

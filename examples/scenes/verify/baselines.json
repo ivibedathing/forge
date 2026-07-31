@@ -376,31 +376,31 @@
       "pinned_by": "hand"
     },
     {
-      "baseline": "examples/scenes/verify/baselines/m27_pointer_aim.png",
-      "scene": "examples/scenes/verify/m27_pointer.json",
+      "baseline": "examples/scenes/verify/baselines/m28_pointer_aim.png",
+      "scene": "examples/scenes/verify/m28_pointer.json",
       "args": [
         "--steps",
         "40",
         "--input",
-        "examples/scenes/verify/m27_pointer.input.jsonl"
+        "examples/scenes/verify/m28_pointer.input.jsonl"
       ],
       "width": 640,
       "height": 360,
-      "milestone": "M27",
+      "milestone": "M28",
       "pinned_by": "crates/engine-cli/tests/cli.rs::the_mouse_aims_where_the_cursor_points"
     },
     {
-      "baseline": "examples/scenes/verify/baselines/m27_pointer_click.png",
-      "scene": "examples/scenes/verify/m27_pointer.json",
+      "baseline": "examples/scenes/verify/baselines/m28_pointer_click.png",
+      "scene": "examples/scenes/verify/m28_pointer.json",
       "args": [
         "--steps",
         "80",
         "--input",
-        "examples/scenes/verify/m27_pointer.input.jsonl"
+        "examples/scenes/verify/m28_pointer.input.jsonl"
       ],
       "width": 640,
       "height": 360,
-      "milestone": "M27",
+      "milestone": "M28",
       "pinned_by": "crates/engine-cli/tests/cli.rs::the_mouse_aims_where_the_cursor_points"
     }
   ],

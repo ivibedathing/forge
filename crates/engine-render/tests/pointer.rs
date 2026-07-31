@@ -1,4 +1,4 @@
-//! The agreement test M27's design promises: the cursor ray in
+//! The agreement test M28's design promises: the cursor ray in
 //! `engine-core` is the inverse of the projection the renderer actually draws
 //! with.
 //!
@@ -77,7 +77,7 @@ fn the_aspect_ratio_is_the_frames_and_not_a_guess() {
     let cursor = Vec2::new(0.9, 0.2);
 
     // The same cursor in two different frames is two different directions —
-    // that is the resolution dependence M27 §5 documents rather than hides.
+    // that is the resolution dependence M28 §5 documents rather than hides.
     let wide = pointer_at(cursor, &camera, model, &Viewport::new(1920, 540, None));
     let square = pointer_at(cursor, &camera, model, &Viewport::new(540, 540, None));
     let wide_dir = wide.ray.unwrap().1;
