@@ -745,10 +745,16 @@ is what drawing the object second under `Less` gives.
 
 Residue, recorded rather than hidden: `showcase_646.png`, the blast frame, still comes back as two
 images ~100 pixels apart (delta ≤ 18) in the distant tree canopy. It is the only baseline with a
-`diff_args` tolerance in `baselines.json` (`--threshold 24`). `showcase_810.png` has since been
-seen to flake the same way **once** — 29 pixels at a channel delta of 1, along the treeline, clean on
-the next three runs — so it is the same residue and not a second bug; it is left without a tolerance
-deliberately, since one flake in four sweeps is worth re-running rather than blessing away. **The general rule: fine geometry
+`diff_args` tolerance in `baselines.json` (`--threshold 24`). **Three more tour frames have since
+been seen to flake the same way** — `showcase_810`, `showcase_585` and `showcase_90`, tens of pixels
+at a channel delta of 1–13, always along the treeline — so it is one residue rather than four bugs.
+They are left without tolerances deliberately: a flake in one sweep out of several is worth
+re-running rather than blessing away. **M27 measured the rate rather than counting sweeps**: ten
+`--steps 585` renders of the unchanged tour came back as **three distinct images from the M27 binary
+and two from `main`'s**, so the frame is nondeterministic on both sides and the sweep is a lossy way
+to observe it. When a sweep failure needs settling, the check is the A/B between binaries (which was
+byte-identical across all 29 artifacts), or `md5`-ing N renders of the one frame — not another sweep.
+**The general rule: fine geometry
 against relief under MSAA is where this adapter stops being reproducible, so a new fixture wanting a
 hard pin should aim its camera at its subject rather than across a landscape.** Verified by
 `engine-render/tests/terrain.rs` (including `a_flat_single_layer_patch_is_exactly_a_painted_plane`,

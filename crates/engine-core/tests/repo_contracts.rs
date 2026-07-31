@@ -363,6 +363,17 @@ impl engine_core::texture::TextureSource for StubbedFileAssets {
     }
 }
 
+/// And the rig half (M27). A stubbed cube has no skin, so the draw list this
+/// test counts never asks for a palette.
+impl engine_core::skeleton::RigSource for StubbedFileAssets {
+    fn load_rig(
+        &self,
+        _asset: &str,
+    ) -> engine_core::error::Result<std::sync::Arc<engine_core::skeleton::Rig>> {
+        Ok(std::sync::Arc::new(engine_core::skeleton::Rig::default()))
+    }
+}
+
 #[test]
 fn demo_scene_loads_and_draws_everything() {
     // The truck's mesh existence check resolves relative to the scene path,

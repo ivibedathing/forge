@@ -310,4 +310,45 @@ baselines are re-blessed as part of that, and nothing else in the manifest may m
 
 ## 11. What building it actually taught
 
-*(Written after the fact, like M26 §11.5. Empty until then.)*
+*(Written as each stage lands, like M26 §11.5.)*
+
+### S1 — pixels
+
+- **The vertex-stage refactor came out smaller than §7 feared, because the fix was to make the
+  *seam* narrower rather than the mechanism cleverer.** A producer does not contribute a stage; it
+  contributes attributes, varyings, statements, and — at most one of them — *the expression the
+  stage transforms in place of `position`*. Assembly is then one `format!` over a fixed skeleton,
+  and the empty case reproduces `mesh.wgsl`'s stage character for character, which is an assertion
+  rather than a hope. The A/B says all 29 committed render artifacts moved zero pixels.
+- **Where the palette lives was decided by what already depends on time.** Everything else in a
+  draw list was posed by the caller before `render_items` saw it; the palette is the only thing in
+  it that is a function of the clock. So `render_items_at(assets, Some(t))` is a second entry point
+  rather than a parameter threaded through twenty call sites that cannot have a skin — and
+  `render_items(assets)`, the rest pose, is what the editor's viewport wants anyway, since it shows
+  scenes at rest.
+- **A rest pose still needs a palette.** The obvious shortcut — no clock, no palette, identity —
+  collapses any rig whose rest pose is not exactly its bind pose, because the vertices are in skin
+  space and `global · inverse_bind` is what puts them back. The fixture's second arm exists to catch
+  precisely that, and it caught nothing only because the rule was written down first.
+- **The skinned pipelines are built lazily, on the first frame that has a skinned draw.** Six shader
+  modules is a real startup cost and every `engine screenshot` in this repo but one has no rig in
+  it. The precedent was already here: the shadow map, the 1×1 white texture and the colour copy are
+  all allocated by the first frame that needs them.
+- **Influences are written for every primitive in a file or for none.** A file mixing a skinned
+  primitive with a static one would otherwise leave the two arrays shorter than the positions they
+  parallel, and the shader would read one primitive's influences against another's vertices. Static
+  vertices take all-zero weights, which `skin.wgsl` reads as "leave this vertex alone" — attaching
+  them to joint 0 instead would drag them around with a bone. A file where nothing turned out to be
+  skinned gives the arrays back, so an unskinned mesh uploads exactly the buffers it always did.
+- **§9's build-profile warning did not hold, and that is why it said to measure.** The skeletal
+  baseline renders byte-identically from the debug and release binaries, unlike M19's trees and
+  M20's clouds. Three joints of slerp is not enough libm to reach a pixel; a hundred-joint rig may
+  not inherit that.
+- **A sweep is a lossy way to observe M22's residue, and this milestone finally measured the rate.**
+  Two showcase frames failed one sweep out of five and passed every other; the reflex reading is
+  "the change moved a pixel". Rendering `--steps 585` ten times with each binary settled it —
+  **three distinct images from this branch's binary, two from `main`'s** — so the frame is
+  nondeterministic on both sides and the difference in counts is sampling noise. `showcase_90` and
+  `showcase_585` join `showcase_646` and `showcase_810` in CLAUDE.md's record. The lesson for the
+  next milestone: when a sweep fails and the A/B is clean, `md5` N renders of the one frame rather
+  than running the sweep again.

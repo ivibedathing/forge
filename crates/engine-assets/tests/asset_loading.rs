@@ -334,6 +334,120 @@ fn one_texture_asset_is_one_arc() {
 // ── Rigs (M27) ────────────────────────────────────────────────────────────
 
 #[test]
+fn a_skinned_primitive_carries_its_influences_and_stays_in_skin_space() {
+    let mesh = engine_assets::load_gltf(&example("meshes/rigged_arm.gltf")).unwrap();
+
+    assert!(mesh.is_skinned(), "the arm has JOINTS_0 and WEIGHTS_0");
+    assert_eq!(mesh.joint_indices.len(), mesh.positions.len());
+    assert_eq!(mesh.joint_weights.len(), mesh.positions.len());
+    for weights in &mesh.joint_weights {
+        let sum: f32 = weights.iter().sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-5,
+            "glTF weights are normalized per vertex, got {weights:?}"
+        );
+    }
+    for indices in &mesh.joint_indices {
+        assert!(
+            indices.iter().all(|&i| (i as usize) < 3),
+            "the arm has three joints, got {indices:?}"
+        );
+    }
+}
+
+#[test]
+fn a_skinned_primitives_node_transform_is_not_baked_into_its_vertices() {
+    // glTF says the transform of the node referencing a skinned mesh is
+    // ignored: the palette already speaks skin space. Baking it is the bug
+    // this test exists to catch, and its symptom — a character posed correctly
+    // in the wrong place — looks like a scene-authoring mistake rather than a
+    // loader one.
+    let source = std::fs::read_to_string(example("meshes/rigged_arm.gltf")).unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&source).unwrap();
+    let unmoved = engine_assets::load_gltf(&example("meshes/rigged_arm.gltf")).unwrap();
+
+    document["nodes"][0]["translation"] = serde_json::json!([100.0, 0.0, 0.0]);
+    let fixture = Fixture::new("skinned-node-transform");
+    let path = fixture.write("arm.gltf", serde_json::to_string(&document).unwrap());
+    let moved = engine_assets::load_gltf(&path).unwrap();
+
+    assert_eq!(
+        unmoved.positions, moved.positions,
+        "moving the skinned node must not move a single vertex"
+    );
+}
+
+#[test]
+fn an_unskinned_file_carries_no_influences_at_all() {
+    // Which is what keeps every mesh committed before M27 uploading exactly
+    // the vertex buffers it always did.
+    let mesh = engine_assets::load_gltf(&example("meshes/pyramid.gltf")).unwrap();
+    assert!(!mesh.is_skinned());
+    assert!(mesh.joint_indices.is_empty());
+    assert!(mesh.joint_weights.is_empty());
+}
+
+#[test]
+fn a_fifth_influence_per_vertex_is_refused_rather_than_dropped() {
+    let source = std::fs::read_to_string(example("meshes/rigged_arm.gltf")).unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&source).unwrap();
+    // Point JOINTS_1 at the accessor JOINTS_0 already uses: the values are
+    // irrelevant, the attribute's presence is the whole claim.
+    let joints_0 = document["meshes"][0]["primitives"][0]["attributes"]["JOINTS_0"].clone();
+    document["meshes"][0]["primitives"][0]["attributes"]["JOINTS_1"] = joints_0;
+
+    let fixture = Fixture::new("joints-1");
+    let path = fixture.write("arm.gltf", serde_json::to_string(&document).unwrap());
+    let error = engine_assets::load_gltf(&path).unwrap_err();
+
+    assert_eq!(error.error, engine_core::codes::ASSET_UNSUPPORTED);
+    assert!(
+        error.message.contains("JOINTS_1"),
+        "the message has to name the attribute: {}",
+        error.message
+    );
+}
+
+#[test]
+fn the_draw_list_carries_a_palette_that_moves_with_the_clock() {
+    let path = example("scenes/verify/m27_skeletal.json");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let scene = engine_core::Scene::from_source(&source, &path.display().to_string()).unwrap();
+    let assets = engine_assets::AssetServer::for_scene(&path);
+
+    let at = |t: Option<f32>| {
+        let items = scene.render_items_at(&assets, t).unwrap();
+        let find = |name: &str| {
+            items
+                .iter()
+                .find(|item| item.entity == name)
+                .unwrap_or_else(|| panic!("{name} draws"))
+                .joints
+                .clone()
+        };
+        (find("Arm"), find("Rest"), find("Ground"))
+    };
+
+    let (rest_arm, rest_still, ground) = at(None);
+    assert!(
+        ground.is_empty(),
+        "an unskinned mesh carries no palette, which is what keeps it on the \
+         pipeline that compiles mesh.wgsl as it sits on disk"
+    );
+    assert_eq!(rest_arm.len(), 3, "the arm's three joints");
+    assert_eq!(
+        rest_arm, rest_still,
+        "with no clock both arms are the rest pose"
+    );
+
+    // A quarter of the way into Wave, the played arm has moved and the one
+    // with no AnimationPlayer has not.
+    let (waved, still, _) = at(Some(0.25));
+    assert_eq!(still, rest_still, "no player, no motion, at any time");
+    assert_ne!(waved, rest_arm, "the Wave clip poses the played arm");
+}
+
+#[test]
 fn the_rigged_arm_loads_its_skin_in_the_files_joint_order() {
     let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
     let skin = rig.skin.expect("rigged_arm.gltf has a skin");

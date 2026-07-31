@@ -49,6 +49,12 @@ impl MeshSource for Textures {
     }
 }
 
+impl engine_core::skeleton::RigSource for Textures {
+    fn load_rig(&self, asset: &str) -> engine_core::error::Result<Arc<engine_core::skeleton::Rig>> {
+        BuiltinAssets.load_rig(asset)
+    }
+}
+
 impl TextureSource for Textures {
     fn load_texture(
         &self,

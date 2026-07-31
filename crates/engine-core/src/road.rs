@@ -633,6 +633,7 @@ fn build(road: &Road) -> RoadSurface {
         normals: Vec::with_capacity(centers.len() * 9),
         uvs: Vec::with_capacity(centers.len() * 9),
         indices: Vec::with_capacity(centers.len() * 8 * 6),
+        ..MeshData::default()
     };
 
     // Per-sample frame: the horizontal cross-section direction, and the surface

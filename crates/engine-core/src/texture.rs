@@ -298,12 +298,16 @@ pub trait TextureSource {
     fn load_texture(&self, asset: &str, space: ColorSpace) -> Result<Arc<TextureData>>;
 }
 
-/// Everything the draw list needs to resolve: geometry and textures.
+/// Everything the draw list needs to resolve: geometry, textures, and — since
+/// M27 — the rig behind a skinned mesh.
 ///
-/// One parameter rather than two, with a blanket impl, so every existing caller
-/// of `Scene::render_items` keeps passing exactly what it passed before.
-pub trait AssetSource: crate::mesh::MeshSource + TextureSource {}
-impl<T: crate::mesh::MeshSource + TextureSource + ?Sized> AssetSource for T {}
+/// One parameter rather than three, with a blanket impl, so every existing
+/// caller of `Scene::render_items` keeps passing exactly what it passed before.
+pub trait AssetSource: crate::mesh::MeshSource + TextureSource + crate::skeleton::RigSource {}
+impl<T: crate::mesh::MeshSource + TextureSource + crate::skeleton::RigSource + ?Sized> AssetSource
+    for T
+{
+}
 
 /// The four maps a material can carry, resolved to shared pixels (M26).
 ///

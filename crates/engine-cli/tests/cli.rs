@@ -3553,6 +3553,94 @@ fn the_skeletal_fixture_validates() {
     assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
 }
 
+/// The M27 fixture rendered: a rigged arm mid-`Wave` beside an identical one
+/// with no player, pinned bit-exactly.
+///
+/// The two arms are the assertion. They share a file, a mesh and a material,
+/// so anything that made *both* wrong — a palette that never reached the GPU,
+/// a bind group off by a slot — would still leave them identical; only real
+/// skinning makes one bend and the other stand. And the bent arm's shadow
+/// bends with it, which is the skinned caster: `shadow.wgsl` reads nothing but
+/// the model matrix, so without a second pipeline a walking character casts
+/// its rest pose, a wrongness that reads as a renderer bug.
+///
+/// Aimed at its subject with no terrain in frame (M22's rule), so it carries a
+/// hard pin rather than a `diff_args` tolerance. Measured, not assumed: unlike
+/// tree and cloud baselines this one renders identically from the debug and
+/// release binaries — three joints of slerp is not enough libm to reach a
+/// pixel.
+#[test]
+fn the_m27_skeletal_fixture_pins_a_posed_rig_and_its_shadow() {
+    let scene = skeletal_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m27_skeletal.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--time")
+        .arg("0.4")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The pose is a pure function of (files, time), the M9 property — now on a
+/// skinned mesh, where the joints reach the GPU as a uniform rather than the
+/// components reaching it as a transform.
+#[test]
+fn a_skinned_render_is_a_pure_function_of_the_file_and_the_clock() {
+    let dir = std::env::temp_dir().join(format!("engine-m27-skin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let shot = |name: &str, time: &str| {
+        let out = dir.join(name);
+        let output = engine()
+            .arg("screenshot")
+            .arg(skeletal_scene())
+            .arg("--out")
+            .arg(&out)
+            .arg("--width")
+            .arg("160")
+            .arg("--height")
+            .arg("90")
+            .arg("--time")
+            .arg(time)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            return None;
+        }
+        Some(std::fs::read(&out).unwrap())
+    };
+
+    let Some(first) = shot("a.png", "0.4") else {
+        eprintln!("skipping render determinism: no usable GPU on this machine");
+        std::fs::remove_dir_all(&dir).ok();
+        return;
+    };
+    let again = shot("b.png", "0.4").unwrap();
+    let elsewhere = shot("c.png", "0.9").unwrap();
+
+    assert_eq!(first, again, "same file, same time, same bytes");
+    assert_ne!(
+        first, elsewhere,
+        "a different time has to pose the rig differently, or the clock is \
+         not reaching the palette at all"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn list_joints_reports_a_rig_out_of_a_gltf_directly() {
     let output = engine()

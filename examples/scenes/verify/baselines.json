@@ -374,6 +374,18 @@
       "height": 360,
       "milestone": "M26",
       "pinned_by": "hand"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m27_skeletal.png",
+      "scene": "examples/scenes/verify/m27_skeletal.json",
+      "args": [
+        "--time",
+        "0.4"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M27",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [

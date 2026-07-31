@@ -1262,8 +1262,8 @@ fn diff_render(
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
-    let items = scene.render_items(&assets)?;
     let render_time = scene_time(time, steps, &scene);
+    let items = scene.render_items_at(&assets, Some(render_time))?;
     let (lights, environment) = scene.resolved_at(render_time);
 
     let (actual, adapter) = engine_render::offscreen::render_with_adapter(
@@ -1451,7 +1451,7 @@ fn filmstrip(
             start + (end - start) * frame as f32 / (frames - 1) as f32
         };
         engine_core::animation::apply_all(&mut scene, &players, t);
-        let items = scene.render_items(&assets)?;
+        let items = scene.render_items_at(&assets, Some(t))?;
         let (lights, environment) = scene.resolved_at(t);
         // Filmstrip samples animation time only; particles advance with
         // --steps, which filmstrip does not take, so none are drawn. Water is
@@ -1858,9 +1858,9 @@ fn screenshot(
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
-    let items = scene.render_items(&assets)?;
-    let drawn = items.len();
     let render_time = scene_time(time, steps, &scene);
+    let items = scene.render_items_at(&assets, Some(render_time))?;
+    let drawn = items.len();
     let (lights, environment) = scene.resolved_at(render_time);
 
     let image = engine_render::offscreen::render(

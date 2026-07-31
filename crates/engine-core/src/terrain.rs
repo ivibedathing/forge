@@ -253,6 +253,7 @@ fn build_surface(terrain: &Terrain, origin: Vec2, size: Vec2) -> MeshData {
         normals: Vec::with_capacity(vertices),
         uvs: Vec::with_capacity(vertices),
         indices: Vec::with_capacity(n * n * 6),
+        ..MeshData::default()
     };
 
     for i in 0..=n {

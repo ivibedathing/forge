@@ -79,6 +79,7 @@ fn build_grid(segments: u32) -> MeshData {
         normals: Vec::with_capacity(vertices),
         uvs: Vec::with_capacity(vertices),
         indices: Vec::with_capacity(n * n * 6),
+        ..MeshData::default()
     };
 
     for i in 0..=n {

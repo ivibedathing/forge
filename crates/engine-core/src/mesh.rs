@@ -29,6 +29,19 @@ pub struct MeshData {
     pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
+
+    /// Which joints move each vertex, as indices into the skin's `joints`
+    /// array (M27) — glTF `JOINTS_0`.
+    ///
+    /// **Empty for every mesh that is not skinned**, which is every mesh in
+    /// this repo before M27 and every `builtin:` primitive forever: the
+    /// renderer uploads these two slots only when they are non-empty, so no
+    /// committed vertex buffer and no committed vertex layout changed when
+    /// they arrived.
+    pub joint_indices: Vec<[u16; 4]>,
+    /// How much each of those four joints moves the vertex — glTF `WEIGHTS_0`,
+    /// parallel to `joint_indices`.
+    pub joint_weights: Vec<[f32; 4]>,
 }
 
 impl MeshData {
@@ -38,6 +51,15 @@ impl MeshData {
 
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
+    }
+
+    /// Whether this geometry carries skinning influences — the test that routes
+    /// a draw onto the skinned pipeline variants.
+    ///
+    /// Both arrays or neither: the loader writes them together, and a mesh with
+    /// influences but no weights would skin every vertex to the origin.
+    pub fn is_skinned(&self) -> bool {
+        !self.joint_indices.is_empty() && self.joint_indices.len() == self.joint_weights.len()
     }
 }
 
@@ -257,6 +279,19 @@ impl MeshSource for BuiltinAssets {
     }
 }
 
+impl crate::skeleton::RigSource for BuiltinAssets {
+    /// A `builtin:` primitive is generated geometry with no file behind it, so
+    /// it has no rig — an empty one, not an error, which is what lets every
+    /// GPU-less test keep passing this unit struct where an `AssetSource` is
+    /// wanted.
+    fn load_rig(&self, _asset: &str) -> Result<Arc<crate::skeleton::Rig>> {
+        thread_local! {
+            static EMPTY: Arc<crate::skeleton::Rig> = Arc::new(crate::skeleton::Rig::default());
+        }
+        Ok(EMPTY.with(Arc::clone))
+    }
+}
+
 /// Build a quad facing `normal`, wound counter-clockwise seen from outside.
 ///
 /// `u` and `v` must satisfy `cross(u, v) == normal`; that constraint is what
@@ -294,6 +329,7 @@ fn cube() -> MeshData {
         normals: Vec::with_capacity(24),
         uvs: Vec::with_capacity(24),
         indices: Vec::with_capacity(36),
+        ..MeshData::default()
     };
 
     let (x, y, z) = (Vec3::X, Vec3::Y, Vec3::Z);
@@ -314,6 +350,7 @@ fn plane() -> MeshData {
         normals: Vec::with_capacity(4),
         uvs: Vec::with_capacity(4),
         indices: Vec::with_capacity(6),
+        ..MeshData::default()
     };
     // Offset back to the origin: `quad` pushes the face out along its normal.
     quad(Vec3::Y, Vec3::Z, Vec3::X, &mut mesh);
@@ -339,6 +376,7 @@ fn sphere() -> MeshData {
         normals: Vec::with_capacity(vertex_count),
         uvs: Vec::with_capacity(vertex_count),
         indices: Vec::with_capacity((RINGS * SEGMENTS * 6) as usize),
+        ..MeshData::default()
     };
 
     // The seam column is duplicated (segment 0 == segment SEGMENTS) so UVs can
@@ -402,6 +440,7 @@ fn cylinder() -> MeshData {
         normals: Vec::with_capacity(vertex_count),
         uvs: Vec::with_capacity(vertex_count),
         indices: Vec::with_capacity((SEGMENTS * 6 + SEGMENTS * 6) as usize),
+        ..MeshData::default()
     };
 
     let rim = |segment: u32| {
@@ -463,6 +502,7 @@ fn triangle() -> MeshData {
         normals: vec![[0.0, 0.0, 1.0]; 3],
         uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
         indices: vec![0, 1, 2],
+        ..MeshData::default()
     }
 }
 

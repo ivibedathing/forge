@@ -90,6 +90,7 @@ pub fn generate(cloud: &Cloud) -> MeshData {
             normals: Vec::with_capacity(vertex_count(cloud) as usize),
             uvs: Vec::with_capacity(vertex_count(cloud) as usize),
             indices: Vec::new(),
+            ..MeshData::default()
         },
     };
 
@@ -444,6 +445,7 @@ fn build_sphere(detail: u32) -> MeshData {
         normals: Vec::with_capacity(positions.len()),
         uvs: Vec::with_capacity(positions.len()),
         indices: indices.into_iter().flatten().collect(),
+        ..MeshData::default()
     };
     for point in positions {
         mesh.positions.push(point.to_array());
