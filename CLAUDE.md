@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M24 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, M19 procedural trees, M20 procedural clouds, M21 day/night, M22 terrain, M23 roads, and M24 agent ergonomics** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M25 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, M19 procedural trees, M20 procedural clouds, M21 day/night, M22 terrain, M23 roads, and M24/M25 agent ergonomics** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -24,7 +24,10 @@ engine validate <scene.json>... [--strict]  # every error at once; multi-file; -
 engine screenshot <scene.json> --out x.png [--steps N] [--input f] [--time T] [--camera N] [--width W --height H]
 engine diff-render <scene.json> <baseline.png> [--steps N] [--input f] [--time T] [--out diff.png] [--threshold N] [--max-diff-percent P]
 engine edit <scene.json> [--watch]       # GUI editor; --watch = read-only supervision mode
-engine simulate <scene.json> --steps N [--input f] [--bake out.json] [--trace t.jsonl]
+engine simulate <scene.json> --steps N [--input f] [--bake out.json] [--trace t.jsonl] [--entity N]...
+#   the report says where every dynamic body ended up (M25); screenshot/filmstrip report a
+#   frame "digest" — mean_luminance, background, coverage — so a black frame is diagnosable
+#   without reading the image (M25)
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
 engine list-animations <scene-or-clip> [--schema]
@@ -979,6 +982,44 @@ fails against the pre-M24 binary, which is how the tests were written.
 Output-shape rule this settled, for the next command that prints something: **schemas
 pretty-print, reports do not.** `inspect` is compact like `raycast` and `road-centerline`;
 `--component` is pretty like `list-components`.
+
+**M25 is the other half of that doc**: two reports that computed the answer to the most common
+follow-up question and threw it away. Both are additive keys on existing stdout objects; existing
+keys keep their meaning, every workspace test passed unchanged (which is the confirmation that
+nothing parsed those objects positionally), and the sweep again reported **30 of 30**. No A/B —
+`engine_render::digest` is a pure CPU module beside `diff`, called from the CLI *between*
+`offscreen::render` and the PNG encode, so the render path is not touched at all.
+
+- **`simulate` says where everything ended up.** The whole report used to be
+  `{contacts, simulated_steps, timestep_hz}` — three numbers, none of which is a position — so
+  learning where a body landed meant writing a trace (125 lines / 17.8 KB for a 120-step run) and
+  parsing its tail, or baking an entire scene file and reading a `Transform` back out, which is
+  what the M22 CLI test does to assert one number. The new `entities` array **is the trace's
+  rows**: same fields (`position`, `rotation`, `linear_velocity` when there is a `RigidBody`),
+  same omissions (no angular velocity, no scale — one shape to learn, and a field is cheap to add
+  and breaking to remove), and the same membership rule, the dynamic bodies re-enumerated after
+  the run. **Name-sorted is a contract, not cosmetics** — the same rule the trace follows, so an
+  unchanged scene reports identically instead of in archetype order. `--entity NAME` (repeatable)
+  narrows *and* reaches what no trace enumerates: a fixed floor, a scripted kinematic platform, a
+  camera a chase script drives. Unknown names are reported all at once. The trace format, the bake
+  format, and both golden traces are untouched.
+- **`screenshot`/`filmstrip` report a frame `digest`**: `mean_luminance`, `background` (the most
+  common exact color, as sRGB bytes), and `coverage` (the fraction that is anything else).
+  `entities_drawn` catches "nothing loaded" and cannot catch **"nothing is in the frame"** — a
+  camera aimed past the scene submits the same geometry and renders a perfectly correct empty
+  picture, and `coverage: 0.0` is that, without the 1–2k-token image read. Luminance is over the
+  **encoded** bytes, since the question is whether the PNG looks black. Defining "background" as
+  the frame's *mode* rather than the clear color is what keeps the number meaningful under a sky
+  gradient; ties break toward the numerically smallest color, or `HashMap` order would decide it.
+- **The digest is quantized to three decimals, and that is the load-bearing part.** M22 records
+  that this adapter renders a terrain frame ~24 pixels differently run to run; at full precision
+  the mean would differ in its low digits between two runs of an unchanged scene, which turns a
+  diagnostic into phantom diffs — the exact failure mode of a check an agent learns to skip. The
+  measured worst case moves it by ~3e-5 against a 1e-3 step. **Nothing may pin the digest**:
+  `diff-render` pins renders, bit-exactly and with a diff image showing where, and that margin is
+  a property of how small today's noise is rather than a guarantee. A perceptual hash was rejected
+  for inviting exactly the comparison `diff-render` already does properly, and a flag to opt in
+  was rejected because having to know to ask is the problem being fixed.
 
 Showcase tour (`designs/showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —

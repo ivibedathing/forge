@@ -185,6 +185,11 @@ enum Command {
         bake: Option<PathBuf>,
         #[arg(long)]
         trace: Option<PathBuf>,
+        /// Report this entity's final state instead of every dynamic body's.
+        /// Repeatable, and reaches entities no trace enumerates — a scripted
+        /// kinematic platform, a camera a chase script drives.
+        #[arg(long)]
+        entity: Vec<String>,
     },
 
     /// Cast a ray into the (optionally pre-simulated) scene; JSON result.
@@ -391,7 +396,8 @@ fn main() {
             input,
             bake,
             trace,
-        } => simulate::simulate_command(scene, steps, input, bake, trace),
+            entity,
+        } => simulate::simulate_command(scene, steps, input, bake, trace, entity),
         Command::Raycast {
             scene,
             from,
@@ -1123,6 +1129,20 @@ fn load_baseline(path: &std::path::Path) -> Result<engine_render::Image> {
     })
 }
 
+/// The render digest as it appears in a report (M25).
+///
+/// One shape for both commands, so an agent that learns to read
+/// `screenshot`'s reads `filmstrip`'s. Deliberately *not* a pin: see
+/// `engine_render::digest` for why the numbers are quantized and why there is
+/// no hash here.
+fn digest_json(digest: &engine_render::digest::Digest) -> serde_json::Value {
+    serde_json::json!({
+        "mean_luminance": digest.mean_luminance,
+        "background": digest.background,
+        "coverage": digest.coverage,
+    })
+}
+
 /// `engine filmstrip` — one PNG, many moments.
 #[allow(clippy::too_many_arguments)]
 fn filmstrip(
@@ -1188,6 +1208,14 @@ fn filmstrip(
         image::imageops::replace(&mut sheet, &tile, i64::from(x), i64::from(y));
     }
 
+    // The digest is of the whole contact sheet, which is what was written —
+    // a strip whose frames are all black says so in one number.
+    let digest = engine_render::digest::of(&engine_render::Image {
+        width: sheet.width(),
+        height: sheet.height(),
+        pixels: sheet.as_raw().clone(),
+    });
+
     sheet.save(&out).map_err(|e| {
         EngineError::new(codes::PNG_WRITE_FAILED, format!("could not write PNG: {e}"))
             .file(out.display().to_string())
@@ -1197,6 +1225,7 @@ fn filmstrip(
         "{}",
         serde_json::json!({
             "written": out.display().to_string(),
+            "digest": digest_json(&digest),
             "frames": frames,
             "start": start,
             "end": end,
@@ -1315,6 +1344,11 @@ fn screenshot(
         &hud,
     )?;
 
+    // Between rendering and encoding, while the frame is resident: one pass
+    // over a buffer that is already there (M25). Nothing about the render
+    // changes — this is a read.
+    let digest = engine_render::digest::of(&image);
+
     let png = image::RgbaImage::from_raw(image.width, image.height, image.pixels)
         .expect("offscreen::render returns exactly width*height*4 bytes");
     png.save(&out).map_err(|e| {
@@ -1328,6 +1362,7 @@ fn screenshot(
         "height": image.height,
         "scene": scene.name,
         "entities_drawn": drawn,
+        "digest": digest_json(&digest),
     });
     if !hud.is_empty() {
         report["hud"] = serde_json::json!(hud);
