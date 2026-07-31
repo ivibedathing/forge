@@ -164,11 +164,9 @@ pub fn find_blender() -> Option<PathBuf> {
 /// The Python expression handed to `blender --python-expr`. The output path
 /// rides as a JSON string literal — valid Python, quoting handled.
 fn export_expr(out: &Path) -> String {
-    let filepath = serde_json::to_string(&out.to_string_lossy())
-        .unwrap_or_else(|_| "\"export.glb\"".into());
-    format!(
-        "import bpy; bpy.ops.export_scene.gltf(filepath={filepath}, export_format='GLB')"
-    )
+    let filepath =
+        serde_json::to_string(&out.to_string_lossy()).unwrap_or_else(|_| "\"export.glb\"".into());
+    format!("import bpy; bpy.ops.export_scene.gltf(filepath={filepath}, export_format='GLB')")
 }
 
 fn convert_blend(blender: &Path, blend: &Path, out: &Path) -> Result<()> {
@@ -250,7 +248,10 @@ mod tests {
     #[test]
     fn export_expr_quotes_the_path_as_a_python_literal() {
         let expr = export_expr(Path::new("/tmp/o'brien scene.glb"));
-        assert!(expr.contains(r#"filepath="/tmp/o'brien scene.glb""#), "{expr}");
+        assert!(
+            expr.contains(r#"filepath="/tmp/o'brien scene.glb""#),
+            "{expr}"
+        );
         assert!(expr.contains("export_format='GLB'"));
     }
 
@@ -312,7 +313,12 @@ mod tests {
         // default cube scene.
         let filepath = serde_json::to_string(&blend.to_string_lossy()).unwrap();
         let status = Command::new(&blender)
-            .args(["--background", "--factory-startup", "--python-exit-code", "2"])
+            .args([
+                "--background",
+                "--factory-startup",
+                "--python-exit-code",
+                "2",
+            ])
             .arg("--python-expr")
             .arg(format!(
                 "import bpy; bpy.ops.wm.save_as_mainfile(filepath={filepath})"

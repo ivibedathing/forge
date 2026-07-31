@@ -214,8 +214,7 @@ pub fn format_value(value: &Value) -> String {
         }
         // Strings, bools, null, and (rare) nested containers: serde's
         // compact form is already correct.
-        other => serde_json::to_string(other)
-            .unwrap_or_else(|_| "null".to_string()),
+        other => serde_json::to_string(other).unwrap_or_else(|_| "null".to_string()),
     }
 }
 
@@ -277,9 +276,9 @@ pub fn insert_key(source: &str, object_pointer: &str, key: &str, value: &Value) 
     // whitespace and the closing brace keep their exact bytes.
     let insert_at = span.start
         + 1
-        + inner
-            .rfind(|c: char| !c.is_whitespace())
-            .map_or(0, |i| i + inner[i..].chars().next().map_or(1, char::len_utf8));
+        + inner.rfind(|c: char| !c.is_whitespace()).map_or(0, |i| {
+            i + inner[i..].chars().next().map_or(1, char::len_utf8)
+        });
 
     let entry = format!("{:?}: {}", key, format_value(value));
     let insertion = if is_empty {
@@ -374,8 +373,7 @@ pub fn apply_set_component_field(source: &str, edit: &SetComponentField) -> Resu
             .component(&edit.component)
         })?;
 
-    let component_pointer =
-        format!("/entities/{entity_index}/components/{component_index}");
+    let component_pointer = format!("/entities/{entity_index}/components/{component_index}");
     let field_pointer = format!("{component_pointer}/{}", edit.field);
 
     if components[component_index]
@@ -457,9 +455,9 @@ fn append_array_item(
     // bytes before and after the insertion stay untouched.
     let insert_at = span.start
         + 1
-        + inner
-            .rfind(|c: char| !c.is_whitespace())
-            .map_or(0, |i| i + inner[i..].chars().next().map_or(1, char::len_utf8));
+        + inner.rfind(|c: char| !c.is_whitespace()).map_or(0, |i| {
+            i + inner[i..].chars().next().map_or(1, char::len_utf8)
+        });
 
     let insertion = if inner.contains('\n') {
         // Multi-line array: match the first item's indentation, or step
@@ -750,7 +748,11 @@ fn line_indent(source: &str, at: usize) -> String {
 /// One component in scene style: `{ "type": "Mesh", "asset": "x.glb" }`.
 fn component_text(kind: &str, fields: &[(String, Value)]) -> String {
     let mut parts = vec![format!("\"type\": {kind:?}")];
-    parts.extend(fields.iter().map(|(k, v)| format!("{k:?}: {}", format_value(v))));
+    parts.extend(
+        fields
+            .iter()
+            .map(|(k, v)| format!("{k:?}: {}", format_value(v))),
+    );
     format!("{{ {} }}", parts.join(", "))
 }
 
@@ -763,8 +765,15 @@ fn entity_text(edit: &AddEntity, indent: &str) -> String {
     } else {
         out.push_str(&format!("{indent}  \"components\": [\n"));
         for (i, (kind, fields)) in edit.components.iter().enumerate() {
-            let comma = if i + 1 < edit.components.len() { "," } else { "" };
-            out.push_str(&format!("{indent}    {}{comma}\n", component_text(kind, fields)));
+            let comma = if i + 1 < edit.components.len() {
+                ","
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "{indent}    {}{comma}\n",
+                component_text(kind, fields)
+            ));
         }
         out.push_str(&format!("{indent}  ]\n"));
     }
@@ -814,13 +823,15 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
 /// A spliced edit must still be valid JSON; anything else is a bug in this
 /// module, and the broken text must never reach the disk.
 fn check_still_parses(edited: &str, pointer: &str) -> Result<()> {
-    serde_json::from_str::<Value>(edited).map(|_| ()).map_err(|e| {
-        EngineError::new(
-            codes::FORMATTER_DESYNC,
-            format!("editing {pointer:?} produced invalid JSON ({e}); nothing was written"),
-        )
-        .path(pointer)
-    })
+    serde_json::from_str::<Value>(edited)
+        .map(|_| ())
+        .map_err(|e| {
+            EngineError::new(
+                codes::FORMATTER_DESYNC,
+                format!("editing {pointer:?} produced invalid JSON ({e}); nothing was written"),
+            )
+            .path(pointer)
+        })
 }
 
 #[cfg(test)]
@@ -845,12 +856,7 @@ mod tests {
 
     #[test]
     fn set_value_changes_exactly_one_line() {
-        let edited = set_value(
-            SCENE,
-            "/entities/0/components/2/roughness",
-            &json!(0.3),
-        )
-        .unwrap();
+        let edited = set_value(SCENE, "/entities/0/components/2/roughness", &json!(0.3)).unwrap();
 
         let changed: Vec<(&str, &str)> = SCENE
             .lines()
@@ -889,12 +895,7 @@ mod tests {
         // Setting a value to itself must be a no-op on the whole file — the
         // E1 round-trip contract (load → save → byte-identical), which holds
         // by construction because there is no save step, only splices.
-        let edited = set_value(
-            SCENE,
-            "/entities/0/components/2/roughness",
-            &json!(0.4),
-        )
-        .unwrap();
+        let edited = set_value(SCENE, "/entities/0/components/2/roughness", &json!(0.4)).unwrap();
         assert_eq!(SCENE, edited);
     }
 
@@ -929,7 +930,8 @@ mod tests {
 
     #[test]
     fn insert_key_into_multiline_object_matches_indentation() {
-        let source = "{\n  \"name\": \"s\",\n  \"entities\": [\n    {\n      \"name\": \"A\"\n    }\n  ]\n}";
+        let source =
+            "{\n  \"name\": \"s\",\n  \"entities\": [\n    {\n      \"name\": \"A\"\n    }\n  ]\n}";
         let edited = insert_key(source, "/entities/0", "components", &json!([])).unwrap();
         assert!(
             edited.contains("\"name\": \"A\",\n      \"components\": []"),
@@ -942,8 +944,13 @@ mod tests {
         let source = r#"{"name":"s","entities":[{"name":"A","components":[{}]}]}"#;
         // Not a valid scene (component without type), but the formatter is a
         // text tool; validation is someone else's job.
-        let edited =
-            insert_key(source, "/entities/0/components/0", "type", &json!("Transform")).unwrap();
+        let edited = insert_key(
+            source,
+            "/entities/0/components/0",
+            "type",
+            &json!("Transform"),
+        )
+        .unwrap();
         assert!(edited.contains(r#"[{ "type": "Transform" }]"#), "{edited}");
     }
 
@@ -974,7 +981,10 @@ mod tests {
         };
         let edited = apply_set_component_field(&reordered, &edit).unwrap();
         let root: Value = serde_json::from_str(&edited).unwrap();
-        assert_eq!(root["entities"][1]["components"][2]["roughness"], json!(0.3));
+        assert_eq!(
+            root["entities"][1]["components"][2]["roughness"],
+            json!(0.3)
+        );
     }
 
     #[test]
@@ -1055,10 +1065,7 @@ mod tests {
 
         let inline = r#"{"name":"s","entities":[{"name":"A","components":[]}]}"#;
         let edited = apply_add_entity(inline, &pyramid()).unwrap();
-        assert!(
-            edited.contains(r#"]}, { "name": "pyramid","#),
-            "{edited}"
-        );
+        assert!(edited.contains(r#"]}, { "name": "pyramid","#), "{edited}");
         serde_json::from_str::<Value>(&edited).unwrap();
     }
 
@@ -1112,7 +1119,10 @@ mod tests {
             "{edited}"
         );
         let root: Value = serde_json::from_str(&edited).unwrap();
-        assert_eq!(root["entities"][0]["components"][3]["body"], json!("dynamic"));
+        assert_eq!(
+            root["entities"][0]["components"][3]["body"],
+            json!("dynamic")
+        );
     }
 
     #[test]
@@ -1125,7 +1135,10 @@ mod tests {
         };
         let edited = apply_add_component(source, &edit).unwrap();
         let root: Value = serde_json::from_str(&edited).unwrap();
-        assert_eq!(root["entities"][0]["components"][0]["type"], json!("Transform"));
+        assert_eq!(
+            root["entities"][0]["components"][0]["type"],
+            json!("Transform")
+        );
     }
 
     #[test]
@@ -1137,7 +1150,10 @@ mod tests {
         };
         let err = apply_add_component(SCENE, &edit).unwrap_err();
         assert_eq!(err.error, "duplicate_component");
-        assert_eq!(err.context().unwrap().component.as_deref(), Some("Material"));
+        assert_eq!(
+            err.context().unwrap().component.as_deref(),
+            Some("Material")
+        );
     }
 
     #[test]
@@ -1162,8 +1178,14 @@ mod tests {
         assert!(!edited.contains("\"type\": \"Mesh\""), "{edited}");
         assert_eq!(SCENE.lines().count(), edited.lines().count() + 1);
         let root: Value = serde_json::from_str(&edited).unwrap();
-        assert_eq!(root["entities"][0]["components"].as_array().unwrap().len(), 2);
-        assert_eq!(root["entities"][0]["components"][1]["type"], json!("Material"));
+        assert_eq!(
+            root["entities"][0]["components"].as_array().unwrap().len(),
+            2
+        );
+        assert_eq!(
+            root["entities"][0]["components"][1]["type"],
+            json!("Material")
+        );
 
         // Last component: the predecessor keeps its bytes, loses its comma.
         let edit = RemoveComponent {
@@ -1205,7 +1227,10 @@ mod tests {
         };
         let edited = apply_remove_component(&reordered, &edit).unwrap();
         let root: Value = serde_json::from_str(&edited).unwrap();
-        assert_eq!(root["entities"][1]["components"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            root["entities"][1]["components"].as_array().unwrap().len(),
+            2
+        );
     }
 
     #[test]
@@ -1221,7 +1246,9 @@ mod tests {
 
     #[test]
     fn remove_entity_cuts_exactly_one_block() {
-        let edit = RemoveEntity { entity: "Sphere".into() };
+        let edit = RemoveEntity {
+            entity: "Sphere".into(),
+        };
         let edited = apply_remove_entity(SCENE, &edit).unwrap();
         assert!(!edited.contains("Sphere"), "{edited}");
         let root: Value = serde_json::from_str(&edited).unwrap();
@@ -1229,7 +1256,9 @@ mod tests {
         assert_eq!(root["entities"][0]["name"], json!("Camera1"));
 
         // The last entity: the predecessor keeps its bytes, loses its comma.
-        let edit = RemoveEntity { entity: "Camera1".into() };
+        let edit = RemoveEntity {
+            entity: "Camera1".into(),
+        };
         let edited = apply_remove_entity(SCENE, &edit).unwrap();
         let root: Value = serde_json::from_str(&edited).unwrap();
         assert_eq!(root["entities"].as_array().unwrap().len(), 1);
@@ -1238,18 +1267,33 @@ mod tests {
 
     #[test]
     fn remove_the_only_entity_leaves_an_empty_array() {
-        let edited =
-            apply_remove_entity(SCENE, &RemoveEntity { entity: "Sphere".into() }).unwrap();
-        let edited =
-            apply_remove_entity(&edited, &RemoveEntity { entity: "Camera1".into() }).unwrap();
+        let edited = apply_remove_entity(
+            SCENE,
+            &RemoveEntity {
+                entity: "Sphere".into(),
+            },
+        )
+        .unwrap();
+        let edited = apply_remove_entity(
+            &edited,
+            &RemoveEntity {
+                entity: "Camera1".into(),
+            },
+        )
+        .unwrap();
         let root: Value = serde_json::from_str(&edited).unwrap();
         assert_eq!(root["entities"], json!([]));
     }
 
     #[test]
     fn remove_entity_against_a_vanished_target_reports_not_corrupts() {
-        let err =
-            apply_remove_entity(SCENE, &RemoveEntity { entity: "Gone".into() }).unwrap_err();
+        let err = apply_remove_entity(
+            SCENE,
+            &RemoveEntity {
+                entity: "Gone".into(),
+            },
+        )
+        .unwrap_err();
         assert_eq!(err.error, "edit_target_missing");
         assert_eq!(err.context().unwrap().entity.as_deref(), Some("Gone"));
     }

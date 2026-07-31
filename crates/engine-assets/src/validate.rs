@@ -41,8 +41,10 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
     // Textures are keyed on (reference, colour space): the space decides how
     // the mip chain is filtered, so one file read as albedo and as ORM really
     // is two decodes, and a failure in either is worth reporting.
-    let mut texture_verdicts: HashMap<(String, engine_core::texture::ColorSpace), Option<EngineError>> =
-        HashMap::new();
+    let mut texture_verdicts: HashMap<
+        (String, engine_core::texture::ColorSpace),
+        Option<EngineError>,
+    > = HashMap::new();
 
     for (entity_index, entity) in file.entities.iter().enumerate() {
         for (component_index, component) in entity.components.iter().enumerate() {
@@ -69,6 +71,40 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                         error = error.line(line);
                     }
                     errors.push(error.path(json_path));
+                }
+            }
+
+            // A HudImage (M31). The reference itself is engine-core's, and so
+            // is every field range; what needs this crate is the comparison
+            // between the nine-slice insets and the *source* image, which
+            // means decoding it. Same division as `texture_too_large`, and the
+            // same reason it fires from `validate` rather than from a draw:
+            // a frame that has quietly clamped its corners is a bug found too
+            // late, and the fix is a number the author cannot otherwise see.
+            if let ComponentData::HudImage(image) = component {
+                let space = engine_core::texture::ColorSpace::Srgb;
+                let verdict = texture_verdicts
+                    .entry((image.texture.clone(), space))
+                    .or_insert_with(|| check_texture(&image.texture, base_dir, space));
+                let json_path = format!("{component_path}/texture");
+                if let Some(template) = verdict {
+                    let mut error = template
+                        .clone()
+                        .file(path)
+                        .entity(entity.name.clone())
+                        .component("HudImage")
+                        .field("texture");
+                    if let Some(line) = index.line_of_or_parent(&json_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(json_path));
+                } else if let Some(error) = check_slice(image, base_dir, &entity.name) {
+                    let slice_path = format!("{component_path}/slice");
+                    let mut error = error.file(path);
+                    if let Some(line) = index.line_of_or_parent(&slice_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(slice_path));
                 }
             }
 
@@ -235,6 +271,40 @@ fn check_rig(asset: &str, clip: &str, base_dir: &Path) -> Vec<EngineError> {
     }
 
     errors
+}
+
+/// Do a `HudImage`'s nine-slice insets fit the image they cut up (M31)?
+///
+/// Only called once the texture is known to decode, so the load here is the
+/// cached one. Reports both dimensions in the message, because "too large" is
+/// unactionable without the size it is too large for.
+fn check_slice(
+    image: &engine_core::components::HudImage,
+    base_dir: &Path,
+    entity: &str,
+) -> Option<EngineError> {
+    let path = engine_core::texture::resolve_texture(&image.texture, base_dir).ok()?;
+    let texture =
+        crate::texture::load_texture(&path, engine_core::texture::ColorSpace::Srgb).ok()?;
+    let [left, top, right, bottom] = image.slice;
+    let (horizontal, vertical) = (left + right, top + bottom);
+    if horizontal <= texture.width as f32 && vertical <= texture.height as f32 {
+        return None;
+    }
+    Some(
+        EngineError::new(
+            engine_core::codes::HUD_IMAGE_SLICE_TOO_LARGE,
+            format!(
+                "the HudImage on {entity:?} slices [{left}, {top}, {right}, {bottom}] out of \
+                 {:?}, which is {}×{}; left+right ({horizontal}) must fit the width and \
+                 top+bottom ({vertical}) the height",
+                image.texture, texture.width, texture.height
+            ),
+        )
+        .entity(entity)
+        .component("HudImage")
+        .field("slice"),
+    )
 }
 
 /// The same for a texture: decode it, which is also where `texture_too_large`

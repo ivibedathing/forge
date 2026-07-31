@@ -363,7 +363,10 @@ mod tests {
         assert!(lo >= -terrain.height && hi <= terrain.height, "{lo}..{hi}");
         // ...and that it is actually used: a field that never leaves ±0.1 m
         // would pass the bound above and still be flat ground.
-        assert!(hi - lo > terrain.height, "terrain barely varies: {lo}..{hi}");
+        assert!(
+            hi - lo > terrain.height,
+            "terrain barely varies: {lo}..{hi}"
+        );
     }
 
     #[test]
@@ -381,7 +384,12 @@ mod tests {
         };
         // Not a fixed value — the point is that eight octaves do not tower over
         // two, which is what an unnormalised sum would do.
-        assert!(sample(8) < sample(2) * 1.35, "{} vs {}", sample(8), sample(2));
+        assert!(
+            sample(8) < sample(2) * 1.35,
+            "{} vs {}",
+            sample(8),
+            sample(2)
+        );
     }
 
     #[test]
@@ -512,7 +520,10 @@ mod tests {
     #[test]
     fn a_different_seed_is_a_different_landscape() {
         let a = rolling();
-        let b = Terrain { seed: 12, ..a.clone() };
+        let b = Terrain {
+            seed: 12,
+            ..a.clone()
+        };
         let differing = (0..200)
             .filter(|i| {
                 let x = *i as f32 * 0.6;

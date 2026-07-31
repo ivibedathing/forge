@@ -60,7 +60,7 @@ fn render(particles: &[ParticleInstance]) -> Image {
         0.0,
         SIZE,
         SIZE,
-        &scene.hud_items(),
+        &scene.hud_tree(&engine_core::mesh::BuiltinAssets),
         &[],
     )
     .expect("offscreen render failed")

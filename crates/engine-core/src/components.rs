@@ -729,27 +729,71 @@ pub enum HudAnchor {
     Center,
 }
 
-/// A screen-space text label (M12): one line of the built-in 8×8 pixel font,
+/// How a [`HudPanel`] arranges its children (M31).
+///
+/// NOTE (schemars): variants carry no doc comments on purpose. A doc comment
+/// on a *variant* turns the generated schema from a flat `"enum": [...]` into
+/// oneOf/const, which blinds the validation walk's closed-vocabulary check —
+/// the same trap `ColliderShapeKind` documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HudLayout {
+    #[default]
+    Free,
+    Row,
+    Column,
+}
+
+/// Cross-axis alignment of a [`HudPanel`]'s children (M31). See [`HudLayout`]
+/// for why the variants are undocumented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HudAlign {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+/// Horizontal alignment of text within its own box (M31). See [`HudLayout`]
+/// for why the variants are undocumented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HudTextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// A screen-space text label (M12): lines of the built-in 8×8 pixel font,
 /// drawn over the 3D scene after lighting, independent of any camera.
 ///
 /// Needs no `Transform` — placement is `anchor` + `offset` in framebuffer
 /// pixels, which is what the agent sees in the PNG. Text is always opaque
 /// and never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs
 /// outside the font's coverage render as a filled box: visibly wrong in the
-/// screenshot, never a panic. Draw order is file order, and all text draws
-/// over all `HudRect`s.
+/// screenshot, never a panic.
+///
+/// M31 adds `parent`, `visible` and `stretch` (shared by every element in the
+/// family), plus `align`, `wrap` and `line_gap`. Every one defaults to the M12
+/// behaviour: no parent means a child of the viewport placed by exactly the
+/// M12 anchor arithmetic, and `wrap: 0` means the single unwrapped line it has
+/// always been.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HudText {
-    /// One line; no wrapping. Scripts may rewrite it via
-    /// `world.set_hud_text` — an empty string is a legal rest value for a
-    /// script-driven readout.
+    /// The label. `\n` breaks a line explicitly; `wrap` breaks it
+    /// automatically. Scripts may rewrite it via `world.set_hud_text` — an
+    /// empty string is a legal rest value for a script-driven readout.
     pub text: String,
 
     #[serde(default)]
     pub anchor: HudAnchor,
 
-    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    /// Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or
+    /// `column` parent this is a nudge on top of the computed position rather
+    /// than the position itself.
     #[serde(default)]
     #[schemars(with = "[f32; 2]")]
     pub offset: Vec2,
@@ -765,6 +809,39 @@ pub struct HudText {
     #[serde(default = "white")]
     #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub color: Vec3,
+
+    /// The name of an entity carrying a [`HudPanel`] to place this inside.
+    /// Absent (the default) means a child of the viewport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+
+    /// Drawn and hit-testable when true (the default). Hiding a panel hides
+    /// its whole subtree — one boolean is how a menu opens and closes.
+    #[serde(default = "yes")]
+    pub visible: bool,
+
+    /// Fill the parent's content box on `[x, y]`, ignoring this element's own
+    /// size on that axis. Two booleans rather than a `"fill"` string in a
+    /// numeric field, which would break the schema-driven walk.
+    #[serde(default)]
+    pub stretch: [bool; 2],
+
+    /// Alignment of each line within the text's own box, which differs from
+    /// the box only when the text is stretched or wrapped.
+    #[serde(default)]
+    pub align: HudTextAlign,
+
+    /// Wrap width in pixels; `0` (the default) is no wrapping. Breaks on
+    /// spaces — a word longer than `wrap` overflows rather than splitting,
+    /// since a mid-word break in a fixed-width font reads as corruption.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub wrap: f32,
+
+    /// Extra pixels between lines, on top of the glyph cell.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub line_gap: f32,
 }
 
 fn hud_text_size() -> f32 {
@@ -776,22 +853,27 @@ fn white() -> Vec3 {
 }
 
 /// A screen-space solid rectangle (M12): the primitive behind health bars,
-/// speed bars, and backdrops. Drawn before all `HudText`, file order within
-/// rects.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// speed bars, and backdrops. Drawn with the panels and images, before all
+/// `HudText`, file order within the class.
+///
+/// M31 adds only the shared `parent`/`visible`/`stretch`; a rect stays the
+/// flat script-driven bar it has always been.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HudRect {
     #[serde(default)]
     pub anchor: HudAnchor,
 
-    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    /// Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or
+    /// `column` parent this is a nudge on top of the computed position.
     #[serde(default)]
     #[schemars(with = "[f32; 2]")]
     pub offset: Vec2,
 
     /// `[width, height]` in pixels, each `>= 0` — zero is legal so a
     /// script-driven bar can be empty. Scripts resize via
-    /// `world.set_hud_rect_size`.
+    /// `world.set_hud_rect_size` or `world.set_hud_size`. Ignored on an axis
+    /// where `stretch` is true.
     #[schemars(with = "[f32; 2]", inner(range(min = 0.0)))]
     pub size: Vec2,
 
@@ -806,6 +888,203 @@ pub struct HudRect {
     #[serde(default = "one")]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub opacity: f32,
+
+    /// The name of an entity carrying a [`HudPanel`] to place this inside.
+    /// Absent (the default) means a child of the viewport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+
+    /// Drawn and hit-testable when true (the default).
+    #[serde(default = "yes")]
+    pub visible: bool,
+
+    /// Fill the parent's content box on `[x, y]`, ignoring `size` on that
+    /// axis — the full-screen dim backdrop, and the bar spanning a column.
+    #[serde(default)]
+    pub stretch: [bool; 2],
+}
+
+/// A screen-space container that lays its children out (M31).
+///
+/// This is the component that removes hand-computed pixel offsets. Children
+/// name it in their `parent`; `layout` decides whether they are stacked in a
+/// `row`, a `column`, or placed `free` by their own anchors relative to this
+/// panel's content box.
+///
+/// **Absent `width`/`height` means hug contents** — the panel is exactly its
+/// children's extent plus `padding`. That is the default because it is the
+/// case that makes a dialog authorable: the box follows the text instead of
+/// the text being fitted to a box someone solved by hand.
+///
+/// `opacity` defaults to **0**, so a bare `HudPanel` is an invisible layout
+/// group; set it and the same component is the dialog's backdrop. One
+/// component rather than a container plus a rect whose size would have to be
+/// kept in agreement with it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudPanel {
+    #[serde(default)]
+    pub anchor: HudAnchor,
+
+    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    #[serde(default)]
+    #[schemars(with = "[f32; 2]")]
+    pub offset: Vec2,
+
+    #[serde(default)]
+    pub layout: HudLayout,
+
+    /// Uniform inset in pixels between this panel's edge and its content box.
+    /// Per-side padding is the obvious next field and costs nothing to add
+    /// later; M12's "no z field until something needs it" applies.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub padding: f32,
+
+    /// Pixels between children along the main axis of a `row`/`column`.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub gap: f32,
+
+    /// Cross-axis alignment of children in a `row`/`column`.
+    #[serde(default)]
+    pub align: HudAlign,
+
+    /// Fixed width in pixels. Absent hugs the children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub width: Option<f32>,
+
+    /// Fixed height in pixels. Absent hugs the children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub height: Option<f32>,
+
+    /// Background colour, linear RGB in `[0, 1]`. Only visible at
+    /// `opacity > 0`.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// `[0, 1]`, defaulting to **0** — an invisible layout group.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: f32,
+
+    /// The name of another [`HudPanel`] entity to nest inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+
+    /// Drawn and hit-testable when true (the default). A hidden panel hides
+    /// its whole subtree.
+    #[serde(default = "yes")]
+    pub visible: bool,
+
+    /// Fill the parent's content box on `[x, y]`, ignoring `width`/`height`
+    /// and hug sizing on that axis.
+    #[serde(default)]
+    pub stretch: [bool; 2],
+}
+
+/// A screen-space textured rectangle (M31): icons, logos, framed panels.
+///
+/// `texture` is a PNG relative to the scene file, loaded through the same
+/// `TextureSource` and `(asset, space)` cache the material system uses, in
+/// sRGB — so `texture_too_large` fires from `validate`, before a device
+/// exists. Only the base level is read: the overlay draws at most one
+/// destination pixel per texel band and never minifies below it, so a mip
+/// level selection would have no correct answer at this scale.
+///
+/// Sampling is **nearest-neighbour**, written out in `engine-core` like every
+/// other generator here — a render sits under a baseline, so the filter is a
+/// format contract, and nearest is exactly reproducible where a bilinear
+/// filter is a float-rounding question.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudImage {
+    /// A `.png` path relative to the scene file (invariant 3).
+    pub texture: String,
+
+    #[serde(default)]
+    pub anchor: HudAnchor,
+
+    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    #[serde(default)]
+    #[schemars(with = "[f32; 2]")]
+    pub offset: Vec2,
+
+    /// `[width, height]` in destination pixels. Ignored on an axis where
+    /// `stretch` is true.
+    #[schemars(with = "[f32; 2]", inner(range(min = 0.0)))]
+    pub size: Vec2,
+
+    /// Nine-slice insets in **source** pixels, `[left, top, right, bottom]`.
+    /// The default `[0, 0, 0, 0]` is a plain stretch. Corners are copied
+    /// 1:1, edges tile along their axis and the centre tiles both ways —
+    /// tiling rather than stretching, because tiling at nearest is exact
+    /// where stretching at nearest is a moiré pattern.
+    #[serde(default)]
+    #[schemars(inner(range(min = 0.0)))]
+    pub slice: [f32; 4],
+
+    /// Multiplies the decoded texel in linear space, so one grey frame
+    /// texture serves a red panel and a blue one — the material system's
+    /// authoring rule for `albedo_map`, here for the same reason.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub tint: Vec3,
+
+    /// `[0, 1]`, multiplied onto the texture's own alpha.
+    #[serde(default = "one")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: f32,
+
+    /// The name of an entity carrying a [`HudPanel`] to place this inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+
+    /// Drawn and hit-testable when true (the default).
+    #[serde(default = "yes")]
+    pub visible: bool,
+
+    /// Fill the parent's content box on `[x, y]`, ignoring `size`.
+    #[serde(default)]
+    pub stretch: [bool; 2],
+}
+
+/// Makes the HUD element on its own entity clickable (M31).
+///
+/// Carries no geometry: the hit box is that element's laid-out rectangle. An
+/// entity with a `HudInteract` and no `HudPanel`/`HudRect`/`HudImage`/
+/// `HudText` is `hud_interact_without_element`.
+///
+/// A separate component rather than an `interactive: true` flag on each of
+/// four components, because the flag would be four fields that must stay in
+/// agreement, and because the tints belong next to it.
+///
+/// The tints multiply the element's own colour (clamped to `[0, 1]` after
+/// multiplying) and default to `[1, 1, 1]` — no change — so adding a
+/// `HudInteract` moves no pixel until a cursor arrives. They exist so the
+/// ordinary case, a button that lights up under the pointer, needs no script
+/// at all; anything richer is a script writing colours.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudInteract {
+    /// Colour multiplier while the cursor is over this element. Unbounded
+    /// above — a hover tint brightens.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0)))]
+    pub hover_tint: Vec3,
+
+    /// Colour multiplier while a button is held down on this element.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0)))]
+    pub press_tint: Vec3,
+
+    /// Excluded from hit-testing when true, so it never hovers, presses or
+    /// clicks — and never blocks what is under it either.
+    #[serde(default)]
+    pub disabled: bool,
 }
 
 /// One piece a `Breakable` entity shatters into (M14).
@@ -2745,6 +3024,9 @@ components!(
     Wheel,
     HudText,
     HudRect,
+    HudPanel,
+    HudImage,
+    HudInteract,
     ParticleEmitter,
     Tree,
     Water,
@@ -2843,6 +3125,9 @@ mod tests {
                 "Wheel",
                 "HudText",
                 "HudRect",
+                "HudPanel",
+                "HudImage",
+                "HudInteract",
                 "ParticleEmitter",
                 "Tree",
                 "Water",

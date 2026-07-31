@@ -57,15 +57,11 @@ fn bare_triangle_gltf(extra_primitive_keys: &str) -> String {
 }
 
 fn triangle_bin() -> Vec<u8> {
-    [
-        [0.0f32, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-    ]
-    .iter()
-    .flatten()
-    .flat_map(|f| f.to_le_bytes())
-    .collect()
+    [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        .iter()
+        .flatten()
+        .flat_map(|f| f.to_le_bytes())
+        .collect()
 }
 
 #[test]
@@ -512,7 +508,10 @@ fn the_wave_clip_moves_the_hand_and_returns_it() {
     // A 60° bend at the elbow swings the hand forward (-Z) and down.
     assert!(bent.z < -0.8, "the hand did not swing forward: {bent}");
     assert!(bent.y < rest.y, "the hand did not drop: {bent}");
-    assert!((back - rest).length() < 1e-5, "the clip did not return: {back}");
+    assert!(
+        (back - rest).length() < 1e-5,
+        "the clip did not return: {back}"
+    );
 }
 
 #[test]

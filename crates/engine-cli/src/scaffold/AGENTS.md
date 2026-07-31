@@ -35,6 +35,7 @@ engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --co
 engine simulate <scene.json> --steps N [--entity Name]... [--bake out.json] [--trace t.jsonl]
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine road-centerline <scene.json> [--entity Name]
+engine ui-layout <scene.json> [--width W --height H] [--entity Name]  # where the UI landed
 engine terrain-height <scene.json> --at x,z [--entity Name]   # where the ground is
 engine inspect <scene.json> [--entity Name]       # every field, with the defaults filled in
 engine list-components [--component Name]         # the scene + component JSON Schemas
@@ -133,6 +134,7 @@ engine inspect scene.json --entity Ground        # every field, defaults filled 
 engine terrain-height scene.json --at -12,8      # the world Y of the ground there
 engine road-centerline scene.json                # where a Road actually goes
 engine list-joints scene.json --entity Robot --time 0.7   # where every joint is
+engine ui-layout scene.json --width 1280 --height 720     # every HUD element's rectangle
 engine raycast scene.json --from -6,20,6 --dir 0,-1,0
 ```
 
@@ -144,6 +146,15 @@ at rest — for what a scene *does*, `simulate --steps N`.
 `engine terrain-height` is the height field, not a raycast: it needs no
 `Collider`, and it is the same sampler `world.terrain_height` answers with in a
 script, so a prop you place from the shell lands where a script would put it.
+
+`engine ui-layout` is the same idea for the screen. A UI is laid out from
+anchors, hug sizing and a `parent` tree, so **where a button ends up is not
+something you can read off the file** — and you cannot click one you cannot
+locate. It reports every element's pixel rectangle at a given frame size, which
+is how you write the cursor that hits it: a timeline's cursor is a *fraction*
+of the frame, so the centre of a reported `[x, y, w, h]` is
+`[(x + w/2) / width, (y + h/2) / height]`. Layout is a pure function of the
+file and the viewport, so the answer is stable and needs no GPU.
 
 `engine list-joints` is the same idea for a rigged mesh, and it is how you check
 an animation without reading pixels: a filmstrip shows that *something* moved

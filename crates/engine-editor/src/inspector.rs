@@ -139,15 +139,7 @@ pub fn ui(
                 .unwrap_or_else(|| property["default"].clone());
             let key = format!("{entity}/{type_name}/{field}");
 
-            let commit = field_widget(
-                ui,
-                state,
-                &key,
-                field,
-                property,
-                &current,
-                read_only,
-            );
+            let commit = field_widget(ui, state, &key, field, property, &current, read_only);
             if let Some(value) = commit {
                 commits.push(InspectorEdit::Set(SetComponentField {
                     entity: entity.to_string(),
@@ -444,7 +436,10 @@ mod tests {
         assert_eq!(axis_labels("position").map(|(l, _)| l), ["X", "Y", "Z"]);
         assert_eq!(axis_labels("half_extents").map(|(l, _)| l), ["X", "Y", "Z"]);
         // The letter tints are the gizmo arm colors, not a second palette.
-        assert_eq!(axis_labels("position").map(|(_, c)| c), AXES.map(|(_, c)| c));
+        assert_eq!(
+            axis_labels("position").map(|(_, c)| c),
+            AXES.map(|(_, c)| c)
+        );
     }
 
     #[test]

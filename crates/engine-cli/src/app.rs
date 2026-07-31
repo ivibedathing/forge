@@ -58,7 +58,7 @@ pub enum Content {
         daylight: Option<engine_core::daylight::DaylightSettings>,
         /// The scene's HUD components; refreshed per frame when a simulation
         /// runs (clips and scripts can drive them), static otherwise.
-        hud_items: engine_core::scene::HudItems,
+        hud_items: engine_core::ui::HudTree,
         /// Present when the scene has physics components: the viewer drives
         /// the same fixed step through a wall-clock accumulator (the
         /// headless path stays canonical; frame pacing may vary here).
@@ -84,6 +84,9 @@ pub struct Simulation {
     /// Touching-state from the previous physics step, for script contact
     /// queries — same one-step latency as the headless path.
     pub contacts: engine_core::contact::ContactState,
+    /// What the pointer is doing to the overlay (M31), updated before each
+    /// step's scripts against the window's own size.
+    pub interaction: engine_core::ui::Interaction,
     pub recorder: Option<InputRecorder>,
     pub accumulator: f32,
     pub t: f32,
@@ -151,9 +154,10 @@ impl InputRecorder {
 /// no rendering code of its own. Appending puts it last within each class,
 /// which draws it over a scene's own HUD; the script debug-line panel is
 /// top-left and never collides with it.
-fn with_fps_readout(hud: &engine_core::scene::HudItems, fps: &str) -> engine_core::scene::HudItems {
+fn with_fps_readout(hud: &engine_core::ui::HudTree, fps: &str) -> engine_core::ui::HudTree {
     use engine_core::components::{HudAnchor, HudRect, HudText};
     use engine_core::math::{Vec2, Vec3};
+    use engine_core::ui::{HudKind, HudNode};
 
     /// Font cell at the readout's text size — `HudText.size` snaps to integer
     /// multiples of the 8×8 font, so 16 is exactly 2×.
@@ -165,19 +169,40 @@ fn with_fps_readout(hud: &engine_core::scene::HudItems, fps: &str) -> engine_cor
 
     let mut hud = hud.clone();
     let text_width = fps.chars().count() as f32 * SIZE;
-    hud.rects.push(HudRect {
-        anchor: HudAnchor::TopRight,
-        offset: Vec2::splat(INSET),
-        size: Vec2::new(text_width + 2.0 * PAD, SIZE + 2.0 * PAD),
-        color: Vec3::new(0.01, 0.015, 0.02),
-        opacity: 0.55,
+    // Appended, so within each draw class it lands last and reads over the
+    // scene's own HUD. Both parts are children of the viewport: the readout is
+    // the viewer's, not the scene's, and parenting it into a scene's panel
+    // would let a scene move it.
+    hud.nodes.push(HudNode {
+        entity: "__fps_plate".into(),
+        kind: HudKind::Rect(HudRect {
+            anchor: HudAnchor::TopRight,
+            offset: Vec2::splat(INSET),
+            size: Vec2::new(text_width + 2.0 * PAD, SIZE + 2.0 * PAD),
+            color: Vec3::new(0.01, 0.015, 0.02),
+            opacity: 0.55,
+            parent: None,
+            visible: true,
+            stretch: [false, false],
+        }),
+        interact: None,
     });
-    hud.texts.push(HudText {
-        text: fps.to_string(),
-        anchor: HudAnchor::TopRight,
-        offset: Vec2::splat(INSET + PAD),
-        size: SIZE,
-        color: Vec3::ONE,
+    hud.nodes.push(HudNode {
+        entity: "__fps_text".into(),
+        kind: HudKind::Text(HudText {
+            text: fps.to_string(),
+            anchor: HudAnchor::TopRight,
+            offset: Vec2::splat(INSET + PAD),
+            size: SIZE,
+            color: Vec3::ONE,
+            parent: None,
+            visible: true,
+            stretch: [false, false],
+            align: Default::default(),
+            wrap: 0.0,
+            line_gap: 0.0,
+        }),
+        interact: None,
     });
     hud
 }
@@ -382,6 +407,26 @@ impl ViewerApp {
                                         .ok()
                                         .map(|(camera, transform)| (camera, transform.matrix())),
                                 );
+                                // Hit-testing against the window's own size,
+                                // before scripts — the headless path does the
+                                // identical thing against the frame it is
+                                // rendering, so a menu clicked while playing
+                                // is the menu a replayed timeline clicks.
+                                let tree = sim.scene.hud_tree(&sim.assets);
+                                if !tree.is_empty() {
+                                    let layout =
+                                        engine_core::ui::layout(&tree, view_width, view_height);
+                                    let frame = engine_core::math::Vec2::new(
+                                        view_width as f32,
+                                        view_height as f32,
+                                    );
+                                    sim.interaction.update(
+                                        &tree,
+                                        &layout,
+                                        pointer.cursor * frame,
+                                        sim.held.is_held("MouseLeft"),
+                                    );
+                                }
                                 // A failing script ends the session with a
                                 // structured error, like any render failure.
                                 match scripts.step(
@@ -389,6 +434,7 @@ impl ViewerApp {
                                     sim.step_index,
                                     &sim.held,
                                     &pointer,
+                                    &sim.interaction,
                                     &sim.contacts,
                                 ) {
                                     Ok(lines) => sim.hud_lines = lines,
@@ -452,7 +498,7 @@ impl ViewerApp {
                     *clouds = sim.scene.cloud_items();
                     *roads = sim.scene.road_items();
                     *meadows = sim.scene.meadow_items();
-                    *hud_items = sim.scene.hud_items();
+                    *hud_items = sim.scene.hud_tree(&sim.assets);
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
                     if let Ok((fresh_camera, fresh_transform)) =
@@ -759,18 +805,24 @@ mod tests {
     fn the_fps_readout_occupies_only_the_top_right_corner() {
         use engine_core::components::{HudAnchor, HudRect};
         use engine_core::math::{Vec2, Vec3};
-        use engine_core::scene::HudItems;
+        use engine_core::ui::{HudKind, HudNode, HudTree};
 
         let (width, height) = (400u32, 200u32);
-        let scene_hud = HudItems {
-            rects: vec![HudRect {
-                anchor: HudAnchor::BottomLeft,
-                offset: Vec2::splat(10.0),
-                size: Vec2::new(60.0, 12.0),
-                color: Vec3::ONE,
-                opacity: 1.0,
+        let scene_hud = HudTree {
+            nodes: vec![HudNode {
+                entity: "Bar".into(),
+                kind: HudKind::Rect(HudRect {
+                    anchor: HudAnchor::BottomLeft,
+                    offset: Vec2::splat(10.0),
+                    size: Vec2::new(60.0, 12.0),
+                    color: Vec3::ONE,
+                    opacity: 1.0,
+                    parent: None,
+                    visible: true,
+                    stretch: [false, false],
+                }),
+                interact: None,
             }],
-            texts: vec![],
         };
 
         let overlay = super::with_fps_readout(&scene_hud, "FPS  60");

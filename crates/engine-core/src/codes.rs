@@ -232,6 +232,20 @@ registry! {
     TOO_MANY_GROWTH_STAGES = "too_many_growth_stages", Input,
         "a Meadow has more life-cycle stages than the shader's table holds";
 
+    // ── UI system (M31) ────────────────────────────────────────────────
+    HUD_PARENT_NOT_FOUND = "hud_parent_not_found", Input,
+        "a HUD element's \"parent\" names no entity in the scene";
+    HUD_PARENT_NOT_PANEL = "hud_parent_not_panel", Input,
+        "a HUD element's \"parent\" must name an entity that has a HudPanel";
+    HUD_PARENT_CYCLE = "hud_parent_cycle", Input,
+        "a chain of HUD \"parent\" references loops back on itself";
+    HUD_NESTING_TOO_DEEP = "hud_nesting_too_deep", Input,
+        "a HUD element nests deeper than the layout engine will resolve";
+    HUD_INTERACT_WITHOUT_ELEMENT = "hud_interact_without_element", Input,
+        "a HudInteract needs a HudPanel, HudRect, HudImage or HudText on the same entity to be the hit box";
+    HUD_IMAGE_SLICE_TOO_LARGE = "hud_image_slice_too_large", Input,
+        "a HudImage's nine-slice insets are larger than the source image";
+
     // ── Input (M11) ────────────────────────────────────────────────────
     INPUT_UNREADABLE = "input_unreadable", Input,
         "the input timeline file could not be read";

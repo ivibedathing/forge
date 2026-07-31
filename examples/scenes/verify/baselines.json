@@ -484,6 +484,20 @@
       "height": 360,
       "milestone": "M30",
       "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m31_ui.png",
+      "scene": "examples/scenes/verify/m31_ui.json",
+      "args": [
+        "--steps",
+        "30",
+        "--input",
+        "examples/scenes/verify/m31_ui.input.jsonl"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M31",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [

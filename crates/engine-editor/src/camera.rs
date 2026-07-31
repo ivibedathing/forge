@@ -52,8 +52,10 @@ impl OrbitCamera {
 
     pub fn orbit(&mut self, delta: Vec2) {
         self.yaw -= delta.x * 0.008;
-        self.pitch = (self.pitch - delta.y * 0.008)
-            .clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
+        self.pitch = (self.pitch - delta.y * 0.008).clamp(
+            -std::f32::consts::FRAC_PI_2 + 0.01,
+            std::f32::consts::FRAC_PI_2 - 0.01,
+        );
     }
 
     pub fn pan(&mut self, delta: Vec2) {

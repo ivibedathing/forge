@@ -50,7 +50,11 @@ pub fn run(options: EditorOptions) -> Result<()> {
     let title = format!(
         "engine edit — {}{}",
         options.scene.display(),
-        if options.watch_only { " (read-only)" } else { "" }
+        if options.watch_only {
+            " (read-only)"
+        } else {
+            ""
+        }
     );
 
     let native_options = eframe::NativeOptions {
@@ -67,6 +71,9 @@ pub fn run(options: EditorOptions) -> Result<()> {
         Box::new(move |_cc| Ok(Box::new(app::EditorApp::new(options)))),
     )
     .map_err(|e| {
-        EngineError::new(codes::EDITOR_FAILED, format!("the editor could not run: {e}"))
+        EngineError::new(
+            codes::EDITOR_FAILED,
+            format!("the editor could not run: {e}"),
+        )
     })
 }

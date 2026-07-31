@@ -26,14 +26,53 @@ use crate::{codes, EngineError};
 /// on AZERTY hardware too. Keys outside this list do not exist, in timeline
 /// files or in the viewer.
 pub const KNOWN_KEYS: &[&str] = &[
-    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-    "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI",
-    "KeyJ", "KeyK", "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR",
-    "KeyS", "KeyT", "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ",
-    "Digit0", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6",
-    "Digit7", "Digit8", "Digit9",
-    "Space", "Enter", "Escape",
-    "ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "KeyA",
+    "KeyB",
+    "KeyC",
+    "KeyD",
+    "KeyE",
+    "KeyF",
+    "KeyG",
+    "KeyH",
+    "KeyI",
+    "KeyJ",
+    "KeyK",
+    "KeyL",
+    "KeyM",
+    "KeyN",
+    "KeyO",
+    "KeyP",
+    "KeyQ",
+    "KeyR",
+    "KeyS",
+    "KeyT",
+    "KeyU",
+    "KeyV",
+    "KeyW",
+    "KeyX",
+    "KeyY",
+    "KeyZ",
+    "Digit0",
+    "Digit1",
+    "Digit2",
+    "Digit3",
+    "Digit4",
+    "Digit5",
+    "Digit6",
+    "Digit7",
+    "Digit8",
+    "Digit9",
+    "Space",
+    "Enter",
+    "Escape",
+    "ShiftLeft",
+    "ShiftRight",
+    "ControlLeft",
+    "ControlRight",
 ];
 
 /// The mouse buttons (M28). They live in the same held set as the keys — a
@@ -75,7 +114,10 @@ pub fn closest_button(name: &str) -> Option<String> {
 pub fn closest_input(name: &str) -> Option<String> {
     closest_match(
         name,
-        KNOWN_KEYS.iter().copied().chain(KNOWN_BUTTONS.iter().copied()),
+        KNOWN_KEYS
+            .iter()
+            .copied()
+            .chain(KNOWN_BUTTONS.iter().copied()),
     )
 }
 
@@ -146,7 +188,11 @@ impl InputState {
     /// the nearest edge: a pointer that left the window still points
     /// somewhere, and a ray through `1.4` is a ray into nothing.
     pub fn set_cursor(&mut self, cursor: Vec2) {
-        let cursor = if cursor.is_finite() { cursor } else { CURSOR_CENTRE };
+        let cursor = if cursor.is_finite() {
+            cursor
+        } else {
+            CURSOR_CENTRE
+        };
         self.cursor = cursor.clamp(Vec2::ZERO, Vec2::ONE);
     }
 
@@ -259,8 +305,7 @@ impl InputTimeline {
                     continue;
                 }
             };
-            let Some(held_values) = object.get("held").and_then(serde_json::Value::as_array)
-            else {
+            let Some(held_values) = object.get("held").and_then(serde_json::Value::as_array) else {
                 errors.push(at(EngineError::new(
                     codes::INPUT_PARSE_ERROR,
                     "timeline line needs a \"held\" array of key names",
@@ -289,7 +334,10 @@ impl InputTimeline {
                     .field("held")
                     .suggest_from(
                         name,
-                        KNOWN_KEYS.iter().copied().chain(KNOWN_BUTTONS.iter().copied()),
+                        KNOWN_KEYS
+                            .iter()
+                            .copied()
+                            .chain(KNOWN_BUTTONS.iter().copied()),
                     )));
                 }
             }
@@ -309,7 +357,10 @@ impl InputTimeline {
                         }
                         _ => errors.push(at(EngineError::new(
                             codes::INPUT_PARSE_ERROR,
-                            format!("cursor components must be numbers, got {}", object["cursor"]),
+                            format!(
+                                "cursor components must be numbers, got {}",
+                                object["cursor"]
+                            ),
                         )
                         .field("cursor"))),
                     }
@@ -458,7 +509,11 @@ impl Pointer {
     /// `engine-render` pins the two against each other — engine-core cannot
     /// depend on the renderer, so an agreement test is what keeps two
     /// spellings of one transform honest.
-    pub fn resolve(input: &InputState, viewport: &Viewport, camera: Option<(Camera, Mat4)>) -> Self {
+    pub fn resolve(
+        input: &InputState,
+        viewport: &Viewport,
+        camera: Option<(Camera, Mat4)>,
+    ) -> Self {
         let cursor = input.cursor();
         let ray = camera.map(|(camera, model)| {
             // Cursor (top-left origin, y down) to normalized device space
@@ -600,7 +655,10 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(errors[0].error, "input_parse_error");
-        assert_eq!(errors[0].context().unwrap().field.as_deref(), Some("cursor"));
+        assert_eq!(
+            errors[0].context().unwrap().field.as_deref(),
+            Some("cursor")
+        );
     }
 
     #[test]
@@ -660,7 +718,10 @@ mod tests {
             Some((camera, model)),
         );
         let ground = pointer.ground(0.0).unwrap();
-        assert!((ground - Vec3::new(3.0, 0.0, -4.0)).length() < 1e-4, "{ground}");
+        assert!(
+            (ground - Vec3::new(3.0, 0.0, -4.0)).length() < 1e-4,
+            "{ground}"
+        );
 
         // A ray that never reaches the plane degrades to "far away", not NaN.
         let level = Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0));
@@ -684,7 +745,17 @@ mod tests {
 
     #[test]
     fn known_keys_cover_the_arrows_and_wasd() {
-        for key in ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyW", "KeyA", "KeyS", "KeyD", "Space"] {
+        for key in [
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "KeyW",
+            "KeyA",
+            "KeyS",
+            "KeyD",
+            "Space",
+        ] {
             assert!(is_known_key(key), "{key} should be known");
         }
         assert!(!is_known_key("Up"));

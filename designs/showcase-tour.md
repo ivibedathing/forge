@@ -71,7 +71,7 @@ seconds](#past-the-fifteen-seconds).
 | 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
 | 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
 | 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
-| 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4 (tread `normal_map`), `Material.orm_map`, `HudText`, `HudRect`, the camera |
+| 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4 (tread `normal_map`), `Material.orm_map`, the `HudPanel` station card, the camera |
 | 900–1079 | 06 the way back | the descent home, over the burning fire and the debris field, and then all of the above again | the loop |
 
 Running underneath all five, from the `environment` block rather than from any
@@ -190,6 +190,25 @@ notice that the system exists. M21's hole is an exemption the contract
 computes; this one is a system the contract was never able to see. The tour
 carries a rigged character anyway, because "every system running at once" is
 the tour's claim and a contract that cannot see a system does not weaken it.
+
+**M31 is the case the contract works best on**, and worth recording as the
+counterexample to the two holes above: the UI system adds three components,
+the test failed on the commit that added them, and the fix improved the scene
+rather than decorating it. The tour's lower third *was* the problem the UI
+design opens with — a 352×92 `HudRect` whose size had been solved by hand to
+fit four labels and a gauge, each positioned by an offset derived from the
+others, with nothing in the file saying they belonged together. It is now an
+invisible `HudPanel` hugging its contents, a nine-sliced `HudImage` stretched
+over exactly that box, a `row` pairing the station icon with the station name,
+and — the part that reads best — the `TimeBar` fill *inside* its
+`TimeBarBack` track instead of beside it at an offset that has to match. The
+director script is untouched: same entity names, same `set_hud_text` and
+`set_hud_rect_size` calls.
+
+The `HudInteract` rides on the card's frame, so it brightens under the pointer
+in `run-scene` and costs the baselines nothing — an absent cursor is the
+*centre* of the frame (M28) and the card is bottom-left. That is luck rather
+than law, and the UI fixture is the scene where it goes the other way.
 
 When a system is bigger than one component — a renderer feature, a shader
 path, a whole subsystem — it does not trip that test, so add it here by hand

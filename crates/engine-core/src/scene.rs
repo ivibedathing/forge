@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use glam::Vec3;
 
 use crate::components::{
-    AmbientLight, Camera, ComponentData, DirectionalLight, HudRect, HudText, Name, PointLight,
-    Transform, MAX_POINT_LIGHTS,
+    AmbientLight, Camera, ComponentData, DirectionalLight, HudImage, HudInteract, HudPanel,
+    HudRect, HudText, Name, PointLight, Transform, MAX_POINT_LIGHTS,
 };
 use crate::daylight::DaylightSettings;
 use crate::error::{EngineError, Result};
@@ -260,20 +260,10 @@ pub struct MeadowItem {
     pub meadow: crate::components::Meadow,
 }
 
-/// The scene's screen-space overlay, extracted as plain data in draw order
-/// (M12): `rects` under `texts`, each in scene-file order. An empty overlay
-/// means no HUD pass runs at all, so pre-M12 scenes render byte-identically.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct HudItems {
-    pub rects: Vec<HudRect>,
-    pub texts: Vec<HudText>,
-}
-
-impl HudItems {
-    pub fn is_empty(&self) -> bool {
-        self.rects.is_empty() && self.texts.is_empty()
-    }
-}
+/// The scene's screen-space overlay. M12's `HudItems { rects, texts }` became
+/// [`crate::ui::HudTree`] in M31, because the hierarchy is a `parent` name in a
+/// flat list rather than two lists split by type.
+pub use crate::ui::HudTree;
 
 /// The scene's light entities, extracted as plain data.
 ///
@@ -1019,28 +1009,80 @@ impl Scene {
         items
     }
 
-    /// Extract the screen-space overlay as plain data, in draw order (M12):
-    /// every `HudRect`, then every `HudText`, each in scene-file order — text
-    /// always reads over bars, and within a class the file is the z-order.
+    /// Extract the screen-space overlay as plain data, in **scene-file order**
+    /// (M12, generalized in M31).
+    ///
+    /// The list is not in draw order any more — `ui::layout` decides that, from
+    /// the tree the `parent` names describe — but file order is still what
+    /// breaks ties among siblings, so producing it in file order is a contract
+    /// rather than a convenience.
     ///
     /// File order is recovered by sorting on entity id: `instantiate` spawns
     /// definitions sequentially into a fresh world and nothing ever despawns,
     /// so hecs ids are monotone in file order even though archetype iteration
     /// is not.
-    pub fn hud_items(&self) -> HudItems {
-        fn in_file_order<C: Clone + hecs::Component>(world: &World) -> Vec<C> {
-            let mut found: Vec<(u64, C)> = world
+    ///
+    /// `textures` resolves each `HudImage`'s PNG. A failure is *not* an error
+    /// here: the reference was already checked by `validate`, and a render path
+    /// with no asset directory (a GPU-less test) must still lay the overlay
+    /// out. An unresolved image lays out at its authored size and draws
+    /// nothing.
+    pub fn hud_tree(&self, textures: &dyn crate::texture::TextureSource) -> HudTree {
+        use crate::ui::{HudKind, HudNode};
+
+        fn in_file_order<C: Clone + hecs::Component>(world: &World) -> Vec<(u64, Entity, C)> {
+            let mut found: Vec<(u64, Entity, C)> = world
                 .query::<(Entity, &C)>()
                 .iter()
-                .map(|(entity, c)| (entity.to_bits().get(), c.clone()))
+                .map(|(entity, c)| (entity.to_bits().get(), entity, c.clone()))
                 .collect();
-            found.sort_by_key(|(bits, _)| *bits);
-            found.into_iter().map(|(_, c)| c).collect()
+            found.sort_by_key(|(bits, _, _)| *bits);
+            found
         }
 
-        HudItems {
-            rects: in_file_order::<HudRect>(&self.world),
-            texts: in_file_order::<HudText>(&self.world),
+        let name_of = |entity: Entity| {
+            self.world
+                .get::<&Name>(entity)
+                .map(|n| n.0.clone())
+                .unwrap_or_default()
+        };
+
+        let mut nodes: Vec<(u64, HudNode)> = Vec::new();
+        let mut push = |bits: u64, entity: Entity, kind: HudKind| {
+            nodes.push((
+                bits,
+                HudNode {
+                    entity: name_of(entity),
+                    kind,
+                    interact: self
+                        .world
+                        .get::<&HudInteract>(entity)
+                        .map(|i| (*i).clone())
+                        .ok(),
+                },
+            ));
+        };
+
+        for (bits, entity, panel) in in_file_order::<HudPanel>(&self.world) {
+            push(bits, entity, HudKind::Panel(panel));
+        }
+        for (bits, entity, rect) in in_file_order::<HudRect>(&self.world) {
+            push(bits, entity, HudKind::Rect(rect));
+        }
+        for (bits, entity, image) in in_file_order::<HudImage>(&self.world) {
+            let pixels = textures
+                .load_texture(&image.texture, crate::texture::ColorSpace::Srgb)
+                .ok();
+            push(bits, entity, HudKind::Image(image, pixels));
+        }
+        for (bits, entity, text) in in_file_order::<HudText>(&self.world) {
+            push(bits, entity, HudKind::Text(text));
+        }
+
+        // One flat list, back in file order across all four kinds.
+        nodes.sort_by_key(|(bits, _)| *bits);
+        HudTree {
+            nodes: nodes.into_iter().map(|(_, node)| node).collect(),
         }
     }
 

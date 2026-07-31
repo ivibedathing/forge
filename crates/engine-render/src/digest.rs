@@ -76,9 +76,8 @@ pub fn of(image: &Image) -> Digest {
     for pixel in image.pixels.chunks_exact(4) {
         let rgb = [pixel[0], pixel[1], pixel[2]];
         // Rec. 709 luma weights, on the encoded values.
-        luminance_sum += 0.2126 * f64::from(rgb[0])
-            + 0.7152 * f64::from(rgb[1])
-            + 0.0722 * f64::from(rgb[2]);
+        luminance_sum +=
+            0.2126 * f64::from(rgb[0]) + 0.7152 * f64::from(rgb[1]) + 0.0722 * f64::from(rgb[2]);
         *counts.entry(rgb).or_insert(0) += 1;
     }
 
@@ -118,7 +117,10 @@ mod tests {
         let digest = of(&image(16, 16, [0, 0, 0, 255]));
         assert_eq!(digest.mean_luminance, 0.0);
         assert_eq!(digest.background, [0, 0, 0]);
-        assert_eq!(digest.coverage, 0.0, "nothing is in front of the background");
+        assert_eq!(
+            digest.coverage, 0.0,
+            "nothing is in front of the background"
+        );
     }
 
     #[test]
@@ -131,7 +133,11 @@ mod tests {
         }
 
         let digest = of(&frame);
-        assert_eq!(digest.background, [0, 0, 0], "the empty part is still the mode");
+        assert_eq!(
+            digest.background,
+            [0, 0, 0],
+            "the empty part is still the mode"
+        );
         assert_eq!(digest.coverage, 0.04);
         assert!(
             digest.mean_luminance > 0.0,

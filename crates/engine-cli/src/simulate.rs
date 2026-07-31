@@ -26,6 +26,9 @@ fn vec2_json(v: glam::Vec2) -> Value {
     Value::Array(v.to_array().into_iter().map(number_from_f32).collect())
 }
 
+/// The button `world.hovered`/`pressed`/`clicked` answer for (M31).
+const PRIMARY: &str = "MouseLeft";
+
 /// Step a scene `steps` times — scripts, physics, then particles, per the
 /// fixed system order — optionally replaying an input timeline and writing a
 /// JSONL trace. No timeline means no keys held, which keeps every pre-input
@@ -44,14 +47,13 @@ pub fn run(
     mut trace: Option<&mut dyn Write>,
 ) -> Result<StepRun> {
     let assets = engine_assets::AssetServer::for_scene(scene_path);
-    let mut scripts =
-        engine_script::ScriptHost::build(
-            &scene.world,
-            scene_path,
-            scene.physics.timestep_hz,
-            scene.daylight.clone(),
-            &assets,
-        )?;
+    let mut scripts = engine_script::ScriptHost::build(
+        &scene.world,
+        scene_path,
+        scene.physics.timestep_hz,
+        scene.daylight.clone(),
+        &assets,
+    )?;
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
     let mut particles = ParticleSystem::build(&scene.world);
     let dt = 1.0 / scene.physics.timestep_hz.max(1) as f32;
@@ -62,11 +64,55 @@ pub fn run(
     let mut contact_state = engine_core::contact::ContactState::default();
     let mut hud: Vec<String> = Vec::new();
     let mut traced_hud: Vec<String> = Vec::new();
+    // What the pointer is doing to the overlay (M31). Runtime state of the
+    // same kind as `world.state` and the contact state: replay-deterministic,
+    // reset by a fresh run, never baked.
+    let mut interaction = engine_core::ui::Interaction::default();
+    // Whether there is an overlay at all, checked once: a scene without one
+    // must take exactly the pre-M31 path, per-step and per-frame.
+    let hud_present = !scene.hud_tree(&assets).is_empty();
 
     for step in 1..=steps {
+        let step_index = u64::from(step) - 1;
+        let held = input.map_or(&no_keys, |t| t.held_at(step_index));
+
+        // Hit-testing runs before scripts, against the layout for the frame
+        // this command is rendering — `view` is the real size for commands
+        // that render and `Viewport::DEFAULT` for the ones that do not (M28's
+        // rule, which M31 inherits rather than revisits). The cursor is a
+        // *fraction*, so this is where it becomes pixels.
+        //
+        // Outside the script branch, because hover and press tints are a
+        // property of the *components*: a menu that lights up under the
+        // pointer needs no script at all, and a scene with no `Script` would
+        // otherwise render its buttons permanently untouched. Gated on there
+        // being an overlay, so a scene without one takes exactly the pre-M31
+        // path rather than laying out an empty tree every step.
+        if hud_present {
+            let pointer = Pointer::resolve(
+                held,
+                view,
+                scene
+                    .camera(view.camera.as_deref())
+                    .ok()
+                    .map(|(camera, transform)| (camera, transform.matrix())),
+            );
+            let frame = glam::Vec2::new(view.width as f32, view.height as f32);
+            let tree = scene.hud_tree(&assets);
+            let layout = engine_core::ui::layout(&tree, view.width, view.height);
+            // `MouseLeft` alone drives the widget model. The other two buttons
+            // stay available raw through `world.mouse`, because a right-click
+            // is a context action in every UI ever written and making it press
+            // a button would be a surprise with no way to opt out of it.
+            interaction.update(
+                &tree,
+                &layout,
+                pointer.cursor * frame,
+                held.is_held(PRIMARY),
+            );
+        }
+
         if let Some(scripts) = &scripts {
-            let step_index = u64::from(step) - 1;
-            let held = input.map_or(&no_keys, |t| t.held_at(step_index));
             // The pointer is resolved against the camera *this* step will be
             // scripted with, through the same `Scene::camera` selection the
             // render makes — so what a script aims at is what the picture
@@ -79,7 +125,14 @@ pub fn run(
                     .ok()
                     .map(|(camera, transform)| (camera, transform.matrix())),
             );
-            hud = scripts.step(&mut scene.world, step_index, held, &pointer, &contact_state)?;
+            hud = scripts.step(
+                &mut scene.world,
+                step_index,
+                held,
+                &pointer,
+                &interaction,
+                &contact_state,
+            )?;
             for blast in scripts.take_explosions() {
                 physics.queue_explosion(engine_physics::Explosion {
                     center: Vec3::from(blast.center),
@@ -108,11 +161,7 @@ pub fn run(
                     .get::<&Transform>(entity)
                     .map(|t| *t)
                     .unwrap_or_default();
-                let body = scene
-                    .world
-                    .get::<&RigidBody>(entity)
-                    .map(|b| *b)
-                    .ok();
+                let body = scene.world.get::<&RigidBody>(entity).map(|b| *b).ok();
                 let mut line = json!({
                     "step": step,
                     "entity": name,
@@ -147,7 +196,10 @@ pub fn run(
         // Breaks apply after physics, before the next step's scripts: the
         // broken entity traced its final position above, and its fragments
         // enter the rows from the next step.
-        let forced = scripts.as_ref().map(ScriptHost::take_breaks).unwrap_or_default();
+        let forced = scripts
+            .as_ref()
+            .map(ScriptHost::take_breaks)
+            .unwrap_or_default();
         let broke = engine_physics::apply_breaks(&mut scene.world, &mut physics, &forced)?;
         if !broke.is_empty() {
             scene.refresh_names();
@@ -156,8 +208,11 @@ pub fn run(
             }
             if let Some(trace) = trace.as_deref_mut() {
                 for event in &broke {
-                    let fragments: Vec<&str> =
-                        event.fragments.iter().map(|(name, _)| name.as_str()).collect();
+                    let fragments: Vec<&str> = event
+                        .fragments
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect();
                     write_line(
                         trace,
                         &json!({ "step": step, "broke": event.entity, "fragments": fragments }),
@@ -172,17 +227,24 @@ pub fn run(
         particles,
         contacts,
         hud,
+        interaction,
     })
 }
 
 /// What stepping a scene produced: the physics world (for queries), the
-/// particle system (for rendering), the total contact count, and the HUD
-/// lines the final step's scripts pushed.
+/// particle system (for rendering), the total contact count, the HUD
+/// lines the final step's scripts pushed, and where the pointer left the
+/// overlay.
 pub struct StepRun {
     pub physics: PhysicsWorld,
     pub particles: ParticleSystem,
     pub contacts: u64,
     pub hud: Vec<String>,
+    /// The final step's hover and press state (M31), so the render that
+    /// follows can tint the element under the cursor. Carried out of the run
+    /// rather than recomputed, because recomputing it would need the cursor
+    /// again and is one more place the two could disagree.
+    pub interaction: engine_core::ui::Interaction,
 }
 
 fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
@@ -237,7 +299,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
             field_edit(field, component, vec3_json(value))
         };
 
-        if def.components.iter().any(|c| matches!(c, ComponentData::Transform(_))) {
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::Transform(_)))
+        {
             if let Ok(current) = scene.world.get::<&Transform>(entity) {
                 let rest = def
                     .components
@@ -258,7 +324,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                 }
             }
         }
-        if def.components.iter().any(|c| matches!(c, ComponentData::RigidBody(_))) {
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::RigidBody(_)))
+        {
             if let Ok(current) = scene.world.get::<&RigidBody>(entity) {
                 let rest = def
                     .components
@@ -269,7 +339,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                     })
                     .expect("guarded above");
                 if current.linear_velocity != rest.linear_velocity {
-                    edits.push(edit("linear_velocity", "RigidBody", current.linear_velocity));
+                    edits.push(edit(
+                        "linear_velocity",
+                        "RigidBody",
+                        current.linear_velocity,
+                    ));
                 }
                 if current.angular_velocity != rest.angular_velocity {
                     edits.push(edit(
@@ -282,7 +356,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
         }
         // Script-driven HUD state is scene state like any other: a changed
         // readout or gauge width lands in the baked file.
-        if def.components.iter().any(|c| matches!(c, ComponentData::HudText(_))) {
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::HudText(_)))
+        {
             if let Ok(current) = scene.world.get::<&engine_core::components::HudText>(entity) {
                 let rest = def
                     .components
@@ -305,15 +383,29 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                 if current.offset != rest.offset {
                     edits.push(field_edit("offset", "HudText", vec2_json(current.offset)));
                 }
+                if current.visible != rest.visible {
+                    edits.push(field_edit(
+                        "visible",
+                        "HudText",
+                        Value::Bool(current.visible),
+                    ));
+                }
+                if current.color != rest.color {
+                    edits.push(field_edit("color", "HudText", vec3_json(current.color)));
+                }
             }
         }
-        if def.components.iter().any(|c| matches!(c, ComponentData::HudRect(_))) {
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::HudRect(_)))
+        {
             if let Ok(current) = scene.world.get::<&engine_core::components::HudRect>(entity) {
                 let rest = def
                     .components
                     .iter()
                     .find_map(|c| match c {
-                        ComponentData::HudRect(r) => Some(*r),
+                        ComponentData::HudRect(r) => Some(r.clone()),
                         _ => None,
                     })
                     .expect("guarded above");
@@ -323,6 +415,120 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                 if current.offset != rest.offset {
                     edits.push(field_edit("offset", "HudRect", vec2_json(current.offset)));
                 }
+                if current.visible != rest.visible {
+                    edits.push(field_edit(
+                        "visible",
+                        "HudRect",
+                        Value::Bool(current.visible),
+                    ));
+                }
+                if current.color != rest.color {
+                    edits.push(field_edit("color", "HudRect", vec3_json(current.color)));
+                }
+                if current.opacity != rest.opacity {
+                    edits.push(field_edit(
+                        "opacity",
+                        "HudRect",
+                        number_from_f32(current.opacity),
+                    ));
+                }
+            }
+        }
+        // M31's containers and images bake on the same change-based rule: a
+        // run that opened a menu bakes a scene with the menu open. `visible`
+        // is the one that carries the most, since it is how a menu opens and
+        // closes at all.
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::HudPanel(_)))
+        {
+            if let Ok(current) = scene
+                .world
+                .get::<&engine_core::components::HudPanel>(entity)
+            {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::HudPanel(p) => Some(p.clone()),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.visible != rest.visible {
+                    edits.push(field_edit(
+                        "visible",
+                        "HudPanel",
+                        Value::Bool(current.visible),
+                    ));
+                }
+                if current.offset != rest.offset {
+                    edits.push(field_edit("offset", "HudPanel", vec2_json(current.offset)));
+                }
+                if current.color != rest.color {
+                    edits.push(field_edit("color", "HudPanel", vec3_json(current.color)));
+                }
+                if current.opacity != rest.opacity {
+                    edits.push(field_edit(
+                        "opacity",
+                        "HudPanel",
+                        number_from_f32(current.opacity),
+                    ));
+                }
+                // A panel sized by a script has stopped hugging, and the baked
+                // file has to say so or reloading it would re-hug.
+                if current.width != rest.width {
+                    if let Some(width) = current.width {
+                        edits.push(field_edit("width", "HudPanel", number_from_f32(width)));
+                    }
+                }
+                if current.height != rest.height {
+                    if let Some(height) = current.height {
+                        edits.push(field_edit("height", "HudPanel", number_from_f32(height)));
+                    }
+                }
+            }
+        }
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::HudImage(_)))
+        {
+            if let Ok(current) = scene
+                .world
+                .get::<&engine_core::components::HudImage>(entity)
+            {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::HudImage(i) => Some(i.clone()),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.visible != rest.visible {
+                    edits.push(field_edit(
+                        "visible",
+                        "HudImage",
+                        Value::Bool(current.visible),
+                    ));
+                }
+                if current.offset != rest.offset {
+                    edits.push(field_edit("offset", "HudImage", vec2_json(current.offset)));
+                }
+                if current.size != rest.size {
+                    edits.push(field_edit("size", "HudImage", vec2_json(current.size)));
+                }
+                if current.tint != rest.tint {
+                    edits.push(field_edit("tint", "HudImage", vec3_json(current.tint)));
+                }
+                if current.opacity != rest.opacity {
+                    edits.push(field_edit(
+                        "opacity",
+                        "HudImage",
+                        number_from_f32(current.opacity),
+                    ));
+                }
             }
         }
         // A script-driven emission rate is scene state too. The particles
@@ -330,9 +536,14 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
         // like solver caches) — but `rate` is an authored component field
         // that a script changed, so it bakes under the same change-based
         // rule as a velocity or a gauge width.
-        if def.components.iter().any(|c| matches!(c, ComponentData::ParticleEmitter(_))) {
-            if let Ok(current) =
-                scene.world.get::<&engine_core::components::ParticleEmitter>(entity)
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::ParticleEmitter(_)))
+        {
+            if let Ok(current) = scene
+                .world
+                .get::<&engine_core::components::ParticleEmitter>(entity)
             {
                 let rest = def
                     .components
@@ -343,7 +554,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                     })
                     .expect("guarded above");
                 if current.rate != rest.rate {
-                    edits.push(field_edit("rate", "ParticleEmitter", number_from_f32(current.rate)));
+                    edits.push(field_edit(
+                        "rate",
+                        "ParticleEmitter",
+                        number_from_f32(current.rate),
+                    ));
                 }
             }
         }
@@ -353,7 +568,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
         // lit differently from the one that was saved.
         macro_rules! bake_light {
             ($variant:ident, $ty:ty) => {
-                if def.components.iter().any(|c| matches!(c, ComponentData::$variant(_))) {
+                if def
+                    .components
+                    .iter()
+                    .any(|c| matches!(c, ComponentData::$variant(_)))
+                {
                     if let Ok(current) = scene.world.get::<&$ty>(entity) {
                         let rest = def
                             .components
@@ -589,14 +808,11 @@ fn final_states(
             .collect();
         if let Some(last) = unknown.last() {
             for name in &unknown[..unknown.len() - 1] {
-                EngineError::new(
-                    codes::ENTITY_NOT_FOUND,
-                    format!("no entity named {name:?}"),
-                )
-                .entity(*name)
-                .file(display)
-                .suggest_from(name, scene.names())
-                .emit();
+                EngineError::new(codes::ENTITY_NOT_FOUND, format!("no entity named {name:?}"))
+                    .entity(*name)
+                    .file(display)
+                    .suggest_from(name, scene.names())
+                    .emit();
             }
             return Err(EngineError::new(
                 codes::ENTITY_NOT_FOUND,

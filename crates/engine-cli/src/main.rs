@@ -253,6 +253,35 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Print where every HUD element ends up on screen (M31).
+    ///
+    /// This is the command the UI system is really for. An agent authoring a
+    /// menu cannot see it move; what it needs is the answer to "where did the
+    /// Start button end up", so it can write a timeline cursor that lands on
+    /// it. `engine road-centerline` publishes the samples a ribbon was built
+    /// from for exactly this reason, and the failure it prevents is the same:
+    /// a caller re-deriving geometry the engine already computed, and the two
+    /// drifting.
+    ///
+    /// A pure function of (file, viewport) at rest, like `engine inspect`:
+    /// no `--steps`, no `--input`, no cursor. What a script has since done to
+    /// the layout is `simulate`'s question.
+    UiLayout {
+        scene: PathBuf,
+        /// The framebuffer to lay out against. A pixel-authored UI is
+        /// resolution-dependent by construction, so the size is part of the
+        /// question — these default to the same 960×540 `simulate` hit-tests
+        /// against.
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
+        /// Narrow to named elements; repeatable. Unknown names are reported
+        /// all at once.
+        #[arg(long)]
+        entity: Vec<String>,
+    },
+
     /// Ask a terrain patch how high the ground is at a world XZ position.
     ///
     /// The same sampler `world.terrain_height` answers with, so a prop placed
@@ -470,6 +499,12 @@ fn main() {
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
+        Command::UiLayout {
+            scene,
+            width,
+            height,
+            entity,
+        } => ui_layout(scene, width, height, entity),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
         Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Import {
@@ -843,6 +878,94 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
             "shoulder": road.road.shoulder,
             "closed": road.road.closed,
             "points": points,
+        })
+    );
+    Ok(())
+}
+
+/// `engine ui-layout <scene> [--width W --height H] [--entity N]...` (M31).
+///
+/// Reports the rectangle the layout engine puts every HUD element in — the
+/// same function `hud::rasterize` draws from and the same one the hit test
+/// uses, so the report cannot disagree with the picture.
+///
+/// **Name-sorted**, following `simulate --entity`'s contract rather than draw
+/// order: a report is read by name, and draw order is already visible in the
+/// render. `depth` and `parent` carry the tree for anything that wants it.
+fn ui_layout(
+    scene_path: PathBuf,
+    width: Option<u32>,
+    height: Option<u32>,
+    entities: Vec<String>,
+) -> Result<()> {
+    let scene = load_scene(&scene_path)?;
+    let assets = engine_assets::AssetServer::for_scene(&scene_path);
+    let view = engine_core::input::Viewport::DEFAULT;
+    let (width, height) = (width.unwrap_or(view.width), height.unwrap_or(view.height));
+
+    let tree = scene.hud_tree(&assets);
+    let layout = engine_core::ui::layout(&tree, width, height);
+
+    // Unknown names all at once, the M25 rule — an agent fixing one typo at a
+    // time is an agent running the command four times.
+    if !entities.is_empty() {
+        let unknown: Vec<&String> = entities
+            .iter()
+            .filter(|name| tree.index_of(name).is_none())
+            .collect();
+        if !unknown.is_empty() {
+            let known: Vec<&str> = tree.nodes.iter().map(|n| n.entity.as_str()).collect();
+            let mut error = EngineError::new(
+                codes::ENTITY_NOT_FOUND,
+                format!(
+                    "no HUD element on {}",
+                    unknown
+                        .iter()
+                        .map(|n| format!("{n:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .file(scene_path.display().to_string());
+            if let Some(first) = unknown.first() {
+                error = error.entity(first.as_str()).suggest_from(first, known);
+            }
+            return Err(error);
+        }
+    }
+
+    let mut elements: Vec<serde_json::Value> = layout
+        .placed
+        .iter()
+        .filter(|placed| entities.is_empty() || entities.contains(&tree.nodes[placed.node].entity))
+        .map(|placed| {
+            let node = &tree.nodes[placed.node];
+            serde_json::json!({
+                "entity": node.entity,
+                "kind": node.kind.name(),
+                "parent": placed.parent,
+                "depth": placed.depth,
+                "rect": [
+                    placed.rect.x,
+                    placed.rect.y,
+                    placed.rect.width,
+                    placed.rect.height,
+                ],
+                "visible": placed.visible,
+                "interactive": node
+                    .interact
+                    .as_ref()
+                    .is_some_and(|interact| !interact.disabled),
+            })
+        })
+        .collect();
+    elements.sort_by(|a, b| a["entity"].as_str().cmp(&b["entity"].as_str()));
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "viewport": [width, height],
+            "elements": elements,
         })
     );
     Ok(())
@@ -1268,15 +1391,23 @@ fn diff_render(
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    let (particles, hud) = if steps > 0 {
+    let (particles, hud, interaction) = if steps > 0 {
         // The cursor is a fraction of the frame, and the frame here is the
         // baseline's own dimensions — the same ones this render uses, so a
         // mouse-driven fixture is pinned at the size it was blessed at.
         let view = engine_core::input::Viewport::new(baseline.width, baseline.height, camera_name);
         let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
-        (outcome.particles.instances(&scene.world), outcome.hud)
+        (
+            outcome.particles.instances(&scene.world),
+            outcome.hud,
+            outcome.interaction,
+        )
     } else {
-        (Vec::new(), Vec::new())
+        (
+            Vec::new(),
+            Vec::new(),
+            engine_core::ui::Interaction::default(),
+        )
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -1298,7 +1429,7 @@ fn diff_render(
         render_time,
         baseline.width,
         baseline.height,
-        &scene.hud_items(),
+        &tinted_hud(&scene, &assets, &interaction),
         &hud,
     )?;
 
@@ -1382,6 +1513,24 @@ fn scene_time(time: f32, steps: u32, scene: &engine_core::Scene) -> f32 {
         return time;
     }
     steps as f32 / scene.physics.timestep_hz.max(1) as f32
+}
+
+/// The scene's overlay with the pointer's hover and press tints applied (M31).
+///
+/// Applied here, between extraction and the render, rather than inside the
+/// rasterizer: the renderer has no business knowing what a pointer is, and
+/// `hud::rasterize` stays a pure function of (tree, lines, size). With no
+/// cursor over anything — every scene with no `HudInteract`, and every one
+/// rendered at `--steps 0` — every tint is `[1, 1, 1]` and `apply_tints` is a
+/// no-op, which is why no pre-M31 baseline can move through this path.
+fn tinted_hud(
+    scene: &engine_core::Scene,
+    assets: &engine_assets::AssetServer,
+    interaction: &engine_core::ui::Interaction,
+) -> engine_core::ui::HudTree {
+    let mut tree = scene.hud_tree(assets);
+    interaction.apply_tints(&mut tree);
+    tree
 }
 
 fn load_baseline(path: &std::path::Path) -> Result<engine_render::Image> {
@@ -1491,7 +1640,7 @@ fn filmstrip(
             t,
             tile_width,
             tile_height,
-            &scene.hud_items(),
+            &scene.hud_tree(&assets),
             &[],
         )?;
         let tile = image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
@@ -1621,10 +1770,7 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
 
 /// Every clip in a glTF, reported the way a property clip is — same shape, so
 /// one `jq` expression reads both.
-fn gltf_clip_reports(
-    rig: &engine_core::skeleton::Rig,
-    display: &str,
-) -> Vec<serde_json::Value> {
+fn gltf_clip_reports(rig: &engine_core::skeleton::Rig, display: &str) -> Vec<serde_json::Value> {
     rig.clips
         .iter()
         .map(|clip| {
@@ -1760,7 +1906,11 @@ fn entity_joint_report(
     skinned: &engine_core::skeleton::SkinnedEntity,
     time: Option<f32>,
 ) -> serde_json::Value {
-    let skin = skinned.rig.skin.as_ref().expect("skinned_entities filtered");
+    let skin = skinned
+        .rig
+        .skin
+        .as_ref()
+        .expect("skinned_entities filtered");
     joint_report(
         &skinned.asset,
         Some(&skinned.name),
@@ -1867,14 +2017,22 @@ fn screenshot(
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    let (particles, hud) = if steps > 0 {
+    let (particles, hud, interaction) = if steps > 0 {
         // The frame the cursor is measured in is the one about to be
         // rendered (M28).
         let view = engine_core::input::Viewport::new(width, height, camera_name);
         let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
-        (outcome.particles.instances(&scene.world), outcome.hud)
+        (
+            outcome.particles.instances(&scene.world),
+            outcome.hud,
+            outcome.interaction,
+        )
     } else {
-        (Vec::new(), Vec::new())
+        (
+            Vec::new(),
+            Vec::new(),
+            engine_core::ui::Interaction::default(),
+        )
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
@@ -1897,7 +2055,7 @@ fn screenshot(
         render_time,
         width,
         height,
-        &scene.hud_items(),
+        &tinted_hud(&scene, &assets, &interaction),
         &hud,
     )?;
 
@@ -1949,7 +2107,7 @@ fn run_scene(
     let lights = scene.lights().resolved();
     let environment = scene.environment;
     let daylight = scene.daylight.clone();
-    let hud_items = scene.hud_items();
+    let hud_items = scene.hud_tree(&assets);
     let title = format!("engine — {}", scene.name);
 
     // Physics and animated scenes come alive in the viewer; static scenes
@@ -1995,6 +2153,7 @@ fn run_scene(
             camera_name: camera_name.map(String::from),
             held: engine_core::input::InputState::default(),
             contacts: engine_core::contact::ContactState::default(),
+            interaction: engine_core::ui::Interaction::default(),
             recorder,
             accumulator: 0.0,
             t: 0.0,

@@ -137,7 +137,8 @@ impl EngineError {
 
     /// Whether this diagnostic is a warning rather than an error.
     pub fn is_warning(&self) -> bool {
-        self.context().is_some_and(|c| c.severity == Some("warning"))
+        self.context()
+            .is_some_and(|c| c.severity == Some("warning"))
     }
 
     /// The process exit code this error's registered class dictates

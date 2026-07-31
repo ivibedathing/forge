@@ -38,8 +38,7 @@ pub fn load_texture(path: &Path, space: ColorSpace) -> Result<TextureData> {
     // Before the chain is built, not after: the point of the limit is to refuse
     // ahead of the allocation, and a 8192² source would spend a second
     // box-filtering eleven levels it can never upload.
-    check_texture_size(&display, image.width(), image.height())
-        .map_err(|e| e.file(&display))?;
+    check_texture_size(&display, image.width(), image.height()).map_err(|e| e.file(&display))?;
 
     Ok(TextureData::new(
         image.width(),

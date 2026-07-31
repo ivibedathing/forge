@@ -59,7 +59,9 @@ fn demo_scene_is_valid() {
 /// Validate a scene that references real files, so validation must see the
 /// scene's actual location — hence the absolute path.
 fn assert_scene_validates(relative: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative);
     let display = path.display().to_string();
     let source = std::fs::read_to_string(&path).unwrap();
     let errors = engine_core::validate::validate_source(&source, &display);
@@ -128,9 +130,7 @@ fn showcase_tour_uses_every_component_the_engine_has() {
     // Components the scene is *forbidden* to carry, because its `daylight`
     // block already owns what they mean.
     let daylight = &scene["daylight"];
-    let drives = |field: &str| {
-        !daylight.is_null() && daylight[field].as_bool().unwrap_or(true)
-    };
+    let drives = |field: &str| !daylight.is_null() && daylight[field].as_bool().unwrap_or(true);
     let mut owned_by_daylight: Vec<&str> = Vec::new();
     if drives("drives_sun") {
         owned_by_daylight.push("DirectionalLight");
@@ -226,7 +226,12 @@ fn m5_broken_verify_scene_reports_every_planted_error() {
     };
 
     // One run reports all of them — never a drip-feed.
-    assert_eq!(errors.len(), 7, "expected exactly the planted errors:\n{}", dump());
+    assert_eq!(
+        errors.len(),
+        7,
+        "expected exactly the planted errors:\n{}",
+        dump()
+    );
 
     for error in &errors {
         let context = error.context().expect("every error carries context");
@@ -249,10 +254,18 @@ fn m5_broken_verify_scene_reports_every_planted_error() {
         Some("Material")
     );
 
-    find("value_out_of_range", &|e| e.message.contains("albedo[0] is 1.5"));
-    find("value_out_of_range", &|e| e.message.contains("roughness is 1.5"));
-    find("value_out_of_range", &|e| e.message.contains("intensity is -2"));
-    find("asset_not_found", &|e| e.message.contains("does_not_exist.glb"));
+    find("value_out_of_range", &|e| {
+        e.message.contains("albedo[0] is 1.5")
+    });
+    find("value_out_of_range", &|e| {
+        e.message.contains("roughness is 1.5")
+    });
+    find("value_out_of_range", &|e| {
+        e.message.contains("intensity is -2")
+    });
+    find("asset_not_found", &|e| {
+        e.message.contains("does_not_exist.glb")
+    });
 
     let colour = find("unknown_field", &|e| {
         e.context().unwrap().field.as_deref() == Some("colour")
@@ -303,7 +316,10 @@ fn error_code_registry_matches_the_docs() {
             .iter()
             .find(|(code, _, _)| code == entry.code)
             .unwrap_or_else(|| {
-                panic!("{} is registered but missing from docs/error-codes.md", entry.code)
+                panic!(
+                    "{} is registered but missing from docs/error-codes.md",
+                    entry.code
+                )
             });
         assert_eq!(
             row.1,
@@ -340,7 +356,9 @@ impl engine_core::mesh::MeshSource for StubbedFileAssets {
     ) -> engine_core::error::Result<std::sync::Arc<engine_core::mesh::MeshData>> {
         match engine_core::mesh::BuiltinMesh::parse(asset) {
             Some(builtin) => Ok(std::sync::Arc::new(builtin?.data())),
-            None => Ok(std::sync::Arc::new(engine_core::mesh::BuiltinMesh::Cube.data())),
+            None => Ok(std::sync::Arc::new(
+                engine_core::mesh::BuiltinMesh::Cube.data(),
+            )),
         }
     }
 }
@@ -429,7 +447,9 @@ fn formatter_edit_of_m4_fixture_changes_exactly_one_line() {
     // scene the engine rejects, for a value the schema allows.
     let errors = engine_core::validate::validate_source(&edited, "edited.json");
     assert!(
-        errors.iter().all(|e| e.is_warning() || e.error == "asset_not_found"),
+        errors
+            .iter()
+            .all(|e| e.is_warning() || e.error == "asset_not_found"),
         "unexpected: {errors:?}"
     );
 }
@@ -450,13 +470,22 @@ fn every_committed_baseline_is_listed_in_the_manifest() {
     let mut listed: Vec<String> = Vec::new();
     for key in ["baselines", "traces"] {
         for entry in manifest[key].as_array().unwrap() {
-            let artifact = entry[if key == "baselines" { "baseline" } else { "trace" }]
-                .as_str()
-                .unwrap();
+            let artifact = entry[if key == "baselines" {
+                "baseline"
+            } else {
+                "trace"
+            }]
+            .as_str()
+            .unwrap();
             let scene = entry["scene"].as_str().unwrap();
             for relative in [artifact, scene] {
-                let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative);
-                assert!(path.exists(), "{relative} is in the manifest but not on disk");
+                let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join(relative);
+                assert!(
+                    path.exists(),
+                    "{relative} is in the manifest but not on disk"
+                );
             }
             listed.push(artifact.rsplit('/').next().unwrap().to_string());
         }
