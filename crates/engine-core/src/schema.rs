@@ -31,6 +31,86 @@ pub fn full_schema() -> Value {
     })
 }
 
+/// One component's schema, lifted out of the `oneOf` (M24).
+///
+/// `engine list-components` publishes the whole vocabulary as a `oneOf`
+/// discriminated by `properties.type.const`, which is the right shape for a
+/// validator and a two-attempt `jq` selector for a reader who wants one
+/// component. This does that selection once, in the engine, so the answer to
+/// "what fields does a `Water` have" is a command rather than a query someone
+/// has to get right.
+///
+/// The variant is returned as a **standalone document**: the `$defs` it
+/// references (transitively — `Road` reaches `RoadMarkings`, which reaches
+/// nothing, while `Terrain` reaches `TerrainLayer`) are carried along, so every
+/// `#/$defs/...` pointer inside it still resolves. Dropping them would print a
+/// schema that reads fine and cannot be resolved by any validator, which is a
+/// worse failure than the `jq` it replaces.
+///
+/// `None` when no component has that name; the caller turns that into
+/// `unknown_component_query` with a `did_you_mean`, since it knows the file and
+/// the invocation.
+pub fn component_schema_named(name: &str) -> Option<Value> {
+    let schema = component_schema();
+    let variant = schema
+        .get("oneOf")?
+        .as_array()?
+        .iter()
+        .find(|variant| variant.pointer("/properties/type/const") == Some(&Value::from(name)))?
+        .clone();
+
+    let mut document = variant;
+    let mut needed = std::collections::BTreeMap::new();
+    collect_defs(&document, schema.get("$defs"), &mut needed);
+
+    let object = document.as_object_mut()?;
+    if !needed.is_empty() {
+        object.insert(
+            "$defs".to_string(),
+            Value::Object(needed.into_iter().collect()),
+        );
+    }
+    if let Some(dialect) = schema.get("$schema") {
+        object.insert("$schema".to_string(), dialect.clone());
+    }
+    object.insert("title".to_string(), Value::from(name));
+    Some(document)
+}
+
+/// Walk a schema fragment for `#/$defs/<name>` references, pulling each
+/// definition (and everything *it* references) out of `defs`.
+fn collect_defs(
+    fragment: &Value,
+    defs: Option<&Value>,
+    out: &mut std::collections::BTreeMap<String, Value>,
+) {
+    match fragment {
+        Value::Object(map) => {
+            if let Some(Value::String(reference)) = map.get("$ref") {
+                if let Some(name) = reference.strip_prefix("#/$defs/") {
+                    if !out.contains_key(name) {
+                        if let Some(definition) = defs.and_then(|d| d.get(name)) {
+                            // Insert before recursing: a self-referential
+                            // definition would otherwise loop forever.
+                            out.insert(name.to_string(), definition.clone());
+                            collect_defs(definition, defs, out);
+                        }
+                    }
+                }
+            }
+            for value in map.values() {
+                collect_defs(value, defs, out);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_defs(item, defs, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Schema for a property-clip file (M9).
 pub fn animation_schema() -> Value {
     to_value(schemars::schema_for!(crate::animation::ClipFile))
@@ -95,6 +175,43 @@ mod tests {
             .find(|v| v["properties"]["type"]["const"] == name)
             .unwrap_or_else(|| panic!("no schema variant for {name}"))
             .clone()
+    }
+
+    #[test]
+    fn names_a_single_component_out_of_the_one_of() {
+        for name in ComponentData::NAMES {
+            let one = component_schema_named(name)
+                .unwrap_or_else(|| panic!("no single-component schema for {name}"));
+            assert_eq!(one["properties"]["type"]["const"], *name);
+            // Field-for-field the same object the `oneOf` carries: this is a
+            // selection, not a second rendering of the vocabulary.
+            assert_eq!(one["properties"], variant(name)["properties"]);
+        }
+        assert!(component_schema_named("Meterial").is_none());
+    }
+
+    #[test]
+    fn a_single_component_schema_resolves_its_own_refs() {
+        // A variant that reaches a `$defs` entry has to carry it, or the
+        // printed document has pointers into a document that is not there.
+        let road = component_schema_named("Road").expect("Road is a component");
+        let text = road.to_string();
+        for reference in text.split("\"$ref\":\"").skip(1) {
+            let name = reference
+                .split('"')
+                .next()
+                .and_then(|r| r.strip_prefix("#/$defs/").map(str::to_string))
+                .expect("refs point into $defs");
+            assert!(
+                road["$defs"].get(&name).is_some(),
+                "Road's schema references {name} without carrying it"
+            );
+        }
+        assert!(road["$defs"]["RoadPoint"].is_object());
+        assert!(road["$defs"]["RoadMarkings"].is_object());
+        // …and only what it needs: Terrain's layer type is a different
+        // component's business.
+        assert!(road["$defs"].get("TerrainLayer").is_none());
     }
 
     #[test]

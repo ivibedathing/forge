@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use glam::{Vec2, Vec3};
 
-use crate::components::Terrain;
+use crate::components::{Terrain, Transform};
 use crate::mesh::MeshData;
 
 /// Most layers one terrain may blend. The shader's table is fixed-size, so a
@@ -131,6 +131,21 @@ pub fn height_at(terrain: &Terrain, x: f32, z: f32) -> f32 {
     }
 
     terrain.height * sum / total.max(1e-6)
+}
+
+/// [`height_at`] placed in the world by the patch's own `Transform`: the world
+/// Y a caller can assign to a position directly.
+///
+/// The one composition of "the field says this much relief" with "the patch
+/// sits here and is this tall". Everything that answers *where the ground is*
+/// goes through this function — the script API's `world.terrain_height`,
+/// [`Scene::terrain_height`](crate::scene::Scene::terrain_height), and
+/// `engine terrain-height` — because M22's central claim is that terrain has
+/// exactly one implementation and therefore nothing to keep in agreement, and
+/// two callers each adding `position.y + scale.y * …` for themselves is how
+/// that claim quietly stops being true.
+pub fn world_height_at(terrain: &Terrain, transform: &Transform, x: f32, z: f32) -> f32 {
+    transform.position.y + transform.scale.y * height_at(terrain, x, z)
 }
 
 /// The slope at a world XZ position: `(∂y/∂x, ∂y/∂z)` in metres per metre,

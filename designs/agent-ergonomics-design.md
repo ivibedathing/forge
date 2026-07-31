@@ -2,7 +2,29 @@
 
 ## 0. Status
 
-Plan, not implementation. Two milestones, split by shape:
+**M24 is implemented and merged; M25 is still a plan.** What implementation
+settled, beyond what §2 planned:
+
+- **`inspect` is the file at rest** — the §2.4 open question, resolved the way
+  it leaned. No `--steps`, so "what did you author" and "what happened" stay
+  two commands.
+- **One new error code, not three.** `unknown_component_query` is new;
+  `terrain-height` and `inspect` reuse `entity_not_found` and
+  `missing_component`, which is the convention `road-centerline` already set
+  for "name one of these" and "there is no such thing here".
+- **`--component NAME` carries its `$defs`.** A variant lifted out of the
+  `oneOf` keeps `#/$defs/...` pointers into the document it came from, so the
+  referenced definitions ride along, collected transitively. Printing the
+  variant alone reads fine and resolves in no validator.
+- **The one-sampler rule became a function.** `terrain::world_height_at`
+  composes the height field with the patch's transform, and the script API,
+  `Scene::terrain_height` and the CLI all call it. Before this the composition
+  (`position.y + scale.y * height_at`) was written out twice.
+- **Output shape rule: schemas pretty-print, reports do not.** `inspect` prints
+  compact like `raycast` and `road-centerline`; `list-components --component`
+  pretty-prints like `list-components`.
+
+Two milestones, split by shape:
 
 - **M24 — the CLI answers questions it already knows the answers to.** Four
   small questions an agent asks constantly and cannot currently ask directly.

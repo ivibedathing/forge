@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M0–M23 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, M19 procedural trees, M20 procedural clouds, M21 day/night, M22 terrain, and M23 roads** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
+**M0–M24 are done — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M12 vehicle wheels, M12 HUD components, M12 collision, M13 particles, M14 breaking objects, M15 frame cost, M16 environment (sky, fog, shadows, MSAA, transparency), M17 fire + point lights, M18 water, M19 procedural trees, M20 procedural clouds, M21 day/night, M22 terrain, M23 roads, and M24 agent ergonomics** (and most of M1's CLI; M7 at scope E0–E2 + validation panel + --watch).
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin
 their renders against committed baselines with `engine diff-render`, and open in a GUI editor
@@ -29,6 +29,8 @@ engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
 engine list-animations <scene-or-clip> [--schema]
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
+engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
+engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
 # Script component: {"type": "Script", "source": "scripts/x.rhai"} — runs fn step(world, step)
 # once per fixed step (order: animations → scripts → physics → particles → render)
 # Wheel component (M12): raycast-suspension wheel on its own visual entity, chassis by name —
@@ -69,7 +71,7 @@ engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode
 #   scripts); draws an FPS readout top-right — viewer-only, never in a headless render
 engine init [dir] [--force]              # scaffold a project: starter scene + AGENTS.md/CLAUDE.md
 engine agent-guide                       # the agent orientation as markdown (a stdout exception)
-engine list-components                   # scene + component JSON Schemas (with range constraints)
+engine list-components [--component Name]  # scene + component JSON Schemas (with range constraints)
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
 engine run                               # M0 triangle (stack proof)
 engine info                              # selected GPU adapter as JSON
@@ -934,6 +936,50 @@ about the engine). Verified by
 on the inside, and that a road-less scene is untouched) plus `engine-core`'s geometry tests, and
 fixture `verify/m23_road.json` + baseline at `--steps 180`, pinned by a CLI test that also drops a
 ball on the road and requires it to *stay where it lands*.
+Agent ergonomics (M24, design in `designs/agent-ergonomics-design.md`). The README claims
+*discover by looking, verify by querying*; this is the querying half catching up. Four questions
+the engine already knew the answers to and the CLI could not be asked. **No component, no
+renderer, no physics code — `bin/verify-baselines` reported 30 of 30 unchanged, which is the
+claim here, and no A/B was needed because no pixel path is involved.** Every one of the four
+fails against the pre-M24 binary, which is how the tests were written.
+
+- **Negative coordinates parse.** `raycast --from -6,20,6` was
+  `unexpected argument '-6' found` — half the coordinates in any centered scene are negative, and
+  the error named the argument rather than the cause because nothing was misspelled.
+  `allow_hyphen_values` is now on the *class*: `raycast --from`/`--dir`, `terrain-height --at`,
+  `screenshot`/`diff-render --time`, `filmstrip --start`/`--end`. Teaching the guide to write
+  `--from=` was rejected: a workaround documents a defect instead of removing it.
+- **`engine terrain-height <scene> --at x,z [--entity N]`** reports `{entity, x, z, height}` —
+  the world Y a caller assigns straight to a position. It **needs no `Collider`**, which is what
+  separates it from a downward raycast (that asks where the *collider* is, and a patch authored
+  for looks has none). M22's one-implementation claim is now enforced by a function rather than by
+  discipline: `terrain::world_height_at` composes the field with the patch's transform, and the
+  script API, `Scene::terrain_height` and the CLI all call it — before this, `position.y +
+  scale.y * height_at` was written out twice. A CLI test drives both paths and requires the same
+  f32.
+- **`engine inspect <scene> [--entity N]`** prints each entity's components with **every field
+  filled in**, plus its resolved transform, name-sorted. Absent fields *are* the documented
+  defaults, so the file under-specifies the entity by design — writing this milestone's own test,
+  the author guessed `Material.roughness` was 0.5; it is 0.9. Resolution goes through
+  `ComponentData::collect_from` and the ordinary serde impls, never a re-derivation in the CLI,
+  which is how `inspect` would otherwise start describing a scene the renderer does not have. It
+  is a pure function of the file **at rest** — no `--steps`, so `inspect` answers "what did you
+  author" and `simulate` answers "what happened".
+- **`engine list-components --component <Name>`** lifts one schema out of the `oneOf` (unknown
+  name = `unknown_component_query`, exit 1, with `did_you_mean` — the one new code; the other two
+  commands reuse `entity_not_found`/`missing_component` per the `road-centerline` convention).
+  Without the flag the output is **byte-identical**, because it *is*
+  `schemas/component-schema.json` and a repo-contract test says so. The trap: a lifted variant
+  keeps `#/$defs/...` pointers into the document it came from, so the referenced definitions are
+  collected **transitively** and carried along — printing the variant alone reads fine and
+  resolves in no validator. Reshaping the top-level output to key schemas by name was rejected:
+  it breaks the schema file, the validation walk, the editor's widget generation, and any agent
+  script in the wild, to save one `jq` selector.
+
+Output-shape rule this settled, for the next command that prints something: **schemas
+pretty-print, reports do not.** `inspect` is compact like `raycast` and `road-centerline`;
+`--component` is pretty like `list-components`.
+
 Showcase tour (`designs/showcase-tour.md`): `examples/scenes/showcase_tour.json` is a 15-second (900-step)
 camera move through five 180-step stations — forest / campfire / water+ice / breaking / wide —
 with every system running at once, plus four scripts (`scripts/tour_{director,wildlife,effects,

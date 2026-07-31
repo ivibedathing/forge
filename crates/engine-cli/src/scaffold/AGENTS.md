@@ -35,7 +35,9 @@ engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --co
 engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine road-centerline <scene.json> [--entity Name]
-engine list-components                            # the scene + component JSON Schemas
+engine terrain-height <scene.json> --at x,z [--entity Name]   # where the ground is
+engine inspect <scene.json> [--entity Name]       # every field, with the defaults filled in
+engine list-components [--component Name]         # the scene + component JSON Schemas
 engine list-animations <scene-or-clip> [--schema]
 engine run-scene <scene.json> [--record-input f]  # windowed viewer; keyboard reaches scripts
 engine edit <scene.json> [--watch]                # GUI editor: a live view onto the file
@@ -104,21 +106,41 @@ what the engine accepts. It is the authoritative field list, including ranges.
 
 Its shape: `.components` is the list of type names, `.component` is a `oneOf`
 over every component schema (discriminated by `.properties.type.const`), and
-`.scene` is the schema for the file as a whole.
+`.scene` is the schema for the file as a whole. `--component <Name>` does that
+selection for you and prints one schema.
 
 ```bash
+engine list-components --component Terrain                     # one component, whole
+engine list-components --component Terrain | jq -r '.properties | keys[]'
 engine list-components | jq -r '.components[]'                 # every component type
-engine list-components | jq '.component.oneOf[]
-                             | select(.properties.type.const == "Material")'
-engine list-components | jq -r '.component.oneOf[]
-                             | select(.properties.type.const == "Terrain")
-                             | .properties | keys[]'
 engine list-components | jq -r '.scene.properties | keys[]'    # the scene-level blocks
 ```
 
 Do this rather than guessing a field name. A guessed field comes back as
 `unknown_field` with a `did_you_mean`, which is a fine way to find out, but the
 schema is faster.
+
+## Asking about a scene you have
+
+The schema says what a component *can* hold; these say what yours *does*.
+
+```bash
+engine inspect scene.json --entity Ground        # every field, defaults filled in
+engine terrain-height scene.json --at -12,8      # the world Y of the ground there
+engine road-centerline scene.json                # where a Road actually goes
+engine raycast scene.json --from -6,20,6 --dir 0,-1,0
+```
+
+`engine inspect` matters more than it sounds: **an absent field in the file is
+the documented default, not an unset value**, so a `Material` that writes only
+`albedo` is four values you cannot see by reading the JSON. It reports the scene
+at rest — for what a scene *does*, `simulate --steps N`.
+
+`engine terrain-height` is the height field, not a raycast: it needs no
+`Collider`, and it is the same sampler `world.terrain_height` answers with in a
+script, so a prop you place from the shell lands where a script would put it.
+
+Negative coordinates are ordinary arguments — `--from -6,20,6` needs no `=`.
 
 ## Built-in meshes
 
@@ -213,4 +235,7 @@ Two limits worth knowing before you build a workflow on it:
 - **A scene validates but looks off.** Read the warnings on stderr — `zero_scale`
   and `unused_material` exist precisely for scenes that are legal and wrong.
 - **A field was ignored.** It was probably rejected: check the exit code, and
-  read the schema with `engine list-components`.
+  read the schema with `engine list-components --component <Name>`.
+- **An entity is not where you think.** `engine inspect scene.json --entity X`
+  prints what the engine actually built, defaults included — the gap between
+  that and what you meant is usually the bug.

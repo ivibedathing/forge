@@ -100,7 +100,9 @@ engine filmstrip <scene.json> --out strip.png [--start/--end/--frames/--columns]
 engine list-animations <scene-or-clip> [--schema]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
-engine list-components                       # scene + component JSON Schemas
+engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
+engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
+engine list-components [--component Name]    # scene + component JSON Schemas
 engine info                                  # selected GPU adapter
 engine init [dir] [--force]                  # scaffold a project; refuses a non-empty dir
 engine agent-guide                           # the agent orientation, as markdown
@@ -281,6 +283,44 @@ make_car_track.py` is the worked example: it writes the road, asks where it
 went, and writes the scene again with the barriers on it. With no `--entity`
 the scene must contain exactly one road; naming one that is not there is
 `entity_not_found` with a `did_you_mean`.
+
+## Asking the engine instead of reconstructing the answer
+
+Four small queries whose answers the engine already holds. None of them adds
+state between invocations, and none changes an existing output.
+
+**Signed numbers parse.** Every argument that takes a vector or a signed
+scalar — `raycast --from`/`--dir`, `terrain-height --at`, `screenshot`/
+`diff-render --time`, `filmstrip --start`/`--end` — accepts a leading minus
+without the `--from=-6,20,6` workaround. Roughly half the coordinates in a
+centered scene are negative, so this was constant, and the failure named the
+argument rather than the cause.
+
+`engine terrain-height <scene> --at x,z` reports
+`{"entity", "x", "z", "height"}`: the world Y of a `Terrain` patch's height
+field, which is a coordinate a caller can assign to a position directly.
+Placement is the most common operation on terrain — it is what keeps a tree
+from floating and an emitter from firing out of a hillside. It is the **same
+sampler `world.terrain_height` answers with**, and it needs no `Collider`,
+which is what separates it from a downward raycast: that asks where the
+*collider* is, and a patch authored for looks has none. `--entity` picks among
+several patches, defaulting to the only one; the `road-centerline` convention.
+
+`engine inspect <scene> [--entity Name]` prints each entity's resolved
+components — **every field, defaults filled in** — plus its resolved transform,
+name-sorted. Reading the JSON is not the same thing: absent fields *are* the
+documented defaults, so a `Material` writing only `albedo` leaves four values
+unstated. The components are serialized from what the engine actually built, so
+this cannot describe a scene the renderer does not have. It is a pure function
+of the file **at rest**: no `--steps`, because "what did you author" and "what
+happened when it ran" are different questions and `simulate` owns the second.
+
+`engine list-components --component <Name>` prints one component's schema
+instead of the `oneOf` over all of them, carrying the `$defs` that variant
+references so the printed document resolves on its own. Without the flag the
+output is byte-identical to what it always was — it *is*
+`schemas/component-schema.json`. An unknown name is `unknown_component_query`
+(exit 1) with a `did_you_mean`.
 
 `schemas/component-schema.json` (from `engine list-components`) carries the
 same numeric range constraints `engine validate` enforces, so third-party

@@ -124,6 +124,7 @@ build fails.
 | `png_write_failed` | 2 | the output PNG could not be written |
 | `init_target_not_empty` | 2 | the directory to scaffold into already holds files; pass --force to write anyway |
 | `init_write_failed` | 2 | a scaffolded file or directory could not be written |
+| `unknown_component_query` | 1 | engine list-components --component names no known component |
 | `invalid_invocation` | 2 | the command line itself could not be parsed |
 | `internal_panic` | 2 | internal bug: the process panicked; the protocol still held |
 | `output_serialization_failed` | 2 | internal bug: a result object failed to serialize |
