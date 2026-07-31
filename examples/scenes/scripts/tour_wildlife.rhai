@@ -48,4 +48,32 @@ fn step(world, step) {
             cz[i] + rad[i] * cos(ahead),
         );
     }
+
+    // The walker (M27), on a slow circuit through the forest station. Its
+    // *legs* are a skeletal clip and this only carries it along the ground —
+    // which is the whole division of labour the milestone is about: the pose
+    // is a pure function of (files, time) and a script never touches a joint,
+    // so what a script does with a character is decide where it is.
+    //
+    // The stride is tuned to the clip rather than the other way round: `Walk`
+    // is one second long and covers about 0.9 m of ground per cycle, so a
+    // speed much off that skates the feet. Nothing enforces it — foot IK is
+    // out of scope and named so in the design — so the number is a comment
+    // with a value attached.
+    // The circuit sits *between* the station-01 camera and the trees rather
+    // than among them: a two-metre figure thirty metres away and behind a
+    // canopy is a pale smudge, and the point of putting it here is that the
+    // legs are legibly legs.
+    let wa = 0.34 * t + 2.2;
+    let wr = 2.6;
+    let wx = -18.6 + wr * sin(wa);
+    let wz = -10.4 + wr * cos(wa);
+    world.set_position("Walker", wx, world.terrain_height("Ground", wx, wz), wz);
+    let wahead = wa + 0.10;
+    world.look_at(
+        "Walker",
+        -13.2 + wr * sin(wahead),
+        world.terrain_height("Ground", wx, wz),
+        -9.6 + wr * cos(wahead),
+    );
 }

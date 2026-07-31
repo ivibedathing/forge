@@ -352,3 +352,34 @@ baselines are re-blessed as part of that, and nothing else in the manifest may m
   `showcase_585` join `showcase_646` and `showcase_810` in CLAUDE.md's record. The lesson for the
   next milestone: when a sweep fails and the A/B is clean, `md5` N renders of the one frame rather
   than running the sweep again.
+
+### S2 — reach
+
+- **The script API needed the rigs, and the layering decided how.** `engine-script` must not learn
+  what glTF is, so `ScriptHost::build` takes a `&dyn RigSource` — the trait already in
+  `engine-core` — and resolves the scene's skinned assets once at construction. Rigs are `Arc`s, so
+  holding them costs a pointer each and spares `world.joint_position` a file read per call. Only
+  *skinned* files are kept, so "does this entity have a rig" is a lookup that can fail rather than
+  one that always succeeds with an empty answer.
+- **`world.joint_transform` returns six numbers in one call rather than two calls of three.** Two
+  calls would pose the rig twice for one question, and the second pose is not free — it walks the
+  whole hierarchy. Rotation comes back as XYZ Euler degrees, the file's convention, so it can be
+  written straight back through `set_rotation`.
+- **`closest_match` became public.** A runtime error is not an `EngineError` until it leaves the
+  script host, so the joint-name suggestion could not go through `suggest_from` — and a second
+  similarity threshold beside the first is how two spellings of "close enough" start disagreeing.
+- **The tour needed a character, and the fixture is not one.** `rigged_arm.gltf` is three joints in
+  a chain: the smallest thing that can prove a palette composes, and unable to be *wrong* in the
+  ways a character is. `make_rigged_walker.py` is the second generator — thirteen joints in a
+  branching tree, limbs that pass each other mid-stride, a loop whose last keyframe is computed as
+  its first rather than copied. A chain resolves parents in whatever order it is written; a tree
+  does not, which is what exercises `joint_globals`' resolution on real data.
+- **One added entity changed exactly the frames it is in, and that was checkable.** Five of the six
+  showcase baselines moved and `showcase_450` came back byte-identical — station 03's camera is
+  aimed away. The three small diffs at stations 02, 04 and 05 looked like M22's flake and were not:
+  eight renders of each came back as **one** image apiece, none equal to the old baseline. The
+  general technique, which S1 also needed: a stable-but-different render is a real change, a
+  different-every-time render is the adapter.
+- **The tour's growth contract cannot see this milestone, exactly as §4 predicted.** The record is
+  now in three places — here, `showcase-tour.md`, and CLAUDE.md — because the thing a contract
+  cannot check is precisely the thing that needs writing down.

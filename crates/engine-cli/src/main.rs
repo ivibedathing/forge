@@ -1940,6 +1940,7 @@ fn run_scene(
             &scene_path,
             scene.physics.timestep_hz,
             scene.daylight.clone(),
+            &assets,
         )?;
     let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
     let has_emitters =

@@ -954,6 +954,46 @@
    ]
   },
   {
+   "name": "Walker",
+   "components": [
+    {
+     "type": "Transform",
+     "position": [
+      -13.4,
+      0.0,
+      -8.2
+     ]
+    },
+    {
+     "type": "Mesh",
+     "asset": "../meshes/rigged_walker.gltf"
+    },
+    {
+     "type": "Material",
+     "albedo": [
+      0.3,
+      0.28,
+      0.26
+     ],
+     "metallic": 0.18,
+     "roughness": 0.62,
+     "orm_map": "../textures/plate_orm.png",
+     "normal_map": "../textures/plate_normal.png",
+     "uv_scale": [
+      2.0,
+      2.0
+     ],
+     "normal_strength": 1.1
+    },
+    {
+     "type": "AnimationPlayer",
+     "clip": "../meshes/rigged_walker.gltf#Walk",
+     "speed": 1.0,
+     "looping": true
+    }
+   ]
+  },
+  {
    "name": "FirePit",
    "components": [
     {

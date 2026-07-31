@@ -132,6 +132,7 @@ The schema says what a component *can* hold; these say what yours *does*.
 engine inspect scene.json --entity Ground        # every field, defaults filled in
 engine terrain-height scene.json --at -12,8      # the world Y of the ground there
 engine road-centerline scene.json                # where a Road actually goes
+engine list-joints scene.json --entity Robot --time 0.7   # where every joint is
 engine raycast scene.json --from -6,20,6 --dir 0,-1,0
 ```
 
@@ -143,6 +144,15 @@ at rest — for what a scene *does*, `simulate --steps N`.
 `engine terrain-height` is the height field, not a raycast: it needs no
 `Collider`, and it is the same sampler `world.terrain_height` answers with in a
 script, so a prop you place from the shell lands where a script would put it.
+
+`engine list-joints` is the same idea for a rigged mesh, and it is how you check
+an animation without reading pixels: a filmstrip shows that *something* moved
+and never that the hand reached the doorknob. Without `--time` it reports the
+rig — name, parent, index, rest transform; with it, each joint's posed world
+transform at that moment. It needs no GPU. Scripts ask the same question with
+`world.joint_position(entity, joint)`, which is how you hang a prop off a hand:
+there is no way to *move* a joint, deliberately, so a character's pose stays a
+function of its files and the clock.
 
 Negative coordinates are ordinary arguments — `--from -6,20,6` needs no `=`.
 

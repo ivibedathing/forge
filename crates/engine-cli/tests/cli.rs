@@ -3641,6 +3641,127 @@ fn a_skinned_render_is_a_pure_function_of_the_file_and_the_clock() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// `world.joint_position` / `world.joint_transform`: the two read-only getters
+/// that make a rig reachable from gameplay (M27 §8).
+///
+/// The test is the design's own worked example — parent a prop to a hand — and
+/// it asserts the two things a wrong implementation would still satisfy
+/// separately: the prop is *not* at the rig's origin (so a palette really was
+/// applied) and it *moves between steps* (so the clock reaches it).
+#[test]
+fn a_script_can_hang_a_prop_off_a_joint() {
+    let dir = repo_path("examples/meshes");
+    let script = dir.join("_m27_torch.rhai");
+    std::fs::write(
+        &script,
+        r#"fn step(world, step) {
+            let p = world.joint_position("Arm", "Hand");
+            world.set_position("Torch", p[0], p[1], p[2]);
+            let t = world.joint_transform("Arm", "Hand");
+            world.hud("pitch " + t[3]);
+        }"#,
+    )
+    .unwrap();
+    let path = dir.join("_m27_joint_script.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"rigged_arm.gltf"},
+                {"type":"AnimationPlayer","clip":"rigged_arm.gltf#Wave","looping":true},
+                {"type":"Script","source":"_m27_torch.rhai"}
+            ]},
+            {"name":"Torch","components":[
+                {"type":"Transform"},
+                {"type":"Mesh","asset":"builtin:sphere"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let at = |steps: &str| {
+        let output = engine()
+            .arg("simulate")
+            .arg(&path)
+            .arg("--steps")
+            .arg(steps)
+            .arg("--entity")
+            .arg("Torch")
+            .output()
+            .unwrap();
+        json_stdout(&output)
+    };
+    let early = at("6");
+    let later = at("30");
+
+    let position = |report: &serde_json::Value| -> Vec<f64> {
+        report["entities"][0]["position"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    };
+    let (a, b) = (position(&early), position(&later));
+
+    // The rig's root is at the origin and the hand is 2 m up it, so a prop
+    // that landed at the origin means no palette was applied at all.
+    assert!(a[1] > 0.5, "the hand is well above the ground, got {a:?}");
+    assert_ne!(a, b, "the clip has to move the hand between two step counts");
+    // And `joint_transform` reports an orientation, not just a place.
+    let pitch = later["hud"][0].as_str().unwrap();
+    assert!(pitch.starts_with("pitch "), "got {pitch:?}");
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A mistyped joint is a located runtime error with a suggestion, matching
+/// `world.key` — not a silent identity transform.
+#[test]
+fn a_mistyped_joint_name_is_a_located_error_with_a_suggestion() {
+    let dir = repo_path("examples/meshes");
+    let script = dir.join("_m27_typo.rhai");
+    std::fs::write(
+        &script,
+        "fn step(world, step) {\n    world.joint_position(\"Arm\", \"Hnad\");\n}",
+    )
+    .unwrap();
+    let path = dir.join("_m27_joint_typo.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"rigged_arm.gltf"},
+                {"type":"Script","source":"_m27_typo.rhai"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine()
+        .arg("simulate")
+        .arg(&path)
+        .arg("--steps")
+        .arg("1")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&script);
+
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stderr_lines(&output);
+    assert!(codes_of(&lines).contains(&"script_runtime_error".to_string()));
+    let message = lines[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("did you mean \\\"Hand\\\"") || message.contains("did you mean \"Hand\""),
+        "the error must suggest the real joint: {message}"
+    );
+    assert_eq!(lines[0]["line"], 2, "and point at the script line");
+}
+
 #[test]
 fn list_joints_reports_a_rig_out_of_a_gltf_directly() {
     let output = engine()

@@ -219,7 +219,12 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 
 /// Closest candidate to `needle` by Levenshtein distance, if within a
 /// similarity threshold that scales with word length.
-pub(crate) fn closest_match<'a>(
+///
+/// Public because a *runtime* error is not an [`EngineError`] until it leaves
+/// the script host — `world.joint_position` on a mistyped joint wants the same
+/// suggestion `suggest_from` gives, in a `rhai` error rather than a JSON one,
+/// and a second threshold would drift from this one.
+pub fn closest_match<'a>(
     needle: &str,
     candidates: impl IntoIterator<Item = &'a str>,
 ) -> Option<String> {
