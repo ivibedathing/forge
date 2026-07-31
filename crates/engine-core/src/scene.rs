@@ -723,7 +723,7 @@ impl Scene {
         let entity = self.entity(name)?;
         let terrain = self.world.get::<&crate::components::Terrain>(entity).ok()?;
         let transform = self.transform_of(entity);
-        Some(transform.position.y + transform.scale.y * crate::terrain::height_at(&terrain, x, z))
+        Some(crate::terrain::world_height_at(&terrain, &transform, x, z))
     }
 
     /// Flatten the world's water surfaces into a draw list (M18).

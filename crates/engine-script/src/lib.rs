@@ -232,8 +232,9 @@ impl WorldApi {
             .get::<&Transform>(entity)
             .map(|t| *t)
             .unwrap_or_default();
-        Ok(transform.position.y
-            + transform.scale.y * engine_core::terrain::height_at(&terrain, x, z))
+        Ok(engine_core::terrain::world_height_at(
+            &terrain, &transform, x, z,
+        ))
     }
 
     /// The vehicle path: velocity access needs a `RigidBody`; what a write

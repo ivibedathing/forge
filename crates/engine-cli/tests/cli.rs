@@ -2804,3 +2804,319 @@ fn agent_guide_is_documentation_not_a_result() {
     engine().arg("init").arg(&dir).output().unwrap();
     assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), guide);
 }
+
+// ── M24: the CLI answers questions it already knows ───────────────────────
+//
+// Four questions an agent asks constantly and could not ask directly. Each of
+// these fails against the pre-M24 binary — a test that passes before the change
+// tests nothing.
+
+/// A scene with a terrain patch and no collider on it: the height field exists
+/// whether or not anything can be dropped onto it.
+const TERRAIN: &str = r#"{"name":"ground","entities":[
+    {"name":"Cam","components":[
+        {"type":"Camera","active":true},
+        {"type":"Transform","position":[0.0,5.0,20.0]}]},
+    {"name":"Ground","components":[
+        {"type":"Transform","position":[0.0,-1.0,0.0],"scale":[180.0,2.0,180.0]},
+        {"type":"Terrain","height":6.0,"seed":7}]}
+]}"#;
+
+#[test]
+fn raycast_takes_a_negative_origin_without_an_equals_sign() {
+    // Roughly half the coordinates in any centered scene are negative, and
+    // before M24 clap read `-6,20,6` as a flag: `unexpected argument '-6'`,
+    // with no `did_you_mean` that could help, because nothing is misspelled.
+    let scene = repo_path("examples/scenes/verify/m22_terrain.json");
+    let output = engine()
+        .args(["raycast"])
+        .arg(&scene)
+        .args(["--from", "-6,20,6", "--dir", "0,-1,0"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    assert_eq!(report["hit"]["entity"], "Ground");
+    let point = &report["hit"]["point"];
+    assert_eq!(point[0].as_f64().unwrap(), -6.0);
+    assert_eq!(point[2].as_f64().unwrap(), 6.0);
+}
+
+#[test]
+fn signed_scalars_parse_everywhere_they_are_taken() {
+    // The class, not the instance: every argument that takes a vector or a
+    // signed number accepts a leading minus.
+    let scene = scene_file("signed", TERRAIN);
+    let out = std::env::temp_dir().join(format!("engine-signed-{}.png", std::process::id()));
+
+    for args in [
+        vec!["--time", "-1.0"],
+        vec!["--time", "-0.5", "--steps", "0"],
+    ] {
+        let output = engine()
+            .arg("screenshot")
+            .arg(&scene)
+            .arg("--out")
+            .arg(&out)
+            .args(&args)
+            .args(["--width", "64", "--height", "64"])
+            .output()
+            .unwrap();
+        // A GPU-less machine fails later, in the renderer; what is being
+        // pinned here is that it is not rejected by the *parser*.
+        let codes = codes_of(&stderr_lines(&output));
+        assert!(
+            !codes.iter().any(|c| c == "invalid_invocation"),
+            "{args:?} must parse; got {codes:?}"
+        );
+    }
+}
+
+#[test]
+fn list_components_names_one_component() {
+    let output = engine()
+        .args(["list-components", "--component", "Water"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    assert!(output.stderr.is_empty());
+
+    let schema: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    assert_eq!(schema["properties"]["type"]["const"], "Water");
+    assert!(
+        schema["properties"]["segments"].is_object(),
+        "a component's own fields are the point of asking"
+    );
+    // Standalone: the `Wave` definition its `waves` array points at rides along,
+    // so the printed document resolves without the one it was lifted out of.
+    assert!(schema["$defs"]["Wave"].is_object());
+
+    // Without the flag, byte-identical to what it always printed — the
+    // checked-in schema file is that output.
+    let whole = engine().arg("list-components").output().unwrap();
+    assert_eq!(
+        stdout_of(&whole),
+        std::fs::read_to_string(repo_path("schemas/component-schema.json")).unwrap(),
+        "--component must not have reshaped the default output"
+    );
+}
+
+#[test]
+fn an_unknown_component_query_suggests_the_near_miss() {
+    let output = engine()
+        .args(["list-components", "--component", "Meterial"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout_of(&output).is_empty(), "failure writes nothing to stdout");
+
+    let lines = stderr_lines(&output);
+    assert_eq!(codes_of(&lines), ["unknown_component_query"]);
+    assert_eq!(lines[0]["did_you_mean"], "Material");
+}
+
+#[test]
+fn terrain_height_answers_without_a_collider_or_a_raycast() {
+    let scene = scene_file("terrain-height", TERRAIN);
+    let output = engine()
+        .arg("terrain-height")
+        .arg(&scene)
+        .args(["--at", "-12,8"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    assert_eq!(report["entity"], "Ground");
+    assert_eq!(report["x"].as_f64().unwrap(), -12.0);
+    assert_eq!(report["z"].as_f64().unwrap(), 8.0);
+    // The patch sits at y = -1 with scale.y = 2 over ±6 m of relief, so the
+    // answer is a world coordinate in that band — not the raw field value.
+    let height = report["height"].as_f64().unwrap();
+    assert!((-13.0..=11.0).contains(&height), "height was {height}");
+}
+
+#[test]
+fn terrain_height_is_the_sampler_scripts_ask() {
+    // M22's central claim is that terrain has exactly one implementation. This
+    // pins it across the two ways of asking: a script's world.terrain_height
+    // and the CLI must return the same f32, not merely a similar number.
+    let scene = scene_file("terrain-sampler", &TERRAIN.replace(
+        r#"{"name":"Cam","components":["#,
+        r#"{"name":"Probe","components":[{"type":"Script","source":"probe.rhai"}]},
+    {"name":"Cam","components":["#,
+    ));
+    std::fs::write(
+        scene.parent().unwrap().join("probe.rhai"),
+        "fn step(world, step) { world.hud(\"h=\" + world.terrain_height(\"Ground\", -12.0, 8.0)); }\n",
+    )
+    .unwrap();
+
+    let simulated = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "1"])
+        .output()
+        .unwrap();
+    assert_eq!(simulated.status.code(), Some(0), "{:?}", stderr_lines(&simulated));
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&simulated).trim()).unwrap();
+    let from_script: f64 = report["hud"][0]
+        .as_str()
+        .expect("the script pushes one HUD line")
+        .trim_start_matches("h=")
+        .parse()
+        .unwrap();
+
+    let queried = engine()
+        .arg("terrain-height")
+        .arg(&scene)
+        .args(["--at", "-12,8"])
+        .output()
+        .unwrap();
+    let from_cli: serde_json::Value = serde_json::from_str(stdout_of(&queried).trim()).unwrap();
+
+    assert_eq!(
+        from_cli["height"].as_f64().unwrap() as f32,
+        from_script as f32,
+        "the CLI and the script API must sample the same height field"
+    );
+}
+
+#[test]
+fn terrain_height_names_the_candidates_when_several_patches_exist() {
+    let two = TERRAIN.replace(
+        r#"{"name":"Ground","components":["#,
+        r#"{"name":"Island","components":[
+        {"type":"Transform","position":[400.0,0.0,0.0],"scale":[60.0,3.0,60.0]},
+        {"type":"Terrain","height":4.0,"seed":2}]},
+    {"name":"Ground","components":["#,
+    );
+    let scene = scene_file("terrain-two", &two);
+
+    let ambiguous = engine()
+        .arg("terrain-height")
+        .arg(&scene)
+        .args(["--at", "0,0"])
+        .output()
+        .unwrap();
+    assert_eq!(ambiguous.status.code(), Some(1));
+    let lines = stderr_lines(&ambiguous);
+    assert_eq!(codes_of(&lines), ["missing_component"]);
+    let message = lines[0]["message"].as_str().unwrap();
+    assert!(message.contains("Ground") && message.contains("Island"), "{message}");
+
+    // Naming one that is not there suggests the near miss, like every other
+    // name error in the engine.
+    let typo = engine()
+        .arg("terrain-height")
+        .arg(&scene)
+        .args(["--at", "0,0", "--entity", "Grond"])
+        .output()
+        .unwrap();
+    assert_eq!(typo.status.code(), Some(1));
+    let lines = stderr_lines(&typo);
+    assert_eq!(codes_of(&lines), ["entity_not_found"]);
+    assert_eq!(lines[0]["did_you_mean"], "Ground");
+
+    // And naming one that is there answers for that patch.
+    let named = engine()
+        .arg("terrain-height")
+        .arg(&scene)
+        .args(["--at", "400,0", "--entity", "Island"])
+        .output()
+        .unwrap();
+    assert_eq!(named.status.code(), Some(0), "{:?}", stderr_lines(&named));
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&named).trim()).unwrap();
+    assert_eq!(report["entity"], "Island");
+}
+
+#[test]
+fn inspect_fills_in_the_defaults_the_file_leaves_out() {
+    // `{"type": "Material"}` in the file is five values in the engine. Reading
+    // the JSON tells you one of them.
+    let scene = scene_file(
+        "inspect",
+        r#"{"name":"defaults","entities":[
+    {"name":"Cam","components":[{"type":"Camera","active":true}]},
+    {"name":"Cube","components":[
+        {"type":"Transform","position":[1.0,2.0,3.0]},
+        {"type":"Mesh","asset":"builtin:cube"},
+        {"type":"Material","albedo":[0.5,0.5,0.5]}]}
+]}"#,
+    );
+
+    let output = engine()
+        .arg("inspect")
+        .arg(&scene)
+        .args(["--entity", "Cube"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    let entities = report["entities"].as_array().unwrap();
+    assert_eq!(entities.len(), 1, "--entity narrows to one");
+    assert_eq!(entities[0]["name"], "Cube");
+
+    let material = entities[0]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["type"] == "Material")
+        .expect("the entity has a Material");
+    // 0.9, not the 0.5 a reader guesses — which is the whole argument for the
+    // command: the file says nothing, and everyone fills the silence wrong.
+    // (Compared as f32: these are f32 fields widened to JSON doubles.)
+    assert_eq!(
+        material["roughness"].as_f64().unwrap() as f32,
+        0.9,
+        "an unwritten field is its default"
+    );
+    assert_eq!(material["metallic"].as_f64().unwrap(), 0.0);
+    assert_eq!(material["alpha"].as_f64().unwrap(), 1.0);
+
+    // The Transform the file omits two thirds of comes back whole, and the
+    // resolved placement is reported beside the components.
+    assert_eq!(entities[0]["transform"]["scale"], serde_json::json!([1.0, 1.0, 1.0]));
+    assert_eq!(entities[0]["transform"]["position"], serde_json::json!([1.0, 2.0, 3.0]));
+}
+
+#[test]
+fn inspect_reports_every_entity_name_sorted() {
+    let scene = scene_file("inspect-all", VALID);
+    let output = engine().arg("inspect").arg(&scene).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    let names: Vec<&str> = report["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Cam", "Cube"], "sorted, never archetype order");
+    assert_eq!(report["scene"], "ok");
+
+    // An entity with no Transform still reports one: the identity placement is
+    // what everything downstream uses for it.
+    let cube = &report["entities"][1];
+    assert_eq!(cube["transform"]["scale"], serde_json::json!([1.0, 1.0, 1.0]));
+}
+
+#[test]
+fn inspect_suggests_a_near_miss_entity() {
+    let scene = scene_file("inspect-typo", VALID);
+    let output = engine()
+        .arg("inspect")
+        .arg(&scene)
+        .args(["--entity", "Cubee"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout_of(&output).is_empty());
+    let lines = stderr_lines(&output);
+    assert_eq!(codes_of(&lines), ["entity_not_found"]);
+    assert_eq!(lines[0]["did_you_mean"], "Cube");
+}

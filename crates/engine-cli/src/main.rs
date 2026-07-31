@@ -74,7 +74,7 @@ enum Command {
         #[arg(long)]
         input: Option<PathBuf>,
         /// Render the animated pose at this scene time (seconds).
-        #[arg(long, default_value_t = 0.0)]
+        #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
         time: f32,
         /// Render from this entity's camera instead of the active one.
         #[arg(long)]
@@ -102,7 +102,7 @@ enum Command {
         #[arg(long)]
         input: Option<PathBuf>,
         /// Compare the animated pose at this scene time (seconds).
-        #[arg(long, default_value_t = 0.0)]
+        #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
         time: f32,
         /// Write the visual diff here (red: violation, yellow: within
         /// threshold, faded gray: identical). Written on pass and fail.
@@ -140,10 +140,10 @@ enum Command {
         scene: PathBuf,
         #[arg(long)]
         out: PathBuf,
-        #[arg(long, default_value_t = 0.0)]
+        #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
         start: f32,
         /// Defaults to the longest clip duration in the scene.
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         end: Option<f32>,
         #[arg(long, default_value_t = 8)]
         frames: u32,
@@ -191,10 +191,10 @@ enum Command {
     Raycast {
         scene: PathBuf,
         /// Ray origin as x,y,z
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         from: String,
         /// Ray direction as x,y,z (need not be normalized)
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         dir: String,
         /// Simulate this many steps before casting.
         #[arg(long, default_value_t = 0)]
@@ -227,6 +227,37 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Ask a terrain patch how high the ground is at a world XZ position.
+    ///
+    /// The same sampler `world.terrain_height` answers with, so a prop placed
+    /// from the shell and one placed from a script land on the same ground.
+    /// Needs no `Collider`: this is the height *field*, not a raycast, so a
+    /// patch authored purely for looks answers too.
+    TerrainHeight {
+        scene: PathBuf,
+        /// World position as x,z — the height is what is being asked for.
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+        /// Which patch, when the scene has more than one. Defaults to the only
+        /// one; with several, naming one is required.
+        #[arg(long)]
+        entity: Option<String>,
+    },
+
+    /// Print entities with every component field resolved — defaults filled
+    /// in, as the engine actually built them.
+    ///
+    /// Reading the scene file is not the same thing: absent fields *are* the
+    /// documented defaults, so a `Material` that writes only `albedo` leaves
+    /// four values unstated. This is the scene at rest — what you authored, not
+    /// what happens when it runs.
+    Inspect {
+        scene: PathBuf,
+        /// One entity by name. Absent, every entity, name-sorted.
+        #[arg(long)]
+        entity: Option<String>,
+    },
+
     /// Scaffold a new project: a starter scene, a script, and the agent
     /// orientation under the names Claude Code and Codex already read.
     Init {
@@ -247,7 +278,14 @@ enum Command {
     AgentGuide,
 
     /// Print the component and scene JSON Schemas.
-    ListComponents,
+    ListComponents {
+        /// One component's schema instead of the whole vocabulary — the
+        /// selection out of the `oneOf` that would otherwise be a `jq`
+        /// expression. Carries the `$defs` it references, so it resolves on
+        /// its own.
+        #[arg(long)]
+        component: Option<String>,
+    },
 
     /// Compile the workspace, re-emitting rustc diagnostics as engine errors.
     Build {
@@ -363,15 +401,14 @@ fn main() {
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
+        Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
+        Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Init { dir, force } => scaffold::init(dir, force),
         Command::AgentGuide => {
             print!("{}", scaffold::AGENT_GUIDE);
             Ok(())
         }
-        Command::ListComponents => {
-            print!("{}", engine_core::schema::canonical_json());
-            Ok(())
-        }
+        Command::ListComponents { component } => list_components(component),
         Command::Build { check } => build::build(check),
         Command::Info => info(),
         #[cfg(debug_assertions)]
@@ -685,6 +722,226 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
             "shoulder": road.road.shoulder,
             "closed": road.road.closed,
             "points": points,
+        })
+    );
+    Ok(())
+}
+
+/// `engine list-components [--component NAME]` — the component vocabulary
+/// (M24).
+///
+/// Without the flag this is byte-identical to what it always printed: the
+/// checked-in `schemas/component-schema.json` is that output, a repo-contract
+/// test enforces it, and the validation walk and the editor's widget generator
+/// both read the same document.
+fn list_components(component: Option<String>) -> Result<()> {
+    let Some(name) = component else {
+        print!("{}", engine_core::schema::canonical_json());
+        return Ok(());
+    };
+
+    let schema = engine_core::schema::component_schema_named(&name).ok_or_else(|| {
+        EngineError::new(
+            codes::UNKNOWN_COMPONENT_QUERY,
+            format!("no component named {name:?}"),
+        )
+        .component(&name)
+        .suggest_from(
+            &name,
+            engine_core::components::ComponentData::NAMES.iter().copied(),
+        )
+    })?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&schema).map_err(|e| {
+            EngineError::new(
+                codes::OUTPUT_SERIALIZATION_FAILED,
+                format!("could not serialize the component schema: {e}"),
+            )
+        })?
+    );
+    Ok(())
+}
+
+/// `engine terrain-height <scene> --at x,z [--entity NAME]` — where the ground
+/// is (M24).
+///
+/// Placement is the most common operation on terrain, and until this the only
+/// route from outside a script was a downward `raycast`: it needs the trick,
+/// and it needs the patch to carry a `Collider`, so a patch authored for looks
+/// could not be asked at all. This asks the height *field*, which is the thing
+/// that decides where a tree's roots go.
+///
+/// Goes through [`Scene::terrain_height`], which goes through
+/// `terrain::world_height_at`, which is what `world.terrain_height` answers
+/// with — one sampler, per M22's one-implementation rule.
+fn terrain_height(scene_path: PathBuf, at: String, entity: Option<String>) -> Result<()> {
+    let (x, z) = parse_xz(&at)?;
+    let scene = load_scene(&scene_path)?;
+
+    let patches: Vec<String> = {
+        let mut names: Vec<String> = scene
+            .names()
+            .filter(|name| {
+                scene.entity(name).is_some_and(|entity| {
+                    scene
+                        .world
+                        .get::<&engine_core::components::Terrain>(entity)
+                        .is_ok()
+                })
+            })
+            .map(str::to_string)
+            .collect();
+        names.sort();
+        names
+    };
+
+    // The `road-centerline` convention exactly: name one when there are
+    // several, default to the only one, and fail rather than guess.
+    let name = match (&entity, patches.len()) {
+        (Some(requested), _) => patches
+            .iter()
+            .find(|patch| *patch == requested)
+            .cloned()
+            .ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {requested:?} with a Terrain component"),
+                )
+                .entity(requested)
+                .file(scene_path.display().to_string())
+                .suggest_from(requested, patches.iter().map(String::as_str))
+            })?,
+        (None, 1) => patches[0].clone(),
+        (None, 0) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                "scene has no entity with a Terrain component",
+            )
+            .file(scene_path.display().to_string()))
+        }
+        (None, _) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                format!(
+                    "scene has {} terrain patches ({}); name one with --entity",
+                    patches.len(),
+                    patches.join(", ")
+                ),
+            )
+            .file(scene_path.display().to_string()))
+        }
+    };
+
+    let height = scene
+        .terrain_height(&name, x, z)
+        .expect("the name came from a Terrain query");
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "entity": name,
+            "x": x,
+            "z": z,
+            "height": height,
+        })
+    );
+    Ok(())
+}
+
+/// `--at x,z`: two numbers, unlike `raycast`'s three. The height is what is
+/// being asked for, so passing a Y would be passing an answer in.
+fn parse_xz(text: &str) -> Result<(f32, f32)> {
+    let parts: Vec<f32> = text
+        .split(',')
+        .map(|part| part.trim().parse::<f32>())
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| {
+            EngineError::new(
+                codes::INVALID_INVOCATION,
+                format!("expected x,z numbers, got {text:?} ({e})"),
+            )
+        })?;
+    if parts.len() != 2 {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!(
+                "expected exactly two comma-separated numbers (x,z), got {text:?}; \
+                 the height is what terrain-height answers"
+            ),
+        ));
+    }
+    Ok((parts[0], parts[1]))
+}
+
+/// `engine inspect <scene> [--entity NAME]` — the entity as the engine holds
+/// it (M24).
+///
+/// The components come back through `ComponentData::collect_from` and are
+/// serialized by the same serde impls that read them, so every default is the
+/// one the engine is actually using. Re-deriving defaults here is how `inspect`
+/// would start describing a scene the renderer does not have.
+///
+/// A pure function of the file at rest — no `--steps`. "What did you author"
+/// and "what happened when it ran" are different questions, and `simulate` owns
+/// the second one.
+fn inspect(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
+    let scene = load_scene(&scene_path)?;
+
+    let mut names: Vec<String> = scene.names().map(str::to_string).collect();
+    names.sort();
+
+    if let Some(requested) = &entity {
+        if !names.iter().any(|name| name == requested) {
+            return Err(EngineError::new(
+                codes::ENTITY_NOT_FOUND,
+                format!("no entity named {requested:?}"),
+            )
+            .entity(requested)
+            .file(scene_path.display().to_string())
+            .suggest_from(requested, names.iter().map(String::as_str)));
+        }
+        names.retain(|name| name == requested);
+    }
+
+    let entities: Vec<serde_json::Value> = names
+        .iter()
+        .map(|name| {
+            let handle = scene.entity(name).expect("the name came from the scene");
+            let components =
+                engine_core::components::ComponentData::collect_from(&scene.world, handle);
+            let transform = components
+                .iter()
+                .find_map(|component| match component {
+                    engine_core::components::ComponentData::Transform(t) => Some(*t),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "name": name,
+                // There is no parenting in this engine, so an entity's world
+                // transform is its own — reported anyway, and filled with the
+                // identity for an entity that carries no Transform at all,
+                // because that is the placement everything downstream uses.
+                "transform": {
+                    "position": [transform.position.x, transform.position.y, transform.position.z],
+                    "rotation": [transform.rotation.x, transform.rotation.y, transform.rotation.z],
+                    "scale": [transform.scale.x, transform.scale.y, transform.scale.z],
+                },
+                "components": components,
+            })
+        })
+        .collect();
+
+    // Compact, like every other report — `raycast`, `road-centerline`,
+    // `simulate`. Only the schema commands pretty-print, because a schema is
+    // read and a report is piped through `jq`.
+    println!(
+        "{}",
+        serde_json::json!({
+            "scene": scene.name,
+            "entities": entities,
         })
     );
     Ok(())

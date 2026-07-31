@@ -315,6 +315,10 @@ registry! {
     INIT_WRITE_FAILED = "init_write_failed", Environment,
         "a scaffolded file or directory could not be written";
 
+    // ── Introspection queries (M24) ────────────────────────────────────
+    UNKNOWN_COMPONENT_QUERY = "unknown_component_query", Input,
+        "engine list-components --component names no known component";
+
     // ── Process-level ──────────────────────────────────────────────────
     INVALID_INVOCATION = "invalid_invocation", Environment,
         "the command line itself could not be parsed";
