@@ -50,11 +50,11 @@ moving.
 
 | steps | station | what is on screen | systems |
 |-------|---------|-------------------|---------|
-| 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — four critters running loops, the glTF monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), `Material`, `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
+| 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — under fissured bark, four critters running loops, the granite monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), `Material` (`albedo_map`, `normal_map`, `Material.asset`), `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
 | 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
 | 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
-| 540–719 | 04 breaking | a boulder rolls into a crate stack, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
-| 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4, `HudText`, `HudRect`, the camera |
+| 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
+| 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4 (tread `normal_map`), `Material.orm_map`, `HudText`, `HudRect`, the camera |
 
 Running underneath all five, from the `environment` block rather than from any
 component: a gradient sky with the sun in it, distance fog, sun shadows from
@@ -171,15 +171,40 @@ than no showcase:
   `water-design.md`.
 - **Ice** is a pale dielectric at roughness 0.05–0.10 with transmission
   0.55–0.66, and the floating blocks are sorted into the same back-to-front
-  list as the water they sit in. No subsurface scattering and no tinting by
-  thickness, so a thick block is exactly as clear as a thin one.
+  list as the water they sit in. As of M26 it **refracts** — `ior: 1.31` with a
+  `thickness` that scales with each block and a faint blue-green `attenuation`,
+  so a thick block is not as clear as a thin one. No subsurface scattering, and
+  the ice carries no texture maps deliberately: refraction is what this station
+  is showing and a frost normal map competes with it for the same pixels.
 - **The trees are real geometry** as of M19 — swept tubes on wandering
   polylines, recursively branched, with taper and a root flare, and a seed per
-  tree so no two are the same individual. What is missing is surface: there is
-  no bark texture and no leaf texture (the engine has neither), so bark is a
-  flat brown dielectric and a leaf is a folded blade that gets its variation
-  from shading alone. No wind, no LOD, and no collision — you can walk the
-  truck through a trunk.
+  tree so no two are the same individual — and as of the M26 material pass they
+  have **surface**: bark is an `albedo_map` and a `normal_map` of fissures, and
+  seven of the nine trees share one `materials/bark.json` file. The leaves are
+  what is still flat: a leaf is a folded blade shaded by its own geometry, and
+  `Tree::leaf_material` has no map fields to hang an alpha-cut leaf card off,
+  so giving them one is an engine change and not an authoring job. No wind, no
+  LOD, and no collision — you can walk the truck through a trunk.
+- **Everything else with a `Mesh` is textured too**, and the interesting part is
+  what the maps are *not*. Bark, crate, granite and tread all serve more than
+  one entity at more than one colour, so each map is near-neutral and bright and
+  the material's `albedo` carries the hue: `albedo_map` is **multiplied** by
+  `albedo`, so a map with its own strong colour can only be tinted toward black
+  and one bark file could not serve both an oak and a birch. The truck is the
+  one entity that texture is *only* relief and reflectance — `plate_normal` for
+  the panel seams and their rivets, `plate_orm` scuffing the paint's roughness,
+  and the red left where the file says it. Untextured on purpose: the critters
+  and the beacon (stand-ins with nothing to be a surface of), the ice, and
+  `Terrain` and `Road`, whose own texture systems are generative and whose map
+  support M26 did not build.
+- **`builtin:cube`'s faces do not agree on which way `u` runs** — it is vertical
+  on ±X and horizontal on ±Z — which is why the crates are a *framed* panel with
+  a centre batten rather than plain boards: a border is invariant under that,
+  and boards that change direction between the side of a crate and its end are
+  what a real crate does anyway. Anything strongly directional on a cube draws
+  one thing on two faces and another on the other two. `Tree` tubes are the
+  well-behaved case: `u` runs around the ring and `v` along the branch, so a
+  fissure is simply something that varies fast in `u`.
 - **The animals** are scaled spheres on parametric loops. There is no
   navigation, no steering behaviour, no state machine — scripts have no
   randomness by design, so the variety is sums of sines.
@@ -207,9 +232,10 @@ than no showcase:
   need cascades, which M16 does not have.
 
 Refraction is the upgrade that would move this scene most now, and the water is
-its loudest customer. For the forest it is textured bark and alpha-cut leaves —
-the same missing feature seen from the other side, since the renderer has no
-texture-mapped materials at all yet. For the sky it is the cloud *layer* of
+its loudest customer — the ice took it in M26 and the pond still cannot, since
+`Water` has no `Material` to put an `ior` on. For the forest it is alpha-cut
+leaves: the bark is textured and the canopy is the last flat surface in the
+frame. For the sky it is the cloud *layer* of
 `cloud-design.md` §9: overcast and cirrus belong to the dome, would ride into
 the water reflection for free through `sky_common.wgsl`, and unlike the cloud
 objects would be visible from a camera that never looks up.
