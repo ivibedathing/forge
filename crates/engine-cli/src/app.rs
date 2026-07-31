@@ -42,7 +42,7 @@ pub enum Content {
         /// The scene's roads (M23). Refreshed with `water` for the same
         /// reason: a script can move or repaint one.
         roads: Vec<engine_core::scene::RoadItem>,
-        /// The scene's meadows (M28). Refreshed with `roads` for the same
+        /// The scene's meadows (M29). Refreshed with `roads` for the same
         /// reason: a script can change what a field is made of between steps.
         meadows: Vec<engine_core::scene::MeadowItem>,
         camera: Camera,

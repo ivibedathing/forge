@@ -1,4 +1,4 @@
-// Meadow: ground cover with a life cycle (M28).
+// Meadow: ground cover with a life cycle (M29).
 //
 // This is the only shader in the engine whose vertex stage does the *modelling*.
 // The CPU hands it one plant template and a list of places to put copies of it;

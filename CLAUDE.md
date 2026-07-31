@@ -9,11 +9,11 @@ it are still open (§9).
 
 ## Current state
 
-**M0–M28 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M29 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
-M28 meadows. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
+M29 meadows. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -60,7 +60,7 @@ own visual entity naming a chassis. `ParticleEmitter` is a seeded deterministic 
 M17 fire fields). `PointLight` is a local light, ≤8 per scene. `Water`, `Tree`, `Cloud`, `Terrain`,
 `Road` and `Meadow` are **recipes, not mesh references** — each owns its geometry and so carries no
 `Mesh` and no `Material` (a `Tree` is the exception on materials: the entity's `Material` is its
-bark). `Meadow` is ground cover on a seed→grass→weeds→straw→collapse life cycle (M28).
+bark). `Meadow` is ground cover on a seed→grass→weeds→straw→collapse life cycle (M29).
 Scene-level blocks: `physics`, `environment` (M16), `daylight` (M21).
 
 ## Editor (M7, `crates/engine-editor`)
@@ -987,7 +987,7 @@ Not here: IBL and prefiltered probes, parallax, decals, texture compression, sto
 anisotropic filtering (pinned at 1 — a per-adapter quality knob is where reproducibility dies),
 textured terrain layers, and textured roads.
 
-## Meadows (M28, `designs/meadow-design.md`)
+## Meadows (M29, `designs/meadow-design.md`)
 
 `Meadow` is ground cover with a **life cycle**: seed → sprout → grass → flowering weeds → dry straw →
 collapse → seed, on the scene clock, so `cycle_length: 3.0` runs a whole generation in three seconds.
@@ -1041,12 +1041,12 @@ buffer** (36 bytes a plant) — and everything visible happens in `meadow.wgsl`'
   7.1M in 3.6 s (debug). Geometry fields are in `NOT_ANIMATABLE`, `stagger` included — a plant's phase
   offset is drawn once, at placement.
 
-**M28 is where this adapter's reproducibility limit gets sharper, and the two artifacts settle it
+**M29 is where this adapter's reproducibility limit gets sharper, and the two artifacts settle it
 oppositely.** A meadow at `samples: 4` is *not* byte-reproducible: six renders of the unchanged
 fixture came back as six distinct PNGs (1874 px, delta 69). At `samples: 1` eight renders are one
 image. **Relief is not required** — the fixture's ground is `height: 0.0`, a flat patch — so M22's
 rule is really "enough sub-pixel geometry", and a meadow is the densest source of it in the engine.
-So `verify/m28_meadow.json` renders at **`samples: 1`** and keeps a hard bit-exact pin, while **all
+So `verify/m29_meadow.json` renders at **`samples: 1`** and keeps a hard bit-exact pin, while **all
 six showcase baselines now carry `"diff_args": ["--threshold", "24"]`** (the tour is stable without
 the meadow — 8/8 identical — and the meadow is visible in every frame, worst drift 203 px / delta 20).
 That is a real loss of five bit-exact pins, recorded rather than hidden: **a new fixture wanting a
@@ -1198,11 +1198,11 @@ A/B bit-exactness check as a loop rather than a reconstruction. Both golden trac
 GPU-free.
 
 **16 of the 32 baselines are pinned by no test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`,
-both `m10`, `m11_lap`, `m13_smoke`, `m14_break`, `m28_meadow`, and all six `showcase_*`) — the sweep is their only
+both `m10`, `m11_lap`, `m13_smoke`, `m14_break`, `m29_meadow`, and all six `showcase_*`) — the sweep is their only
 check. `m11_lap.png` is the one to be careful about when reading older notes: the lap CLI test pins
 the *drive* (positions, elevation, parked HUD strings) and names the PNG in a comment, but nothing
 diff-renders it. A sweep failure that will not reproduce twice in a row is worth suspecting before it
-is worth debugging: since M28 **all six `showcase_*` frames** carry a `diff_args` tolerance of
+is worth debugging: since M29 **all six `showcase_*` frames** carry a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02`, because a meadow at `samples: 4` is not byte-reproducible
 on this adapter and the tour has one in every frame (M22 had already given `showcase_646` a
 threshold for its own reason). The pixel *allowance* is there rather than a wider threshold because

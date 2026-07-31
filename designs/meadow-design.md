@@ -1,4 +1,4 @@
-# Meadow design (M28)
+# Meadow design (M29)
 
 Ground cover that **grows, seeds, and dies on a loop**: a field of small plants that walk a life
 cycle from seed to sprout to green grass to flowering weeds to dry yellow stalks to collapse, and
@@ -231,7 +231,7 @@ expected. The measurements, all on an Apple M3 Pro, debug build:
 
 So the two artifacts take opposite settlements, and the split is the design:
 
-- **The fixture is `samples: 1` and carries a hard bit-exact pin.** `verify/m28_meadow.json` at
+- **The fixture is `samples: 1` and carries a hard bit-exact pin.** `verify/m29_meadow.json` at
   `--time 0.7`, aimed at its subject with no horizon in frame (M26's rule). Giving up MSAA costs a
   verification fixture some anti-aliasing and buys back the only strict check this system has.
 - **The six showcase baselines take `"diff_args": ["--threshold", "24", "--max-diff-percent",
@@ -241,7 +241,7 @@ So the two artifacts take opposite settlements, and the split is the design:
   claim than widening the threshold to 40 would have been. Eight consecutive full sweeps of all 34
   artifacts passed with it.
 
-That is a real loss and it is worth naming: before M28, five of the tour's six frames were bit-exact
+That is a real loss and it is worth naming: before M29, five of the tour's six frames were bit-exact
 pins. **The next fixture that needs a hard pin on ground cover must render it at `samples: 1`.**
 
 ## 10. What the renders changed

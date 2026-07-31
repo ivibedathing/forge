@@ -136,7 +136,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     let mut distinct_layers: Vec<(String, String)> = Vec::new();
     // Wheel pass inputs (M12): checked cross-entity once names are known.
     let mut wheels: Vec<(String, crate::components::Wheel, String)> = Vec::new();
-    // Meadow pass inputs (M28): a meadow names the Terrain it stands on, which
+    // Meadow pass inputs (M29): a meadow names the Terrain it stands on, which
     // is another entity, so the check waits until every name is known — the
     // wheel pass's shape.
     let mut meadows: Vec<(String, crate::components::Meadow, String)> = Vec::new();
@@ -750,7 +750,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
-        // ── Meadow checks (M28) ──────────────────────────────────────────
+        // ── Meadow checks (M29) ──────────────────────────────────────────
         if let Some((meadow, path)) = &meadow {
             // Same rule as every other recipe: the component grows the entity's
             // geometry and carries its own colours, so a Mesh or Material beside
@@ -1051,7 +1051,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         }
     }
 
-    // ── Meadow pass (M28): the ground a meadow names must be a Terrain ──
+    // ── Meadow pass (M29): the ground a meadow names must be a Terrain ──
     //
     // A name that resolves to nothing, or to an entity with no `Terrain`, would
     // otherwise silently fall back to flat ground at the meadow's own Y — grass
@@ -1972,7 +1972,7 @@ fn check_component(
             }
         }
 
-        // The life-cycle table (M28). The keyframes are read by interpolating
+        // The life-cycle table (M29). The keyframes are read by interpolating
         // between neighbours and wrapping from the last back to the first, so
         // an out-of-order or too-short table does not fail loudly at render
         // time — it silently plays the cycle backwards through part of itself,

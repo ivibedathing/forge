@@ -42,7 +42,7 @@ pub struct SceneDoc {
     /// no time in it at all — the ribbon a screenshot shows is the ribbon the
     /// editor shows.
     pub roads: Vec<RoadItem>,
-    /// Meadows (M28). Shown at rest like clouds and roads: the life cycle is a
+    /// Meadows (M29). Shown at rest like clouds and roads: the life cycle is a
     /// function of the clock, and the viewport's clock does not run, so what the
     /// editor draws is the field frozen at the `phase` the file authored.
     pub meadows: Vec<MeadowItem>,

@@ -231,7 +231,7 @@ pub struct RoadItem {
     pub road: crate::components::Road,
 }
 
-/// One meadow, with its plants grown and placed (M28) — [`WaterItem`]'s
+/// One meadow, with its plants grown and placed (M29) — [`WaterItem`]'s
 /// sibling, separate from [`RenderItem`] for the same reasons and one more: a
 /// meadow is drawn **instanced**, so it is the only draw list whose geometry is
 /// a template plus a placement, rather than a mesh.
@@ -813,7 +813,7 @@ impl Scene {
         items
     }
 
-    /// Flatten the world's meadows into a draw list (M28).
+    /// Flatten the world's meadows into a draw list (M29).
     ///
     /// Takes no [`MeshSource`](crate::mesh::MeshSource) and cannot fail, for
     /// water's reason: the geometry is grown from the component, not loaded.

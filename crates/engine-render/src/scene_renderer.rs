@@ -245,7 +245,7 @@ struct RoadUniform {
 }
 
 /// One life-cycle keyframe as the shader reads it, matching WGSL
-/// `GrowthStageData` (M28).
+/// `GrowthStageData` (M29).
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 struct GrowthStageData {
@@ -258,7 +258,7 @@ struct GrowthStageData {
     tip: [f32; 4],
 }
 
-/// Per-meadow shader data, matching WGSL `MeadowUniform` (M28).
+/// Per-meadow shader data, matching WGSL `MeadowUniform` (M29).
 ///
 /// No model matrix, unlike every other per-object uniform here: a meadow's
 /// instances are placed in world space, because their altitude came off the
@@ -325,7 +325,7 @@ struct CachedMesh {
     last_used: u64,
 }
 
-/// One uploaded meadow, cached across frames (M28).
+/// One uploaded meadow, cached across frames (M29).
 ///
 /// Three buffers rather than two, because a meadow is the one thing in this
 /// engine drawn instanced from geometry of its own: the plant template, its
@@ -676,7 +676,7 @@ pub struct ScenePass<'a> {
     /// Pass `&[]` for a scene with no road, which then issues exactly the draws
     /// it did before roads existed.
     pub roads: &'a [RoadItem],
-    /// Meadows (M28), drawn with the opaque geometry after the roads. Pass
+    /// Meadows (M29), drawn with the opaque geometry after the roads. Pass
     /// `&[]` for a scene with no ground cover, which then issues exactly the
     /// draws it did before meadows existed.
     pub meadows: &'a [MeadowItem],
@@ -744,7 +744,7 @@ pub struct SceneRenderer {
     /// vertex UV — a road's markings are painted from surface coordinates.
     road_pipeline: wgpu::RenderPipeline,
     road_layout: wgpu::BindGroupLayout,
-    /// Meadows (M28): opaque, instanced, double-sided, and the only pipeline
+    /// Meadows (M29): opaque, instanced, double-sided, and the only pipeline
     /// whose vertex stage decides what the geometry *is*.
     meadow_pipeline: wgpu::RenderPipeline,
     meadow_layout: wgpu::BindGroupLayout,
@@ -1372,7 +1372,7 @@ impl SceneRenderer {
             multisample,
         );
 
-        // Meadows (M28): its own uniform, the mesh pass's frame binding, and
+        // Meadows (M29): its own uniform, the mesh pass's frame binding, and
         // the shadow map — grass receives shadows even though it casts none.
         let meadow_layout = uniform_layout(
             "meadow-uniforms",
@@ -2065,7 +2065,7 @@ impl SceneRenderer {
         })
     }
 
-    /// The meadow pass (M28): opaque, depth-writing, and **instanced**.
+    /// The meadow pass (M29): opaque, depth-writing, and **instanced**.
     ///
     /// Two vertex buffers rather than the mesh pass's three, and both are this
     /// pipeline's own: a plant template with channels no `MeshData` has, and a
@@ -4000,7 +4000,7 @@ fn cloud_uniform(item: &CloudItem, view_projection: Mat4, time: f32) -> CloudUni
     }
 }
 
-/// Pack a meadow's clock, wind and life-cycle table for the shader (M28).
+/// Pack a meadow's clock, wind and life-cycle table for the shader (M29).
 ///
 /// The two conversions that happen here rather than in the shader are the file's
 /// units meeting the maths: `lean` and `wind` are authored in degrees and used

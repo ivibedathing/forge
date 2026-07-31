@@ -206,7 +206,7 @@ registry! {
     CLOUD_TOO_COMPLEX = "cloud_too_complex", Input,
         "a Cloud's parameters would generate more vertices than the engine will grow";
 
-    // ── Meadows (M28) ──────────────────────────────────────────────────
+    // ── Meadows (M29) ──────────────────────────────────────────────────
     MEADOW_WITH_MESH = "meadow_with_mesh", Input,
         "a Meadow entity owns its own geometry; it may not also have a Mesh or a Material";
     MEADOW_TOO_COMPLEX = "meadow_too_complex", Input,

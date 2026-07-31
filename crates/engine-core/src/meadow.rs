@@ -1,4 +1,4 @@
-//! Procedural ground cover with a life cycle (M28).
+//! Procedural ground cover with a life cycle (M29).
 //!
 //! A [`Meadow`] component is a recipe, not a mesh reference — M19's premise
 //! again — but it is the first recipe in this engine whose subject **changes

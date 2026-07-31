@@ -434,15 +434,15 @@
       "pinned_by": "cli.rs"
     },
     {
-      "baseline": "examples/scenes/verify/baselines/m28_meadow.png",
-      "scene": "examples/scenes/verify/m28_meadow.json",
+      "baseline": "examples/scenes/verify/baselines/m29_meadow.png",
+      "scene": "examples/scenes/verify/m29_meadow.json",
       "args": [
         "--time",
         "0.7"
       ],
       "width": 640,
       "height": 360,
-      "milestone": "M28",
+      "milestone": "M29",
       "pinned_by": "hand"
     }
   ],
