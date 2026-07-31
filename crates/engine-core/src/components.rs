@@ -2371,6 +2371,311 @@ impl Default for Road {
     }
 }
 
+/// One keyframe of a [`Meadow`]'s life cycle.
+///
+/// All seven fields are required. A half-specified keyframe is an error rather
+/// than a fade to black — M21's palette wrote that rule down, and a meadow's
+/// table is read the same way: linearly interpolated, and **wrapping** from the
+/// last keyframe back round to the first, so the cycle closes without anyone
+/// having to author phase 1.0 as a copy of phase 0.0.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrowthStage {
+    /// Where in the cycle this keyframe sits, `[0, 1)`. Strictly increasing
+    /// down the table (`meadow_stages_invalid`).
+    #[schemars(range(min = 0.0, max = 0.999))]
+    pub at: f32,
+
+    /// Plant height as a fraction of [`Meadow::height`], `>= 0`. `0` is a plant
+    /// that is not there, which is what the seed keyframe says.
+    #[schemars(range(min = 0.0))]
+    pub height: f32,
+
+    /// Blade width as a fraction of [`Meadow::blade_width`], `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub width: f32,
+
+    /// Degrees the plant leans from vertical at its tip. The bend is a
+    /// cantilever — the tip leans this far and the root not at all — so a large
+    /// value at the end of the cycle is the plant collapsing rather than
+    /// tipping over rigidly. `[0, 90]`.
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub lean: f32,
+
+    /// How much of [`Meadow::wind`] reaches the plant at this stage, `>= 0`.
+    ///
+    /// This is what separates green grass that flows from dry stalks that
+    /// stand, and it is nearly free — the wind term is already in the vertex
+    /// stage.
+    #[schemars(range(min = 0.0))]
+    pub sway: f32,
+
+    /// Linear RGB at the plant's base, each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// Linear RGB at the plant's tip, each component `[0, 1]`.
+    ///
+    /// Two colours rather than one because senescence runs tip-downward in real
+    /// grass: a stand going over turns straw at the top while its base is still
+    /// green, and a single flat colour per stage looks painted on.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub tip_color: Vec3,
+}
+
+/// Ground cover that grows, seeds and dies on a loop: grass, weeds, wildflowers
+/// and the dry stand they turn into.
+///
+/// A recipe rather than a mesh reference, like [`Tree`] and [`Cloud`] — the
+/// engine grows one plant and scatters copies of it over the footprint
+/// `Transform.scale` gives, so a `Meadow` entity carries **no** `Mesh` and
+/// **no** `Material` (`meadow_with_mesh`).
+///
+/// **It is the first recipe in this engine whose subject changes shape over
+/// time.** A sprout is not a small blade of grass. The resolution is that the
+/// geometry is static and the *life cycle lives in the vertex stage*: the plant
+/// is built once carrying every organ any stage will need, and each organ scales
+/// to nothing outside the phase window it belongs to. See
+/// `designs/meadow-design.md`.
+///
+/// The cycle runs on the scene clock, so it can be sped up:
+/// [`cycle_length`](Meadow::cycle_length) `: 3.0` runs a whole generation in
+/// three seconds. **`0` — the default — freezes the field** at
+/// [`phase`](Meadow::phase), the way `daylight.day_length: 0` freezes the day:
+/// most scenes want a dial, not motion, and a frozen field is reproducible with
+/// no `--time` at all.
+///
+/// Every generation **reseeds** rather than regrowing: a plant's position within
+/// its own cell, its height and its lean all shift a little each time round, so
+/// the dead stalk and the sprout that replaces it are not collinear. That costs
+/// one integer hash in the shader and no state anywhere.
+///
+/// A meadow is scenery: no `Collider`, no shadow cast (a 2048² map cannot
+/// resolve a blade of grass, and what it would record is noise that crawls),
+/// and no `PointLight` contribution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Meadow {
+    /// Seeds placement and the template's blades. Two meadows with the same
+    /// parameters and different seeds are different fields.
+    ///
+    /// The generator's xorshift and the shader's reseed hash are both written
+    /// out in this repo, so a given seed means the same field across dependency
+    /// upgrades — a meadow render sits under a `diff-render` baseline, which
+    /// makes both a format contract.
+    pub seed: u32,
+
+    /// Plants per square metre of footprint, `>= 0`.
+    ///
+    /// The footprint is `Transform.scale` in XZ, so the plant count is
+    /// `density × area`, rounded up to a square grid. `0` is an empty field,
+    /// which is a legitimate thing to animate toward.
+    #[schemars(range(min = 0.0))]
+    pub density: f32,
+
+    /// Height of a fully grown plant in metres, `> 0`. `Transform.scale.y`
+    /// multiplies it, the way it multiplies a [`Terrain`]'s relief.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub height: f32,
+
+    /// Blades in one plant. `[1, 12]`; `3`–`5` reads as a tuft.
+    #[schemars(range(min = 1, max = 12))]
+    pub blades: u32,
+
+    /// Lengthwise segments per blade — how finely a blade can curve as it leans
+    /// and bends in the wind. `[1, 8]`.
+    ///
+    /// Together with [`blades`](Meadow::blades) this sets the per-plant
+    /// triangle count, and the product with the plant count is what
+    /// `meadow_too_complex` bounds.
+    #[schemars(range(min = 1, max = 8))]
+    pub segments: u32,
+
+    /// Width of a blade at its base, in metres, `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub blade_width: f32,
+
+    /// Degrees the outermost blades splay from vertical, `[0, 90]`. Blade 0
+    /// stays near upright, which is what gives a tuft a centre rather than a
+    /// hole.
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub splay: f32,
+
+    /// Size of the flower and seed heads, in metres, `>= 0`. `0` grows a plant
+    /// that never flowers.
+    #[schemars(range(min = 0.0))]
+    pub head_size: f32,
+
+    /// How much plant height varies between plants, as a fraction, `[0, 1)`.
+    /// `0` is a lawn.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub size_jitter: f32,
+
+    /// Seconds one full life cycle takes, `>= 0`.
+    ///
+    /// **`0` freezes the field** at [`phase`](Meadow::phase) — the default, and
+    /// `daylight.day_length: 0`'s reasoning exactly.
+    #[schemars(range(min = 0.0))]
+    pub cycle_length: f32,
+
+    /// Where the cycle starts, `[0, 1)` — and where a frozen field sits. The
+    /// default is mature green, so `{"type": "Meadow"}` alone puts a working
+    /// field of grass in a scene.
+    #[schemars(range(min = 0.0, max = 0.999))]
+    pub phase: f32,
+
+    /// How far plants desync from each other, `[0, 1]`.
+    ///
+    /// `0` marches the whole field in lockstep; `1` spreads offsets across the
+    /// whole cycle, so every stage is present at every moment and the field
+    /// never appears to change. A real meadow browns together with variation,
+    /// which is why the default is near the low end.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub stagger: f32,
+
+    /// How far the wind bends a plant at full sway, in degrees, `>= 0`. `0` is
+    /// still air.
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub wind: f32,
+
+    /// How fast gusts travel across the field, in metres per second, `>= 0`.
+    ///
+    /// Gusts are a travelling wave, not a per-plant shimmer: sampling the noise
+    /// against a moving coordinate is what makes wind cross a meadow visibly.
+    #[schemars(range(min = 0.0))]
+    pub wind_speed: f32,
+
+    /// Which way the wind blows, in degrees — `0` toward −Z, the engine's
+    /// forward convention, shared with `Water`'s wave directions.
+    pub wind_direction: f32,
+
+    /// Steepest ground grass will grow on, in degrees, `[0, 90]`. Plants on
+    /// steeper ground are dropped; `90` keeps everything.
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub max_slope: f32,
+
+    /// The [`Terrain`] entity this meadow stands on, by name.
+    ///
+    /// Each plant's altitude is sampled from that patch through the same
+    /// function `world.terrain_height` and `engine terrain-height` call, so
+    /// there is one implementation of "where is the ground" and nothing to keep
+    /// in agreement. Absent, the field is flat at the entity's own Y.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terrain: Option<String>,
+
+    /// Linear RGB of the flower head, each component `[0, 1]`. What stops the
+    /// weed stage from being nothing but taller grass.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub flower_color: Vec3,
+
+    /// The life cycle, as keyframes over `phase`. At least two, at most
+    /// [`MAX_GROWTH_STAGES`](crate::meadow::MAX_GROWTH_STAGES), strictly
+    /// increasing in `at`.
+    ///
+    /// The default is the full seed → sprout → grass → weeds → dry → collapse
+    /// cycle, so a meadow is worth looking at before anything is authored.
+    pub stages: Vec<GrowthStage>,
+}
+
+impl Default for Meadow {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            density: 24.0,
+            height: 0.45,
+            blades: 5,
+            segments: 4,
+            blade_width: 0.007,
+            splay: 54.0,
+            head_size: 0.018,
+            size_jitter: 0.35,
+            cycle_length: 0.0,
+            phase: 0.42,
+            stagger: 0.25,
+            wind: 9.0,
+            wind_speed: 3.5,
+            wind_direction: 0.0,
+            max_slope: 38.0,
+            terrain: None,
+            flower_color: Vec3::new(0.40, 0.37, 0.17),
+            stages: Meadow::default_stages(),
+        }
+    }
+}
+
+impl Meadow {
+    /// The default life cycle: six keyframes from bare ground back to bare
+    /// ground, in linear RGB.
+    ///
+    /// The table wraps, so there is no phase-1.0 entry — the collapse keyframe
+    /// interpolates round to the seed keyframe on its own.
+    pub fn default_stages() -> Vec<GrowthStage> {
+        vec![
+            // Seed: nothing above ground.
+            GrowthStage {
+                at: 0.0,
+                height: 0.0,
+                width: 0.5,
+                lean: 0.0,
+                sway: 0.0,
+                color: Vec3::new(0.13, 0.10, 0.05),
+                tip_color: Vec3::new(0.16, 0.13, 0.07),
+            },
+            // Sprout: short, soft, and the bright yellow-green of new growth.
+            GrowthStage {
+                at: 0.09,
+                height: 0.16,
+                width: 0.7,
+                lean: 10.0,
+                sway: 0.5,
+                color: Vec3::new(0.16, 0.34, 0.07),
+                tip_color: Vec3::new(0.31, 0.55, 0.13),
+            },
+            // Grass: full height, saturated, moving.
+            GrowthStage {
+                at: 0.31,
+                height: 0.86,
+                width: 1.0,
+                lean: 17.0,
+                sway: 1.0,
+                color: Vec3::new(0.06, 0.19, 0.04),
+                tip_color: Vec3::new(0.17, 0.40, 0.09),
+            },
+            // Weeds: the tallest and coarsest it gets, flower heads open,
+            // colour drifting olive.
+            GrowthStage {
+                at: 0.53,
+                height: 1.0,
+                width: 1.05,
+                lean: 21.0,
+                sway: 0.9,
+                color: Vec3::new(0.09, 0.20, 0.05),
+                tip_color: Vec3::new(0.30, 0.36, 0.10),
+            },
+            // Dry: standing straw, stiff, seed heads out.
+            GrowthStage {
+                at: 0.76,
+                height: 0.95,
+                width: 0.92,
+                lean: 27.0,
+                sway: 0.4,
+                color: Vec3::new(0.22, 0.18, 0.07),
+                tip_color: Vec3::new(0.62, 0.51, 0.19),
+            },
+            // Collapse: gone over, grey-brown, on its way back into the ground.
+            GrowthStage {
+                at: 0.91,
+                height: 0.62,
+                width: 0.8,
+                lean: 71.0,
+                sway: 0.25,
+                color: Vec3::new(0.14, 0.11, 0.06),
+                tip_color: Vec3::new(0.26, 0.21, 0.11),
+            },
+        ]
+    }
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -2446,6 +2751,7 @@ components!(
     Cloud,
     Terrain,
     Road,
+    Meadow,
 );
 
 #[cfg(test)]
@@ -2542,7 +2848,8 @@ mod tests {
                 "Water",
                 "Cloud",
                 "Terrain",
-                "Road"
+                "Road",
+                "Meadow"
             ]
         );
     }

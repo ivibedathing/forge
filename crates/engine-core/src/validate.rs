@@ -136,6 +136,11 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     let mut distinct_layers: Vec<(String, String)> = Vec::new();
     // Wheel pass inputs (M12): checked cross-entity once names are known.
     let mut wheels: Vec<(String, crate::components::Wheel, String)> = Vec::new();
+    // Meadow pass inputs (M29): a meadow names the Terrain it stands on, which
+    // is another entity, so the check waits until every name is known — the
+    // wheel pass's shape.
+    let mut meadows: Vec<(String, crate::components::Meadow, String)> = Vec::new();
+    let mut terrain_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for (entity_index, entity) in entities.iter().enumerate() {
         let entity_path = format!("/entities/{entity_index}");
@@ -252,10 +257,12 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut water: Option<(crate::components::Water, String)> = None;
         let mut terrain: Option<(crate::components::Terrain, String)> = None;
         let mut road: Option<(crate::components::Road, String)> = None;
+        let mut meadow: Option<(crate::components::Meadow, String)> = None;
 
         for (component_index, component) in components.iter().enumerate() {
             let component_path = format!("{entity_path}/components/{component_index}");
-            let checked = check_component(&cx, &schemas, component, name, &component_path, &mut errors);
+            let checked =
+                check_component(&cx, &schemas, component, name, &component_path, &mut errors);
 
             let Some(type_name) = checked.type_name else {
                 continue;
@@ -334,10 +341,15 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     cloud_path = Some(component_path);
                 }
                 Some(ComponentData::Terrain(t)) => {
+                    terrain_names.insert(name.to_string());
                     terrain = Some((t, component_path));
                 }
                 Some(ComponentData::Road(r)) => {
                     road = Some((r, component_path));
+                }
+                Some(ComponentData::Meadow(m)) => {
+                    meadows.push((name.to_string(), m.clone(), component_path.clone()));
+                    meadow = Some((m, component_path));
                 }
                 _ => {}
             }
@@ -738,17 +750,71 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             }
         }
 
+        // ── Meadow checks (M29) ──────────────────────────────────────────
+        if let Some((meadow, path)) = &meadow {
+            // Same rule as every other recipe: the component grows the entity's
+            // geometry and carries its own colours, so a Mesh or Material beside
+            // it is a second, silently ignored answer to what this entity is.
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::MEADOW_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a Meadow component and also {extras}; \
+                             a meadow grows its own plants (over the footprint \
+                             Transform.scale gives) and carries its own colours in its \
+                             stages — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Meadow"),
+                );
+            }
+
+            // Refused before anything is allocated, because a hung render with
+            // no output is the worst failure an agent loop can hit — M19's rule,
+            // counted here in triangles because a meadow's cost is the *product*
+            // of its plant count and its template (see `MAX_MEADOW_TRIANGLES`).
+            let triangles = crate::meadow::triangle_count(meadow, scale.x, scale.z);
+            if triangles > crate::meadow::MAX_MEADOW_TRIANGLES {
+                let plants = crate::meadow::plant_count(meadow, scale.x, scale.z);
+                errors.push(
+                    cx.err(
+                        codes::MEADOW_TOO_COMPLEX,
+                        format!(
+                            "entity {name:?} would grow {plants} plants of \
+                             {} triangles each ({triangles} total), over the limit of {}; \
+                             reduce density, the footprint, blades or segments",
+                            triangles / plants.max(1),
+                            crate::meadow::MAX_MEADOW_TRIANGLES
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Meadow")
+                    .field("density"),
+                );
+            }
+        }
+
         // Legal but almost certainly wrong: dead data from editing the wrong
         // entity. A warning, because rendering it is well-defined. A `Tree`
         // counts as geometry here — the entity's Material is its bark. A Water,
-        // Cloud or Road entity's Material is already a hard error above, so it
-        // does not also collect this: one mistake, one diagnostic.
+        // Cloud, Road or Meadow entity's Material is already a hard error above,
+        // so it does not also collect this: one mistake, one diagnostic.
         if !has_mesh
             && tree_path.is_none()
             && water.is_none()
             && cloud_path.is_none()
             && terrain.is_none()
             && road.is_none()
+            && meadow.is_none()
         {
             for material_path in material_paths {
                 errors.push(
@@ -985,6 +1051,51 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         }
     }
 
+    // ── Meadow pass (M29): the ground a meadow names must be a Terrain ──
+    //
+    // A name that resolves to nothing, or to an entity with no `Terrain`, would
+    // otherwise silently fall back to flat ground at the meadow's own Y — grass
+    // hovering over a hillside, with nothing in the file or the render saying
+    // why. The wheel pass's shape, and its reasoning.
+    for (owner, meadow, meadow_component_path) in &meadows {
+        let Some(ground) = &meadow.terrain else {
+            continue;
+        };
+        let terrain_path = format!("{meadow_component_path}/terrain");
+        if !seen_names.contains(&ground.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::MEADOW_TERRAIN_NOT_FOUND,
+                    format!(
+                        "the Meadow on {owner:?} names terrain {ground:?}, which is \
+                         not an entity in this scene"
+                    ),
+                    &terrain_path,
+                )
+                .entity(owner)
+                .component("Meadow")
+                .field("terrain")
+                .suggest_from(ground, seen_names.iter().copied()),
+            );
+        } else if !terrain_names.contains(ground.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::MEADOW_TERRAIN_INVALID,
+                    format!(
+                        "the Meadow on {owner:?} names terrain {ground:?}, but that \
+                         entity has no Terrain component; a meadow samples its \
+                         ground height from a Terrain patch, so the name must be one"
+                    ),
+                    &terrain_path,
+                )
+                .entity(owner)
+                .component("Meadow")
+                .field("terrain")
+                .suggest_from(ground, terrain_names.iter().map(String::as_str)),
+            );
+        }
+    }
+
     // ── Animation pass (M9): clip contents, target entities, conflicts ─
     // Runs against the same scene the players sit in; clip-content errors
     // carry the *clip's* file/line via its own LineIndex.
@@ -992,9 +1103,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     let mut claimed: std::collections::HashMap<(String, String), String> =
         std::collections::HashMap::new();
     for (player_entity, player, player_path) in &players {
-        if player.clip.contains('#')
-            || Path::new(&player.clip).is_absolute()
-        {
+        if player.clip.contains('#') || Path::new(&player.clip).is_absolute() {
             continue; // Already reported by the component check.
         }
         let clip_path = base_dir.join(&player.clip);
@@ -1062,8 +1171,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             // dynamic body is a contradiction (who wins?); kinematic bodies
             // are exactly the "animation drives, physics follows" case.
             if track.property.starts_with("Transform.")
-                && body_kinds.get(&track.entity)
-                    == Some(&crate::components::BodyKind::Dynamic)
+                && body_kinds.get(&track.entity) == Some(&crate::components::BodyKind::Dynamic)
             {
                 errors.push(
                     cx.err(
@@ -1124,7 +1232,10 @@ impl ComponentSchemas {
     /// Look through a `$ref` to the schema's `$defs` (schemars refs shared
     /// types like enums). Non-ref schemas come back unchanged.
     fn resolve<'a>(&'a self, property: &'a Value) -> &'a Value {
-        match property["$ref"].as_str().and_then(|r| r.strip_prefix("#/$defs/")) {
+        match property["$ref"]
+            .as_str()
+            .and_then(|r| r.strip_prefix("#/$defs/"))
+        {
             Some(name) => &self.schema["$defs"][name],
             None => property,
         }
@@ -1151,7 +1262,9 @@ impl Cx<'_> {
     /// attached. The pointer is what the validator walked to get here; keeping
     /// it costs nothing and makes the fix `jq`-addressable.
     fn err(&self, code: &'static str, message: String, json_path: &str) -> EngineError {
-        let error = EngineError::new(code, message).file(self.file).path(json_path);
+        let error = EngineError::new(code, message)
+            .file(self.file)
+            .path(json_path);
         match self.index.line_of_or_parent(json_path) {
             Some(line) => error.line(line),
             None => error,
@@ -1217,7 +1330,10 @@ pub fn validate_material_source(source: &str, path: &str) -> Vec<EngineError> {
     let Some(object) = root.as_object() else {
         errors.push(cx.err(
             codes::COMPONENT_NOT_OBJECT,
-            format!("a material file must be a JSON object, found {}", kind_of(&root)),
+            format!(
+                "a material file must be a JSON object, found {}",
+                kind_of(&root)
+            ),
             "",
         ));
         return errors;
@@ -1249,16 +1365,24 @@ pub fn validate_material_source(source: &str, path: &str) -> Vec<EngineError> {
 
     let mut filtered = object.clone();
     filtered.remove("asset");
-    let clean =
-        walk_component(&cx, &schemas, variant, &filtered, "Material", "", "", &mut errors);
+    let clean = walk_component(
+        &cx,
+        &schemas,
+        variant,
+        &filtered,
+        "Material",
+        "",
+        "",
+        &mut errors,
+    );
 
     // Its texture references, resolved against **the material file's own
     // directory** — that is what lets one material be named by scenes in
     // different places and still find its maps.
     if clean {
-        if let Ok(material) = serde_json::from_value::<crate::components::Material>(
-            Value::Object(filtered),
-        ) {
+        if let Ok(material) =
+            serde_json::from_value::<crate::components::Material>(Value::Object(filtered))
+        {
             let base_dir = Path::new(path).parent().unwrap_or(Path::new(""));
             for (field, asset, _) in material.maps() {
                 if let Err(resolve) = crate::texture::resolve_texture(asset, base_dir) {
@@ -1266,8 +1390,7 @@ pub fn validate_material_source(source: &str, path: &str) -> Vec<EngineError> {
                         .err(resolve.error, resolve.message.clone(), &format!("/{field}"))
                         .component("Material")
                         .field(field);
-                    if let Some(suggestion) =
-                        resolve.context().and_then(|c| c.did_you_mean.clone())
+                    if let Some(suggestion) = resolve.context().and_then(|c| c.did_you_mean.clone())
                     {
                         error = error.did_you_mean(suggestion);
                     }
@@ -1346,8 +1469,16 @@ fn check_component(
         return Checked::named(type_name);
     };
 
-    let shape_clean =
-        walk_component(cx, schemas, variant, object, type_name, entity, component_path, errors);
+    let shape_clean = walk_component(
+        cx,
+        schemas,
+        variant,
+        object,
+        type_name,
+        entity,
+        component_path,
+        errors,
+    );
     if !shape_clean {
         // Field names or JSON types are wrong; serde would reject this
         // component, so parsing and the semantic checks below are moot.
@@ -1536,8 +1667,7 @@ fn check_component(
                         .entity(entity)
                         .component("Material")
                         .field(field);
-                    if let Some(suggestion) =
-                        resolve.context().and_then(|c| c.did_you_mean.clone())
+                    if let Some(suggestion) = resolve.context().and_then(|c| c.did_you_mean.clone())
                     {
                         error = error.did_you_mean(suggestion);
                     }
@@ -1593,14 +1723,10 @@ fn check_component(
                         }
                     };
                     errors.push(
-                        cx.err(
-                            code,
-                            message,
-                            &format!("{component_path}/points/{index}"),
-                        )
-                        .entity(entity)
-                        .component("Road")
-                        .field("points"),
+                        cx.err(code, message, &format!("{component_path}/points/{index}"))
+                            .entity(entity)
+                            .component("Road")
+                            .field("points"),
                     );
                 }
             }
@@ -1846,6 +1972,68 @@ fn check_component(
             }
         }
 
+        // The life-cycle table (M29). The keyframes are read by interpolating
+        // between neighbours and wrapping from the last back to the first, so
+        // an out-of-order or too-short table does not fail loudly at render
+        // time — it silently plays the cycle backwards through part of itself,
+        // which reads as a renderer bug. `daylight_palette_invalid`'s reasoning
+        // and its shape.
+        ComponentData::Meadow(ref meadow) => {
+            if meadow.stages.len() < 2 {
+                errors.push(
+                    cx.err(
+                        codes::MEADOW_STAGES_INVALID,
+                        format!(
+                            "this Meadow has {} life-cycle stage(s); it needs at \
+                             least two to interpolate between, and the table wraps \
+                             from the last back round to the first",
+                            meadow.stages.len()
+                        ),
+                        &format!("{component_path}/stages"),
+                    )
+                    .entity(entity)
+                    .component("Meadow")
+                    .field("stages"),
+                );
+            } else if meadow.stages.len() > crate::meadow::MAX_GROWTH_STAGES {
+                errors.push(
+                    cx.err(
+                        codes::TOO_MANY_GROWTH_STAGES,
+                        format!(
+                            "this Meadow has {} life-cycle stages; the shader's table \
+                             is a fixed-size uniform array holding {}",
+                            meadow.stages.len(),
+                            crate::meadow::MAX_GROWTH_STAGES
+                        ),
+                        &format!("{component_path}/stages"),
+                    )
+                    .entity(entity)
+                    .component("Meadow")
+                    .field("stages"),
+                );
+            }
+
+            for pair in meadow.stages.windows(2) {
+                if !(pair[1].at > pair[0].at) {
+                    errors.push(
+                        cx.err(
+                            codes::MEADOW_STAGES_INVALID,
+                            format!(
+                                "this Meadow's stages run {} then {}; \"at\" must \
+                                 strictly increase down the table",
+                                pair[0].at, pair[1].at
+                            ),
+                            &format!("{component_path}/stages"),
+                        )
+                        .entity(entity)
+                        .component("Meadow")
+                        .field("stages"),
+                    );
+                    break;
+                }
+            }
+        }
+
         // Fragment mesh references resolve like `Mesh.asset` (existence,
         // extension, relative path); fragment collider dimensions are
         // strictly positive like a Collider's.
@@ -1863,8 +2051,7 @@ fn check_component(
                         .entity(entity)
                         .component("Breakable")
                         .field("mesh");
-                    if let Some(suggestion) =
-                        resolve.context().and_then(|c| c.did_you_mean.clone())
+                    if let Some(suggestion) = resolve.context().and_then(|c| c.did_you_mean.clone())
                     {
                         error = error.did_you_mean(suggestion);
                     }
@@ -2032,7 +2219,10 @@ fn walk_component(
             .field(key)
             .suggest_from(
                 key,
-                properties.keys().map(String::as_str).filter(|k| *k != "type"),
+                properties
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|k| *k != "type"),
             ),
         );
     }
@@ -2064,8 +2254,17 @@ fn walk_component(
         };
         let property = schemas.resolve(property);
         let field_path = format!("{component_path}/{key}");
-        shape_clean &=
-            check_value(cx, schemas, property, value, type_name, entity, key, &field_path, errors);
+        shape_clean &= check_value(
+            cx,
+            schemas,
+            property,
+            value,
+            type_name,
+            entity,
+            key,
+            &field_path,
+            errors,
+        );
     }
 
     shape_clean
@@ -2097,7 +2296,10 @@ fn enum_values(schema: &Value) -> Option<Vec<&str>> {
         return Some(values.iter().filter_map(Value::as_str).collect());
     }
     if let Some(variants) = schema["oneOf"].as_array() {
-        let consts: Vec<&str> = variants.iter().filter_map(|v| v["const"].as_str()).collect();
+        let consts: Vec<&str> = variants
+            .iter()
+            .filter_map(|v| v["const"].as_str())
+            .collect();
         if !consts.is_empty() && consts.len() == variants.len() {
             return Some(consts);
         }
@@ -2136,7 +2338,9 @@ fn check_value(
                 );
                 return false;
             };
-            check_bounds(cx, schema, number, component, entity, field, field, json_path, errors);
+            check_bounds(
+                cx, schema, number, component, entity, field, field, json_path, errors,
+            );
             true
         }
 
@@ -2145,9 +2349,7 @@ fn check_value(
             // "number": serde rejects fractions and out-of-format values, so
             // the walk must too — reporting them as shape errors, or the
             // final serde gate would fire `scene_parse_desync` on them.
-            let integral = value
-                .as_number()
-                .is_some_and(|n| n.is_u64() || n.is_i64());
+            let integral = value.as_number().is_some_and(|n| n.is_u64() || n.is_i64());
             if !integral {
                 errors.push(
                     cx.wrong_type(field, "integer", value, json_path)
@@ -2175,7 +2377,9 @@ fn check_value(
                 return false;
             }
             let number = value.as_number().expect("checked above");
-            check_bounds(cx, schema, number, component, entity, field, field, json_path, errors);
+            check_bounds(
+                cx, schema, number, component, entity, field, field, json_path, errors,
+            );
             true
         }
 
@@ -2306,7 +2510,14 @@ fn check_value(
                     };
                     let label = format!("{field}[{i}]");
                     check_bounds(
-                        cx, item_schema, number, component, entity, field, &label, &item_path,
+                        cx,
+                        item_schema,
+                        number,
+                        component,
+                        entity,
+                        field,
+                        &label,
+                        &item_path,
                         errors,
                     );
                 } else if item_schema["type"].as_str() == Some("object") {
@@ -2314,7 +2525,14 @@ fn check_value(
                     // bad fragment is a located walk error rather than a
                     // serde rejection masquerading as scene_parse_desync.
                     clean &= check_value(
-                        cx, schemas, item_schema, item, component, entity, field, &item_path,
+                        cx,
+                        schemas,
+                        item_schema,
+                        item,
+                        component,
+                        entity,
+                        field,
+                        &item_path,
                         errors,
                     );
                 }
@@ -2515,9 +2733,7 @@ fn check_physics_block(cx: &Cx<'_>, physics: &Value, errors: &mut Vec<EngineErro
             errors.push(
                 cx.err(
                     codes::INVALID_PHYSICS_VALUE,
-                    format!(
-                        "physics.timestep_hz is {hz}; it must be an integer of at least 1"
-                    ),
+                    format!("physics.timestep_hz is {hz}; it must be an integer of at least 1"),
                     "/physics/timestep_hz",
                 )
                 .field("timestep_hz"),
@@ -2692,11 +2908,46 @@ fn check_daylight_block(
     // (field, low, high, low is exclusive, high is exclusive, prose)
     let ranges: [(&str, f64, f64, bool, bool, &str); 6] = [
         ("time_of_day", 0.0, 24.0, false, true, "hours in [0, 24)"),
-        ("day_length", 0.0, f64::INFINITY, false, false, "a number >= 0"),
-        ("sun_elevation", 0.0, 90.0, true, false, "degrees in (0, 90]"),
-        ("sun_azimuth", f64::NEG_INFINITY, f64::INFINITY, false, false, "a finite number of degrees"),
-        ("moon_elevation", 0.0, 90.0, true, false, "degrees in (0, 90]"),
-        ("moon_intensity", 0.0, f64::INFINITY, false, false, "a number >= 0"),
+        (
+            "day_length",
+            0.0,
+            f64::INFINITY,
+            false,
+            false,
+            "a number >= 0",
+        ),
+        (
+            "sun_elevation",
+            0.0,
+            90.0,
+            true,
+            false,
+            "degrees in (0, 90]",
+        ),
+        (
+            "sun_azimuth",
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            false,
+            false,
+            "a finite number of degrees",
+        ),
+        (
+            "moon_elevation",
+            0.0,
+            90.0,
+            true,
+            false,
+            "degrees in (0, 90]",
+        ),
+        (
+            "moon_intensity",
+            0.0,
+            f64::INFINITY,
+            false,
+            false,
+            "a number >= 0",
+        ),
     ];
 
     for (name, low, high, low_exclusive, high_exclusive, prose) in ranges {
@@ -2721,7 +2972,14 @@ fn check_daylight_block(
     }
 
     if let Some(color) = object.get("moon_color") {
-        check_daylight_color(cx, color, "moon_color", "/daylight/moon_color", true, errors);
+        check_daylight_color(
+            cx,
+            color,
+            "moon_color",
+            "/daylight/moon_color",
+            true,
+            errors,
+        );
     }
 
     if let Some(palette) = object.get("palette") {
@@ -3123,7 +3381,11 @@ mod tests {
         let errors = validate_source(source, "test.json");
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].error, "invalid_field_type");
-        assert!(errors[0].message.contains("exactly 3"), "{}", errors[0].message);
+        assert!(
+            errors[0].message.contains("exactly 3"),
+            "{}",
+            errors[0].message
+        );
     }
 
     #[test]
@@ -3212,7 +3474,11 @@ mod tests {
         let errors = validate_source(both, &scene_path);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].error, "material_asset_with_fields");
-        assert!(errors[0].message.contains("roughness"), "{}", errors[0].message);
+        assert!(
+            errors[0].message.contains("roughness"),
+            "{}",
+            errors[0].message
+        );
 
         // A missing file is reported at the *scene's* line; a malformed one
         // carries the material file's own (M9's clip precedent).
@@ -3223,7 +3489,10 @@ mod tests {
         ]}"#;
         let errors = validate_source(missing, &scene_path);
         assert_eq!(errors[0].error, "asset_not_found");
-        assert_eq!(errors[0].context().unwrap().file.as_deref(), Some(scene_path.as_str()));
+        assert_eq!(
+            errors[0].context().unwrap().file.as_deref(),
+            Some(scene_path.as_str())
+        );
 
         std::fs::write(
             dir.join("materials/broken.json"),
@@ -3281,7 +3550,10 @@ mod tests {
         let errors = validate_source(source, "test.json");
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].error, "asset_not_found");
-        assert_eq!(errors[0].context().unwrap().field.as_deref(), Some("albedo_map"));
+        assert_eq!(
+            errors[0].context().unwrap().field.as_deref(),
+            Some("albedo_map")
+        );
 
         let wrong_format = r#"{"name":"s","entities":[
             {"name":"Cube1","components":[
@@ -3475,7 +3747,9 @@ mod tests {
             .map(|e| e.message.as_str())
             .collect();
         assert_eq!(albedo_messages.len(), 2, "both bad channels reported");
-        assert!(albedo_messages.iter().any(|m| m.contains("albedo[0] is 1.5")));
+        assert!(albedo_messages
+            .iter()
+            .any(|m| m.contains("albedo[0] is 1.5")));
         assert!(
             albedo_messages
                 .iter()
@@ -3485,8 +3759,10 @@ mod tests {
 
         assert!(out_of_range
             .iter()
-            .any(|e| e.context().unwrap().field.as_deref() == Some("intensity")
-                && e.message.contains("at least 0")));
+            .any(
+                |e| e.context().unwrap().field.as_deref() == Some("intensity")
+                    && e.message.contains("at least 0")
+            ));
     }
 
     #[test]
@@ -3505,10 +3781,8 @@ mod tests {
             .collect();
         assert_eq!(ranges.len(), 3, "{errors:?}");
 
-        assert!(ranges
-            .iter()
-            .any(|e| e.message.contains("fov is 0")
-                && e.message.contains("greater than 0 and less than 180")));
+        assert!(ranges.iter().any(|e| e.message.contains("fov is 0")
+            && e.message.contains("greater than 0 and less than 180")));
         assert!(ranges
             .iter()
             .any(|e| e.message.contains("near is -1") && e.message.contains("greater than 0")));
@@ -3628,7 +3902,11 @@ mod tests {
 
     #[test]
     fn accepts_a_valid_physics_scene() {
-        assert!(codes_of(PHYSICS_VALID).is_empty(), "{:?}", validate_source(PHYSICS_VALID, "t"));
+        assert!(
+            codes_of(PHYSICS_VALID).is_empty(),
+            "{:?}",
+            validate_source(PHYSICS_VALID, "t")
+        );
     }
 
     #[test]
@@ -3642,11 +3920,20 @@ mod tests {
         ]}"#;
         let errors = validate_source(source, "test.json");
 
-        let body = errors.iter().find(|e| e.error == "unknown_body_kind").unwrap();
-        assert_eq!(body.context().unwrap().did_you_mean.as_deref(), Some("dynamic"));
+        let body = errors
+            .iter()
+            .find(|e| e.error == "unknown_body_kind")
+            .unwrap();
+        assert_eq!(
+            body.context().unwrap().did_you_mean.as_deref(),
+            Some("dynamic")
+        );
 
         let shape = errors.iter().find(|e| e.error == "unknown_shape").unwrap();
-        assert_eq!(shape.context().unwrap().did_you_mean.as_deref(), Some("cuboid"));
+        assert_eq!(
+            shape.context().unwrap().did_you_mean.as_deref(),
+            Some("cuboid")
+        );
     }
 
     #[test]
@@ -3669,7 +3956,10 @@ mod tests {
             .find(|e| e.context().and_then(|c| c.field.as_deref()) == Some("anchor"))
             .unwrap();
         assert_eq!(anchor.error, "invalid_field_type");
-        assert_eq!(anchor.context().unwrap().did_you_mean.as_deref(), Some("top_left"));
+        assert_eq!(
+            anchor.context().unwrap().did_you_mean.as_deref(),
+            Some("top_left")
+        );
 
         let range_fields: Vec<&str> = errors
             .iter()
@@ -3688,7 +3978,11 @@ mod tests {
             {"name":"Label","components":[{"type":"HudText","text":"HI","anchor":"bottom_right"}]},
             {"name":"Bar","components":[{"type":"HudRect","size":[0.0,0.0]}]}
         ]}"#;
-        assert!(validate_source(valid, "t").is_empty(), "{:?}", validate_source(valid, "t"));
+        assert!(
+            validate_source(valid, "t").is_empty(),
+            "{:?}",
+            validate_source(valid, "t")
+        );
     }
 
     #[test]
@@ -3701,7 +3995,10 @@ mod tests {
         let errors = validate_source(source, "test.json");
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].error, "missing_collider");
-        assert_eq!(errors[0].context().unwrap().entity.as_deref(), Some("Faller"));
+        assert_eq!(
+            errors[0].context().unwrap().entity.as_deref(),
+            Some("Faller")
+        );
     }
 
     #[test]
@@ -3784,8 +4081,11 @@ mod tests {
         assert_eq!(codes_of(&armored), ["wheel_with_physics"]);
 
         // And it needs a Transform for physics to write the pose into.
-        let bare = good.replace(r#"{"type":"Transform"},
-                {"type":"Wheel""#, r#"{"type":"Wheel""#);
+        let bare = good.replace(
+            r#"{"type":"Transform"},
+                {"type":"Wheel""#,
+            r#"{"type":"Wheel""#,
+        );
         assert_eq!(codes_of(&bare), ["missing_transform"]);
     }
 
@@ -3849,7 +4149,10 @@ mod tests {
         let errors = validate_source(source, "test.json");
         let codes: Vec<&str> = errors.iter().map(|e| e.error).collect();
         // Sphere: missing radius AND stray half_extents; cuboid: missing half_extents.
-        assert!(codes.iter().filter(|c| **c == "missing_field").count() == 2, "{errors:?}");
+        assert!(
+            codes.iter().filter(|c| **c == "missing_field").count() == 2,
+            "{errors:?}"
+        );
         assert!(codes.contains(&"shape_field_mismatch"), "{errors:?}");
     }
 
@@ -3867,7 +4170,10 @@ mod tests {
         ]}"#;
         let codes = codes_of(source);
         assert_eq!(
-            codes.iter().filter(|c| **c == "invalid_shape_dimension").count(),
+            codes
+                .iter()
+                .filter(|c| **c == "invalid_shape_dimension")
+                .count(),
             2,
             "{codes:?}"
         );
@@ -3916,7 +4222,10 @@ mod tests {
         let errors = validate_source(source, "test.json");
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].error, "unknown_field");
-        assert_eq!(errors[0].context().unwrap().did_you_mean.as_deref(), Some("offset"));
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("offset")
+        );
         assert_eq!(
             errors[0].context().unwrap().path.as_deref(),
             Some("/entities/0/components/1/fragments/0/ofset")
@@ -3945,7 +4254,10 @@ mod tests {
         let errors = validate_source(source, "test.json");
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].error, "asset_not_found");
-        assert_eq!(errors[0].context().unwrap().did_you_mean.as_deref(), Some("builtin:cube"));
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("builtin:cube")
+        );
         assert_eq!(
             errors[0].context().unwrap().path.as_deref(),
             Some("/entities/0/components/1/fragments/0/mesh")
@@ -3986,7 +4298,6 @@ mod tests {
         ]}"#;
         assert!(validate_source(source, "test.json").is_empty());
     }
-
 
     /// The road's half of the "a generated surface is one source of truth"
     /// rule, matching water's.
@@ -4238,17 +4549,16 @@ mod tests {
     #[test]
     fn daylight_values_are_range_checked() {
         for (field, value) in [
-            ("time_of_day", "24.0"),   // the hour is [0, 24), open at the top
+            ("time_of_day", "24.0"), // the hour is [0, 24), open at the top
             ("time_of_day", "-1.0"),
             ("day_length", "-5.0"),
-            ("sun_elevation", "0.0"),  // (0, 90]: a sun that never rises
+            ("sun_elevation", "0.0"), // (0, 90]: a sun that never rises
             ("sun_elevation", "91.0"),
             ("moon_elevation", "0.0"),
             ("moon_intensity", "-0.1"),
         ] {
-            let source = format!(
-                r#"{{"name":"s","daylight":{{"{field}":{value}}},"entities":[]}}"#
-            );
+            let source =
+                format!(r#"{{"name":"s","daylight":{{"{field}":{value}}},"entities":[]}}"#);
             assert_eq!(
                 codes_of(&source),
                 ["invalid_daylight_value"],
@@ -4406,7 +4716,10 @@ mod tests {
         ]}"#;
         assert_eq!(
             codes_of(both),
-            ["terrain_layer_range_inverted", "terrain_layer_range_inverted"]
+            [
+                "terrain_layer_range_inverted",
+                "terrain_layer_range_inverted"
+            ]
         );
     }
 
@@ -4507,7 +4820,10 @@ mod tests {
         let source = r#"{"name":"s","physics":{"gravty":[0,-9.81,0]},"entities":[]}"#;
         let errors = validate_source(source, "test.json");
         assert_eq!(errors[0].error, "unknown_field");
-        assert_eq!(errors[0].context().unwrap().did_you_mean.as_deref(), Some("gravity"));
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("gravity")
+        );
     }
 
     #[test]
@@ -4652,7 +4968,11 @@ mod tests {
                 {"type":"Collider","shape":"trimesh"}
             ]}
         ]}"#;
-        assert!(codes_of(borrowing).is_empty(), "{:?}", validate_source(borrowing, "t"));
+        assert!(
+            codes_of(borrowing).is_empty(),
+            "{:?}",
+            validate_source(borrowing, "t")
+        );
 
         // Trimesh with an explicit asset and no Mesh: also valid.
         let explicit = r#"{"name":"s","entities":[
@@ -4661,7 +4981,11 @@ mod tests {
                 {"type":"Collider","shape":"trimesh","asset":"builtin:plane"}
             ]}
         ]}"#;
-        assert!(codes_of(explicit).is_empty(), "{:?}", validate_source(explicit, "t"));
+        assert!(
+            codes_of(explicit).is_empty(),
+            "{:?}",
+            validate_source(explicit, "t")
+        );
 
         // Neither: there is no geometry to collide.
         let neither = r#"{"name":"s","entities":[
@@ -4686,7 +5010,11 @@ mod tests {
 
         // convex_hull is the supported dynamic mesh shape.
         let hull = source.replace("trimesh", "convex_hull");
-        assert!(codes_of(&hull).is_empty(), "{:?}", validate_source(&hull, "t"));
+        assert!(
+            codes_of(&hull).is_empty(),
+            "{:?}",
+            validate_source(&hull, "t")
+        );
     }
 
     #[test]
@@ -4705,7 +5033,10 @@ mod tests {
         let errors = validate_source(source, "test.json");
         let codes: Vec<&str> = errors.iter().map(|e| e.error).collect();
         assert!(codes.contains(&"shape_field_mismatch"), "{errors:?}");
-        let bad_ref = errors.iter().find(|e| e.error == "asset_not_found").unwrap();
+        let bad_ref = errors
+            .iter()
+            .find(|e| e.error == "asset_not_found")
+            .unwrap();
         assert_eq!(
             bad_ref.context().unwrap().did_you_mean.as_deref(),
             Some("builtin:cube")
@@ -4729,8 +5060,14 @@ mod tests {
         let errors = validate_source(source, "test.json");
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].error, "unknown_collision_layer");
-        assert!(errors[0].is_warning(), "a typo'd reference still simulates, so: warning");
-        assert_eq!(errors[0].context().unwrap().did_you_mean.as_deref(), Some("ground"));
+        assert!(
+            errors[0].is_warning(),
+            "a typo'd reference still simulates, so: warning"
+        );
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("ground")
+        );
     }
 
     #[test]
@@ -4773,6 +5110,10 @@ mod tests {
                  "layers":["player"],"collides_with":["ground"]}
             ]}
         ]}"#;
-        assert!(codes_of(source).is_empty(), "{:?}", validate_source(source, "t"));
+        assert!(
+            codes_of(source).is_empty(),
+            "{:?}",
+            validate_source(source, "t")
+        );
     }
 }

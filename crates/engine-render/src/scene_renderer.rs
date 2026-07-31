@@ -27,11 +27,12 @@ use std::sync::Arc;
 
 use engine_core::components::{Camera, ParticleBlend, Terrain, Water, MAX_POINT_LIGHTS};
 use engine_core::math::{Mat4, Vec3};
+use engine_core::meadow::MAX_GROWTH_STAGES;
 use engine_core::mesh::MeshData;
 use engine_core::particles::ParticleInstance;
 use engine_core::road::MAX_ROAD_KERBS;
 use engine_core::scene::{
-    CloudItem, EnvironmentSettings, RenderItem, ResolvedLights, RoadItem, WaterItem,
+    CloudItem, EnvironmentSettings, MeadowItem, RenderItem, ResolvedLights, RoadItem, WaterItem,
 };
 use engine_core::terrain::MAX_TERRAIN_LAYERS;
 use engine_core::water::MAX_WAVES;
@@ -243,6 +244,41 @@ struct RoadUniform {
     kerbs: [[f32; 4]; MAX_ROAD_KERBS],
 }
 
+/// One life-cycle keyframe as the shader reads it, matching WGSL
+/// `GrowthStageData` (M29).
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct GrowthStageData {
+    /// x = at, y = height fraction, z = width fraction, w = lean in **radians**
+    /// (the file authors degrees; the conversion happens once, here).
+    shape: [f32; 4],
+    /// rgb = colour at the plant's base, w = sway multiplier.
+    color_sway: [f32; 4],
+    /// rgb = colour at the plant's tip, w padding.
+    tip: [f32; 4],
+}
+
+/// Per-meadow shader data, matching WGSL `MeadowUniform` (M29).
+///
+/// No model matrix, unlike every other per-object uniform here: a meadow's
+/// instances are placed in world space, because their altitude came off the
+/// terrain and a transform applied afterwards would lift them back off it.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MeadowUniform {
+    view_proj: [[f32; 4]; 4],
+    /// x = scene time in seconds, y = cycle length in seconds (0 = frozen),
+    /// z = base phase, w = live stage count.
+    clock: [f32; 4],
+    /// xy = unit wind direction in XZ, z = wind strength in radians,
+    /// w = gust travel speed in m/s.
+    wind: [f32; 4],
+    /// rgb = flower colour, w = reseed jitter radius in metres.
+    flower: [f32; 4],
+    /// Unused slots are zeroed and never read — the shader loops to the count.
+    stages: [GrowthStageData; MAX_GROWTH_STAGES],
+}
+
 /// Per-pass particle data, matching WGSL `ParticleFrame`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -286,6 +322,27 @@ struct CachedMesh {
     index_count: u32,
     /// Frame counter at the last draw that used this mesh; entries idle for
     /// [`MESH_CACHE_LIFETIME`] frames are dropped.
+    last_used: u64,
+}
+
+/// One uploaded meadow, cached across frames (M29).
+///
+/// Three buffers rather than two, because a meadow is the one thing in this
+/// engine drawn instanced from geometry of its own: the plant template, its
+/// indices, and where every copy of it stands. All three are static — the life
+/// cycle is evaluated in the vertex stage — so this uploads once and is never
+/// rewritten however many generations pass.
+///
+/// `_patch` keeps the source `Arc` alive for `CachedMesh`'s reason: the cache is
+/// keyed on that allocation's address, and holding a strong reference is what
+/// stops a freed patch's address from being reused by a different one.
+struct CachedMeadow {
+    _patch: Arc<engine_core::meadow::MeadowPatch>,
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    instances: wgpu::Buffer,
+    index_count: u32,
+    instance_count: u32,
     last_used: u64,
 }
 
@@ -364,12 +421,7 @@ impl SceneDepth {
     ///
     /// Returns whether it reallocated, which is what tells the frame-textures
     /// bind group that it has to be rebuilt.
-    fn ensure(
-        slot: &mut Option<Self>,
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-    ) -> bool {
+    fn ensure(slot: &mut Option<Self>, device: &wgpu::Device, width: u32, height: u32) -> bool {
         let fits = slot
             .as_ref()
             .is_some_and(|held| held.width == width.max(1) && held.height == height.max(1));
@@ -624,6 +676,10 @@ pub struct ScenePass<'a> {
     /// Pass `&[]` for a scene with no road, which then issues exactly the draws
     /// it did before roads existed.
     pub roads: &'a [RoadItem],
+    /// Meadows (M29), drawn with the opaque geometry after the roads. Pass
+    /// `&[]` for a scene with no ground cover, which then issues exactly the
+    /// draws it did before meadows existed.
+    pub meadows: &'a [MeadowItem],
     /// Particle billboards, drawn after the meshes (alpha-blended, depth-read
     /// only). Pass `&[]` when nothing simulates particles.
     pub particles: &'a [ParticleInstance],
@@ -688,6 +744,10 @@ pub struct SceneRenderer {
     /// vertex UV — a road's markings are painted from surface coordinates.
     road_pipeline: wgpu::RenderPipeline,
     road_layout: wgpu::BindGroupLayout,
+    /// Meadows (M29): opaque, instanced, double-sided, and the only pipeline
+    /// whose vertex stage decides what the geometry *is*.
+    meadow_pipeline: wgpu::RenderPipeline,
+    meadow_layout: wgpu::BindGroupLayout,
     depth_resolve_pipeline: wgpu::RenderPipeline,
     /// Puts the opaque colour copy back over the frame — see `blit.wgsl` for
     /// the one path that needs it.
@@ -725,6 +785,9 @@ pub struct SceneRenderer {
     /// scenes which never do pay nothing for it.
     shadow_map: Option<ShadowMap>,
     meshes: HashMap<usize, CachedMesh>,
+    /// Uploaded meadows, keyed on the `Arc<MeadowPatch>` identity — the mesh
+    /// cache's rule, for the same reason.
+    meadow_meshes: HashMap<usize, CachedMeadow>,
     /// Uploaded material maps, keyed on the `Arc<TextureData>` identity — M15's
     /// rule, which is why `TextureSource` must hand back the same `Arc`.
     textures: HashMap<usize, CachedTexture>,
@@ -751,6 +814,10 @@ pub struct SceneRenderer {
     /// big to ride in the object uniform every mesh shares.
     road_objects: Option<Uniforms>,
     road_stride: u64,
+    /// And again for meadows, whose life-cycle table is the largest uniform of
+    /// the four.
+    meadow_objects: Option<Uniforms>,
+    meadow_stride: u64,
     /// The opaque depth copy the water pass reads, allocated on the first frame
     /// that has any water in it and resized with the target.
     scene_depth: Option<SceneDepth>,
@@ -1305,6 +1372,21 @@ impl SceneRenderer {
             multisample,
         );
 
+        // Meadows (M29): its own uniform, the mesh pass's frame binding, and
+        // the shadow map — grass receives shadows even though it casts none.
+        let meadow_layout = uniform_layout(
+            "meadow-uniforms",
+            Some(std::mem::size_of::<MeadowUniform>() as u64),
+        );
+        let meadow_pipeline = Self::meadow_pipeline(
+            device,
+            &meadow_layout,
+            &frame_layout,
+            &frame_textures_layout,
+            format,
+            multisample,
+        );
+
         let (depth_resolve_pipeline, depth_source_layout) =
             Self::depth_resolve_pipeline(device, samples);
 
@@ -1485,8 +1567,11 @@ impl SceneRenderer {
             std::mem::size_of::<ObjectUniform>().next_multiple_of(alignment as usize) as u64;
 
         let shadow_placeholder = ShadowMap::new(device, 1);
-        let depth_placeholder =
-            placeholder_texture(device, "scene-depth-placeholder", wgpu::TextureFormat::R32Float);
+        let depth_placeholder = placeholder_texture(
+            device,
+            "scene-depth-placeholder",
+            wgpu::TextureFormat::R32Float,
+        );
         let color_placeholder = placeholder_texture(device, "scene-color-placeholder", format);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow-sampler"),
@@ -1515,6 +1600,8 @@ impl SceneRenderer {
             std::mem::size_of::<CloudUniform>().next_multiple_of(alignment as usize) as u64;
         let road_stride =
             std::mem::size_of::<RoadUniform>().next_multiple_of(alignment as usize) as u64;
+        let meadow_stride =
+            std::mem::size_of::<MeadowUniform>().next_multiple_of(alignment as usize) as u64;
 
         Self {
             pipeline,
@@ -1535,6 +1622,11 @@ impl SceneRenderer {
             road_layout,
             road_objects: None,
             road_stride,
+            meadow_pipeline,
+            meadow_layout,
+            meadow_objects: None,
+            meadow_stride,
+            meadow_meshes: HashMap::new(),
             depth_resolve_pipeline,
             blit_pipeline,
             water_layout,
@@ -1973,6 +2065,109 @@ impl SceneRenderer {
         })
     }
 
+    /// The meadow pass (M29): opaque, depth-writing, and **instanced**.
+    ///
+    /// Two vertex buffers rather than the mesh pass's three, and both are this
+    /// pipeline's own: a plant template with channels no `MeshData` has, and a
+    /// per-instance record of where each copy of it stands. That is why the
+    /// layout is interleaved here where every other pipeline's is split — a
+    /// meadow does not share the geometry cache, so there is no mesh with no
+    /// normals to keep unpadded.
+    ///
+    /// **Culling is off**, and it is load-bearing: a blade of grass is a
+    /// single-sided strip, half of every tuft faces away from any given camera,
+    /// and back-face culling would delete it. The alternative — emitting both
+    /// faces — doubles the template for nothing, since the fragment stage can
+    /// flip the normal toward the viewer in one line. `clouds.wgsl` set this
+    /// precedent for its own reason.
+    ///
+    /// There is no shadow-caster twin. See `meadow.wgsl`'s header.
+    fn meadow_pipeline(
+        device: &wgpu::Device,
+        meadow_layout: &wgpu::BindGroupLayout,
+        frame_layout: &wgpu::BindGroupLayout,
+        frame_textures_layout: &wgpu::BindGroupLayout,
+        format: wgpu::TextureFormat,
+        multisample: wgpu::MultisampleState,
+    ) -> wgpu::RenderPipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("meadow-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("shaders/meadow.wgsl"))),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("meadow-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(meadow_layout),
+                Some(frame_layout),
+                Some(frame_textures_layout),
+            ],
+            immediate_size: 0,
+        });
+
+        // `MeadowVertex`: centre, normal, offset, anchor, span, organ.
+        const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+            0 => Float32x3,
+            1 => Float32x3,
+            2 => Float32x3,
+            3 => Float32x3,
+            4 => Float32x3,
+            5 => Uint32,
+        ];
+        // `MeadowInstance`: position+scale, yaw+phase+gradient, seed.
+        const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![
+            6 => Float32x4,
+            7 => Float32x4,
+            8 => Uint32,
+        ];
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("meadow-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<MeadowVertexRaw>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &VERTEX_ATTRIBUTES,
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<MeadowInstanceRaw>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &INSTANCE_ATTRIBUTES,
+                    }),
+                ],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
     /// The depth copy pass (M18): one fullscreen triangle turning the opaque
     /// pass's depth attachment into something the water shader can read.
     ///
@@ -1989,8 +2184,8 @@ impl SceneRenderer {
         } else {
             "texture_depth_2d"
         };
-        let source = include_str!("shaders/depth_resolve.wgsl")
-            .replace("SOURCE_TEXTURE_TYPE", source_type);
+        let source =
+            include_str!("shaders/depth_resolve.wgsl").replace("SOURCE_TEXTURE_TYPE", source_type);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("depth-resolve-shader"),
@@ -2158,6 +2353,7 @@ impl SceneRenderer {
             water,
             clouds,
             roads,
+            meadows,
             particles,
             view_projection,
             camera_position,
@@ -2429,6 +2625,35 @@ impl SceneRenderer {
             queue.write_buffer(&objects.buffer, 0, &road_bytes);
         }
 
+        // Meadows: the same arrangement once more. Their templates and instance
+        // buffers join a cache of their own, keyed on `Arc<MeadowPatch>`
+        // identity, so a field that is not being edited uploads once for the
+        // life of the run — the life cycle is a uniform and a vertex-stage
+        // evaluation, never new geometry.
+        let meadow_keys: Vec<usize> = meadows
+            .iter()
+            .map(|item| self.upload_meadow(device, &item.patch))
+            .collect();
+        if !meadows.is_empty() {
+            let stride = self.meadow_stride as usize;
+            let mut meadow_bytes = vec![0u8; stride * meadows.len()];
+            for (index, item) in meadows.iter().enumerate() {
+                let uniform = meadow_uniform(item, view_projection, time);
+                let at = index * stride;
+                meadow_bytes[at..at + std::mem::size_of::<MeadowUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(&uniform));
+            }
+            let objects = Uniforms::ensure(
+                &mut self.meadow_objects,
+                device,
+                &self.meadow_layout,
+                "meadow-uniforms",
+                meadow_bytes.len() as u64,
+                Some(std::mem::size_of::<MeadowUniform>() as u64),
+            );
+            queue.write_buffer(&objects.buffer, 0, &meadow_bytes);
+        }
+
         // Split the draw list by blend mode. Opaque keeps file order (it is
         // depth-tested, so order does not matter and stability is worth more);
         // everything blended sorts back-to-front, because blending does not
@@ -2637,7 +2862,9 @@ impl SceneRenderer {
                     if !cutout[index] {
                         continue;
                     }
-                    let Some(key) = material_keys[index] else { continue };
+                    let Some(key) = material_keys[index] else {
+                        continue;
+                    };
                     if !switched {
                         shadow_pass.set_pipeline(&self.shadow_cutout_pipeline);
                         shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
@@ -2711,7 +2938,12 @@ impl SceneRenderer {
             );
         }
         if water_present {
-            SceneDepth::ensure(&mut self.scene_depth, device, target_size[0], target_size[1]);
+            SceneDepth::ensure(
+                &mut self.scene_depth,
+                device,
+                target_size[0],
+                target_size[1],
+            );
             // The source view changes every frame in the viewer (a new
             // swapchain-sized depth texture on resize) and cannot be compared
             // for identity, so this bind group is rebuilt rather than cached.
@@ -2857,7 +3089,9 @@ impl SceneRenderer {
                 // blessed before M26 issuing exactly the draws it always did.
                 let mut textured = false;
                 for &index in &opaque {
-                    let Some(key) = material_keys[index] else { continue };
+                    let Some(key) = material_keys[index] else {
+                        continue;
+                    };
                     if !textured {
                         pass.set_pipeline(&self.textured_pipeline);
                         textured = true;
@@ -2909,6 +3143,42 @@ impl SceneRenderer {
                 }
                 // Nothing after this assumes a bound pipeline: `draw_blended`
                 // sets its own for the first item it draws.
+            }
+
+            // Meadows, last in the opaque run. They write depth like the grass
+            // they are: a plant standing in front of a rock occludes it, water
+            // absorbs against the field, and particles sort against it.
+            //
+            // Drawing *after* the terrain is not merely tidy — M22 measured that
+            // this adapter renders a big relief patch differently run to run
+            // when it is the last thing in an MSAA pass, and that any draw after
+            // it removes the flake. A meadow is also the finest geometry this
+            // engine has ever put against that same relief, so which way this
+            // actually falls is measured per fixture rather than assumed; see
+            // the design doc's §9.
+            if let Some(uniforms) = &self.meadow_objects {
+                if !meadows.is_empty() {
+                    pass.set_pipeline(&self.meadow_pipeline);
+                    pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                    pass.set_bind_group(2, opaque_frame_textures, &[]);
+                    for (index, _) in meadows.iter().enumerate() {
+                        let meadow = &self.meadow_meshes[&meadow_keys[index]];
+                        if meadow.instance_count == 0 {
+                            continue;
+                        }
+                        pass.set_bind_group(
+                            0,
+                            &uniforms.bind_group,
+                            &[(index as u64 * self.meadow_stride) as u32],
+                        );
+                        pass.set_vertex_buffer(0, meadow.vertices.slice(..));
+                        pass.set_vertex_buffer(1, meadow.instances.slice(..));
+                        pass.set_index_buffer(meadow.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..meadow.index_count, 0, 0..meadow.instance_count);
+                    }
+                    // Nothing after this assumes a bound pipeline: `draw_blended`
+                    // sets its own for the first item it draws.
+                }
             }
 
             // Blended geometry after every opaque surface has written depth, so
@@ -3075,7 +3345,11 @@ impl SceneRenderer {
             depth: self.scene_depth.as_ref().map(|d| (d.width, d.height)),
             color: self.scene_color.as_ref().map(|c| (c.width, c.height)),
         };
-        if self.frame_textures.as_ref().is_some_and(|held| held.key == key) {
+        if self
+            .frame_textures
+            .as_ref()
+            .is_some_and(|held| held.key == key)
+        {
             return;
         }
 
@@ -3152,7 +3426,9 @@ impl SceneRenderer {
         for entry in blended {
             match *entry {
                 Blended::Mesh(index) => {
-                    let Some(objects) = &self.objects else { continue };
+                    let Some(objects) = &self.objects else {
+                        continue;
+                    };
                     let material = material_keys[index];
                     // 0 = plain, 3 = textured, 4 = plain refracting. A textured
                     // material refracts through its own pipeline, which carries
@@ -3218,7 +3494,9 @@ impl SceneRenderer {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
                 Blended::Cloud(index) => {
-                    let Some(objects) = &self.cloud_objects else { continue };
+                    let Some(objects) = &self.cloud_objects else {
+                        continue;
+                    };
                     if current != Some(2) {
                         pass.set_pipeline(&self.cloud_pipeline);
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
@@ -3457,11 +3735,112 @@ impl SceneRenderer {
         key
     }
 
+    /// Upload a meadow if this is the first time it has been seen, and return
+    /// its cache key (the shared allocation's address).
+    ///
+    /// All three buffers are static for the life of the patch — the life cycle
+    /// runs in the vertex stage — so a meadow that is not being edited uploads
+    /// once for the life of the run, however many generations pass in front of
+    /// the camera.
+    fn upload_meadow(
+        &mut self,
+        device: &wgpu::Device,
+        patch: &Arc<engine_core::meadow::MeadowPatch>,
+    ) -> usize {
+        let key = Arc::as_ptr(patch) as usize;
+        let frame_index = self.frame_index;
+        self.meadow_meshes
+            .entry(key)
+            .and_modify(|meadow| meadow.last_used = frame_index)
+            .or_insert_with(|| {
+                // engine-core carries no `bytemuck` (it is the GPU-free crate),
+                // so the POD mirrors live here and the conversion happens once,
+                // at upload.
+                let vertices: Vec<MeadowVertexRaw> = patch
+                    .vertices
+                    .iter()
+                    .map(|v| MeadowVertexRaw {
+                        centre: v.centre,
+                        normal: v.normal,
+                        offset: v.offset,
+                        anchor: v.anchor,
+                        span: v.span,
+                        organ: v.organ,
+                    })
+                    .collect();
+                let instances: Vec<MeadowInstanceRaw> = patch
+                    .instances
+                    .iter()
+                    .map(|i| MeadowInstanceRaw {
+                        pos_scale: [i.position[0], i.position[1], i.position[2], i.scale],
+                        params: [
+                            i.yaw,
+                            i.phase_offset,
+                            i.ground_gradient[0],
+                            i.ground_gradient[1],
+                        ],
+                        seed: i.seed,
+                    })
+                    .collect();
+
+                CachedMeadow {
+                    _patch: Arc::clone(patch),
+                    vertices: buffer_with(
+                        device,
+                        "meadow-template",
+                        wgpu::BufferUsages::VERTEX,
+                        bytemuck::cast_slice(&vertices),
+                    ),
+                    indices: buffer_with(
+                        device,
+                        "meadow-indices",
+                        wgpu::BufferUsages::INDEX,
+                        bytemuck::cast_slice(&patch.indices),
+                    ),
+                    instances: buffer_with(
+                        device,
+                        "meadow-instances",
+                        wgpu::BufferUsages::VERTEX,
+                        bytemuck::cast_slice(&instances),
+                    ),
+                    index_count: patch.indices.len() as u32,
+                    instance_count: patch.instances.len() as u32,
+                    last_used: frame_index,
+                }
+            });
+        key
+    }
+
     /// How many meshes are currently uploaded — the cache's observable
     /// behavior, for tests.
     pub fn cached_mesh_count(&self) -> usize {
         self.meshes.len()
     }
+}
+
+/// `MeadowVertex` with the derives the GPU path needs. Field for field with
+/// `engine_core::meadow::MeadowVertex`, and the vertex layout in
+/// [`SceneRenderer::meadow_pipeline`] is written against this.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MeadowVertexRaw {
+    centre: [f32; 3],
+    normal: [f32; 3],
+    offset: [f32; 3],
+    anchor: [f32; 3],
+    span: [f32; 3],
+    organ: u32,
+}
+
+/// `MeadowInstance`, repacked into the vec4 lanes the shader reads.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MeadowInstanceRaw {
+    /// xyz = world position, w = metres of plant per unit of template height.
+    pos_scale: [f32; 4],
+    /// x = yaw, y = phase offset, zw = the ground's slope here.
+    params: [f32; 4],
+    seed: u32,
 }
 
 impl Uniforms {
@@ -3621,6 +4000,43 @@ fn cloud_uniform(item: &CloudItem, view_projection: Mat4, time: f32) -> CloudUni
     }
 }
 
+/// Pack a meadow's clock, wind and life-cycle table for the shader (M29).
+///
+/// The two conversions that happen here rather than in the shader are the file's
+/// units meeting the maths: `lean` and `wind` are authored in degrees and used
+/// as rotation angles, and `wind_direction` is a heading in degrees that becomes
+/// a unit XZ vector through [`wave_direction`](engine_core::water::wave_direction)
+/// — the *same* function `Water`'s waves use, so "0° travels toward −Z" cannot
+/// come to mean two different things in two components.
+fn meadow_uniform(item: &MeadowItem, view_projection: Mat4, time: f32) -> MeadowUniform {
+    let m = &item.meadow;
+    let mut stages = [GrowthStageData::default(); MAX_GROWTH_STAGES];
+    for (slot, stage) in stages
+        .iter_mut()
+        .zip(m.stages.iter().take(MAX_GROWTH_STAGES))
+    {
+        *slot = GrowthStageData {
+            shape: [stage.at, stage.height, stage.width, stage.lean.to_radians()],
+            color_sway: stage.color.extend(stage.sway).to_array(),
+            tip: stage.tip_color.extend(0.0).to_array(),
+        };
+    }
+
+    let direction = engine_core::water::wave_direction(m.wind_direction);
+    MeadowUniform {
+        view_proj: view_projection.to_cols_array_2d(),
+        clock: [
+            time,
+            m.cycle_length,
+            m.phase,
+            m.stages.len().min(MAX_GROWTH_STAGES) as f32,
+        ],
+        wind: [direction.x, direction.y, m.wind.to_radians(), m.wind_speed],
+        flower: m.flower_color.extend(item.patch.jitter_radius).to_array(),
+        stages,
+    }
+}
+
 /// Pack a terrain's layer table for the mesh shader (M22), zeroed for every
 /// other draw.
 ///
@@ -3647,12 +4063,7 @@ fn terrain_layers(terrain: Option<&Terrain>) -> [TerrainLayerUniform; MAX_TERRAI
             layer.slope_range[0],
             layer.slope_range[1],
         ];
-        slot.blend_noise = [
-            layer.height_blend,
-            layer.noise,
-            layer.slope_blend,
-            0.0,
-        ];
+        slot.blend_noise = [layer.height_blend, layer.noise, layer.slope_blend, 0.0];
     }
 
     layers
@@ -3817,8 +4228,7 @@ mod anchor {
     pub const FILL: &str = "            fill = albedo * hemisphere;\n";
     /// The frame uniform's tail, where the refraction variant appends the
     /// view-projection it needs to project an exit point.
-    pub const FRAME_TAIL: &str =
-        "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
+    pub const FRAME_TAIL: &str = "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
     /// Where the fragment's running colour and alpha are declared.
     pub const VARS: &str = "    var color = base_color;\n    var out_alpha = 1.0;\n";
     /// The last line of the fragment stage.
@@ -4300,8 +4710,7 @@ pub fn depth_texture_multisampled(
             // no water nothing — the copy pass only runs when there is water to
             // absorb with — and it means no caller has to know whether the
             // scene it is about to draw has any.
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
         .create_view(&wgpu::TextureViewDescriptor::default())
@@ -4446,9 +4855,8 @@ fn light_view_projection(
     let depth = radius * 4.0 + 50.0;
     let eye = center - travel * (depth * 0.5);
     let view = glam::camera::rh::view::look_to_mat4(eye, travel, up);
-    let projection = glam::camera::rh::proj::directx::orthographic(
-        -radius, radius, -radius, radius, 0.1, depth,
-    );
+    let projection =
+        glam::camera::rh::proj::directx::orthographic(-radius, radius, -radius, radius, 0.1, depth);
     projection * view
 }
 
@@ -4494,7 +4902,10 @@ mod seam_tests {
             "@location(2) uv: vec2<f32>,",
             "map_params: vec4<f32>,",
         ] {
-            assert!(textured.contains(expected), "textured splice lost {expected:?}");
+            assert!(
+                textured.contains(expected),
+                "textured splice lost {expected:?}"
+            );
         }
         // And the shared lighting body is still the one from the file.
         assert!(textured.contains("let base_color = direct + ambient + emissive;"));

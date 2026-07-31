@@ -297,6 +297,12 @@
         "--steps",
         "90"
       ],
+      "diff_args": [
+        "--threshold",
+        "24",
+        "--max-diff-percent",
+        "0.02"
+      ],
       "width": 640,
       "height": 360,
       "milestone": "tour",
@@ -308,6 +314,12 @@
       "args": [
         "--steps",
         "270"
+      ],
+      "diff_args": [
+        "--threshold",
+        "24",
+        "--max-diff-percent",
+        "0.02"
       ],
       "width": 640,
       "height": 360,
@@ -321,6 +333,12 @@
         "--steps",
         "450"
       ],
+      "diff_args": [
+        "--threshold",
+        "24",
+        "--max-diff-percent",
+        "0.02"
+      ],
       "width": 640,
       "height": 360,
       "milestone": "tour",
@@ -332,6 +350,12 @@
       "args": [
         "--steps",
         "585"
+      ],
+      "diff_args": [
+        "--threshold",
+        "24",
+        "--max-diff-percent",
+        "0.02"
       ],
       "width": 640,
       "height": 360,
@@ -347,7 +371,9 @@
       ],
       "diff_args": [
         "--threshold",
-        "24"
+        "24",
+        "--max-diff-percent",
+        "0.02"
       ],
       "width": 640,
       "height": 360,
@@ -360,6 +386,12 @@
       "args": [
         "--steps",
         "810"
+      ],
+      "diff_args": [
+        "--threshold",
+        "24",
+        "--max-diff-percent",
+        "0.02"
       ],
       "width": 640,
       "height": 360,
@@ -428,6 +460,18 @@
       "height": 360,
       "milestone": "M28",
       "pinned_by": "crates/engine-cli/tests/cli.rs::the_mouse_aims_where_the_cursor_points"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m29_meadow.png",
+      "scene": "examples/scenes/verify/m29_meadow.json",
+      "args": [
+        "--time",
+        "0.7"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M29",
+      "pinned_by": "hand"
     }
   ],
   "traces": [

@@ -111,6 +111,78 @@
         ],
         "type": "object"
       },
+      "GrowthStage": {
+        "additionalProperties": false,
+        "description": "One keyframe of a [`Meadow`]'s life cycle.\n\nAll seven fields are required. A half-specified keyframe is an error rather\nthan a fade to black — M21's palette wrote that rule down, and a meadow's\ntable is read the same way: linearly interpolated, and **wrapping** from the\nlast keyframe back round to the first, so the cycle closes without anyone\nhaving to author phase 1.0 as a copy of phase 0.0.",
+        "properties": {
+          "at": {
+            "description": "Where in the cycle this keyframe sits, `[0, 1)`. Strictly increasing\ndown the table (`meadow_stages_invalid`).",
+            "format": "float",
+            "maximum": 0.999,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "color": {
+            "description": "Linear RGB at the plant's base, each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "height": {
+            "description": "Plant height as a fraction of [`Meadow::height`], `>= 0`. `0` is a plant\nthat is not there, which is what the seed keyframe says.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "lean": {
+            "description": "Degrees the plant leans from vertical at its tip. The bend is a\ncantilever — the tip leans this far and the root not at all — so a large\nvalue at the end of the cycle is the plant collapsing rather than\ntipping over rigidly. `[0, 90]`.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "sway": {
+            "description": "How much of [`Meadow::wind`] reaches the plant at this stage, `>= 0`.\n\nThis is what separates green grass that flows from dry stalks that\nstand, and it is nearly free — the wind term is already in the vertex\nstage.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tip_color": {
+            "description": "Linear RGB at the plant's tip, each component `[0, 1]`.\n\nTwo colours rather than one because senescence runs tip-downward in real\ngrass: a stand going over turns straw at the top while its base is still\ngreen, and a single flat colour per stage looks painted on.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "width": {
+            "description": "Blade width as a fraction of [`Meadow::blade_width`], `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "at",
+          "height",
+          "width",
+          "lean",
+          "sway",
+          "color",
+          "tip_color"
+        ],
+        "type": "object"
+      },
       "HudAnchor": {
         "description": "Where a HUD element attaches on screen (M12).\n\n`offset` is measured **inward** from the anchor: from a right anchor,\n`offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;\nfrom `center` it is the usual +x-right / +y-down applied to the element's\ncenter. The anchored point is the element's matching corner (its center\nfor `center`), so `offset: [0, 0]` puts the element flush against its\ncorner at any resolution.",
         "enum": [
@@ -2361,6 +2433,274 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Ground cover that grows, seeds and dies on a loop: grass, weeds, wildflowers\nand the dry stand they turn into.\n\nA recipe rather than a mesh reference, like [`Tree`] and [`Cloud`] — the\nengine grows one plant and scatters copies of it over the footprint\n`Transform.scale` gives, so a `Meadow` entity carries **no** `Mesh` and\n**no** `Material` (`meadow_with_mesh`).\n\n**It is the first recipe in this engine whose subject changes shape over\ntime.** A sprout is not a small blade of grass. The resolution is that the\ngeometry is static and the *life cycle lives in the vertex stage*: the plant\nis built once carrying every organ any stage will need, and each organ scales\nto nothing outside the phase window it belongs to. See\n`designs/meadow-design.md`.\n\nThe cycle runs on the scene clock, so it can be sped up:\n[`cycle_length`](Meadow::cycle_length) `: 3.0` runs a whole generation in\nthree seconds. **`0` — the default — freezes the field** at\n[`phase`](Meadow::phase), the way `daylight.day_length: 0` freezes the day:\nmost scenes want a dial, not motion, and a frozen field is reproducible with\nno `--time` at all.\n\nEvery generation **reseeds** rather than regrowing: a plant's position within\nits own cell, its height and its lean all shift a little each time round, so\nthe dead stalk and the sprout that replaces it are not collinear. That costs\none integer hash in the shader and no state anywhere.\n\nA meadow is scenery: no `Collider`, no shadow cast (a 2048² map cannot\nresolve a blade of grass, and what it would record is noise that crawls),\nand no `PointLight` contribution.",
+        "properties": {
+          "blade_width": {
+            "default": 0.007000000216066837,
+            "description": "Width of a blade at its base, in metres, `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "blades": {
+            "default": 5,
+            "description": "Blades in one plant. `[1, 12]`; `3`–`5` reads as a tuft.",
+            "format": "uint32",
+            "maximum": 12,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "cycle_length": {
+            "default": 0.0,
+            "description": "Seconds one full life cycle takes, `>= 0`.\n\n**`0` freezes the field** at [`phase`](Meadow::phase) — the default, and\n`daylight.day_length: 0`'s reasoning exactly.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "density": {
+            "default": 24.0,
+            "description": "Plants per square metre of footprint, `>= 0`.\n\nThe footprint is `Transform.scale` in XZ, so the plant count is\n`density × area`, rounded up to a square grid. `0` is an empty field,\nwhich is a legitimate thing to animate toward.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "flower_color": {
+            "default": [
+              0.4000000059604645,
+              0.3700000047683716,
+              0.17000000178813934
+            ],
+            "description": "Linear RGB of the flower head, each component `[0, 1]`. What stops the\nweed stage from being nothing but taller grass.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "head_size": {
+            "default": 0.017999999225139618,
+            "description": "Size of the flower and seed heads, in metres, `>= 0`. `0` grows a plant\nthat never flowers.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "height": {
+            "default": 0.44999998807907104,
+            "description": "Height of a fully grown plant in metres, `> 0`. `Transform.scale.y`\nmultiplies it, the way it multiplies a [`Terrain`]'s relief.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "max_slope": {
+            "default": 38.0,
+            "description": "Steepest ground grass will grow on, in degrees, `[0, 90]`. Plants on\nsteeper ground are dropped; `90` keeps everything.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "phase": {
+            "default": 0.41999998688697815,
+            "description": "Where the cycle starts, `[0, 1)` — and where a frozen field sits. The\ndefault is mature green, so `{\"type\": \"Meadow\"}` alone puts a working\nfield of grass in a scene.",
+            "format": "float",
+            "maximum": 0.999,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "default": 0,
+            "description": "Seeds placement and the template's blades. Two meadows with the same\nparameters and different seeds are different fields.\n\nThe generator's xorshift and the shader's reseed hash are both written\nout in this repo, so a given seed means the same field across dependency\nupgrades — a meadow render sits under a `diff-render` baseline, which\nmakes both a format contract.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "segments": {
+            "default": 4,
+            "description": "Lengthwise segments per blade — how finely a blade can curve as it leans\nand bends in the wind. `[1, 8]`.\n\nTogether with [`blades`](Meadow::blades) this sets the per-plant\ntriangle count, and the product with the plant count is what\n`meadow_too_complex` bounds.",
+            "format": "uint32",
+            "maximum": 8,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "size_jitter": {
+            "default": 0.3499999940395355,
+            "description": "How much plant height varies between plants, as a fraction, `[0, 1)`.\n`0` is a lawn.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "splay": {
+            "default": 54.0,
+            "description": "Degrees the outermost blades splay from vertical, `[0, 90]`. Blade 0\nstays near upright, which is what gives a tuft a centre rather than a\nhole.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "stages": {
+            "default": [
+              {
+                "at": 0.0,
+                "color": [
+                  0.12999999523162842,
+                  0.10000000149011612,
+                  0.05000000074505806
+                ],
+                "height": 0.0,
+                "lean": 0.0,
+                "sway": 0.0,
+                "tip_color": [
+                  0.1599999964237213,
+                  0.12999999523162842,
+                  0.07000000029802322
+                ],
+                "width": 0.5
+              },
+              {
+                "at": 0.09000000357627869,
+                "color": [
+                  0.1599999964237213,
+                  0.3400000035762787,
+                  0.07000000029802322
+                ],
+                "height": 0.1599999964237213,
+                "lean": 10.0,
+                "sway": 0.5,
+                "tip_color": [
+                  0.3100000023841858,
+                  0.550000011920929,
+                  0.12999999523162842
+                ],
+                "width": 0.699999988079071
+              },
+              {
+                "at": 0.3100000023841858,
+                "color": [
+                  0.05999999865889549,
+                  0.1899999976158142,
+                  0.03999999910593033
+                ],
+                "height": 0.8600000143051147,
+                "lean": 17.0,
+                "sway": 1.0,
+                "tip_color": [
+                  0.17000000178813934,
+                  0.4000000059604645,
+                  0.09000000357627869
+                ],
+                "width": 1.0
+              },
+              {
+                "at": 0.5299999713897705,
+                "color": [
+                  0.09000000357627869,
+                  0.20000000298023224,
+                  0.05000000074505806
+                ],
+                "height": 1.0,
+                "lean": 21.0,
+                "sway": 0.8999999761581421,
+                "tip_color": [
+                  0.30000001192092896,
+                  0.36000001430511475,
+                  0.10000000149011612
+                ],
+                "width": 1.0499999523162842
+              },
+              {
+                "at": 0.7599999904632568,
+                "color": [
+                  0.2199999988079071,
+                  0.18000000715255737,
+                  0.07000000029802322
+                ],
+                "height": 0.949999988079071,
+                "lean": 27.0,
+                "sway": 0.4000000059604645,
+                "tip_color": [
+                  0.6200000047683716,
+                  0.5099999904632568,
+                  0.1899999976158142
+                ],
+                "width": 0.9200000166893005
+              },
+              {
+                "at": 0.9100000262260437,
+                "color": [
+                  0.14000000059604645,
+                  0.10999999940395355,
+                  0.05999999865889549
+                ],
+                "height": 0.6200000047683716,
+                "lean": 71.0,
+                "sway": 0.25,
+                "tip_color": [
+                  0.25999999046325684,
+                  0.20999999344348907,
+                  0.10999999940395355
+                ],
+                "width": 0.800000011920929
+              }
+            ],
+            "description": "The life cycle, as keyframes over `phase`. At least two, at most\n[`MAX_GROWTH_STAGES`](crate::meadow::MAX_GROWTH_STAGES), strictly\nincreasing in `at`.\n\nThe default is the full seed → sprout → grass → weeds → dry → collapse\ncycle, so a meadow is worth looking at before anything is authored.",
+            "items": {
+              "$ref": "#/$defs/GrowthStage"
+            },
+            "type": "array"
+          },
+          "stagger": {
+            "default": 0.25,
+            "description": "How far plants desync from each other, `[0, 1]`.\n\n`0` marches the whole field in lockstep; `1` spreads offsets across the\nwhole cycle, so every stage is present at every moment and the field\nnever appears to change. A real meadow browns together with variation,\nwhich is why the default is near the low end.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "terrain": {
+            "description": "The [`Terrain`] entity this meadow stands on, by name.\n\nEach plant's altitude is sampled from that patch through the same\nfunction `world.terrain_height` and `engine terrain-height` call, so\nthere is one implementation of \"where is the ground\" and nothing to keep\nin agreement. Absent, the field is flat at the entity's own Y.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "Meadow",
+            "type": "string"
+          },
+          "wind": {
+            "default": 9.0,
+            "description": "How far the wind bends a plant at full sway, in degrees, `>= 0`. `0` is\nstill air.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "wind_direction": {
+            "default": 0.0,
+            "description": "Which way the wind blows, in degrees — `0` toward −Z, the engine's\nforward convention, shared with `Water`'s wave directions.",
+            "format": "float",
+            "type": "number"
+          },
+          "wind_speed": {
+            "default": 3.5,
+            "description": "How fast gusts travel across the field, in metres per second, `>= 0`.\n\nGusts are a travelling wave, not a per-plant shimmer: sampling the noise\nagainst a moving coordinate is what makes wind cross a meadow visibly.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -2386,7 +2726,8 @@
     "Water",
     "Cloud",
     "Terrain",
-    "Road"
+    "Road",
+    "Meadow"
   ],
   "scene": {
     "$defs": {
@@ -4371,6 +4712,274 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Ground cover that grows, seeds and dies on a loop: grass, weeds, wildflowers\nand the dry stand they turn into.\n\nA recipe rather than a mesh reference, like [`Tree`] and [`Cloud`] — the\nengine grows one plant and scatters copies of it over the footprint\n`Transform.scale` gives, so a `Meadow` entity carries **no** `Mesh` and\n**no** `Material` (`meadow_with_mesh`).\n\n**It is the first recipe in this engine whose subject changes shape over\ntime.** A sprout is not a small blade of grass. The resolution is that the\ngeometry is static and the *life cycle lives in the vertex stage*: the plant\nis built once carrying every organ any stage will need, and each organ scales\nto nothing outside the phase window it belongs to. See\n`designs/meadow-design.md`.\n\nThe cycle runs on the scene clock, so it can be sped up:\n[`cycle_length`](Meadow::cycle_length) `: 3.0` runs a whole generation in\nthree seconds. **`0` — the default — freezes the field** at\n[`phase`](Meadow::phase), the way `daylight.day_length: 0` freezes the day:\nmost scenes want a dial, not motion, and a frozen field is reproducible with\nno `--time` at all.\n\nEvery generation **reseeds** rather than regrowing: a plant's position within\nits own cell, its height and its lean all shift a little each time round, so\nthe dead stalk and the sprout that replaces it are not collinear. That costs\none integer hash in the shader and no state anywhere.\n\nA meadow is scenery: no `Collider`, no shadow cast (a 2048² map cannot\nresolve a blade of grass, and what it would record is noise that crawls),\nand no `PointLight` contribution.",
+            "properties": {
+              "blade_width": {
+                "default": 0.007000000216066837,
+                "description": "Width of a blade at its base, in metres, `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "blades": {
+                "default": 5,
+                "description": "Blades in one plant. `[1, 12]`; `3`–`5` reads as a tuft.",
+                "format": "uint32",
+                "maximum": 12,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "cycle_length": {
+                "default": 0.0,
+                "description": "Seconds one full life cycle takes, `>= 0`.\n\n**`0` freezes the field** at [`phase`](Meadow::phase) — the default, and\n`daylight.day_length: 0`'s reasoning exactly.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "density": {
+                "default": 24.0,
+                "description": "Plants per square metre of footprint, `>= 0`.\n\nThe footprint is `Transform.scale` in XZ, so the plant count is\n`density × area`, rounded up to a square grid. `0` is an empty field,\nwhich is a legitimate thing to animate toward.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "flower_color": {
+                "default": [
+                  0.4000000059604645,
+                  0.3700000047683716,
+                  0.17000000178813934
+                ],
+                "description": "Linear RGB of the flower head, each component `[0, 1]`. What stops the\nweed stage from being nothing but taller grass.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "head_size": {
+                "default": 0.017999999225139618,
+                "description": "Size of the flower and seed heads, in metres, `>= 0`. `0` grows a plant\nthat never flowers.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "height": {
+                "default": 0.44999998807907104,
+                "description": "Height of a fully grown plant in metres, `> 0`. `Transform.scale.y`\nmultiplies it, the way it multiplies a [`Terrain`]'s relief.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "max_slope": {
+                "default": 38.0,
+                "description": "Steepest ground grass will grow on, in degrees, `[0, 90]`. Plants on\nsteeper ground are dropped; `90` keeps everything.",
+                "format": "float",
+                "maximum": 90.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "phase": {
+                "default": 0.41999998688697815,
+                "description": "Where the cycle starts, `[0, 1)` — and where a frozen field sits. The\ndefault is mature green, so `{\"type\": \"Meadow\"}` alone puts a working\nfield of grass in a scene.",
+                "format": "float",
+                "maximum": 0.999,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "seed": {
+                "default": 0,
+                "description": "Seeds placement and the template's blades. Two meadows with the same\nparameters and different seeds are different fields.\n\nThe generator's xorshift and the shader's reseed hash are both written\nout in this repo, so a given seed means the same field across dependency\nupgrades — a meadow render sits under a `diff-render` baseline, which\nmakes both a format contract.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segments": {
+                "default": 4,
+                "description": "Lengthwise segments per blade — how finely a blade can curve as it leans\nand bends in the wind. `[1, 8]`.\n\nTogether with [`blades`](Meadow::blades) this sets the per-plant\ntriangle count, and the product with the plant count is what\n`meadow_too_complex` bounds.",
+                "format": "uint32",
+                "maximum": 8,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "size_jitter": {
+                "default": 0.3499999940395355,
+                "description": "How much plant height varies between plants, as a fraction, `[0, 1)`.\n`0` is a lawn.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "splay": {
+                "default": 54.0,
+                "description": "Degrees the outermost blades splay from vertical, `[0, 90]`. Blade 0\nstays near upright, which is what gives a tuft a centre rather than a\nhole.",
+                "format": "float",
+                "maximum": 90.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "stages": {
+                "default": [
+                  {
+                    "at": 0.0,
+                    "color": [
+                      0.12999999523162842,
+                      0.10000000149011612,
+                      0.05000000074505806
+                    ],
+                    "height": 0.0,
+                    "lean": 0.0,
+                    "sway": 0.0,
+                    "tip_color": [
+                      0.1599999964237213,
+                      0.12999999523162842,
+                      0.07000000029802322
+                    ],
+                    "width": 0.5
+                  },
+                  {
+                    "at": 0.09000000357627869,
+                    "color": [
+                      0.1599999964237213,
+                      0.3400000035762787,
+                      0.07000000029802322
+                    ],
+                    "height": 0.1599999964237213,
+                    "lean": 10.0,
+                    "sway": 0.5,
+                    "tip_color": [
+                      0.3100000023841858,
+                      0.550000011920929,
+                      0.12999999523162842
+                    ],
+                    "width": 0.699999988079071
+                  },
+                  {
+                    "at": 0.3100000023841858,
+                    "color": [
+                      0.05999999865889549,
+                      0.1899999976158142,
+                      0.03999999910593033
+                    ],
+                    "height": 0.8600000143051147,
+                    "lean": 17.0,
+                    "sway": 1.0,
+                    "tip_color": [
+                      0.17000000178813934,
+                      0.4000000059604645,
+                      0.09000000357627869
+                    ],
+                    "width": 1.0
+                  },
+                  {
+                    "at": 0.5299999713897705,
+                    "color": [
+                      0.09000000357627869,
+                      0.20000000298023224,
+                      0.05000000074505806
+                    ],
+                    "height": 1.0,
+                    "lean": 21.0,
+                    "sway": 0.8999999761581421,
+                    "tip_color": [
+                      0.30000001192092896,
+                      0.36000001430511475,
+                      0.10000000149011612
+                    ],
+                    "width": 1.0499999523162842
+                  },
+                  {
+                    "at": 0.7599999904632568,
+                    "color": [
+                      0.2199999988079071,
+                      0.18000000715255737,
+                      0.07000000029802322
+                    ],
+                    "height": 0.949999988079071,
+                    "lean": 27.0,
+                    "sway": 0.4000000059604645,
+                    "tip_color": [
+                      0.6200000047683716,
+                      0.5099999904632568,
+                      0.1899999976158142
+                    ],
+                    "width": 0.9200000166893005
+                  },
+                  {
+                    "at": 0.9100000262260437,
+                    "color": [
+                      0.14000000059604645,
+                      0.10999999940395355,
+                      0.05999999865889549
+                    ],
+                    "height": 0.6200000047683716,
+                    "lean": 71.0,
+                    "sway": 0.25,
+                    "tip_color": [
+                      0.25999999046325684,
+                      0.20999999344348907,
+                      0.10999999940395355
+                    ],
+                    "width": 0.800000011920929
+                  }
+                ],
+                "description": "The life cycle, as keyframes over `phase`. At least two, at most\n[`MAX_GROWTH_STAGES`](crate::meadow::MAX_GROWTH_STAGES), strictly\nincreasing in `at`.\n\nThe default is the full seed → sprout → grass → weeds → dry → collapse\ncycle, so a meadow is worth looking at before anything is authored.",
+                "items": {
+                  "$ref": "#/$defs/GrowthStage"
+                },
+                "type": "array"
+              },
+              "stagger": {
+                "default": 0.25,
+                "description": "How far plants desync from each other, `[0, 1]`.\n\n`0` marches the whole field in lockstep; `1` spreads offsets across the\nwhole cycle, so every stage is present at every moment and the field\nnever appears to change. A real meadow browns together with variation,\nwhich is why the default is near the low end.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "terrain": {
+                "description": "The [`Terrain`] entity this meadow stands on, by name.\n\nEach plant's altitude is sampled from that patch through the same\nfunction `world.terrain_height` and `engine terrain-height` call, so\nthere is one implementation of \"where is the ground\" and nothing to keep\nin agreement. Absent, the field is flat at the entity's own Y.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "Meadow",
+                "type": "string"
+              },
+              "wind": {
+                "default": 9.0,
+                "description": "How far the wind bends a plant at full sway, in degrees, `>= 0`. `0` is\nstill air.",
+                "format": "float",
+                "maximum": 90.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "wind_direction": {
+                "default": 0.0,
+                "description": "Which way the wind blows, in degrees — `0` toward −Z, the engine's\nforward convention, shared with `Water`'s wave directions.",
+                "format": "float",
+                "type": "number"
+              },
+              "wind_speed": {
+                "default": 3.5,
+                "description": "How fast gusts travel across the field, in metres per second, `>= 0`.\n\nGusts are a travelling wave, not a per-plant shimmer: sampling the noise\nagainst a moving coordinate is what makes wind cross a meadow visibly.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -4746,6 +5355,78 @@
         },
         "required": [
           "mesh"
+        ],
+        "type": "object"
+      },
+      "GrowthStage": {
+        "additionalProperties": false,
+        "description": "One keyframe of a [`Meadow`]'s life cycle.\n\nAll seven fields are required. A half-specified keyframe is an error rather\nthan a fade to black — M21's palette wrote that rule down, and a meadow's\ntable is read the same way: linearly interpolated, and **wrapping** from the\nlast keyframe back round to the first, so the cycle closes without anyone\nhaving to author phase 1.0 as a copy of phase 0.0.",
+        "properties": {
+          "at": {
+            "description": "Where in the cycle this keyframe sits, `[0, 1)`. Strictly increasing\ndown the table (`meadow_stages_invalid`).",
+            "format": "float",
+            "maximum": 0.999,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "color": {
+            "description": "Linear RGB at the plant's base, each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "height": {
+            "description": "Plant height as a fraction of [`Meadow::height`], `>= 0`. `0` is a plant\nthat is not there, which is what the seed keyframe says.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "lean": {
+            "description": "Degrees the plant leans from vertical at its tip. The bend is a\ncantilever — the tip leans this far and the root not at all — so a large\nvalue at the end of the cycle is the plant collapsing rather than\ntipping over rigidly. `[0, 90]`.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "sway": {
+            "description": "How much of [`Meadow::wind`] reaches the plant at this stage, `>= 0`.\n\nThis is what separates green grass that flows from dry stalks that\nstand, and it is nearly free — the wind term is already in the vertex\nstage.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tip_color": {
+            "description": "Linear RGB at the plant's tip, each component `[0, 1]`.\n\nTwo colours rather than one because senescence runs tip-downward in real\ngrass: a stand going over turns straw at the top while its base is still\ngreen, and a single flat colour per stage looks painted on.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "width": {
+            "description": "Blade width as a fraction of [`Meadow::blade_width`], `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "at",
+          "height",
+          "width",
+          "lean",
+          "sway",
+          "color",
+          "tip_color"
         ],
         "type": "object"
       },

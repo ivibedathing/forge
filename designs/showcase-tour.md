@@ -15,6 +15,19 @@ engine diff-render examples/scenes/showcase_tour.json \
     examples/scenes/verify/baselines/showcase_646.png --steps 646
 ```
 
+The tour shows M29's `Meadow` too: a 24 × 14 m field of ground cover in front of station 04, on a
+`cycle_length: 5.0` so three whole generations pass during the fifteen seconds — green at step 585,
+flowering at 646. It is the tour's clearest demonstration that a recipe component can be a function
+of the clock rather than a fixed shape.
+
+**It also cost the tour its bit-exact pins.** A meadow at `samples: 4` is not byte-reproducible on
+this adapter (see `meadow-design.md` §9), the tour is `samples: 4`, and the field is visible in all
+six frames — removing the entity changes 875–3649 pixels in each. The tour without it renders
+identically eight runs running; with it, frames move by up to 203 pixels at delta 20. So all six
+`showcase_*` baselines now carry `"diff_args": ["--threshold", "24", "--max-diff-percent", "0.02"]`,
+where before M29 only `showcase_646` had a tolerance at all. The strict pin on the meadow system
+lives in `verify/m29_meadow.json` instead, which renders at `samples: 1` for exactly this reason.
+
 ## The shape of it
 
 The scene opens with an `environment` block, which is where every M16

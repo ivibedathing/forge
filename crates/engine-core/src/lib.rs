@@ -16,6 +16,7 @@ pub mod formatter;
 pub mod input;
 pub mod lineindex;
 pub mod material;
+pub mod meadow;
 pub mod mesh;
 pub mod particles;
 pub mod road;
