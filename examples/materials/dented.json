@@ -1,0 +1,8 @@
+{
+  "albedo": [0.62, 0.66, 0.72],
+  "metallic": 0.15,
+  "roughness": 0.35,
+  "normal_map": "../textures/bumps_normal.png",
+  "normal_strength": 1.0,
+  "uv_scale": [3.0, 2.0]
+}

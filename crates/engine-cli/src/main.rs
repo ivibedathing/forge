@@ -13,7 +13,7 @@ mod build;
 mod scaffold;
 mod simulate;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use engine_core::{codes, EngineError, Result, Scene};
@@ -263,6 +263,33 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Import a glTF model's materials as engine material files, writing any
+    /// embedded textures out as PNGs beside them.
+    ///
+    /// The materials in a `.glb` are already parsed and thrown away by the mesh
+    /// loader; this keeps them. Embedded images are written out because a
+    /// binary asset referenced by index is what invariants 1 and 3 both exist to
+    /// prevent — an import has to produce an ordinary, diffable, hand-editable
+    /// scene. One `materials/*.json` per glTF material, referenced rather than
+    /// inlined, because a model routinely has several primitives sharing one.
+    ///
+    /// With `--into`, one entity is spliced into that scene: its `Mesh` naming
+    /// the model and its `Material` naming the first imported material file.
+    Import {
+        /// The `.gltf` or `.glb` to import.
+        model: PathBuf,
+        /// A scene to splice an entity into. Absent, the files are written
+        /// beside the model and nothing is edited.
+        #[arg(long)]
+        into: Option<PathBuf>,
+        /// Where written textures go, relative to the scene (or the model).
+        #[arg(long, default_value = "textures")]
+        textures: String,
+        /// Where written material files go.
+        #[arg(long, default_value = "materials")]
+        materials: String,
+    },
+
     /// Scaffold a new project: a starter scene, a script, and the agent
     /// orientation under the names Claude Code and Codex already read.
     Init {
@@ -409,6 +436,12 @@ fn main() {
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
         Command::Inspect { scene, entity } => inspect(scene, entity),
+        Command::Import {
+            model,
+            into,
+            textures,
+            materials,
+        } => import(model, into, textures, materials),
         Command::Init { dir, force } => scaffold::init(dir, force),
         Command::AgentGuide => {
             print!("{}", scaffold::AGENT_GUIDE);
@@ -568,6 +601,34 @@ pub(crate) fn report_scene_diagnostics(path: &PathBuf) -> SceneReport {
     }
 }
 
+/// The `Material` component's field names, read from the published schema so
+/// this cannot drift as fields are added.
+///
+/// Used to recognise a `materials/*.json` by its shape rather than by its
+/// filename — the same choice `validate` already makes for clip files, and for
+/// the same reason: an agent should not have to learn a naming convention to
+/// get its file checked. One known field is enough, so a file with a *typo'd*
+/// field is still validated as a material and told which field is wrong,
+/// instead of being validated as a scene and told it has no entities.
+fn material_fields() -> &'static [String] {
+    use std::sync::OnceLock;
+    static FIELDS: OnceLock<Vec<String>> = OnceLock::new();
+    FIELDS.get_or_init(|| {
+        let schema = engine_core::schema::component_schema();
+        schema["oneOf"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|v| v["properties"]["type"]["const"] == "Material")
+            .and_then(|v| v["properties"].as_object())
+            .into_iter()
+            .flatten()
+            .map(|(name, _)| name.clone())
+            .filter(|name| name != "type" && name != "asset")
+            .collect()
+    })
+}
+
 /// `engine validate` — every diagnostic for every file, then an aggregate
 /// verdict. `--strict` promotes warnings to errors, for CI.
 fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
@@ -577,16 +638,30 @@ fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
     for path in scenes {
         // A clip file validates as a clip ("tracks", no "entities"): the
         // same all-at-once contract, structural checks only — entity-name
-        // resolution needs a scene.
-        let is_clip = std::fs::read_to_string(path)
+        // resolution needs a scene. A material file (M26) is routed the same
+        // way, and is recognised the same way: by shape, not by filename, so
+        // `materials/asphalt.json` and `asphalt.material.json` both work.
+        let parsed = std::fs::read_to_string(path)
             .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let is_clip = parsed
+            .as_ref()
             .is_some_and(|v| v.get("tracks").is_some() && v.get("entities").is_none());
-        if is_clip {
+        let is_material = parsed.as_ref().is_some_and(|v| {
+            v.get("entities").is_none()
+                && v.get("tracks").is_none()
+                && v.as_object().is_some_and(|o| {
+                    o.keys().any(|k| material_fields().iter().any(|f| f == k))
+                })
+        });
+        if is_clip || is_material {
             let display = path.display().to_string();
             let source = std::fs::read_to_string(path).unwrap_or_default();
-            let diagnostics =
-                engine_core::animation::validate_clip_source(&source, &display);
+            let diagnostics = if is_clip {
+                engine_core::animation::validate_clip_source(&source, &display)
+            } else {
+                engine_core::validate::validate_material_source(&source, &display)
+            };
             for diagnostic in &diagnostics {
                 diagnostic.emit();
             }
@@ -892,6 +967,179 @@ fn parse_xz(text: &str) -> Result<(f32, f32)> {
 /// A pure function of the file at rest — no `--steps`. "What did you author"
 /// and "what happened when it ran" are different questions, and `simulate` owns
 /// the second one.
+/// `engine import` — a glTF model's materials, as files the engine reads.
+fn import(
+    model: PathBuf,
+    into: Option<PathBuf>,
+    textures: String,
+    materials: String,
+) -> Result<()> {
+    if !model.is_file() {
+        return Err(EngineError::new(
+            codes::ASSET_NOT_FOUND,
+            format!("no model file at {}", model.display()),
+        )
+        .file(model.display().to_string()));
+    }
+
+    // Paths come out relative to whatever will reference them: the scene when
+    // there is one, the model's own directory otherwise. That is the same rule
+    // every other asset reference in the engine follows.
+    let root = match &into {
+        Some(scene) => scene.parent().unwrap_or(Path::new("")).to_path_buf(),
+        None => model.parent().unwrap_or(Path::new("")).to_path_buf(),
+    };
+    let imported = engine_assets::import_materials(&model, &root, &textures, &materials)?;
+
+    for warning in &imported.warnings {
+        EngineError::new(codes::IMPORT_FAILED, warning.clone())
+            .warning()
+            .emit();
+    }
+
+    // The model itself, as the scene would reference it: relative to the scene,
+    // like every other asset. An import that leaves the model where it is (this
+    // one) does not copy it — the editor's drag-and-drop is what copies.
+    let mesh_asset = match &into {
+        Some(scene) => relative_to(&model, scene.parent().unwrap_or(Path::new("")))
+            .unwrap_or_else(|| model.display().to_string()),
+        None => model
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| model.display().to_string()),
+    };
+
+    let entity_name = model
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Imported".to_string());
+
+    // A model outside the scene's own tree still resolves — the reference is
+    // relative and validation accepts it — but it is a path that breaks the
+    // moment the project moves, which is the thing invariant 3 is protecting.
+    let mut warnings = imported.warnings.clone();
+    if mesh_asset.starts_with("..") {
+        let warning = format!(
+            "{mesh_asset:?} climbs out of the scene's directory; copy the model \
+             under the project to keep the scene portable"
+        );
+        EngineError::new(codes::IMPORT_FAILED, warning.clone())
+            .warning()
+            .emit();
+        warnings.push(warning);
+    }
+
+    let mut entity = None;
+    if let Some(scene) = &into {
+        let source = std::fs::read_to_string(scene).map_err(|e| {
+            EngineError::new(
+                codes::SCENE_UNREADABLE,
+                format!("could not read {}: {e}", scene.display()),
+            )
+            .file(scene.display().to_string())
+        })?;
+
+        let mut components = vec![
+            ("Transform".to_string(), vec![]),
+            (
+                "Mesh".to_string(),
+                vec![(
+                    "asset".to_string(),
+                    serde_json::Value::String(mesh_asset.clone()),
+                )],
+            ),
+        ];
+        // The first material, because one entity draws one mesh with one
+        // material and a glTF file with several is a scene the importer cannot
+        // invent an entity split for. The rest are on disk to be referenced by
+        // hand — which is the whole reason they are files.
+        if let Some(first) = imported.materials.first() {
+            components.push((
+                "Material".to_string(),
+                vec![(
+                    "asset".to_string(),
+                    serde_json::Value::String(first.clone()),
+                )],
+            ));
+        }
+
+        // Re-importing refreshes the files and leaves the scene alone, rather
+        // than failing on the duplicate name or quietly adding a second copy.
+        // That is what makes `engine import` safe to run again after the model
+        // changes, which is the case an agent actually hits.
+        let exists = serde_json::from_str::<serde_json::Value>(&source)
+            .ok()
+            .and_then(|v| v["entities"].as_array().cloned())
+            .is_some_and(|entities| {
+                entities.iter().any(|e| e["name"] == entity_name.as_str())
+            });
+        if exists {
+            let warning = format!(
+                "{} already has an entity named {entity_name:?}; its material and \
+                 texture files were refreshed and the scene left alone. Copy the \
+                 entity to place a second one.",
+                scene.display()
+            );
+            EngineError::new(codes::IMPORT_FAILED, warning.clone())
+                .warning()
+                .emit();
+            warnings.push(warning);
+        } else {
+            let edit = engine_core::formatter::AddEntity {
+                name: entity_name.clone(),
+                components,
+            };
+            let updated = engine_core::formatter::apply_add_entity(&source, &edit)?;
+            std::fs::write(scene, &updated).map_err(|e| {
+                EngineError::new(
+                    codes::SCENE_WRITE_FAILED,
+                    format!("could not write {}: {e}", scene.display()),
+                )
+                .file(scene.display().to_string())
+            })?;
+            entity = Some(entity_name);
+        }
+    }
+
+    let report = serde_json::json!({
+        "model": model.display().to_string(),
+        "materials": imported.materials,
+        "textures": imported.textures,
+        "entity": entity,
+        "warnings": warnings.len(),
+    });
+    println!("{report}");
+    Ok(())
+}
+
+/// `path` as seen from `base`, when one is inside the other.
+///
+/// Deliberately lexical and deliberately narrow: it walks up from `base` only
+/// as far as a shared prefix, and gives up rather than guessing when the two
+/// have none. A path that cannot be made relative is reported as it was given,
+/// which validation will then reject as absolute — a legible failure rather
+/// than a silently wrong reference.
+fn relative_to(path: &Path, base: &Path) -> Option<String> {
+    let path = path.canonicalize().ok()?;
+    let base = base.canonicalize().ok().or_else(|| {
+        std::env::current_dir().ok()
+    })?;
+    let mut up = Vec::new();
+    let mut candidate = base.as_path();
+    loop {
+        if let Ok(rest) = path.strip_prefix(candidate) {
+            let mut out = up.join("/");
+            if !out.is_empty() {
+                out.push('/');
+            }
+            out.push_str(&rest.to_string_lossy());
+            return Some(out);
+        }
+        candidate = candidate.parent()?;
+        up.push("..");
+    }
+}
+
 fn inspect(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
     let scene = load_scene(&scene_path)?;
 

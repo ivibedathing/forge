@@ -524,6 +524,42 @@ either.
   and someone will want to turn it on. It belongs in `environment` beside `samples`, defaulting off,
   where the existing per-adapter baseline rules already apply.
 
+## 11.5 What building it actually taught
+
+Written after the fact, per the milestone ritual. Five things the renders and the A/B changed:
+
+- **§7 was wrong about refraction being a branch rather than a variant.** It reasoned that anything
+  transmissive has already left the default path through M16's combined `if`, so the bending could
+  sit inside that branch in the shared file. Measured: compiling the refraction variant for *every*
+  transparent draw moved one pixel of `m16_environment.png` by one channel step. The branch is never
+  taken by a surface at `ior: 1.0` and `thickness: 0.0`, and it still changes the code the compiler
+  sees around the untouchable lines — which is precisely what M22 found and what the rule is about.
+  Refraction is a **third blended pipeline**, so a material that does not refract keeps the one whose
+  module is `mesh.wgsl` as it sits on disk. §8's matrix is therefore six mesh-family variants, not
+  four.
+- **The transmitted background must be held out of the surface's own fog.** The copy it comes from
+  was already fogged at its own depth when the opaque pass drew it; fogging it a second time turned
+  the showcase tour's ice from clear to a pale slab. It is added after fog, and the surface goes
+  opaque only then.
+- **An unwritten placeholder texture is a debugging trap.** The 1×1 white bound in an unused material
+  slot was allocated and never written, and a slot that *was* being bound rendered as a stable
+  magenta — which looks exactly like a mip-chain bug and was chased as one. Placeholders are written
+  now.
+- **`builtin:plane`'s UVs are not the intuitive ones**: `quad(+Y, +Z, +X)` puts `u` along local +Z
+  and `v` along +X, so a texture's "left half" lands on the top of an upright card. The builtins were
+  never authored for texturing — nothing sampled a UV before M23's roads, which generate their own —
+  and re-laying them out is a separate decision from adding texture maps. The orientation test says
+  so rather than hiding it.
+- **A flat card casts no shadow through the solid caster.** That pass is front-face culled so the map
+  records each caster's far side, which is a better peeling margin than any bias; a single-sided quad
+  facing the sun is culled out of the map entirely. The cut-out caster is therefore `cull_mode: None`,
+  and the pre-existing behaviour is worth knowing before someone debugs a missing shadow.
+
+Two smaller ones. Mip chains are filtered **per colour space** — averaging sRGB-encoded bytes darkens
+every level — which is why `TextureSource` keys its cache on `(asset, space)` rather than on the path
+alone. And `uv_scale`/`uv_offset` are not animatable: a clip's values are scalars and 3-vectors, and
+a 2-vector has no spelling in the format, which is the feature scrolling UVs would need anyway.
+
 ## 12. Deferred, with the shapes they would take
 
 - **Textured terrain layers** — each `Terrain` layer taking an albedo/ORM map instead of a flat color.
@@ -543,6 +579,14 @@ either.
   wants the reproducible clock, which is a one-line change when someone wants a conveyor belt).
 - **Material overrides on a referenced asset** — rejected on the merits in §5, not deferred for
   effort. Reopening it means solving the absent-versus-default problem first.
+- **Conventional UVs on the builtin primitives** (§11.5), so a texture on a cube face lands the way
+  an image editor shows it. Cheap, and it moves no committed baseline today — nothing but this
+  milestone's own fixture samples a builtin's UVs — but it is a change to geometry every scene uses
+  and belongs in its own commit with its own A/B.
+- **`engine import --max-size`**, downscaling on the way in. `texture_too_large` will be hit by the
+  first real texture anyone downloads, and "downscale it for me" is the fix an agent wants.
+- **Refraction through more than one transparent surface**, which needs an ordered peel rather than
+  one copy of the opaque frame. Named in §7 as a limitation and still one.
 
 ## 13. Build order
 

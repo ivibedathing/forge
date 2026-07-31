@@ -1187,6 +1187,99 @@ impl Cx<'_> {
     }
 }
 
+/// Validate a standalone `materials/*.json` file (M26).
+///
+/// A material file is the `Material` component's fields minus the `"type"`, so
+/// this is the same schema walk the component gets — unknown fields, JSON
+/// types, ranges — against the same published variant, with the material file's
+/// own line numbers. Nothing about it is checked twice: the scene's Material
+/// component checks the *reference*, this checks the *contents*.
+///
+/// `engine validate materials/asphalt.json` runs exactly this, the way
+/// `engine validate` accepts a clip file directly.
+pub fn validate_material_source(source: &str, path: &str) -> Vec<EngineError> {
+    let root: Value = match serde_json::from_str(source) {
+        Ok(value) => value,
+        Err(e) => {
+            return vec![EngineError::new(codes::INVALID_JSON, e.to_string())
+                .file(path)
+                .line(e.line() as u32)
+                .column(e.column() as u32)];
+        }
+    };
+
+    let cx = Cx {
+        file: path,
+        index: LineIndex::new(source),
+    };
+    let mut errors = Vec::new();
+
+    let Some(object) = root.as_object() else {
+        errors.push(cx.err(
+            codes::COMPONENT_NOT_OBJECT,
+            format!("a material file must be a JSON object, found {}", kind_of(&root)),
+            "",
+        ));
+        return errors;
+    };
+
+    let schemas = ComponentSchemas::new();
+    let Some(variant) = schemas.variant("Material") else {
+        return errors;
+    };
+
+    // A material file has no `"type"` — it is not a component, it is what a
+    // component points at — and it may not name another material file either.
+    for reserved in ["type", "asset"] {
+        if object.contains_key(reserved) {
+            errors.push(
+                cx.err(
+                    codes::UNKNOWN_FIELD,
+                    format!(
+                        "a material file has no {reserved:?} field; it holds the \
+                         Material component's fields and nothing else"
+                    ),
+                    &format!("/{reserved}"),
+                )
+                .component("Material")
+                .field(reserved),
+            );
+        }
+    }
+
+    let mut filtered = object.clone();
+    filtered.remove("asset");
+    let clean =
+        walk_component(&cx, &schemas, variant, &filtered, "Material", "", "", &mut errors);
+
+    // Its texture references, resolved against **the material file's own
+    // directory** — that is what lets one material be named by scenes in
+    // different places and still find its maps.
+    if clean {
+        if let Ok(material) = serde_json::from_value::<crate::components::Material>(
+            Value::Object(filtered),
+        ) {
+            let base_dir = Path::new(path).parent().unwrap_or(Path::new(""));
+            for (field, asset, _) in material.maps() {
+                if let Err(resolve) = crate::texture::resolve_texture(asset, base_dir) {
+                    let mut error = cx
+                        .err(resolve.error, resolve.message.clone(), &format!("/{field}"))
+                        .component("Material")
+                        .field(field);
+                    if let Some(suggestion) =
+                        resolve.context().and_then(|c| c.did_you_mean.clone())
+                    {
+                        error = error.did_you_mean(suggestion);
+                    }
+                    errors.push(error);
+                }
+            }
+        }
+    }
+
+    errors
+}
+
 fn check_component(
     cx: &Cx<'_>,
     schemas: &ComponentSchemas,
@@ -1359,7 +1452,99 @@ fn check_component(
         ComponentData::DirectionalLight(_) => checked.directional_light = true,
         ComponentData::AmbientLight(_) => checked.ambient_light = true,
         ComponentData::PointLight(_) => checked.point_light = true,
-        ComponentData::Material(_) => {}
+        // A material is one of two things and never half of each (M26): a set
+        // of fields, or a reference to a file holding them.
+        //
+        // The exclusivity is checked against the **raw JSON**, not the parsed
+        // component, and that is the whole reason the rule exists: every field
+        // has a `#[serde(default)]`, so the parsed value cannot say whether
+        // `"roughness": 0.9` was an override or someone spelling out the
+        // default. The keys present in the file can.
+        ComponentData::Material(material) => {
+            let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+
+            if material.asset.is_some() {
+                let inline: Vec<&str> = object
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|k| *k != "type" && *k != "asset")
+                    .collect();
+                if !inline.is_empty() {
+                    errors.push(
+                        cx.err(
+                            codes::MATERIAL_ASSET_WITH_FIELDS,
+                            format!(
+                                "this Material names an asset and also sets {}; a material \
+                                 is a file or a set of fields, never both — an override \
+                                 cannot be told apart from a field written at its default. \
+                                 Make a second material file instead.",
+                                inline.join(", ")
+                            ),
+                            component_path,
+                        )
+                        .entity(entity)
+                        .component("Material")
+                        .field("asset")
+                        .candidates(inline.iter().copied()),
+                    );
+                }
+            }
+
+            // The reference itself, then the file's own contents with the
+            // file's own line numbers — M9's clip-error precedent.
+            if let Some(asset) = &material.asset {
+                match crate::material::resolve_material(asset, base_dir) {
+                    Err(resolve) => errors.push(
+                        cx.err(
+                            resolve.error,
+                            resolve.message.clone(),
+                            &format!("{component_path}/asset"),
+                        )
+                        .entity(entity)
+                        .component("Material")
+                        .field("asset"),
+                    ),
+                    Ok(path) => {
+                        let display = path.display().to_string();
+                        match std::fs::read_to_string(&path) {
+                            Ok(source) => {
+                                errors.extend(validate_material_source(&source, &display))
+                            }
+                            Err(e) => errors.push(
+                                cx.err(
+                                    codes::ASSET_LOAD_FAILED,
+                                    format!("could not read material {display}: {e}"),
+                                    &format!("{component_path}/asset"),
+                                )
+                                .entity(entity)
+                                .component("Material")
+                                .field("asset"),
+                            ),
+                        }
+                    }
+                }
+            }
+
+            for (field, asset, _) in material.maps() {
+                if let Err(resolve) = crate::texture::resolve_texture(asset, base_dir) {
+                    let mut error = cx
+                        .err(
+                            resolve.error,
+                            resolve.message.clone(),
+                            &format!("{component_path}/{field}"),
+                        )
+                        .entity(entity)
+                        .component("Material")
+                        .field(field);
+                    if let Some(suggestion) =
+                        resolve.context().and_then(|c| c.did_you_mean.clone())
+                    {
+                        error = error.did_you_mean(suggestion);
+                    }
+                    errors.push(error);
+                }
+            }
+        }
 
         // Water's own fields are fully covered by the schema walk (ranges,
         // `maxItems` on the wave list); what is left is cross-component and
@@ -2991,6 +3176,120 @@ mod tests {
         let errors = validate_source(source, &scene_path);
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(errors.is_empty(), "{:?}", errors);
+    }
+
+    /// §5's rule, and the reason it is checked against the raw JSON: the
+    /// parsed component cannot tell an override from a default.
+    #[test]
+    fn a_material_is_a_file_or_a_set_of_fields_never_both() {
+        let dir = std::env::temp_dir().join(format!("engine-material-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("materials")).unwrap();
+        std::fs::write(
+            dir.join("materials/asphalt.json"),
+            br#"{"albedo": [0.2, 0.2, 0.2], "roughness": 0.7}"#,
+        )
+        .unwrap();
+        let scene_path = dir.join("scene.json").display().to_string();
+
+        let reference = r#"{"name":"s","entities":[
+            {"name":"Road1","components":[
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Material","asset":"materials/asphalt.json"}]}
+        ]}"#;
+        assert!(
+            validate_source(reference, &scene_path).is_empty(),
+            "a reference alone is the supported form"
+        );
+
+        // Even a field written at exactly the file's own value is refused:
+        // the point is that the *resolved* material must not depend on
+        // information the file does not carry.
+        let both = r#"{"name":"s","entities":[
+            {"name":"Road1","components":[
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Material","asset":"materials/asphalt.json","roughness":0.7}]}
+        ]}"#;
+        let errors = validate_source(both, &scene_path);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].error, "material_asset_with_fields");
+        assert!(errors[0].message.contains("roughness"), "{}", errors[0].message);
+
+        // A missing file is reported at the *scene's* line; a malformed one
+        // carries the material file's own (M9's clip precedent).
+        let missing = r#"{"name":"s","entities":[
+            {"name":"Road1","components":[
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Material","asset":"materials/gone.json"}]}
+        ]}"#;
+        let errors = validate_source(missing, &scene_path);
+        assert_eq!(errors[0].error, "asset_not_found");
+        assert_eq!(errors[0].context().unwrap().file.as_deref(), Some(scene_path.as_str()));
+
+        std::fs::write(
+            dir.join("materials/broken.json"),
+            b"{\n  \"roughness\": 4.0\n}",
+        )
+        .unwrap();
+        let broken = r#"{"name":"s","entities":[
+            {"name":"Road1","components":[
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Material","asset":"materials/broken.json"}]}
+        ]}"#;
+        let errors = validate_source(broken, &scene_path);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(errors[0].error, "value_out_of_range", "{errors:?}");
+        assert!(
+            errors[0]
+                .context()
+                .unwrap()
+                .file
+                .as_deref()
+                .is_some_and(|f| f.ends_with("broken.json")),
+            "a material file's errors carry its own file, not the scene's"
+        );
+        assert_eq!(errors[0].context().unwrap().line, Some(2));
+    }
+
+    /// A material file is validated with the same walk the component gets, so
+    /// a typo in one is caught with a suggestion rather than ignored.
+    #[test]
+    fn a_material_file_is_walked_like_the_component() {
+        let errors = validate_material_source(r#"{"roughnes": 0.5}"#, "m.json");
+        assert_eq!(errors[0].error, "unknown_field");
+        assert_eq!(
+            errors[0].context().unwrap().did_you_mean.as_deref(),
+            Some("roughness")
+        );
+
+        // It is not a component and it may not chain to another file.
+        let errors = validate_material_source(r#"{"type": "Material"}"#, "m.json");
+        assert_eq!(errors[0].error, "unknown_field");
+        assert_eq!(errors[0].context().unwrap().field.as_deref(), Some("type"));
+        let errors = validate_material_source(r#"{"asset": "other.json"}"#, "m.json");
+        assert_eq!(errors[0].context().unwrap().field.as_deref(), Some("asset"));
+
+        assert!(validate_material_source(r#"{"metallic": 1.0}"#, "m.json").is_empty());
+    }
+
+    #[test]
+    fn rejects_an_unresolvable_texture_map() {
+        let source = r#"{"name":"s","entities":[
+            {"name":"Cube1","components":[
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Material","albedo_map":"textures/bark.png"}]}
+        ]}"#;
+        let errors = validate_source(source, "test.json");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].error, "asset_not_found");
+        assert_eq!(errors[0].context().unwrap().field.as_deref(), Some("albedo_map"));
+
+        let wrong_format = r#"{"name":"s","entities":[
+            {"name":"Cube1","components":[
+                {"type":"Mesh","asset":"builtin:cube"},
+                {"type":"Material","normal_map":"textures/bark.tga"}]}
+        ]}"#;
+        let errors = validate_source(wrong_format, "test.json");
+        assert_eq!(errors[0].error, "asset_unsupported");
     }
 
     #[test]

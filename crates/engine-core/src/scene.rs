@@ -161,6 +161,10 @@ pub struct RenderItem {
     pub mesh: std::sync::Arc<crate::mesh::MeshData>,
     pub model: glam::Mat4,
     pub material: crate::components::Material,
+    /// The material's maps, resolved to shared pixels (M26). Empty for a
+    /// material with none, which is what keeps such a draw on the pipeline that
+    /// compiles `mesh.wgsl` as it sits on disk.
+    pub textures: crate::texture::MaterialTextures,
     /// Set when this item is a [`Terrain`](crate::components::Terrain) patch
     /// (M22), which shades itself per pixel from its layers rather than from
     /// `material`.
@@ -444,13 +448,25 @@ impl Scene {
 
         // Validation already proved this parses; a failure here is a bug in
         // validation rather than in the scene, so it gets its own error code.
-        let file: SceneFile = serde_json::from_str(source).map_err(|e| {
+        let mut file: SceneFile = serde_json::from_str(source).map_err(|e| {
             vec![EngineError::new(
                 crate::codes::SCENE_PARSE_DESYNC,
                 format!("scene passed validation but failed to parse: {e}"),
             )
             .file(path)]
         })?;
+
+        // File-backed materials are filled in here rather than at every point
+        // of use, so nothing downstream has to know a material can live in
+        // another file. Validation has already proved each one resolves, so a
+        // failure at this point is a file that changed underneath us.
+        let base_dir = std::path::Path::new(path)
+            .parent()
+            .unwrap_or(std::path::Path::new(""));
+        let errors = crate::material::resolve_scene_materials(&mut file, base_dir);
+        if !errors.is_empty() {
+            return Err(errors.into_iter().map(|e| e.file(path)).collect());
+        }
 
         Ok(Self::instantiate(file))
     }
@@ -589,7 +605,7 @@ impl Scene {
     /// [`BuiltinAssets`](crate::mesh::BuiltinAssets). Entities without a `Mesh`
     /// contribute nothing; a `Mesh` whose asset cannot be loaded is an error
     /// rather than a silent omission.
-    pub fn render_items(&self, assets: &dyn crate::mesh::MeshSource) -> Result<Vec<RenderItem>> {
+    pub fn render_items(&self, assets: &dyn crate::texture::AssetSource) -> Result<Vec<RenderItem>> {
         let mut items = Vec::new();
 
         for (entity, mesh) in self
@@ -609,7 +625,7 @@ impl Scene {
             let material = self
                 .world
                 .get::<&crate::components::Material>(entity)
-                .map(|m| *m)
+                .map(|m| (*m).clone())
                 .unwrap_or_default();
 
             let name = self
@@ -618,11 +634,15 @@ impl Scene {
                 .map(|n| n.0.clone())
                 .unwrap_or_default();
 
+            let textures = crate::texture::MaterialTextures::resolve(&material, assets)
+                .map_err(|e| e.entity(name.clone()))?;
+
             items.push(RenderItem {
                 entity: name,
                 mesh: data,
                 model: transform.matrix(),
                 material,
+                textures,
                 terrain: None,
             });
         }
@@ -647,14 +667,21 @@ impl Scene {
             let bark = self
                 .world
                 .get::<&crate::components::Material>(entity)
-                .map(|m| *m)
+                .map(|m| (*m).clone())
                 .unwrap_or_default();
+
+            let bark_textures = crate::texture::MaterialTextures::resolve(&bark, assets)
+                .map_err(|e| e.entity(name.clone()))?;
+            let leaf_material = tree.leaf_material();
+            let leaf_textures = crate::texture::MaterialTextures::resolve(&leaf_material, assets)
+                .map_err(|e| e.entity(name.clone()))?;
 
             items.push(RenderItem {
                 entity: name.clone(),
                 mesh: grown.bark,
                 model,
                 material: bark,
+                textures: bark_textures,
                 terrain: None,
             });
             if let Some(leaves) = grown.leaves {
@@ -662,7 +689,8 @@ impl Scene {
                     entity: name,
                     mesh: leaves,
                     model,
-                    material: tree.leaf_material(),
+                    material: leaf_material,
+                    textures: leaf_textures,
                     terrain: None,
                 });
             }
@@ -705,6 +733,10 @@ impl Scene {
                     // what a terrain with no layers at all would use, and the
                     // shader replaces both the moment there is one.
                     material: crate::components::Material::default(),
+                    // Terrain does not sample a material's maps in M26: it
+                    // shades itself from its layers, and a textured × terrain
+                    // producer is the variant the material design defers.
+                    textures: crate::texture::MaterialTextures::default(),
                     terrain: Some(terrain.clone()),
                 }
             })

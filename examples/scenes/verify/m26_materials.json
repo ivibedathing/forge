@@ -1,0 +1,332 @@
+{
+  "name": "m26_materials",
+  "environment": {
+    "sky": true,
+    "shadows": true,
+    "shadow_distance": 24.0,
+    "samples": 4
+  },
+  "entities": [
+    {
+      "name": "Cam",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            4.4,
+            7.6
+          ],
+          "rotation": [
+            -24.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "fov": 42.0,
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "rotation": [
+            -52.0,
+            -38.0,
+            0.0
+          ]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [
+            1.0,
+            0.97,
+            0.9
+          ],
+          "intensity": 1.15
+        }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [
+            0.55,
+            0.62,
+            0.75
+          ],
+          "intensity": 0.1
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "scale": [
+            16.0,
+            1.0,
+            16.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:plane"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "roughness": 0.75,
+          "albedo_map": "../../textures/checker.png",
+          "uv_scale": [
+            6.0,
+            6.0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PlainRough",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -3.6,
+            0.1,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.75,
+            0.32,
+            0.24
+          ],
+          "roughness": 0.55
+        }
+      ]
+    },
+    {
+      "name": "PlainMetal",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.8,
+            0.1,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.95,
+            0.72,
+            0.28
+          ],
+          "metallic": 1.0,
+          "roughness": 0.18
+        }
+      ]
+    },
+    {
+      "name": "OrmSweep",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.1,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.72,
+            0.66,
+            0.55
+          ],
+          "metallic": 1.0,
+          "roughness": 1.0,
+          "orm_map": "../../textures/panel_orm.png"
+        }
+      ]
+    },
+    {
+      "name": "Bumped",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.8,
+            0.1,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "asset": "../../materials/dented.json"
+        }
+      ]
+    },
+    {
+      "name": "CheckerBox",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            3.6,
+            0.1,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            32.0,
+            0.0
+          ],
+          "scale": [
+            1.4,
+            1.4,
+            1.4
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "roughness": 0.45,
+          "albedo_map": "../../textures/checker.png",
+          "uv_scale": [
+            2.0,
+            2.0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "LeafCard",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -3.1,
+            0.15,
+            2.6
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            2.2,
+            2.2,
+            2.2
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:plane"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "roughness": 0.8,
+          "albedo_map": "../../textures/leaf.png",
+          "alpha_cutoff": 0.5
+        }
+      ]
+    },
+    {
+      "name": "GlassSlab",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            2.0,
+            -0.28,
+            2.3
+          ],
+          "rotation": [
+            0.0,
+            -18.0,
+            0.0
+          ],
+          "scale": [
+            2.6,
+            1.4,
+            0.8
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.92,
+            0.96,
+            0.94
+          ],
+          "roughness": 0.06,
+          "alpha": 1.0,
+          "transmission": 0.94,
+          "ior": 1.52,
+          "thickness": 0.95,
+          "attenuation": [
+            0.55,
+            0.86,
+            0.7
+          ]
+        }
+      ]
+    }
+  ]
+}

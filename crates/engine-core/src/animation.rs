@@ -232,6 +232,13 @@ pub fn set_field(
                 "emissive" => c.emissive = v3,
                 "alpha" => c.alpha = scalar,
                 "transmission" => c.transmission = scalar,
+                // M26. The maps themselves are paths, so they never arrive
+                // here; `uv_scale`/`uv_offset` are in `NOT_ANIMATABLE`.
+                "alpha_cutoff" => c.alpha_cutoff = scalar,
+                "normal_strength" => c.normal_strength = scalar,
+                "ior" => c.ior = scalar,
+                "thickness" => c.thickness = scalar,
+                "attenuation" => c.attenuation = v3,
                 _ => return false,
             }
         }
@@ -543,6 +550,13 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     ("Road", "skirt"),
     ("Road", "segment_length"),
     ("Road", "segment_angle"),
+    // A different reason, and the only one of its kind: a clip's values are
+    // scalars and 3-vectors, and these are 2-vectors, which the format cannot
+    // spell. Scrolling UVs is the feature that would want them and it is
+    // deferred with the reproducible clock it needs — see the material design
+    // doc's §12.
+    ("Material", "uv_scale"),
+    ("Material", "uv_offset"),
 ];
 
 /// Whether a field is vector-shaped in the published schema (3-element

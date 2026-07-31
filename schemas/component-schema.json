@@ -532,7 +532,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Surface appearance, in the metallic/roughness parameterization every\nmainstream engine and glTF file uses.\n\nAll color fields are **linear** RGB in `[0, 1]` — physical reflectance, not\nsRGB-encoded screen values. The engine never silently decodes an authored\ncolor; the PNG pixel is the lit, sRGB-encoded result, so `albedo: [0.5,\n0.5, 0.5]` under full light reads back ≈188, not 128.",
+        "description": "Surface appearance, in the metallic/roughness parameterization every\nmainstream engine and glTF file uses.\n\nAll color fields are **linear** RGB in `[0, 1]` — physical reflectance, not\nsRGB-encoded screen values. The engine never silently decodes an authored\ncolor; the PNG pixel is the lit, sRGB-encoded result, so `albedo: [0.5,\n0.5, 0.5]` under full light reads back ≈188, not 128.\n\nSince M26 a material may instead be a **file**: `{\"type\": \"Material\",\n\"asset\": \"materials/asphalt.json\"}` names a JSON document holding these same\nfields minus the `\"type\"`. `asset` is exclusive with every other field —\nsetting both is `material_asset_with_fields` — because serde cannot tell an\nabsent field from one written at its default, so a partial override would\nresolve to something the file does not say. A variant is a second file.",
         "properties": {
           "albedo": {
             "default": [
@@ -550,6 +550,13 @@
             "minItems": 3,
             "type": "array"
           },
+          "albedo_map": {
+            "description": "An sRGB colour texture, **multiplied** by `albedo` (M26).\n\nA tint over the map, not a replacement — which means the default\n`[0.8, 0.8, 0.8]` darkens an imported texture by 20% unless the file\nsays `\"albedo\": [1, 1, 1]` beside the map. `engine import` writes that\nexplicitly; a hand-authored material has to.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "alpha": {
             "default": 1.0,
             "description": "Uniform opacity: `1` = opaque, `0` = invisible. Range `[0, 1]`.\n\nA flat blend with no view dependence — the \"ghost this object\" knob.\nAnything below 1 moves the entity out of the opaque pass and into the\nsorted blended one, where it tests depth but does not write it.",
@@ -557,6 +564,38 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "type": "number"
+          },
+          "alpha_cutoff": {
+            "default": 0.0,
+            "description": "Above 0, a pixel whose `albedo_map` alpha falls below this is\ndiscarded — and so is its shadow, through a second caster pipeline with\na fragment stage. This is what an alpha-cut leaf needs. Range `[0, 1]`;\n`0` (the default) cuts nothing, so the depth-only caster pass every\ncurrent scene uses is untouched.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "asset": {
+            "description": "A `materials/*.json` file holding this material, relative to the scene\nfile (invariant 3). Exclusive with every other field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attenuation": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "What survives that path, per linear-RGB channel: transmitted colour is\nscaled by `exp(-(1 - attenuation) * thickness)`. `[1, 1, 1]` absorbs\nnothing.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
           },
           "emissive": {
             "default": [
@@ -575,6 +614,21 @@
             "minItems": 3,
             "type": "array"
           },
+          "emissive_map": {
+            "description": "An sRGB colour texture multiplied by `emissive`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ior": {
+            "default": 1.0,
+            "description": "Index of refraction, `1.0` (the default) being no bending at all.\nRead only by a transmissive surface, where it refracts the view vector\nagainst the shading normal and offsets the scene-colour sample. Range\n`[1, 3]` — glass is 1.5, water 1.33, diamond 2.4.",
+            "format": "float",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "type": "number"
+          },
           "metallic": {
             "default": 0.0,
             "description": "`0` = dielectric, `1` = metal. Metals have no diffuse; their specular\nis tinted by `albedo`. Range `[0, 1]`.",
@@ -583,11 +637,40 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "normal_map": {
+            "description": "A tangent-space normal map, linear data. The tangent frame is derived\nper pixel from screen-space derivatives rather than stored per vertex,\nso this works unmodified on `Water`, `Terrain`, `Road`, `Tree` and\n`Cloud` geometry, none of which carries tangents.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "normal_strength": {
+            "default": 1.0,
+            "description": "Scales the normal map's tangent-space XY. The first thing anyone does\nwith a normal map is discover it is too strong, and the alternative is\nre-authoring the texture.",
+            "format": "float",
+            "maximum": 8.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "orm_map": {
+            "description": "Occlusion in R, roughness in G, metallic in B — glTF's packing, so an\nimport is a file copy rather than a channel re-pack. Linear data, never\ncolour. R multiplies the ambient and sky terms only, never the direct\nsun: that is what makes it *ambient* occlusion rather than a second\nshadow. G and B multiply `roughness` and `metallic`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "roughness": {
             "default": 0.8999999761581421,
             "description": "Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.\nRange `[0, 1]`.",
             "format": "float",
             "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "thickness": {
+            "default": 0.0,
+            "description": "How far light travels inside the surface, in metres. Both the scale of\nthe refraction offset and the Beer–Lambert path length, so a thick block\nof ice is finally greener than a thin one. `0` is the pre-M26 behaviour.",
+            "format": "float",
             "minimum": 0.0,
             "type": "number"
           },
@@ -602,6 +685,33 @@
           "type": {
             "const": "Material",
             "type": "string"
+          },
+          "uv_offset": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "uv_scale": {
+            "default": [
+              1.0,
+              1.0
+            ],
+            "description": "Tiling for every map on this material: UV × `uv_scale` + `uv_offset`.\nSampling repeats on both axes, so `[20, 20]` is twenty tiles.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
           }
         },
         "required": [
@@ -2424,7 +2534,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Surface appearance, in the metallic/roughness parameterization every\nmainstream engine and glTF file uses.\n\nAll color fields are **linear** RGB in `[0, 1]` — physical reflectance, not\nsRGB-encoded screen values. The engine never silently decodes an authored\ncolor; the PNG pixel is the lit, sRGB-encoded result, so `albedo: [0.5,\n0.5, 0.5]` under full light reads back ≈188, not 128.",
+            "description": "Surface appearance, in the metallic/roughness parameterization every\nmainstream engine and glTF file uses.\n\nAll color fields are **linear** RGB in `[0, 1]` — physical reflectance, not\nsRGB-encoded screen values. The engine never silently decodes an authored\ncolor; the PNG pixel is the lit, sRGB-encoded result, so `albedo: [0.5,\n0.5, 0.5]` under full light reads back ≈188, not 128.\n\nSince M26 a material may instead be a **file**: `{\"type\": \"Material\",\n\"asset\": \"materials/asphalt.json\"}` names a JSON document holding these same\nfields minus the `\"type\"`. `asset` is exclusive with every other field —\nsetting both is `material_asset_with_fields` — because serde cannot tell an\nabsent field from one written at its default, so a partial override would\nresolve to something the file does not say. A variant is a second file.",
             "properties": {
               "albedo": {
                 "default": [
@@ -2442,6 +2552,13 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "albedo_map": {
+                "description": "An sRGB colour texture, **multiplied** by `albedo` (M26).\n\nA tint over the map, not a replacement — which means the default\n`[0.8, 0.8, 0.8]` darkens an imported texture by 20% unless the file\nsays `\"albedo\": [1, 1, 1]` beside the map. `engine import` writes that\nexplicitly; a hand-authored material has to.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "alpha": {
                 "default": 1.0,
                 "description": "Uniform opacity: `1` = opaque, `0` = invisible. Range `[0, 1]`.\n\nA flat blend with no view dependence — the \"ghost this object\" knob.\nAnything below 1 moves the entity out of the opaque pass and into the\nsorted blended one, where it tests depth but does not write it.",
@@ -2449,6 +2566,38 @@
                 "maximum": 1.0,
                 "minimum": 0.0,
                 "type": "number"
+              },
+              "alpha_cutoff": {
+                "default": 0.0,
+                "description": "Above 0, a pixel whose `albedo_map` alpha falls below this is\ndiscarded — and so is its shadow, through a second caster pipeline with\na fragment stage. This is what an alpha-cut leaf needs. Range `[0, 1]`;\n`0` (the default) cuts nothing, so the depth-only caster pass every\ncurrent scene uses is untouched.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "asset": {
+                "description": "A `materials/*.json` file holding this material, relative to the scene\nfile (invariant 3). Exclusive with every other field.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "attenuation": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "What survives that path, per linear-RGB channel: transmitted colour is\nscaled by `exp(-(1 - attenuation) * thickness)`. `[1, 1, 1]` absorbs\nnothing.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
               },
               "emissive": {
                 "default": [
@@ -2467,6 +2616,21 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "emissive_map": {
+                "description": "An sRGB colour texture multiplied by `emissive`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ior": {
+                "default": 1.0,
+                "description": "Index of refraction, `1.0` (the default) being no bending at all.\nRead only by a transmissive surface, where it refracts the view vector\nagainst the shading normal and offsets the scene-colour sample. Range\n`[1, 3]` — glass is 1.5, water 1.33, diamond 2.4.",
+                "format": "float",
+                "maximum": 3.0,
+                "minimum": 1.0,
+                "type": "number"
+              },
               "metallic": {
                 "default": 0.0,
                 "description": "`0` = dielectric, `1` = metal. Metals have no diffuse; their specular\nis tinted by `albedo`. Range `[0, 1]`.",
@@ -2475,11 +2639,40 @@
                 "minimum": 0.0,
                 "type": "number"
               },
+              "normal_map": {
+                "description": "A tangent-space normal map, linear data. The tangent frame is derived\nper pixel from screen-space derivatives rather than stored per vertex,\nso this works unmodified on `Water`, `Terrain`, `Road`, `Tree` and\n`Cloud` geometry, none of which carries tangents.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "normal_strength": {
+                "default": 1.0,
+                "description": "Scales the normal map's tangent-space XY. The first thing anyone does\nwith a normal map is discover it is too strong, and the alternative is\nre-authoring the texture.",
+                "format": "float",
+                "maximum": 8.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "orm_map": {
+                "description": "Occlusion in R, roughness in G, metallic in B — glTF's packing, so an\nimport is a file copy rather than a channel re-pack. Linear data, never\ncolour. R multiplies the ambient and sky terms only, never the direct\nsun: that is what makes it *ambient* occlusion rather than a second\nshadow. G and B multiply `roughness` and `metallic`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "roughness": {
                 "default": 0.8999999761581421,
                 "description": "Perceptual roughness: `0` = mirror-tight highlight, `1` = matte.\nRange `[0, 1]`.",
                 "format": "float",
                 "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "thickness": {
+                "default": 0.0,
+                "description": "How far light travels inside the surface, in metres. Both the scale of\nthe refraction offset and the Beer–Lambert path length, so a thick block\nof ice is finally greener than a thin one. `0` is the pre-M26 behaviour.",
+                "format": "float",
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -2494,6 +2687,33 @@
               "type": {
                 "const": "Material",
                 "type": "string"
+              },
+              "uv_offset": {
+                "default": [
+                  0.0,
+                  0.0
+                ],
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "uv_scale": {
+                "default": [
+                  1.0,
+                  1.0
+                ],
+                "description": "Tiling for every map on this material: UV × `uv_scale` + `uv_offset`.\nSampling repeats on both axes, so `[20, 20]` is twenty tiles.",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
               }
             },
             "required": [

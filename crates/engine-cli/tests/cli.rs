@@ -3366,3 +3366,104 @@ fn a_filmstrip_reports_the_digest_of_the_sheet_it_wrote() {
         "the strip that was written is summarized too"
     );
 }
+
+/// `engine import` (M26): a glTF model's materials become files the engine
+/// reads, and the images it had embedded become PNGs on disk.
+///
+/// The whole point is that the result is an *ordinary* scene — so the test's
+/// real assertion is that `engine validate` accepts everything the import
+/// wrote, references and decodes and all.
+#[test]
+fn import_writes_material_files_and_the_textures_they_reference() {
+    let scene = scene_file(
+        "import",
+        "{\n  \"name\": \"imported\",\n  \"entities\": []\n}\n",
+    );
+    let dir = scene.parent().unwrap().to_path_buf();
+    let model = repo_path("examples/meshes/textured_quad.gltf");
+
+    let output = engine()
+        .arg("import")
+        .arg(&model)
+        .arg("--into")
+        .arg(&scene)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the report is one JSON object");
+    assert_eq!(report["entity"], "textured_quad");
+    assert_eq!(report["materials"].as_array().unwrap().len(), 1);
+    // Albedo, normal, and the repacked ORM — three files for four glTF
+    // textures, because occlusion and metallic-roughness pack into one.
+    assert_eq!(report["textures"].as_array().unwrap().len(), 3);
+
+    let material = dir.join("materials/textured_quad_stained_glass.json");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&material).unwrap()).unwrap();
+    // The maps are relative to the *material file*, which is what makes one
+    // shareable between scenes in different directories.
+    assert_eq!(
+        written["albedo_map"],
+        "../textures/textured_quad_stained_glass_albedo.png"
+    );
+    // §11: the importer knows there is a map, so it writes the tint out
+    // explicitly rather than leaving the 0.8 default to darken the artist's
+    // texture by 20% for a reason nobody would guess.
+    assert_eq!(written["albedo"], serde_json::json!([1.0, 1.0, 1.0]));
+    // The three volume extensions land on the three M26 fields.
+    assert_eq!(written["ior"], 1.5);
+    assert_eq!(written["thickness"], 0.4);
+    assert_eq!(written["transmission"], 0.8);
+    // alphaMode MASK with its cutoff, and the normal texture's scale.
+    assert_eq!(written["alpha_cutoff"], 0.4);
+    assert_eq!(written["normal_strength"], 0.6);
+
+    // The occlusion repack is lossy and says so rather than picking a winner
+    // quietly.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("repacked into one orm_map"), "{stderr}");
+
+    // Everything it wrote is a file the engine reads.
+    let validate = engine()
+        .arg("validate")
+        .arg(&scene)
+        .arg(&material)
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "the import should validate: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    // Re-importing writes the same bytes: names come from the material and the
+    // model, and textures are deduped by content hash, so nothing accumulates.
+    let before: Vec<(std::path::PathBuf, Vec<u8>)> = std::fs::read_dir(dir.join("textures"))
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let bytes = std::fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    let again = engine()
+        .arg("import")
+        .arg(&model)
+        .arg("--into")
+        .arg(&scene)
+        .output()
+        .unwrap();
+    assert!(again.status.success());
+    for (path, bytes) in before {
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "re-importing rewrote {} differently",
+            path.display()
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}

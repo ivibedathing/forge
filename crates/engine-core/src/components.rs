@@ -131,9 +131,21 @@ impl Default for Camera {
 /// sRGB-encoded screen values. The engine never silently decodes an authored
 /// color; the PNG pixel is the lit, sRGB-encoded result, so `albedo: [0.5,
 /// 0.5, 0.5]` under full light reads back ≈188, not 128.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+///
+/// Since M26 a material may instead be a **file**: `{"type": "Material",
+/// "asset": "materials/asphalt.json"}` names a JSON document holding these same
+/// fields minus the `"type"`. `asset` is exclusive with every other field —
+/// setting both is `material_asset_with_fields` — because serde cannot tell an
+/// absent field from one written at its default, so a partial override would
+/// resolve to something the file does not say. A variant is a second file.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Material {
+    /// A `materials/*.json` file holding this material, relative to the scene
+    /// file (invariant 3). Exclusive with every other field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+
     #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub albedo: Vec3,
     /// `0` = dielectric, `1` = metal. Metals have no diffuse; their specular
@@ -172,6 +184,74 @@ pub struct Material {
     /// tinted by its thickness — see `materials-lighting-design.md`.
     #[schemars(range(min = 0.0, max = 1.0))]
     pub transmission: f32,
+
+    /// An sRGB colour texture, **multiplied** by `albedo` (M26).
+    ///
+    /// A tint over the map, not a replacement — which means the default
+    /// `[0.8, 0.8, 0.8]` darkens an imported texture by 20% unless the file
+    /// says `"albedo": [1, 1, 1]` beside the map. `engine import` writes that
+    /// explicitly; a hand-authored material has to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub albedo_map: Option<String>,
+
+    /// Occlusion in R, roughness in G, metallic in B — glTF's packing, so an
+    /// import is a file copy rather than a channel re-pack. Linear data, never
+    /// colour. R multiplies the ambient and sky terms only, never the direct
+    /// sun: that is what makes it *ambient* occlusion rather than a second
+    /// shadow. G and B multiply `roughness` and `metallic`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orm_map: Option<String>,
+
+    /// A tangent-space normal map, linear data. The tangent frame is derived
+    /// per pixel from screen-space derivatives rather than stored per vertex,
+    /// so this works unmodified on `Water`, `Terrain`, `Road`, `Tree` and
+    /// `Cloud` geometry, none of which carries tangents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normal_map: Option<String>,
+
+    /// An sRGB colour texture multiplied by `emissive`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emissive_map: Option<String>,
+
+    /// Tiling for every map on this material: UV × `uv_scale` + `uv_offset`.
+    /// Sampling repeats on both axes, so `[20, 20]` is twenty tiles.
+    #[schemars(with = "[f32; 2]")]
+    pub uv_scale: Vec2,
+    #[schemars(with = "[f32; 2]")]
+    pub uv_offset: Vec2,
+
+    /// Above 0, a pixel whose `albedo_map` alpha falls below this is
+    /// discarded — and so is its shadow, through a second caster pipeline with
+    /// a fragment stage. This is what an alpha-cut leaf needs. Range `[0, 1]`;
+    /// `0` (the default) cuts nothing, so the depth-only caster pass every
+    /// current scene uses is untouched.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub alpha_cutoff: f32,
+
+    /// Scales the normal map's tangent-space XY. The first thing anyone does
+    /// with a normal map is discover it is too strong, and the alternative is
+    /// re-authoring the texture.
+    #[schemars(range(min = 0.0, max = 8.0))]
+    pub normal_strength: f32,
+
+    /// Index of refraction, `1.0` (the default) being no bending at all.
+    /// Read only by a transmissive surface, where it refracts the view vector
+    /// against the shading normal and offsets the scene-colour sample. Range
+    /// `[1, 3]` — glass is 1.5, water 1.33, diamond 2.4.
+    #[schemars(range(min = 1.0, max = 3.0))]
+    pub ior: f32,
+
+    /// How far light travels inside the surface, in metres. Both the scale of
+    /// the refraction offset and the Beer–Lambert path length, so a thick block
+    /// of ice is finally greener than a thin one. `0` is the pre-M26 behaviour.
+    #[schemars(range(min = 0.0))]
+    pub thickness: f32,
+
+    /// What survives that path, per linear-RGB channel: transmitted colour is
+    /// scaled by `exp(-(1 - attenuation) * thickness)`. `[1, 1, 1]` absorbs
+    /// nothing.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub attenuation: Vec3,
 }
 
 impl Material {
@@ -181,17 +261,120 @@ impl Material {
     pub fn is_transparent(&self) -> bool {
         self.alpha < 1.0 || self.transmission > 0.0
     }
+
+    /// Whether this material samples anything — the test that routes a draw to
+    /// the textured pipeline variant (M26).
+    ///
+    /// A material with no maps compiles and draws through the pipeline that
+    /// compiles `mesh.wgsl` as it sits on disk, rather than through a textured
+    /// pipeline with white textures bound. `x * 1.0` is exact in IEEE-754, but
+    /// that was never the risk: the risk is that inserting the multiply changes
+    /// the code *around* M16's four untouchable lines, and whether the compiler
+    /// contracts `a*b + c` into an FMA depends on exactly that.
+    pub fn has_maps(&self) -> bool {
+        self.albedo_map.is_some()
+            || self.orm_map.is_some()
+            || self.normal_map.is_some()
+            || self.emissive_map.is_some()
+    }
+
+    /// Whether this material bends what is behind it — the gate on the frame's
+    /// colour copy. With none in a scene, the pass structure, the attachments
+    /// and the load/store ops are byte for byte the pre-M26 ones.
+    pub fn refracts(&self) -> bool {
+        self.is_transparent() && (self.ior != 1.0 || self.thickness > 0.0)
+    }
+
+    /// Every texture reference this material makes, with the colour space its
+    /// slot reads it in. **The slot decides the space** — never the file, never
+    /// a field — which is what makes the most common texture bug in any engine
+    /// unrepresentable.
+    pub fn maps(&self) -> impl Iterator<Item = (&str, &str, crate::texture::ColorSpace)> {
+        use crate::texture::ColorSpace::{Linear, Srgb};
+        [
+            ("albedo_map", self.albedo_map.as_deref(), Srgb),
+            ("orm_map", self.orm_map.as_deref(), Linear),
+            ("normal_map", self.normal_map.as_deref(), Linear),
+            ("emissive_map", self.emissive_map.as_deref(), Srgb),
+        ]
+        .into_iter()
+        .filter_map(|(field, asset, space)| asset.map(|asset| (field, asset, space)))
+    }
+}
+
+/// Written by hand for one reason: a material that names an asset serializes as
+/// **only** that reference.
+///
+/// The fields on such a component are the resolved contents of the file, filled
+/// in at load so that everything downstream — the renderer, the editor, a
+/// fragment's inherited material — sees a complete material without knowing
+/// where it came from. Writing those resolved fields back out beside `asset`
+/// would produce a scene that fails its own validation
+/// (`material_asset_with_fields`), which is exactly what `engine simulate
+/// --bake` would do on a scene with a shared material. So the reference wins,
+/// and the file it names stays the single source of truth (invariant 8).
+impl Serialize for Material {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        if let Some(asset) = &self.asset {
+            let mut out = serializer.serialize_struct("Material", 1)?;
+            out.serialize_field("asset", asset)?;
+            return out.end();
+        }
+
+        let maps = [
+            ("albedo_map", &self.albedo_map),
+            ("orm_map", &self.orm_map),
+            ("normal_map", &self.normal_map),
+            ("emissive_map", &self.emissive_map),
+        ];
+        let present = maps.iter().filter(|(_, map)| map.is_some()).count();
+
+        let mut out = serializer.serialize_struct("Material", 13 + present)?;
+        out.serialize_field("albedo", &self.albedo)?;
+        out.serialize_field("metallic", &self.metallic)?;
+        out.serialize_field("roughness", &self.roughness)?;
+        out.serialize_field("emissive", &self.emissive)?;
+        out.serialize_field("alpha", &self.alpha)?;
+        out.serialize_field("transmission", &self.transmission)?;
+        for (field, map) in maps {
+            if let Some(map) = map {
+                out.serialize_field(field, map)?;
+            }
+        }
+        out.serialize_field("uv_scale", &self.uv_scale)?;
+        out.serialize_field("uv_offset", &self.uv_offset)?;
+        out.serialize_field("alpha_cutoff", &self.alpha_cutoff)?;
+        out.serialize_field("normal_strength", &self.normal_strength)?;
+        out.serialize_field("ior", &self.ior)?;
+        out.serialize_field("thickness", &self.thickness)?;
+        out.serialize_field("attenuation", &self.attenuation)?;
+        out.end()
+    }
 }
 
 impl Default for Material {
     fn default() -> Self {
         Self {
+            asset: None,
             albedo: Vec3::splat(0.8),
             metallic: 0.0,
             roughness: 0.9,
             emissive: Vec3::ZERO,
             alpha: 1.0,
             transmission: 0.0,
+            albedo_map: None,
+            orm_map: None,
+            normal_map: None,
+            emissive_map: None,
+            uv_scale: Vec2::ONE,
+            uv_offset: Vec2::ZERO,
+            alpha_cutoff: 0.0,
+            normal_strength: 1.0,
+            ior: 1.0,
+            thickness: 0.0,
+            attenuation: Vec3::ONE,
         }
     }
 }
@@ -1349,11 +1532,8 @@ impl Tree {
     pub fn leaf_material(&self) -> Material {
         Material {
             albedo: self.leaf_color,
-            metallic: 0.0,
             roughness: self.leaf_roughness,
-            emissive: Vec3::ZERO,
-            alpha: 1.0,
-            transmission: 0.0,
+            ..Material::default()
         }
     }
 }

@@ -473,7 +473,10 @@ mod tests {
         let sink = commits.clone();
         let state = Rc::new(RefCell::new(InspectorState::default()));
         let mut harness = egui_kittest::Harness::builder()
-            .with_size(egui::Vec2::new(320.0, 720.0))
+            // Tall enough that the "+ add component" menu is not clipped: a
+            // Material's widget list grew by eleven fields in M26 and this
+            // harness does not scroll.
+            .with_size(egui::Vec2::new(320.0, 1600.0))
             .build_ui(move |ui| {
                 let mut state = state.borrow_mut();
                 let edits = super::ui(ui, &mut state, &schema, &raw, "Cube1", false);

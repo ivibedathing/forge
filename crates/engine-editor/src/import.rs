@@ -24,6 +24,9 @@ type Result<T> = std::result::Result<T, EngineError>;
 pub struct ImportedAsset {
     pub asset: String,
     pub base_name: String,
+    /// The first `materials/*.json` the model's own materials were written to
+    /// (M26), scene-relative. `None` for a model that carries none.
+    pub material: Option<String>,
 }
 
 /// Whether a dropped path is something [`import`] can handle.
@@ -50,6 +53,17 @@ pub fn import(scene_path: &Path, dropped: &Path) -> Result<ImportedAsset> {
             )
         })?;
 
+    // The materials are imported through the *same* code path `engine import`
+    // uses, deliberately: an import reachable only by dropping a file on a GUI
+    // is exactly the bespoke integration layer this project exists to avoid.
+    // A model with no materials, or one whose materials fail to parse, still
+    // imports as geometry — the mesh is what was dropped.
+    let material = |source: &Path| {
+        engine_assets::import_materials(source, scene_dir, "textures", "materials")
+            .ok()
+            .and_then(|imported| imported.materials.into_iter().next())
+    };
+
     match extension(dropped).as_deref() {
         Some("blend") => {
             let blender = find_blender().ok_or_else(|| {
@@ -63,6 +77,7 @@ pub fn import(scene_path: &Path, dropped: &Path) -> Result<ImportedAsset> {
             Ok(ImportedAsset {
                 asset: format!("meshes/{stem}.glb"),
                 base_name: stem,
+                material: material(&out),
             })
         }
         Some(ext @ ("gltf" | "glb")) => {
@@ -71,6 +86,7 @@ pub fn import(scene_path: &Path, dropped: &Path) -> Result<ImportedAsset> {
                 return Ok(ImportedAsset {
                     asset: relative,
                     base_name: stem,
+                    material: material(dropped),
                 });
             }
             // Outside: copy beside the scene. (A .gltf with external buffer
@@ -87,6 +103,7 @@ pub fn import(scene_path: &Path, dropped: &Path) -> Result<ImportedAsset> {
             Ok(ImportedAsset {
                 asset: format!("meshes/{stem}.{ext}"),
                 base_name: stem,
+                material: material(&out),
             })
         }
         _ => Err(EngineError::new(

@@ -123,12 +123,19 @@
     {
      "type": "Material",
      "albedo": [
-      0.3,
-      0.29,
-      0.31
+      0.82,
+      0.8,
+      0.83
      ],
      "metallic": 0.15,
-     "roughness": 0.55
+     "roughness": 0.55,
+     "albedo_map": "../textures/granite.png",
+     "normal_map": "../textures/granite_normal.png",
+     "uv_scale": [
+      2.0,
+      2.0
+     ],
+     "normal_strength": 0.8
     },
     {
      "type": "Collider",
@@ -1496,7 +1503,14 @@
      ],
      "metallic": 0.05,
      "roughness": 0.1,
-     "transmission": 0.55
+     "transmission": 0.55,
+     "ior": 1.31,
+     "thickness": 0.9,
+     "attenuation": [
+      0.72,
+      0.92,
+      0.9
+     ]
     },
     {
      "type": "Collider",
@@ -1542,7 +1556,14 @@
      ],
      "metallic": 0.04,
      "roughness": 0.08,
-     "transmission": 0.62
+     "transmission": 0.62,
+     "ior": 1.31,
+     "thickness": 0.45,
+     "attenuation": [
+      0.72,
+      0.92,
+      0.9
+     ]
     }
    ]
   },
@@ -1654,7 +1675,14 @@
      ],
      "metallic": 0.04,
      "roughness": 0.05,
-     "transmission": 0.66
+     "transmission": 0.66,
+     "ior": 1.31,
+     "thickness": 0.35,
+     "attenuation": [
+      0.72,
+      0.92,
+      0.9
+     ]
     }
    ]
   },

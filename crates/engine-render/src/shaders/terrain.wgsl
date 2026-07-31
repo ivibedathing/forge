@@ -31,19 +31,10 @@
 // nothing else, which is exactly what licenses per-pixel detail far finer than
 // that grid.
 
-const MAX_TERRAIN_LAYERS: u32 = 4u;
-
-// One material a terrain paints itself with, claiming a band of world height
-// and a band of slope.
-struct TerrainLayer {
-    // rgb = linear albedo, w = roughness.
-    albedo_roughness: vec4<f32>,
-    // x, y = world-Y band in metres; z, w = slope band in degrees.
-    bands: vec4<f32>,
-    // x = height fade in metres, y = boundary jitter, z = slope fade in
-    // degrees; w unused.
-    blend_noise: vec4<f32>,
-};
+// `MAX_TERRAIN_LAYERS` and `TerrainLayer` are declared by `with_surface`
+// rather than here: they are part of the *extended object uniform's layout*,
+// which every spliced variant declares whether or not it reads it, because
+// uniform field offsets are positional.
 
 // Hash of two lattice coordinates plus a salt. The same constants the height
 // field uses in `engine-core/src/terrain.rs`, though the two fields are

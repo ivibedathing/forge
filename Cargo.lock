@@ -863,6 +863,7 @@ dependencies = [
  "font8x8",
  "glam 0.33.2",
  "pollster 1.0.1",
+ "serde_json",
  "wgpu",
 ]
 

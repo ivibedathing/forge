@@ -231,6 +231,7 @@ pub fn grid_items() -> Vec<RenderItem> {
                 emissive: albedo * 0.15,
                 ..Material::default()
             },
+            textures: Default::default(),
             terrain: None,
         });
     };
