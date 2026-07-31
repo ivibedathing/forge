@@ -511,3 +511,139 @@ fn alpha_cutoff_removes_pixels_and_their_shadow() {
          the quad it was drawn on (cut {cut_shadow} vs solid {solid_shadow})"
     );
 }
+
+/// A patterned backdrop with a slab in front of it, so what changes between
+/// renders is only what the slab does to the frame behind it.
+fn slab_scene(material: &str) -> String {
+    format!(
+        r#"{{
+  "name": "r",
+  "entities": [
+    {{ "name": "Camera", "components": [
+      {{ "type": "Transform", "position": [0.0, 0.0, 3.0] }},
+      {{ "type": "Camera", "fov": 45.0, "active": true }}
+    ]}},
+    {{ "name": "Sun", "components": [
+      {{ "type": "Transform", "rotation": [-25.0, 20.0, 0.0] }},
+      {{ "type": "DirectionalLight", "intensity": 1.0 }}
+    ]}},
+    {{ "name": "Sky", "components": [
+      {{ "type": "AmbientLight", "intensity": 0.25 }}
+    ]}},
+    {{ "name": "Backdrop", "components": [
+      {{ "type": "Transform", "position": [0.0, 0.0, -1.0], "rotation": [90.0, 0.0, 0.0],
+         "scale": [6.0, 1.0, 6.0] }},
+      {{ "type": "Mesh", "asset": "builtin:plane" }},
+      {{ "type": "Material", "albedo": [1.0, 1.0, 1.0], "roughness": 0.9,
+         "albedo_map": "v_split.png", "uv_scale": [1.0, 14.0] }}
+    ]}},
+    {{ "name": "Slab", "components": [
+      {{ "type": "Transform", "position": [0.0, 0.0, 0.4], "scale": [1.6, 1.6, 0.5] }},
+      {{ "type": "Mesh", "asset": "builtin:cube" }},
+      {material}
+    ]}}
+  ]
+}}"#
+    )
+}
+
+/// `ior` bends what is behind the surface; `ior: 1.0` does not.
+#[test]
+fn refraction_displaces_what_is_behind_the_surface() {
+    if !gpu_available() {
+        return;
+    }
+    let straight = render(&slab_scene(
+        r#"{ "type": "Material", "albedo": [1.0, 1.0, 1.0], "roughness": 0.1,
+             "transmission": 0.95, "ior": 1.0, "thickness": 0.0 }"#,
+    ));
+    let bent = render(&slab_scene(
+        r#"{ "type": "Material", "albedo": [1.0, 1.0, 1.0], "roughness": 0.1,
+             "transmission": 0.95, "ior": 1.6, "thickness": 0.9 }"#,
+    ));
+
+    // The bands behind the slab are vertical, so a refracted view of them
+    // lands somewhere else; count how many pixels moved.
+    let mut moved = 0u32;
+    for y in (SIZE / 3)..(SIZE * 2 / 3) {
+        for x in (SIZE / 3)..(SIZE * 2 / 3) {
+            if straight.pixel(x, y) != bent.pixel(x, y) {
+                moved += 1;
+            }
+        }
+    }
+    // A fifth of the sampled region: a displacement only moves pixels near a
+    // band edge, and the backdrop is banded rather than noisy on purpose — a
+    // count that high cannot come from a stray highlight.
+    assert!(
+        moved > (SIZE / 3) * (SIZE / 3) / 5,
+        "an ior above 1 with thickness should displace the frame behind the \
+         slab; only {moved} pixels moved"
+    );
+}
+
+/// `thickness` is also the Beer–Lambert path length, so a coloured
+/// `attenuation` tints what comes through — the "a thick block of ice is
+/// exactly as clear as a thin one" gap, closed.
+#[test]
+fn attenuation_tints_what_comes_through() {
+    if !gpu_available() {
+        return;
+    }
+    let clear = render(&slab_scene(
+        r#"{ "type": "Material", "albedo": [1.0, 1.0, 1.0], "roughness": 0.1,
+             "transmission": 0.95, "ior": 1.05, "thickness": 1.0 }"#,
+    ));
+    let green = render(&slab_scene(
+        r#"{ "type": "Material", "albedo": [1.0, 1.0, 1.0], "roughness": 0.1,
+             "transmission": 0.95, "ior": 1.05, "thickness": 1.0,
+             "attenuation": [0.2, 0.95, 0.35] }"#,
+    ));
+
+    let centre = (SIZE / 2, SIZE / 2);
+    let (a, b) = (clear.pixel(centre.0, centre.1), green.pixel(centre.0, centre.1));
+    assert!(
+        b[1] as i32 - b[0] as i32 > a[1] as i32 - a[0] as i32,
+        "a green attenuation must leave more green than red behind it \
+         ({a:?} clear vs {b:?} tinted)"
+    );
+
+    // And a thicker slab absorbs more of it than a thin one, which is the
+    // whole point of carrying a path length at all.
+    let thin = render(&slab_scene(
+        r#"{ "type": "Material", "albedo": [1.0, 1.0, 1.0], "roughness": 0.1,
+             "transmission": 0.95, "ior": 1.05, "thickness": 0.1,
+             "attenuation": [0.2, 0.95, 0.35] }"#,
+    ));
+    assert!(
+        luma(thin.pixel(centre.0, centre.1)) > luma(b),
+        "a thick block must absorb more than a thin one"
+    );
+}
+
+/// The pass structure is gated, exactly as M18 gated the depth copy: with
+/// nothing refracting, the frame is the one the engine drew before M26.
+///
+/// The way that breaks is silent — an extra pass, a store op, a resolve moved
+/// one pass later — so it is asserted rather than assumed.
+#[test]
+fn a_scene_with_no_refraction_is_untouched_by_the_colour_copy() {
+    if !gpu_available() {
+        return;
+    }
+    // Transmissive, but with `ior: 1.0` and `thickness: 0.0`: it goes through
+    // the *same* blended pipeline a pre-M26 scene did, and no colour copy is
+    // allocated or written.
+    let plain = render(&slab_scene(
+        r#"{ "type": "Material", "albedo": [0.9, 0.95, 1.0], "roughness": 0.2,
+             "transmission": 0.6 }"#,
+    ));
+    let again = render(&slab_scene(
+        r#"{ "type": "Material", "albedo": [0.9, 0.95, 1.0], "roughness": 0.2,
+             "transmission": 0.6, "ior": 1.0, "thickness": 0.0 }"#,
+    ));
+    assert_eq!(
+        plain.pixels, again.pixels,
+        "spelling out the M26 defaults must be the same picture as omitting them"
+    );
+}

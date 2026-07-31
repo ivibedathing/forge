@@ -143,6 +143,12 @@ struct FrameUniform {
     /// Fixed-size array, `count` entries live. Unused slots are zeroed, which
     /// the shader never reads — it loops to `count`.
     point_lights: [PointLightUniform; MAX_POINT_LIGHTS],
+    /// World → clip (M26). Appended after the array, where it leaves every
+    /// prior field at the offset the shaders already read it from, and declared
+    /// only by the refraction variant — a shader may declare a *prefix* of the
+    /// buffer it is bound to, which is why the other five shaders that spell
+    /// this struct out did not have to change.
+    view_proj: [[f32; 4]; 4],
 }
 
 /// One point light as the frame uniform carries it, matching WGSL
@@ -434,6 +440,15 @@ impl SceneColor {
 /// have, since WGSL binds unconditionally while the reads sit behind a branch.
 struct FrameTextures {
     bind_group: wgpu::BindGroup,
+    /// The same group with the **colour copy left out** — a 1×1 placeholder in
+    /// its slot — for the opaque pass.
+    ///
+    /// Not an optimisation: on the refracting path the opaque pass is *drawing
+    /// into* that copy (directly without MSAA, as a resolve target with it), and
+    /// a texture cannot be a colour attachment and a bound resource in the same
+    /// pass. Nothing in the opaque pass reads scene colour, so leaving it out
+    /// costs nothing and the two groups share every other binding.
+    opaque_bind_group: wgpu::BindGroup,
     key: FrameTextureKey,
 }
 
@@ -638,6 +653,10 @@ pub struct SceneRenderer {
     /// Same shader as `pipeline`, blended and depth-write-off, for materials
     /// with `alpha < 1` or `transmission > 0`.
     transparent_pipeline: wgpu::RenderPipeline,
+    /// The same again with refraction spliced in (M26), for the materials that
+    /// bend what is behind them. A third pipeline rather than a branch in the
+    /// second — see its construction for the pixel that decided that.
+    refractive_pipeline: wgpu::RenderPipeline,
     /// `pipeline` with the terrain material generator spliced into its shader
     /// (M22) — see `with_surface` for why this is a separate module rather than
     /// a branch inside the shared one.
@@ -661,6 +680,9 @@ pub struct SceneRenderer {
     road_pipeline: wgpu::RenderPipeline,
     road_layout: wgpu::BindGroupLayout,
     depth_resolve_pipeline: wgpu::RenderPipeline,
+    /// Puts the opaque colour copy back over the frame — see `blit.wgsl` for
+    /// the one path that needs it.
+    blit_pipeline: wgpu::RenderPipeline,
     water_layout: wgpu::BindGroupLayout,
     cloud_layout: wgpu::BindGroupLayout,
     depth_source_layout: wgpu::BindGroupLayout,
@@ -1042,18 +1064,25 @@ impl SceneRenderer {
             label: Some("textured-shader"),
             source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_textures())),
         });
-        let textured_pipeline_for = |label: &str, blend: wgpu::BlendState, depth_write: bool| {
+        let textured_blended_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("textured-blended-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_textures_and_refraction())),
+        });
+        let textured_pipeline_for = |label: &str,
+                                     module: &wgpu::ShaderModule,
+                                     blend: wgpu::BlendState,
+                                     depth_write: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&textured_layout),
                 vertex: wgpu::VertexState {
-                    module: &textured_shader,
+                    module,
                     entry_point: Some("vs_main"),
                     buffers: &vertex_layouts,
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &textured_shader,
+                    module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -1081,11 +1110,13 @@ impl SceneRenderer {
         };
         let textured_pipeline = textured_pipeline_for(
             "textured-pipeline",
+            &textured_shader,
             wgpu::BlendState::REPLACE,
             true,
         );
         let textured_transparent_pipeline = textured_pipeline_for(
             "textured-transparent-pipeline",
+            &textured_blended_shader,
             wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             false,
         );
@@ -1106,6 +1137,58 @@ impl SceneRenderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // Refraction is a *third* blended pipeline rather than a branch inside
+        // the second, and that was measured, not assumed: compiling the
+        // refraction variant for every transparent draw moved one pixel of
+        // `m16_environment.png` by one channel step — M22's lesson repeating on
+        // the one fixture that has transmissive geometry. The added branch is
+        // never taken by a surface with `ior: 1.0` and `thickness: 0.0`, and it
+        // still changes the code the compiler sees around M16's untouchable
+        // lines, which is exactly what the rule is about.
+        //
+        // So a material that does not refract keeps the pipeline it had, whose
+        // module is `mesh.wgsl` as it sits on disk, and only a material that
+        // asks to bend light pays for a second shader.
+        let refractive_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("mesh-refractive-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_refraction())),
+        });
+        let refractive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mesh-refractive-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &refractive_shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_layouts[..2],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &refractive_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -1198,6 +1281,47 @@ impl SceneRenderer {
 
         let (depth_resolve_pipeline, depth_source_layout) =
             Self::depth_resolve_pipeline(device, samples);
+
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blit-shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blit.wgsl").into()),
+        });
+        let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blit-pipeline-layout"),
+            bind_group_layouts: &[Some(&frame_textures_layout)],
+            immediate_size: 0,
+        });
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blit-pipeline"),
+            layout: Some(&blit_layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            // This path only exists when MSAA is off, so the blit is never
+            // multisampled.
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let (hud_pipeline, hud_layout) = Self::hud_pipeline(device, format);
 
@@ -1369,6 +1493,7 @@ impl SceneRenderer {
         Self {
             pipeline,
             transparent_pipeline,
+            refractive_pipeline,
             terrain_pipeline,
             textured_pipeline,
             textured_transparent_pipeline,
@@ -1384,6 +1509,7 @@ impl SceneRenderer {
             road_objects: None,
             road_stride,
             depth_resolve_pipeline,
+            blit_pipeline,
             water_layout,
             cloud_layout,
             depth_source_layout,
@@ -2062,6 +2188,7 @@ impl SceneRenderer {
             ],
             params2: [point_light_count as f32, 0.0, 0.0, 0.0],
             point_lights,
+            view_proj: view_projection.to_cols_array_2d(),
         };
         queue.write_buffer(&self.frame_uniform.buffer, 0, bytemuck::bytes_of(&frame));
 
@@ -2529,6 +2656,23 @@ impl SceneRenderer {
         // attachments, same load and store ops, same draws — which is what
         // keeps every baseline blessed before this milestone bit-exact.
         let water_present = !water.is_empty();
+        // Refraction splits the frame the same way and for the same reason: a
+        // pass cannot sample the colour attachment it is drawing into (M26).
+        // Gated on the scene actually refracting something, so with none the
+        // pass structure, the attachments and the load/store ops are byte for
+        // byte the pre-M26 ones.
+        let refracting: Vec<bool> = items.iter().map(|item| item.material.refracts()).collect();
+        let refraction_present = refracting.iter().any(|&yes| yes);
+        let split_pass = water_present || refraction_present;
+        if refraction_present {
+            SceneColor::ensure(
+                &mut self.scene_color,
+                device,
+                self.format,
+                target_size[0],
+                target_size[1],
+            );
+        }
         if water_present {
             SceneDepth::ensure(&mut self.scene_depth, device, target_size[0], target_size[1]);
             // The source view changes every frame in the viewer (a new
@@ -2549,21 +2693,34 @@ impl SceneRenderer {
         // Group 2 for every lit pipeline, rebuilt only when one of its textures
         // was — allocating the shadow map, or a resize reallocating a copy.
         self.ensure_frame_textures(device, environment.shadows);
-        let frame_textures = &self
-            .frame_textures
-            .as_ref()
-            .expect("just ensured")
-            .bind_group;
+        let held = self.frame_textures.as_ref().expect("just ensured");
+        let frame_textures = &held.bind_group;
+        let opaque_frame_textures = &held.opaque_bind_group;
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: color_view,
-                    // With water the resolve happens at the end of the *water*
-                    // pass instead, so the multisampled color survives to be
-                    // drawn into again.
-                    resolve_target: if water_present { None } else { resolve_target },
+                    // Refraction with no MSAA has nowhere to resolve *from*, so
+                    // the opaque geometry is drawn straight into the copy and
+                    // blitted across before the blended pass. With MSAA the
+                    // multisampled attachment stays the target and the copy is
+                    // its resolve, which costs nothing extra: the resolve was
+                    // going to happen anyway, only later.
+                    view: match (refraction_present, msaa) {
+                        (true, None) => &self.scene_color.as_ref().expect("ensured above").view,
+                        _ => color_view,
+                    },
+                    // With a split pass the resolve happens at the end of the
+                    // *second* pass instead, so the multisampled color survives
+                    // to be drawn into again.
+                    resolve_target: match (refraction_present, msaa) {
+                        (true, Some(_)) => {
+                            Some(&self.scene_color.as_ref().expect("ensured above").view)
+                        }
+                        _ if split_pass => None,
+                        _ => resolve_target,
+                    },
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
@@ -2574,7 +2731,7 @@ impl SceneRenderer {
                     view: depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: if water_present {
+                        store: if split_pass {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -2596,7 +2753,7 @@ impl SceneRenderer {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-            pass.set_bind_group(2, frame_textures, &[]);
+            pass.set_bind_group(2, opaque_frame_textures, &[]);
 
             if let Some(objects) = &self.objects {
                 let draw = |pass: &mut wgpu::RenderPass<'_>, index: usize| {
@@ -2694,7 +2851,7 @@ impl SceneRenderer {
             {
                 pass.set_pipeline(&self.road_pipeline);
                 pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-                pass.set_bind_group(2, frame_textures, &[]);
+                pass.set_bind_group(2, opaque_frame_textures, &[]);
                 for (index, _) in roads.iter().enumerate() {
                     let mesh = &self.meshes[&road_keys[index]];
                     pass.set_bind_group(
@@ -2719,9 +2876,9 @@ impl SceneRenderer {
 
             // Blended geometry after every opaque surface has written depth, so
             // it is occluded by what is in front of it, and back-to-front among
-            // itself. With water in the scene this waits for the second pass,
-            // where the depth behind the water is readable.
-            if !water_present {
+            // itself. With water or refraction in the scene this waits for the
+            // second pass, where the copies behind it are readable.
+            if !split_pass {
                 self.draw_blended(
                     &mut pass,
                     &blended,
@@ -2729,15 +2886,40 @@ impl SceneRenderer {
                     &water_keys,
                     &cloud_keys,
                     &material_keys,
-                    frame_textures,
+                    &refracting,
+                    opaque_frame_textures,
                 );
                 self.draw_particles(&mut pass, particle_count, alpha_particles);
             }
         }
 
-        if water_present {
-            let scene_depth = self.scene_depth.as_ref().expect("ensured above");
-            {
+        if split_pass {
+            // The opaque colour is in the copy but not on the frame, on the one
+            // path where the copy *was* the attachment.
+            if refraction_present && msaa.is_none() {
+                let mut blit = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("scene-color-blit"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: color_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(clear),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                blit.set_pipeline(&self.blit_pipeline);
+                blit.set_bind_group(0, frame_textures, &[]);
+                blit.draw(0..3, 0..1);
+            }
+
+            if water_present {
+                let scene_depth = self.scene_depth.as_ref().expect("ensured above");
                 let mut resolve = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("depth-resolve-pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2762,7 +2944,7 @@ impl SceneRenderer {
             }
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("water-pass"),
+                label: Some("blended-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: color_view,
                     resolve_target,
@@ -2792,6 +2974,7 @@ impl SceneRenderer {
                 &water_keys,
                 &cloud_keys,
                 &material_keys,
+                &refracting,
                 frame_textures,
             );
             self.draw_particles(&mut pass, particle_count, alpha_particles);
@@ -2870,33 +3053,39 @@ impl SceneRenderer {
             .as_ref()
             .map_or(&self.color_placeholder, |copy| &copy.view);
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("frame-textures"),
-            layout: &self.frame_textures_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(shadow_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(depth_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(color_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
-                },
-            ],
+        let group = |label, colour: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.frame_textures_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(shadow_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(depth_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(colour),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
+                    },
+                ],
+            })
+        };
+        self.frame_textures = Some(FrameTextures {
+            bind_group: group("frame-textures", color_view),
+            opaque_bind_group: group("frame-textures-opaque", &self.color_placeholder),
+            key,
         });
-        self.frame_textures = Some(FrameTextures { bind_group, key });
     }
 
     /// Draw the blended list — transparent meshes and water surfaces
@@ -2914,6 +3103,7 @@ impl SceneRenderer {
         water_keys: &[usize],
         cloud_keys: &[usize],
         material_keys: &[Option<[usize; 4]>],
+        refracting: &[bool],
         frame_textures: &wgpu::BindGroup,
     ) {
         // 0 = transparent mesh, 1 = water, 2 = cloud, 3 = textured transparent
@@ -2924,12 +3114,21 @@ impl SceneRenderer {
                 Blended::Mesh(index) => {
                     let Some(objects) = &self.objects else { continue };
                     let material = material_keys[index];
-                    let kind = if material.is_some() { 3 } else { 0 };
+                    // 0 = plain, 3 = textured, 4 = plain refracting. A textured
+                    // material refracts through its own pipeline, which carries
+                    // both producers: there is no baseline to protect on that
+                    // path, so it does not need splitting the way the plain one
+                    // did.
+                    let kind = match (material.is_some(), refracting[index]) {
+                        (true, _) => 3,
+                        (false, true) => 4,
+                        (false, false) => 0,
+                    };
                     if current != Some(kind) {
-                        pass.set_pipeline(if material.is_some() {
-                            &self.textured_transparent_pipeline
-                        } else {
-                            &self.transparent_pipeline
+                        pass.set_pipeline(match kind {
+                            3 => &self.textured_transparent_pipeline,
+                            4 => &self.refractive_pipeline,
+                            _ => &self.transparent_pipeline,
                         });
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
                         pass.set_bind_group(2, frame_textures, &[]);
@@ -3569,6 +3768,13 @@ mod anchor {
     pub const AMBIENT: &str = "    let ambient = albedo * frame.ambient.rgb;\n";
     /// Its counterpart inside the sky branch.
     pub const FILL: &str = "            fill = albedo * hemisphere;\n";
+    /// The frame uniform's tail, where the refraction variant appends the
+    /// view-projection it needs to project an exit point.
+    pub const FRAME_TAIL: &str =
+        "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
+    /// The composite for a transmissive surface — the one place that decides
+    /// what is seen *through* it.
+    pub const BLENDED: &str = "            color = (lit_diffuse + fill) * out_alpha + lit_specular + reflection + emissive;\n";
 }
 
 /// The types the extended object uniform's tail names, declared by every
@@ -3620,11 +3826,12 @@ const EXTENDED_UNIFORM_TAIL: &str = "    // x = alpha, y = transmission; z and w
 ///
 /// `prelude` goes ahead of the object uniform (a producer's own declarations
 /// often reference its fields); `substitutions` are (anchor, replacement) pairs.
-fn with_surface(prelude: &str, substitutions: &[(&str, &str)]) -> std::borrow::Cow<'static, str> {
+fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, str> {
     let source = include_str!("shaders/mesh.wgsl");
 
     let mut out = source.to_string();
-    for (anchor, _) in substitutions.iter().chain(std::iter::once(&(
+    let substitutions = || producers.iter().flat_map(|p| p.substitutions.iter());
+    for (anchor, _) in substitutions().chain(std::iter::once(&(
         anchor::UNIFORM_TAIL,
         EXTENDED_UNIFORM_TAIL,
     ))) {
@@ -3637,22 +3844,38 @@ fn with_surface(prelude: &str, substitutions: &[(&str, &str)]) -> std::borrow::C
     }
 
     out = out.replace(anchor::UNIFORM_TAIL, EXTENDED_UNIFORM_TAIL);
+    let preludes: String = producers
+        .iter()
+        .map(|p| p.prelude)
+        .collect::<Vec<_>>()
+        .join("\n");
     out = out.replace(
         "struct ObjectUniform {",
-        &format!("{EXTENDED_UNIFORM_TYPES}\n{prelude}\nstruct ObjectUniform {{"),
+        &format!("{EXTENDED_UNIFORM_TYPES}\n{preludes}\nstruct ObjectUniform {{"),
     );
-    for (anchor, replacement) in substitutions {
+    for (anchor, replacement) in substitutions() {
         out = out.replace(anchor, replacement);
     }
 
     std::borrow::Cow::Owned(out)
 }
 
-/// The mesh shader with terrain's generative material spliced in (M22).
-fn with_terrain() -> std::borrow::Cow<'static, str> {
-    with_surface(
-        include_str!("shaders/terrain.wgsl"),
-        &[
+/// One producer at the seam: declarations to put ahead of the object uniform,
+/// and the anchored substitutions that route the shader through them.
+///
+/// Composable, because a textured surface can also refract and the two touch
+/// different anchors. Composition is what keeps the variant matrix from being a
+/// matrix of hand-written shaders.
+struct Producer {
+    prelude: &'static str,
+    substitutions: Vec<(&'static str, &'static str)>,
+}
+
+/// The terrain producer (M22): a generative material in place of the uniform's.
+fn terrain_producer() -> Producer {
+    Producer {
+        prelude: include_str!("shaders/terrain.wgsl"),
+        substitutions: vec![
             (
                 anchor::PROLOGUE,
                 "    let generated = terrain_surface(\n\
@@ -3672,19 +3895,19 @@ fn with_terrain() -> std::borrow::Cow<'static, str> {
                 "    let roughness = max(generated.roughness, 0.045);\n",
             ),
         ],
-    )
+    }
 }
 
-/// The mesh shader with texture sampling spliced in (M26).
+/// The texture producer (M26).
 ///
 /// The second producer at the seam, and the one that proves the seam is worth
 /// naming: it needs a vertex attribute the plain stage does not carry, and it
 /// touches the occlusion half of the ambient terms, and it still shares every
 /// line of the lighting body.
-fn with_textures() -> std::borrow::Cow<'static, str> {
-    with_surface(
-        include_str!("shaders/textured.wgsl"),
-        &[
+fn texture_producer() -> Producer {
+    Producer {
+        prelude: include_str!("shaders/textured.wgsl"),
+        substitutions: vec![
             (
                 anchor::VERTEX_STAGE,
                 "struct VertexOut {\n\
@@ -3745,7 +3968,80 @@ fn with_textures() -> std::borrow::Cow<'static, str> {
                 "            fill = albedo * hemisphere * sampled.occlusion;\n",
             ),
         ],
-    )
+    }
+}
+
+/// The refraction producer (M26), for the blended pipelines.
+///
+/// It replaces exactly one line — the composite for a transmissive surface —
+/// and appends one field to the frame uniform. A surface with `ior: 1.0` and
+/// `thickness: 0.0` takes the `else` and lands on the pre-M26 expression
+/// unchanged, which is what lets the blended pipelines compile this variant
+/// without moving the ice in any committed fixture.
+fn refraction_producer() -> Producer {
+    Producer {
+        prelude: include_str!("shaders/refraction.wgsl"),
+        substitutions: vec![
+            (
+                anchor::FRAME_TAIL,
+                "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n\
+                 \x20   // World → clip (M26): the refraction variant projects an\n\
+                 \x20   // exit point with it. Appended at the end, so every field\n\
+                 \x20   // above keeps the offset the other shaders read it from.\n\
+                 \x20   view_proj: mat4x4<f32>,\n\
+                 };\n",
+            ),
+            (
+                anchor::BLENDED,
+                "            let refracting = object.map_params.w != 1.0 \
+|| object.map_volume.x > 0.0;\n\
+                 \x20           if refracting {\n\
+                 \x20               // The frame behind this surface, bent and\n\
+                 \x20               // absorbed. Composited here rather than left\n\
+                 \x20               // to the blend unit, so the output is opaque\n\
+                 \x20               // and what shows through is the *displaced*\n\
+                 \x20               // background rather than the one straight on.\n\
+                 \x20               let uv = refracted_uv(\n\
+                 \x20                   in.world_position,\n\
+                 \x20                   v,\n\
+                 \x20                   n,\n\
+                 \x20                   object.map_params.w,\n\
+                 \x20                   object.map_volume.x,\n\
+                 \x20               );\n\
+                 \x20               let behind = absorbed(\n\
+                 \x20                   textureSampleLevel(scene_color, scene_sampler, uv, 0.0).rgb,\n\
+                 \x20                   object.map_volume.yzw,\n\
+                 \x20                   object.map_volume.x,\n\
+                 \x20               );\n\
+                 \x20               color = behind * (1.0 - out_alpha)\n\
+                 \x20                   + (lit_diffuse + fill) * out_alpha\n\
+                 \x20                   + lit_specular + reflection + emissive;\n\
+                 \x20               out_alpha = 1.0;\n\
+                 \x20           } else {\n\
+                 \x20               color = (lit_diffuse + fill) * out_alpha + lit_specular + reflection + emissive;\n\
+                 \x20           }\n",
+            ),
+        ],
+    }
+}
+
+/// The mesh shader with terrain's generative material spliced in (M22).
+fn with_terrain() -> std::borrow::Cow<'static, str> {
+    with_surface(&[terrain_producer()])
+}
+
+/// The mesh shader with texture sampling spliced in (M26).
+fn with_textures() -> std::borrow::Cow<'static, str> {
+    with_surface(&[texture_producer()])
+}
+
+/// The blended twins, which also refract.
+fn with_refraction() -> std::borrow::Cow<'static, str> {
+    with_surface(&[refraction_producer()])
+}
+
+fn with_textures_and_refraction() -> std::borrow::Cow<'static, str> {
+    with_surface(&[texture_producer(), refraction_producer()])
 }
 
 /// A buffer holding `contents`, created once and never rewritten — the shape
