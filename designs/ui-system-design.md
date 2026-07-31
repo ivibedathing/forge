@@ -1,13 +1,17 @@
-# UI system — Design Document (M27)
+# UI system — Design Document (M31)
 
 Companion to `agent-native-engine-design.md`, and the successor to
 `hud-design.md`. M12 gave the engine two screen-space primitives — a solid
 rectangle and a line of pixel-font text — placed by an anchor and a pixel
 offset. That was enough to read state out of a running scene. It is not enough
 to build a *screen*: a menu, a dialog, an inventory, a title card, anything a
-player clicks. This milestone closes that gap: layout, images, and a pointer.
+player clicks. This milestone closes that gap: layout, images, and the widgets
+a pointer lands on.
 
-Written 2026-07-31, after M26.
+Written 2026-07-31, after M26; **revised after M30**, which is when it was
+built. The revision is not cosmetic and §7 records it: this document was
+drafted before M28, and M28 shipped the pointer it had planned to invent.
+Everything below now consumes the landed one rather than building a second.
 
 ## 1. The shape of the problem
 
@@ -28,12 +32,12 @@ engine a texture pipeline, mip chains, and an `(asset, space)` cache; none of it
 reaches the overlay. A framed panel, an icon, a health-bar cap, a logo — all of
 them are currently a mesh in front of the camera or they do not exist.
 
-**Nothing can be clicked.** M11 was explicit that input is keyboard-only and
-that live keys exist only in the viewer; everywhere else input is a replayable
-timeline. That decision was right and this milestone does not revisit it — it
-extends it. The pointer becomes another thing the timeline carries, so a click
-is exactly as reproducible as a keypress, and an agent "clicks a button" by
-writing one JSON line.
+**Nothing can be clicked.** M28 put a cursor and three buttons on the
+timeline, so the engine knows where the player is pointing — but nothing on
+screen knows it is *pointable*. A script can read `world.cursor_x()` and
+compare it against numbers it computed itself, which is the hand-computed-box
+problem again wearing a different hat. What is missing is the element saying
+"I am a hit box", and the engine answering "the pointer is on you".
 
 The constraint that shapes every answer below is the same one that shaped M12:
 **an agent builds this UI without ever seeing it move.** It edits JSON, renders
@@ -47,17 +51,17 @@ not in an image — where every element ended up.
    here is written so that a scene with no new field renders byte for byte as it
    does today. Not "close enough to re-bless" — identical, by construction, and
    the argument for each rule is given where the rule is. Eleven baselines
-   survived M16 this way. Four committed scenes carry HUD components and eight
-   baselines render them — `m11_lap`, `m12_hud`, and the six `showcase_*` — and
-   of those eight only the showcase six may move, because §14 re-authors that
-   scene's HUD deliberately.
+   survived M16 this way. Six committed scenes carry HUD components and ten
+   baselines render them — `m11_lap`, `m12_hud`, `m16_environment`, both
+   `m28_pointer_*`, and the six `showcase_*` — and of those ten only the
+   showcase six may move, because §14 re-authors that scene's HUD deliberately.
 2. **Layout is a pure function of (file, viewport size).** No incremental
    layout, no dirty flags, no measurement cache that could go stale. Given the
    scene and a width and height, the pixel rectangle of every element is
    determined — which is what makes it a thing the CLI can print.
-3. **The pointer is timeline state, like the held key set.** `world.key` has no
-   event queue and neither does this. "Where is the cursor during step N, and
-   which buttons are down" is the whole model.
+3. **The pointer is M28's, unchanged.** Not one line of `input.rs` is edited by
+   this milestone. "Where is the cursor during step N, and which buttons are
+   down" was answered there; this milestone only asks what the cursor is *on*.
 4. **Interaction is polled, not dispatched.** Scripts ask `world.clicked(name)`;
    the engine never calls into a script. Reasons in §8.
 5. **Hierarchy is by name, in a flat file.** A child names its parent, exactly
@@ -213,7 +217,7 @@ before its children; among siblings, order by (class, file order)** where
 In a scene where nothing names a parent, every element is a sibling at the root,
 so the order collapses to (class, file order) — which is the old rule verbatim.
 That is the whole compatibility argument, and it is structural rather than
-empirical: there is no arrangement of pre-M27 components that the two rules
+empirical: there is no arrangement of pre-M31 components that the two rules
 order differently. The `world.hud` debug-line panel still draws last, over
 everything.
 
@@ -255,68 +259,71 @@ Sampling reads the base mip only. The overlay draws at most one destination
 pixel per texel band and never minifies below it, so a mip chain would only
 introduce a level-selection decision with no correct answer at this scale.
 
-## 7. The pointer
+## 7. The pointer — already built, and not the way this document planned
 
-An agent has no hands, so the pointer must be a file. `*.input.jsonl` keyframes
-gain two optional fields, unchanged otherwise — a keyframe is still the complete
-state, taking effect at its step and holding until the next:
+This section is kept as a record of a reversal, because the reasoning that
+replaced it is worth more than the paragraph it replaced.
 
-```jsonl
-{"step": 0,   "held": [], "viewport": [1280, 720], "cursor": [640, 400]}
-{"step": 120, "held": [], "cursor": [512, 360]}
-{"step": 122, "held": [], "cursor": [512, 360], "buttons": ["Left"]}
-{"step": 126, "held": [], "cursor": [512, 360], "buttons": []}
-```
+**As drafted**, this milestone was going to put the cursor on the timeline in
+**framebuffer pixels**, with each keyframe declaring a `viewport: [w, h]`, a
+separate `"buttons": ["Left"]` array, and an `input_viewport_mismatch` error
+(exit 2) when a cursor-bearing timeline was replayed into a framebuffer of a
+different size. The argument was that a pixel-authored UI is
+resolution-dependent by construction, so a normalized cursor would produce
+silent misclicks.
 
-- `cursor` is `[x, y]` in **framebuffer pixels**, +x right, +y down — the same
-  space the UI is authored in and the same space the PNG is read in. Absent
-  means the pointer is outside the window; before the first keyframe that
-  carries one, there is no cursor at all.
-- `buttons` is the complete set held, from a curated allowlist `Left`,
-  `Right`, `Middle` — `unknown_mouse_button` with `did_you_mean`, mirroring
-  `unknown_key` exactly.
-- `viewport` is `[width, height]`: the framebuffer the cursor coordinates mean
-  something in.
+**M28 shipped the pointer first, and chose the opposite on every point**
+(`designs/mouse-input-design.md`): the cursor is a **fraction of the frame**,
+origin top-left; buttons ride the *same* `held` set the keys do, as
+`MouseLeft`/`MouseRight`/`MouseMiddle`; an absent cursor is the **centre** of
+the frame, so every pre-M28 timeline parses unchanged; and no keyframe declares
+a viewport, because a fraction does not need one.
 
-**Why the timeline declares its viewport.** A UI laid out in pixels against
-anchors is resolution-dependent by construction: the same normalized cursor
-position lands on a different button at 640×360 than at 1280×720, because a
-button anchored 16 px from the right edge is at a different fraction of the
-screen. Storing the cursor normalized would hide that and produce silent
-misclicks; storing it in pixels without saying which pixels does the same. So
-the timeline says, and a command that replays a cursor-bearing timeline into a
-framebuffer of a different size fails with `input_viewport_mismatch` (exit 2 —
-the flags are the invocation's business), naming both sizes and the two fixes:
-re-render at that size, or re-record. A timeline with no cursor never declares a
-viewport, which is why every committed timeline and every baseline replaying one
-is untouched.
+**M28 is right, and not merely first.** A timeline outlives the window it was
+recorded in — that is the whole reason input is a text artifact — and a
+recording made at 2560×1440 that replays as garbage at 960×540 is exactly the
+failure this engine exists to avoid. The draft's `input_viewport_mismatch`
+would have *reported* that failure rather than removing it, and the cost is a
+timeline pinned forever to one window size. Splitting `held` in two was the
+weaker half of the same idea: a keyframe is one complete snapshot of what the
+player is doing, and two arrays means every line that changes a button must
+restate the keys or grow a merge rule.
 
-That declaration is also what lets `simulate`, which renders nothing and has no
-`--width`, hit-test at all: the viewport it lays out against is the one the
-timeline names. With no timeline there is no cursor, no hit-testing, and layout
-is computed only if something is being rendered — the M11 rule "no `--input`
-means no keys held", extended.
+What the draft got right is that **the concern is real** — it just belongs to
+the *layout*, not to the timeline. A cursor at 0.9 of the frame is on a
+right-anchored button at every size; a cursor over a 132×26 plate is not, and
+M28's own CLI test already documents exactly that (960×540 misses the arena
+fixture's plate that 640×360 hits). So the resolution-dependence lives where it
+is visible and queryable: `engine ui-layout --width W --height H` reports the
+rectangle, and a UI that must survive resizing is authored with `stretch` and
+hug sizing rather than with pixel offsets. That is the same answer §1 gives for
+every other hand-computed box.
 
-In `engine run-scene` the cursor is live, the viewport is the window, and
-`--record-input` writes a keyframe whenever the held set, the button set, or the
-cursor position changes, with `viewport` on the first line and on any line after
-a resize. Recording every cursor sample would write a line per frame; the
-position is part of the state, so a change is a keyframe, exactly like a key.
+**So this milestone edits no input code at all.** It consumes
+`input::Pointer`'s cursor, multiplies by the frame it is laying out against, and
+hit-tests. Scripts keep `world.mouse`, `cursor_x`/`cursor_y`,
+`viewport_width`/`viewport_height` and `cursor_ground` exactly as M28 defined
+them; `world.cursor()` as a *pixel* accessor is not added, because two spellings
+of one quantity in different units is how a script starts disagreeing with the
+engine about where the pointer is.
 
-**The cursor is not captured or hidden**, there is no relative/delta mode, and
-there is no scroll wheel. A first-person mouselook needs pointer lock and
-sub-step deltas, which is a different design with a different determinism story;
-it is a stated non-goal (§13).
+The consequence for hit-testing is one rule: **the frame a UI is hit-tested
+against is the frame the command is rendering**, which M28 already settled —
+`screenshot` passes its own size, `diff-render` the baseline's, and
+`simulate`/`raycast` `Viewport::DEFAULT` (960×540). A `simulate` run and a 16:9
+screenshot therefore agree on which button the cursor is over whenever the
+button is placed proportionally, and disagree when it is placed in pixels, which
+is a property of the scene and is reported by `ui-layout` rather than hidden.
 
 ## 8. Interaction
 
 Hit-testing runs once per fixed step, **before scripts**, against the layout for
-that step's viewport. Candidates are entities carrying a visible, non-disabled
-`HudInteract`; the hit is the **last one in draw order** whose rectangle
-contains the cursor, so topmost wins and a modal panel with a `HudInteract`
-swallows clicks to what is under it, while one without is click-through. That
-makes "does this menu block the game" an authored property rather than an
-accident.
+that step's viewport — the cursor being M28's fraction multiplied by that
+frame. Candidates are entities carrying a visible, non-disabled `HudInteract`;
+the hit is the **last one in draw order** whose rectangle contains the cursor,
+so topmost wins and a modal panel with a `HudInteract` swallows clicks to what
+is under it, while one without is click-through. That makes "does this menu
+block the game" an authored property rather than an accident.
 
 State per element, derived from the pointer and the previous step:
 
@@ -343,11 +350,12 @@ happen. And `world.key` set the precedent in M11 §6 for exactly this shape:
 "one predicate, not an axis/action abstraction — bindings are game logic, and
 game logic lives in scripts." A button that runs code is a binding.
 
-Scripts also get the raw pointer, for aiming and for anything the widget model
-does not cover: `world.cursor()` returns `[x, y]` (or an empty array when there
-is no cursor) and `world.mouse(button)` is the held predicate. No screen-to-world
-picking — `engine raycast` is where that question is answered, and adding a
-second answer in the script API is how two of them start disagreeing.
+Scripts already have the raw pointer for aiming and for anything the widget
+model does not cover — `world.mouse`, `cursor_x`/`cursor_y`,
+`viewport_width`/`viewport_height`, `cursor_ground` — and this milestone adds
+nothing there (§7). No screen-to-world picking beyond M28's ground plane:
+`engine raycast` is where that question is answered, and a second answer in the
+script API is how two of them start disagreeing.
 
 ## 9. Script API
 
@@ -357,14 +365,16 @@ component with `did_you_mean`, like every accessor since M12:
 | Call | Meaning |
 |---|---|
 | `world.hovered(n)` / `pressed(n)` / `clicked(n)` | interaction state (§8) |
-| `world.cursor()` / `world.mouse(b)` | raw pointer |
 | `world.hud_visible(n)` / `set_hud_visible(n, b)` | show/hide an element or a subtree |
 | `world.hud_color(n)` / `set_hud_color(n, r, g, b)` | colour of any HUD element |
 | `world.hud_opacity(n)` / `set_hud_opacity(n, o)` | opacity of any element |
 | `world.hud_size(n)` / `set_hud_size(n, w, h)` | generalizes `set_hud_rect_size` to panels and images |
-| `world.hud_offset(n)` / `set_hud_offset(n, x, y)` | nudge within the parent |
 
-`set_hud_rect_size` stays, as the name three committed scripts already call.
+`set_hud_rect_size` stays, as the name three committed scripts already call, and
+so does M28's `hud_offset` / `set_hud_offset` pair — which this document's draft
+listed as new, having been written before M28 added it to draw a crosshair. The
+raw pointer accessors are M28's and are not restated here (§7).
+
 Colour setters *clamp* to `[0,1]` and opacity errors on NaN/overflow at the
 call, following M17's split for lights: a clamp for a value with an obvious
 nearest legal answer, an error for one without.
@@ -413,8 +423,10 @@ New codes, all `Input` class (exit 1) unless noted:
 | `hud_nesting_too_deep` | more than 16 levels |
 | `hud_interact_without_element` | `HudInteract` with nothing to hit |
 | `hud_image_slice_too_large` | nine-slice insets exceed the source image |
-| `unknown_mouse_button` | a button name outside the allowlist — `did_you_mean` |
-| `input_viewport_mismatch` | cursor timeline vs. framebuffer size (exit **2**) |
+
+Two codes the draft listed are **not** here: `unknown_mouse_button` shipped in
+M28 as part of the held-set allowlist, and `input_viewport_mismatch` does not
+exist because a fractional cursor cannot mismatch a framebuffer (§7).
 
 Everything else — field types, ranges, unknown fields, enum typos on `layout`,
 `align` and `anchor` — comes free from the schema-driven walk, which is the
@@ -476,16 +488,17 @@ Named, so the next session does not have to guess whether they were forgotten:
 
 ## 14. Verification
 
-- **`verify/m27_ui.json` + `verify/m27_ui.input.jsonl` + a baseline.** A menu:
+- **`verify/m31_ui.json` + `verify/m31_ui.input.jsonl` + a baseline.** A menu:
   a stretched dim backdrop, a nine-sliced framed panel hugging a column of a
   title, two lines of wrapped body text, and two buttons with hover and press
   tints, over a small 3D scene so compositing is exercised. The timeline moves
   the cursor onto the second button and presses it, so the blessed frame shows a
   pressed button — the state hardest to reach and the one nothing else pins.
-  Rendered at a fixed `--steps` and `--width 1280 --height 720` matching the
-  timeline's declared viewport, pinned by `engine diff-render`. Aimed at its
-  subject with no terrain in frame, per M22's rule, so it carries a hard
-  bit-exact pin.
+  Rendered at a fixed `--steps` and an explicit `--width`/`--height`, pinned by
+  `engine diff-render`; the cursor being a *fraction* (§7), the timeline needs
+  no viewport of its own, but the render size is still part of what the baseline
+  means and is recorded in the manifest. Aimed at its subject with no terrain in
+  frame, per M22's rule, so it carries a hard bit-exact pin.
 - **Layout unit tests, GPU-free**: hug sizing bottom-up, row/column/free
   placement, `align` on the cross axis, `stretch` on each axis independently,
   nested rounding, wrapping including the over-long word, and the draw-order
@@ -497,20 +510,18 @@ Named, so the next session does not have to guess whether they were forgotten:
   click; press-inside/release-inside does, for exactly one step; topmost wins;
   a disabled or hidden element is not a candidate; a panel with `HudInteract`
   blocks and one without does not.
-- **Timeline round-trip**: record → parse → replay for cursor and buttons, the
-  M11 test extended; plus `input_viewport_mismatch` firing on a size disagreement
-  and *not* firing for a timeline with no cursor.
 - **`engine ui-layout`** against the fixture, including an element whose
-  reported rect is then used as a cursor coordinate that hits it — the loop the
-  command exists to close, closed in a test.
+  reported rect is then used to derive the cursor *fraction* that hits it — the
+  loop the command exists to close, closed in a test, and the one place the
+  pixel report and the fractional timeline have to agree.
 - **`showcase_tour.json` gains the new components**, per
   `repo_contracts.rs::showcase_tour_uses_every_component_the_engine_has`. A
   station card — a nine-sliced `HudPanel` hugging a `HudText` station name and a
   `HudImage` icon, driven by the director script that already knows which
   station is on screen — replaces the four hand-positioned `HudText`s. Six
   showcase baselines re-bless in that commit; nothing else may move.
-- **`bin/verify-baselines`** clean on all 29 committed baselines other than
-  those six, and an **A/B between binaries** on the pre-M27 scenes: the overlay
+- **`bin/verify-baselines`** clean on all 33 committed baselines other than
+  those six, and an **A/B between binaries** on the pre-M31 scenes: the overlay
   path is being restructured under scenes whose HUD pixels are pinned, and a
   baseline diff cannot prove no pixel moved when six of the baselines are
   expected to move.
