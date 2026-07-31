@@ -183,6 +183,15 @@
         ],
         "type": "object"
       },
+      "HudAlign": {
+        "description": "Cross-axis alignment of a [`HudPanel`]'s children (M31). See [`HudLayout`]\nfor why the variants are undocumented.",
+        "enum": [
+          "start",
+          "center",
+          "end"
+        ],
+        "type": "string"
+      },
       "HudAnchor": {
         "description": "Where a HUD element attaches on screen (M12).\n\n`offset` is measured **inward** from the anchor: from a right anchor,\n`offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;\nfrom `center` it is the usual +x-right / +y-down applied to the element's\ncenter. The anchored point is the element's matching corner (its center\nfor `center`), so `offset: [0, 0]` puts the element flush against its\ncorner at any resolution.",
         "enum": [
@@ -191,6 +200,24 @@
           "bottom_left",
           "bottom_right",
           "center"
+        ],
+        "type": "string"
+      },
+      "HudLayout": {
+        "description": "How a [`HudPanel`] arranges its children (M31).\n\nNOTE (schemars): variants carry no doc comments on purpose. A doc comment\non a *variant* turns the generated schema from a flat `\"enum\": [...]` into\noneOf/const, which blinds the validation walk's closed-vocabulary check —\nthe same trap `ColliderShapeKind` documents.",
+        "enum": [
+          "free",
+          "row",
+          "column"
+        ],
+        "type": "string"
+      },
+      "HudTextAlign": {
+        "description": "Horizontal alignment of text within its own box (M31). See [`HudLayout`]\nfor why the variants are undocumented.",
+        "enum": [
+          "left",
+          "center",
+          "right"
         ],
         "type": "string"
       },
@@ -1322,8 +1349,13 @@
       },
       {
         "additionalProperties": false,
-        "description": "A screen-space text label (M12): one line of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic. Draw order is file order, and all text draws\nover all `HudRect`s.",
+        "description": "A screen-space text label (M12): lines of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic.\n\nM31 adds `parent`, `visible` and `stretch` (shared by every element in the\nfamily), plus `align`, `wrap` and `line_gap`. Every one defaults to the M12\nbehaviour: no parent means a child of the viewport placed by exactly the\nM12 anchor arithmetic, and `wrap: 0` means the single unwrapped line it has\nalways been.",
         "properties": {
+          "align": {
+            "$ref": "#/$defs/HudTextAlign",
+            "default": "left",
+            "description": "Alignment of each line within the text's own box, which differs from\nthe box only when the text is stretched or wrapped."
+          },
           "anchor": {
             "$ref": "#/$defs/HudAnchor",
             "default": "top_left"
@@ -1345,12 +1377,19 @@
             "minItems": 3,
             "type": "array"
           },
+          "line_gap": {
+            "default": 0.0,
+            "description": "Extra pixels between lines, on top of the glyph cell.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
           "offset": {
             "default": [
               0.0,
               0.0
             ],
-            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or\n`column` parent this is a nudge on top of the computed position rather\nthan the position itself.",
             "items": {
               "format": "float",
               "type": "number"
@@ -1359,6 +1398,13 @@
             "minItems": 2,
             "type": "array"
           },
+          "parent": {
+            "description": "The name of an entity carrying a [`HudPanel`] to place this inside.\nAbsent (the default) means a child of the viewport.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "size": {
             "default": 16.0,
             "description": "Glyph height in pixels, `>= 4`. The 8×8 font renders at integer\nscale `max(1, round(size / 8))`, so `16` means exactly 2× glyphs.",
@@ -1366,13 +1412,38 @@
             "minimum": 4.0,
             "type": "number"
           },
+          "stretch": {
+            "default": [
+              false,
+              false
+            ],
+            "description": "Fill the parent's content box on `[x, y]`, ignoring this element's own\nsize on that axis. Two booleans rather than a `\"fill\"` string in a\nnumeric field, which would break the schema-driven walk.",
+            "items": {
+              "type": "boolean"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
           "text": {
-            "description": "One line; no wrapping. Scripts may rewrite it via\n`world.set_hud_text` — an empty string is a legal rest value for a\nscript-driven readout.",
+            "description": "The label. `\\n` breaks a line explicitly; `wrap` breaks it\nautomatically. Scripts may rewrite it via `world.set_hud_text` — an\nempty string is a legal rest value for a script-driven readout.",
             "type": "string"
           },
           "type": {
             "const": "HudText",
             "type": "string"
+          },
+          "visible": {
+            "default": true,
+            "description": "Drawn and hit-testable when true (the default). Hiding a panel hides\nits whole subtree — one boolean is how a menu opens and closes.",
+            "type": "boolean"
+          },
+          "wrap": {
+            "default": 0.0,
+            "description": "Wrap width in pixels; `0` (the default) is no wrapping. Breaks on\nspaces — a word longer than `wrap` overflows rather than splitting,\nsince a mid-word break in a fixed-width font reads as corruption.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
           }
         },
         "required": [
@@ -1383,7 +1454,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn before all `HudText`, file order within\nrects.",
+        "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn with the panels and images, before all\n`HudText`, file order within the class.\n\nM31 adds only the shared `parent`/`visible`/`stretch`; a rect stays the\nflat script-driven bar it has always been.",
         "properties": {
           "anchor": {
             "$ref": "#/$defs/HudAnchor",
@@ -1411,7 +1482,7 @@
               0.0,
               0.0
             ],
-            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or\n`column` parent this is a nudge on top of the computed position.",
             "items": {
               "format": "float",
               "type": "number"
@@ -1428,8 +1499,15 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "parent": {
+            "description": "The name of an entity carrying a [`HudPanel`] to place this inside.\nAbsent (the default) means a child of the viewport.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "size": {
-            "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size`.",
+            "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size` or `world.set_hud_size`. Ignored on an axis\nwhere `stretch` is true.",
             "items": {
               "format": "float",
               "minimum": 0.0,
@@ -1439,14 +1517,322 @@
             "minItems": 2,
             "type": "array"
           },
+          "stretch": {
+            "default": [
+              false,
+              false
+            ],
+            "description": "Fill the parent's content box on `[x, y]`, ignoring `size` on that\naxis — the full-screen dim backdrop, and the bar spanning a column.",
+            "items": {
+              "type": "boolean"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
           "type": {
             "const": "HudRect",
             "type": "string"
+          },
+          "visible": {
+            "default": true,
+            "description": "Drawn and hit-testable when true (the default).",
+            "type": "boolean"
           }
         },
         "required": [
           "type",
           "size"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A screen-space container that lays its children out (M31).\n\nThis is the component that removes hand-computed pixel offsets. Children\nname it in their `parent`; `layout` decides whether they are stacked in a\n`row`, a `column`, or placed `free` by their own anchors relative to this\npanel's content box.\n\n**Absent `width`/`height` means hug contents** — the panel is exactly its\nchildren's extent plus `padding`. That is the default because it is the\ncase that makes a dialog authorable: the box follows the text instead of\nthe text being fitted to a box someone solved by hand.\n\n`opacity` defaults to **0**, so a bare `HudPanel` is an invisible layout\ngroup; set it and the same component is the dialog's backdrop. One\ncomponent rather than a container plus a rect whose size would have to be\nkept in agreement with it.",
+        "properties": {
+          "align": {
+            "$ref": "#/$defs/HudAlign",
+            "default": "start",
+            "description": "Cross-axis alignment of children in a `row`/`column`."
+          },
+          "anchor": {
+            "$ref": "#/$defs/HudAnchor",
+            "default": "top_left"
+          },
+          "color": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Background colour, linear RGB in `[0, 1]`. Only visible at\n`opacity > 0`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "gap": {
+            "default": 0.0,
+            "description": "Pixels between children along the main axis of a `row`/`column`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "height": {
+            "description": "Fixed height in pixels. Absent hugs the children.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "layout": {
+            "$ref": "#/$defs/HudLayout",
+            "default": "free"
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "opacity": {
+            "default": 0.0,
+            "description": "`[0, 1]`, defaulting to **0** — an invisible layout group.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "padding": {
+            "default": 0.0,
+            "description": "Uniform inset in pixels between this panel's edge and its content box.\nPer-side padding is the obvious next field and costs nothing to add\nlater; M12's \"no z field until something needs it\" applies.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "parent": {
+            "description": "The name of another [`HudPanel`] entity to nest inside.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stretch": {
+            "default": [
+              false,
+              false
+            ],
+            "description": "Fill the parent's content box on `[x, y]`, ignoring `width`/`height`\nand hug sizing on that axis.",
+            "items": {
+              "type": "boolean"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": {
+            "const": "HudPanel",
+            "type": "string"
+          },
+          "visible": {
+            "default": true,
+            "description": "Drawn and hit-testable when true (the default). A hidden panel hides\nits whole subtree.",
+            "type": "boolean"
+          },
+          "width": {
+            "description": "Fixed width in pixels. Absent hugs the children.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A screen-space textured rectangle (M31): icons, logos, framed panels.\n\n`texture` is a PNG relative to the scene file, loaded through the same\n`TextureSource` and `(asset, space)` cache the material system uses, in\nsRGB — so `texture_too_large` fires from `validate`, before a device\nexists. Only the base level is read: the overlay draws at most one\ndestination pixel per texel band and never minifies below it, so a mip\nlevel selection would have no correct answer at this scale.\n\nSampling is **nearest-neighbour**, written out in `engine-core` like every\nother generator here — a render sits under a baseline, so the filter is a\nformat contract, and nearest is exactly reproducible where a bilinear\nfilter is a float-rounding question.",
+        "properties": {
+          "anchor": {
+            "$ref": "#/$defs/HudAnchor",
+            "default": "top_left"
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "opacity": {
+            "default": 1.0,
+            "description": "`[0, 1]`, multiplied onto the texture's own alpha.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "parent": {
+            "description": "The name of an entity carrying a [`HudPanel`] to place this inside.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "description": "`[width, height]` in destination pixels. Ignored on an axis where\n`stretch` is true.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "slice": {
+            "default": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Nine-slice insets in **source** pixels, `[left, top, right, bottom]`.\nThe default `[0, 0, 0, 0]` is a plain stretch. Corners are copied\n1:1, edges tile along their axis and the centre tiles both ways —\ntiling rather than stretching, because tiling at nearest is exact\nwhere stretching at nearest is a moiré pattern.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "stretch": {
+            "default": [
+              false,
+              false
+            ],
+            "description": "Fill the parent's content box on `[x, y]`, ignoring `size`.",
+            "items": {
+              "type": "boolean"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "texture": {
+            "description": "A `.png` path relative to the scene file (invariant 3).",
+            "type": "string"
+          },
+          "tint": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Multiplies the decoded texel in linear space, so one grey frame\ntexture serves a red panel and a blue one — the material system's\nauthoring rule for `albedo_map`, here for the same reason.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": {
+            "const": "HudImage",
+            "type": "string"
+          },
+          "visible": {
+            "default": true,
+            "description": "Drawn and hit-testable when true (the default).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type",
+          "texture",
+          "size"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Makes the HUD element on its own entity clickable (M31).\n\nCarries no geometry: the hit box is that element's laid-out rectangle. An\nentity with a `HudInteract` and no `HudPanel`/`HudRect`/`HudImage`/\n`HudText` is `hud_interact_without_element`.\n\nA separate component rather than an `interactive: true` flag on each of\nfour components, because the flag would be four fields that must stay in\nagreement, and because the tints belong next to it.\n\nThe tints multiply the element's own colour (clamped to `[0, 1]` after\nmultiplying) and default to `[1, 1, 1]` — no change — so adding a\n`HudInteract` moves no pixel until a cursor arrives. They exist so the\nordinary case, a button that lights up under the pointer, needs no script\nat all; anything richer is a script writing colours.",
+        "properties": {
+          "disabled": {
+            "default": false,
+            "description": "Excluded from hit-testing when true, so it never hovers, presses or\nclicks — and never blocks what is under it either.",
+            "type": "boolean"
+          },
+          "hover_tint": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Colour multiplier while the cursor is over this element. Unbounded\nabove — a hover tint brightens.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "press_tint": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Colour multiplier while a button is held down on this element.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": {
+            "const": "HudInteract",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
         ],
         "type": "object"
       },
@@ -2721,6 +3107,9 @@
     "Wheel",
     "HudText",
     "HudRect",
+    "HudPanel",
+    "HudImage",
+    "HudInteract",
     "ParticleEmitter",
     "Tree",
     "Water",
@@ -3601,8 +3990,13 @@
           },
           {
             "additionalProperties": false,
-            "description": "A screen-space text label (M12): one line of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic. Draw order is file order, and all text draws\nover all `HudRect`s.",
+            "description": "A screen-space text label (M12): lines of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic.\n\nM31 adds `parent`, `visible` and `stretch` (shared by every element in the\nfamily), plus `align`, `wrap` and `line_gap`. Every one defaults to the M12\nbehaviour: no parent means a child of the viewport placed by exactly the\nM12 anchor arithmetic, and `wrap: 0` means the single unwrapped line it has\nalways been.",
             "properties": {
+              "align": {
+                "$ref": "#/$defs/HudTextAlign",
+                "default": "left",
+                "description": "Alignment of each line within the text's own box, which differs from\nthe box only when the text is stretched or wrapped."
+              },
               "anchor": {
                 "$ref": "#/$defs/HudAnchor",
                 "default": "top_left"
@@ -3624,12 +4018,19 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "line_gap": {
+                "default": 0.0,
+                "description": "Extra pixels between lines, on top of the glyph cell.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
               "offset": {
                 "default": [
                   0.0,
                   0.0
                 ],
-                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or\n`column` parent this is a nudge on top of the computed position rather\nthan the position itself.",
                 "items": {
                   "format": "float",
                   "type": "number"
@@ -3638,6 +4039,13 @@
                 "minItems": 2,
                 "type": "array"
               },
+              "parent": {
+                "description": "The name of an entity carrying a [`HudPanel`] to place this inside.\nAbsent (the default) means a child of the viewport.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "size": {
                 "default": 16.0,
                 "description": "Glyph height in pixels, `>= 4`. The 8×8 font renders at integer\nscale `max(1, round(size / 8))`, so `16` means exactly 2× glyphs.",
@@ -3645,13 +4053,38 @@
                 "minimum": 4.0,
                 "type": "number"
               },
+              "stretch": {
+                "default": [
+                  false,
+                  false
+                ],
+                "description": "Fill the parent's content box on `[x, y]`, ignoring this element's own\nsize on that axis. Two booleans rather than a `\"fill\"` string in a\nnumeric field, which would break the schema-driven walk.",
+                "items": {
+                  "type": "boolean"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
               "text": {
-                "description": "One line; no wrapping. Scripts may rewrite it via\n`world.set_hud_text` — an empty string is a legal rest value for a\nscript-driven readout.",
+                "description": "The label. `\\n` breaks a line explicitly; `wrap` breaks it\nautomatically. Scripts may rewrite it via `world.set_hud_text` — an\nempty string is a legal rest value for a script-driven readout.",
                 "type": "string"
               },
               "type": {
                 "const": "HudText",
                 "type": "string"
+              },
+              "visible": {
+                "default": true,
+                "description": "Drawn and hit-testable when true (the default). Hiding a panel hides\nits whole subtree — one boolean is how a menu opens and closes.",
+                "type": "boolean"
+              },
+              "wrap": {
+                "default": 0.0,
+                "description": "Wrap width in pixels; `0` (the default) is no wrapping. Breaks on\nspaces — a word longer than `wrap` overflows rather than splitting,\nsince a mid-word break in a fixed-width font reads as corruption.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
               }
             },
             "required": [
@@ -3662,7 +4095,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn before all `HudText`, file order within\nrects.",
+            "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn with the panels and images, before all\n`HudText`, file order within the class.\n\nM31 adds only the shared `parent`/`visible`/`stretch`; a rect stays the\nflat script-driven bar it has always been.",
             "properties": {
               "anchor": {
                 "$ref": "#/$defs/HudAnchor",
@@ -3690,7 +4123,7 @@
                   0.0,
                   0.0
                 ],
-                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or\n`column` parent this is a nudge on top of the computed position.",
                 "items": {
                   "format": "float",
                   "type": "number"
@@ -3707,8 +4140,15 @@
                 "minimum": 0.0,
                 "type": "number"
               },
+              "parent": {
+                "description": "The name of an entity carrying a [`HudPanel`] to place this inside.\nAbsent (the default) means a child of the viewport.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "size": {
-                "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size`.",
+                "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size` or `world.set_hud_size`. Ignored on an axis\nwhere `stretch` is true.",
                 "items": {
                   "format": "float",
                   "minimum": 0.0,
@@ -3718,14 +4158,322 @@
                 "minItems": 2,
                 "type": "array"
               },
+              "stretch": {
+                "default": [
+                  false,
+                  false
+                ],
+                "description": "Fill the parent's content box on `[x, y]`, ignoring `size` on that\naxis — the full-screen dim backdrop, and the bar spanning a column.",
+                "items": {
+                  "type": "boolean"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
               "type": {
                 "const": "HudRect",
                 "type": "string"
+              },
+              "visible": {
+                "default": true,
+                "description": "Drawn and hit-testable when true (the default).",
+                "type": "boolean"
               }
             },
             "required": [
               "type",
               "size"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A screen-space container that lays its children out (M31).\n\nThis is the component that removes hand-computed pixel offsets. Children\nname it in their `parent`; `layout` decides whether they are stacked in a\n`row`, a `column`, or placed `free` by their own anchors relative to this\npanel's content box.\n\n**Absent `width`/`height` means hug contents** — the panel is exactly its\nchildren's extent plus `padding`. That is the default because it is the\ncase that makes a dialog authorable: the box follows the text instead of\nthe text being fitted to a box someone solved by hand.\n\n`opacity` defaults to **0**, so a bare `HudPanel` is an invisible layout\ngroup; set it and the same component is the dialog's backdrop. One\ncomponent rather than a container plus a rect whose size would have to be\nkept in agreement with it.",
+            "properties": {
+              "align": {
+                "$ref": "#/$defs/HudAlign",
+                "default": "start",
+                "description": "Cross-axis alignment of children in a `row`/`column`."
+              },
+              "anchor": {
+                "$ref": "#/$defs/HudAnchor",
+                "default": "top_left"
+              },
+              "color": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Background colour, linear RGB in `[0, 1]`. Only visible at\n`opacity > 0`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "gap": {
+                "default": 0.0,
+                "description": "Pixels between children along the main axis of a `row`/`column`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "height": {
+                "description": "Fixed height in pixels. Absent hugs the children.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "layout": {
+                "$ref": "#/$defs/HudLayout",
+                "default": "free"
+              },
+              "offset": {
+                "default": [
+                  0.0,
+                  0.0
+                ],
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "opacity": {
+                "default": 0.0,
+                "description": "`[0, 1]`, defaulting to **0** — an invisible layout group.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "padding": {
+                "default": 0.0,
+                "description": "Uniform inset in pixels between this panel's edge and its content box.\nPer-side padding is the obvious next field and costs nothing to add\nlater; M12's \"no z field until something needs it\" applies.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "parent": {
+                "description": "The name of another [`HudPanel`] entity to nest inside.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stretch": {
+                "default": [
+                  false,
+                  false
+                ],
+                "description": "Fill the parent's content box on `[x, y]`, ignoring `width`/`height`\nand hug sizing on that axis.",
+                "items": {
+                  "type": "boolean"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": {
+                "const": "HudPanel",
+                "type": "string"
+              },
+              "visible": {
+                "default": true,
+                "description": "Drawn and hit-testable when true (the default). A hidden panel hides\nits whole subtree.",
+                "type": "boolean"
+              },
+              "width": {
+                "description": "Fixed width in pixels. Absent hugs the children.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A screen-space textured rectangle (M31): icons, logos, framed panels.\n\n`texture` is a PNG relative to the scene file, loaded through the same\n`TextureSource` and `(asset, space)` cache the material system uses, in\nsRGB — so `texture_too_large` fires from `validate`, before a device\nexists. Only the base level is read: the overlay draws at most one\ndestination pixel per texel band and never minifies below it, so a mip\nlevel selection would have no correct answer at this scale.\n\nSampling is **nearest-neighbour**, written out in `engine-core` like every\nother generator here — a render sits under a baseline, so the filter is a\nformat contract, and nearest is exactly reproducible where a bilinear\nfilter is a float-rounding question.",
+            "properties": {
+              "anchor": {
+                "$ref": "#/$defs/HudAnchor",
+                "default": "top_left"
+              },
+              "offset": {
+                "default": [
+                  0.0,
+                  0.0
+                ],
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "opacity": {
+                "default": 1.0,
+                "description": "`[0, 1]`, multiplied onto the texture's own alpha.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "parent": {
+                "description": "The name of an entity carrying a [`HudPanel`] to place this inside.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size": {
+                "description": "`[width, height]` in destination pixels. Ignored on an axis where\n`stretch` is true.",
+                "items": {
+                  "format": "float",
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "slice": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "Nine-slice insets in **source** pixels, `[left, top, right, bottom]`.\nThe default `[0, 0, 0, 0]` is a plain stretch. Corners are copied\n1:1, edges tile along their axis and the centre tiles both ways —\ntiling rather than stretching, because tiling at nearest is exact\nwhere stretching at nearest is a moiré pattern.",
+                "items": {
+                  "format": "float",
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              "stretch": {
+                "default": [
+                  false,
+                  false
+                ],
+                "description": "Fill the parent's content box on `[x, y]`, ignoring `size`.",
+                "items": {
+                  "type": "boolean"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "texture": {
+                "description": "A `.png` path relative to the scene file (invariant 3).",
+                "type": "string"
+              },
+              "tint": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Multiplies the decoded texel in linear space, so one grey frame\ntexture serves a red panel and a blue one — the material system's\nauthoring rule for `albedo_map`, here for the same reason.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": {
+                "const": "HudImage",
+                "type": "string"
+              },
+              "visible": {
+                "default": true,
+                "description": "Drawn and hit-testable when true (the default).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "type",
+              "texture",
+              "size"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Makes the HUD element on its own entity clickable (M31).\n\nCarries no geometry: the hit box is that element's laid-out rectangle. An\nentity with a `HudInteract` and no `HudPanel`/`HudRect`/`HudImage`/\n`HudText` is `hud_interact_without_element`.\n\nA separate component rather than an `interactive: true` flag on each of\nfour components, because the flag would be four fields that must stay in\nagreement, and because the tints belong next to it.\n\nThe tints multiply the element's own colour (clamped to `[0, 1]` after\nmultiplying) and default to `[1, 1, 1]` — no change — so adding a\n`HudInteract` moves no pixel until a cursor arrives. They exist so the\nordinary case, a button that lights up under the pointer, needs no script\nat all; anything richer is a script writing colours.",
+            "properties": {
+              "disabled": {
+                "default": false,
+                "description": "Excluded from hit-testing when true, so it never hovers, presses or\nclicks — and never blocks what is under it either.",
+                "type": "boolean"
+              },
+              "hover_tint": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Colour multiplier while the cursor is over this element. Unbounded\nabove — a hover tint brightens.",
+                "items": {
+                  "format": "float",
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "press_tint": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Colour multiplier while a button is held down on this element.",
+                "items": {
+                  "format": "float",
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": {
+                "const": "HudInteract",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
             ],
             "type": "object"
           },
@@ -5430,6 +6178,15 @@
         ],
         "type": "object"
       },
+      "HudAlign": {
+        "description": "Cross-axis alignment of a [`HudPanel`]'s children (M31). See [`HudLayout`]\nfor why the variants are undocumented.",
+        "enum": [
+          "start",
+          "center",
+          "end"
+        ],
+        "type": "string"
+      },
       "HudAnchor": {
         "description": "Where a HUD element attaches on screen (M12).\n\n`offset` is measured **inward** from the anchor: from a right anchor,\n`offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;\nfrom `center` it is the usual +x-right / +y-down applied to the element's\ncenter. The anchored point is the element's matching corner (its center\nfor `center`), so `offset: [0, 0]` puts the element flush against its\ncorner at any resolution.",
         "enum": [
@@ -5438,6 +6195,24 @@
           "bottom_left",
           "bottom_right",
           "center"
+        ],
+        "type": "string"
+      },
+      "HudLayout": {
+        "description": "How a [`HudPanel`] arranges its children (M31).\n\nNOTE (schemars): variants carry no doc comments on purpose. A doc comment\non a *variant* turns the generated schema from a flat `\"enum\": [...]` into\noneOf/const, which blinds the validation walk's closed-vocabulary check —\nthe same trap `ColliderShapeKind` documents.",
+        "enum": [
+          "free",
+          "row",
+          "column"
+        ],
+        "type": "string"
+      },
+      "HudTextAlign": {
+        "description": "Horizontal alignment of text within its own box (M31). See [`HudLayout`]\nfor why the variants are undocumented.",
+        "enum": [
+          "left",
+          "center",
+          "right"
         ],
         "type": "string"
       },

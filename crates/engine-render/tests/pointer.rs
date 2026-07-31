@@ -94,7 +94,10 @@ fn the_aspect_ratio_is_the_frames_and_not_a_guess() {
     ] {
         let (origin, direction) = pointer.ray.unwrap();
         let landed = project_to_cursor(origin + direction * 10.0, &camera, model, &viewport);
-        assert!((landed - cursor).length() < 1e-4, "{landed} for {viewport:?}");
+        assert!(
+            (landed - cursor).length() < 1e-4,
+            "{landed} for {viewport:?}"
+        );
     }
 }
 

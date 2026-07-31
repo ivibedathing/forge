@@ -47,7 +47,7 @@ fn render_at(source: &str, time: f32) -> Image {
         time,
         SIZE,
         SIZE,
-        &scene.hud_items(),
+        &scene.hud_tree(&engine_core::mesh::BuiltinAssets),
         &[],
     )
     .expect("offscreen render failed")

@@ -319,8 +319,7 @@ mod tests {
             let radians = expected.to_radians();
             let world = origin + (u * radians.cos() + v * radians.sin()) * 2.0;
             let screen = project(view_projection, size, world).unwrap();
-            let angle =
-                ring_angle(view_projection, size, origin, Vec3::Y, screen).unwrap();
+            let angle = ring_angle(view_projection, size, origin, Vec3::Y, screen).unwrap();
             assert!(
                 angle_delta(angle, expected).abs() < 0.1,
                 "expected {expected}, got {angle}"
@@ -347,15 +346,17 @@ mod tests {
         // ring, away from where the X and Z rings cross it. A far corner
         // must miss everything.
         let (u, v) = ring_basis(Vec3::Y);
-        let on_ring =
-            project(view_projection, size, origin + (u + v) * radius * 0.7071).unwrap();
+        let on_ring = project(view_projection, size, origin + (u + v) * radius * 0.7071).unwrap();
         assert_eq!(
             hit_ring(view_projection, size, origin, radius, on_ring),
             Some(1)
         );
 
         let nowhere = Vec2::new(40.0, 40.0);
-        assert_eq!(hit_ring(view_projection, size, origin, radius, nowhere), None);
+        assert_eq!(
+            hit_ring(view_projection, size, origin, radius, nowhere),
+            None
+        );
     }
 
     #[test]

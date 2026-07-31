@@ -44,14 +44,13 @@ pub fn run(
     mut trace: Option<&mut dyn Write>,
 ) -> Result<StepRun> {
     let assets = engine_assets::AssetServer::for_scene(scene_path);
-    let mut scripts =
-        engine_script::ScriptHost::build(
-            &scene.world,
-            scene_path,
-            scene.physics.timestep_hz,
-            scene.daylight.clone(),
-            &assets,
-        )?;
+    let mut scripts = engine_script::ScriptHost::build(
+        &scene.world,
+        scene_path,
+        scene.physics.timestep_hz,
+        scene.daylight.clone(),
+        &assets,
+    )?;
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
     let mut particles = ParticleSystem::build(&scene.world);
     let dt = 1.0 / scene.physics.timestep_hz.max(1) as f32;
@@ -108,11 +107,7 @@ pub fn run(
                     .get::<&Transform>(entity)
                     .map(|t| *t)
                     .unwrap_or_default();
-                let body = scene
-                    .world
-                    .get::<&RigidBody>(entity)
-                    .map(|b| *b)
-                    .ok();
+                let body = scene.world.get::<&RigidBody>(entity).map(|b| *b).ok();
                 let mut line = json!({
                     "step": step,
                     "entity": name,
@@ -147,7 +142,10 @@ pub fn run(
         // Breaks apply after physics, before the next step's scripts: the
         // broken entity traced its final position above, and its fragments
         // enter the rows from the next step.
-        let forced = scripts.as_ref().map(ScriptHost::take_breaks).unwrap_or_default();
+        let forced = scripts
+            .as_ref()
+            .map(ScriptHost::take_breaks)
+            .unwrap_or_default();
         let broke = engine_physics::apply_breaks(&mut scene.world, &mut physics, &forced)?;
         if !broke.is_empty() {
             scene.refresh_names();
@@ -156,8 +154,11 @@ pub fn run(
             }
             if let Some(trace) = trace.as_deref_mut() {
                 for event in &broke {
-                    let fragments: Vec<&str> =
-                        event.fragments.iter().map(|(name, _)| name.as_str()).collect();
+                    let fragments: Vec<&str> = event
+                        .fragments
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect();
                     write_line(
                         trace,
                         &json!({ "step": step, "broke": event.entity, "fragments": fragments }),
@@ -237,7 +238,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
             field_edit(field, component, vec3_json(value))
         };
 
-        if def.components.iter().any(|c| matches!(c, ComponentData::Transform(_))) {
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::Transform(_)))
+        {
             if let Ok(current) = scene.world.get::<&Transform>(entity) {
                 let rest = def
                     .components
@@ -258,7 +263,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                 }
             }
         }
-        if def.components.iter().any(|c| matches!(c, ComponentData::RigidBody(_))) {
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::RigidBody(_)))
+        {
             if let Ok(current) = scene.world.get::<&RigidBody>(entity) {
                 let rest = def
                     .components
@@ -269,7 +278,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                     })
                     .expect("guarded above");
                 if current.linear_velocity != rest.linear_velocity {
-                    edits.push(edit("linear_velocity", "RigidBody", current.linear_velocity));
+                    edits.push(edit(
+                        "linear_velocity",
+                        "RigidBody",
+                        current.linear_velocity,
+                    ));
                 }
                 if current.angular_velocity != rest.angular_velocity {
                     edits.push(edit(
@@ -282,7 +295,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
         }
         // Script-driven HUD state is scene state like any other: a changed
         // readout or gauge width lands in the baked file.
-        if def.components.iter().any(|c| matches!(c, ComponentData::HudText(_))) {
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::HudText(_)))
+        {
             if let Ok(current) = scene.world.get::<&engine_core::components::HudText>(entity) {
                 let rest = def
                     .components
@@ -307,13 +324,17 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                 }
             }
         }
-        if def.components.iter().any(|c| matches!(c, ComponentData::HudRect(_))) {
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::HudRect(_)))
+        {
             if let Ok(current) = scene.world.get::<&engine_core::components::HudRect>(entity) {
                 let rest = def
                     .components
                     .iter()
                     .find_map(|c| match c {
-                        ComponentData::HudRect(r) => Some(*r),
+                        ComponentData::HudRect(r) => Some(r.clone()),
                         _ => None,
                     })
                     .expect("guarded above");
@@ -330,9 +351,14 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
         // like solver caches) — but `rate` is an authored component field
         // that a script changed, so it bakes under the same change-based
         // rule as a velocity or a gauge width.
-        if def.components.iter().any(|c| matches!(c, ComponentData::ParticleEmitter(_))) {
-            if let Ok(current) =
-                scene.world.get::<&engine_core::components::ParticleEmitter>(entity)
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::ParticleEmitter(_)))
+        {
+            if let Ok(current) = scene
+                .world
+                .get::<&engine_core::components::ParticleEmitter>(entity)
             {
                 let rest = def
                     .components
@@ -343,7 +369,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                     })
                     .expect("guarded above");
                 if current.rate != rest.rate {
-                    edits.push(field_edit("rate", "ParticleEmitter", number_from_f32(current.rate)));
+                    edits.push(field_edit(
+                        "rate",
+                        "ParticleEmitter",
+                        number_from_f32(current.rate),
+                    ));
                 }
             }
         }
@@ -353,7 +383,11 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
         // lit differently from the one that was saved.
         macro_rules! bake_light {
             ($variant:ident, $ty:ty) => {
-                if def.components.iter().any(|c| matches!(c, ComponentData::$variant(_))) {
+                if def
+                    .components
+                    .iter()
+                    .any(|c| matches!(c, ComponentData::$variant(_)))
+                {
                     if let Ok(current) = scene.world.get::<&$ty>(entity) {
                         let rest = def
                             .components
@@ -589,14 +623,11 @@ fn final_states(
             .collect();
         if let Some(last) = unknown.last() {
             for name in &unknown[..unknown.len() - 1] {
-                EngineError::new(
-                    codes::ENTITY_NOT_FOUND,
-                    format!("no entity named {name:?}"),
-                )
-                .entity(*name)
-                .file(display)
-                .suggest_from(name, scene.names())
-                .emit();
+                EngineError::new(codes::ENTITY_NOT_FOUND, format!("no entity named {name:?}"))
+                    .entity(*name)
+                    .file(display)
+                    .suggest_from(name, scene.names())
+                    .emit();
             }
             return Err(EngineError::new(
                 codes::ENTITY_NOT_FOUND,

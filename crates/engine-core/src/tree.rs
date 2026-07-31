@@ -150,7 +150,9 @@ pub fn vertex_count(tree: &Tree) -> u64 {
     }
 
     let leaves = outermost.saturating_mul(tree.leaves_per_branch as u64) * leaf_vertices(tree.leaf);
-    total_branches.saturating_mul(per_branch).saturating_add(leaves)
+    total_branches
+        .saturating_mul(per_branch)
+        .saturating_add(leaves)
 }
 
 /// Beyond this a tree is a mistake in a parameter, not a plan — see
@@ -251,8 +253,7 @@ impl Builder<'_> {
                 let pivot = axis.cross(Vec3::Y);
                 if pivot.length_squared() > 1e-8 {
                     let lean = axis.dot(Vec3::Y).clamp(-1.0, 1.0).acos();
-                    let rotation =
-                        Quat::from_axis_angle(pivot.normalize(), lean * TRUNK_UPRIGHT);
+                    let rotation = Quat::from_axis_angle(pivot.normalize(), lean * TRUNK_UPRIGHT);
                     axis = rotation * axis;
                     normal = rotation * normal;
                 }
@@ -266,7 +267,11 @@ impl Builder<'_> {
             // sideways. A trunk's line is its crook alone; the whole point of
             // a trunk is that it is what the branches answer to.
             if tree.tropism != 0.0 && depth > 0 {
-                let target = if tree.tropism > 0.0 { Vec3::Y } else { Vec3::NEG_Y };
+                let target = if tree.tropism > 0.0 {
+                    Vec3::Y
+                } else {
+                    Vec3::NEG_Y
+                };
                 let pivot = axis.cross(target);
                 if pivot.length_squared() > 1e-8 {
                     // Never overshoot: a branch already pointing at the target
@@ -320,12 +325,12 @@ impl Builder<'_> {
                     + slot as f32 * std::f32::consts::TAU / whorl as f32
                     + self.jitter_signed() * 0.5;
                 let binormal = at.axis.cross(at.normal);
-                let radial = (azimuth.cos() * at.normal + azimuth.sin() * binormal)
-                    .normalize_or(at.normal);
+                let radial =
+                    (azimuth.cos() * at.normal + azimuth.sin() * binormal).normalize_or(at.normal);
 
                 let angle = (tree.branch_angle * self.jitter_multiplier()).to_radians();
-                let child_axis = (at.axis * angle.cos() + radial * angle.sin())
-                    .normalize_or(at.axis);
+                let child_axis =
+                    (at.axis * angle.cos() + radial * angle.sin()).normalize_or(at.axis);
                 let child_normal = orthonormalize(radial, child_axis);
 
                 let child_length = (length
@@ -369,8 +374,11 @@ impl Builder<'_> {
             let binormal = node.axis.cross(node.normal);
             for side in 0..sides {
                 let angle = side as f32 / sides as f32 * std::f32::consts::TAU;
-                let radial = (angle.cos() * node.normal + angle.sin() * binormal).normalize_or(node.normal);
-                self.bark.positions.push((node.position + radial * node.radius).to_array());
+                let radial =
+                    (angle.cos() * node.normal + angle.sin() * binormal).normalize_or(node.normal);
+                self.bark
+                    .positions
+                    .push((node.position + radial * node.radius).to_array());
                 self.bark.normals.push(radial.to_array());
                 self.bark.uvs.push([side as f32 / sides as f32, v]);
             }
@@ -436,8 +444,8 @@ impl Builder<'_> {
 
             let azimuth = (LEAF_TWIST * index as f32).to_radians() + self.jitter_signed();
             let binormal = at.axis.cross(at.normal);
-            let radial = (azimuth.cos() * at.normal + azimuth.sin() * binormal)
-                .normalize_or(at.normal);
+            let radial =
+                (azimuth.cos() * at.normal + azimuth.sin() * binormal).normalize_or(at.normal);
 
             // Leaves stand off the shoot at a wide angle and lift toward the
             // sky — a petiole's job. Both are jittered, or the foliage draws a
@@ -503,7 +511,9 @@ impl Builder<'_> {
         }
         for corner in &corners {
             self.leaves.positions.push((center + *corner).to_array());
-            self.leaves.normals.push(corner.normalize_or(Vec3::Y).to_array());
+            self.leaves
+                .normals
+                .push(corner.normalize_or(Vec3::Y).to_array());
             self.leaves.uvs.push([0.5, 0.5]);
         }
 
@@ -569,7 +579,11 @@ const CLUSTER_STRETCH: f32 = 1.6;
 /// A frame across a leaf's growth direction: the width axis, and the direction
 /// its wings fold toward. `roll` spins the leaf about its own midrib.
 fn leaf_frame(direction: Vec3, roll: f32) -> (Vec3, Vec3) {
-    let reference = if direction.y.abs() > 0.9 { Vec3::X } else { Vec3::Y };
+    let reference = if direction.y.abs() > 0.9 {
+        Vec3::X
+    } else {
+        Vec3::Y
+    };
     let side = direction.cross(reference).normalize_or(Vec3::X);
     let fold = direction.cross(side).normalize_or(Vec3::Z);
     let rotation = Quat::from_axis_angle(direction, roll);
@@ -795,7 +809,10 @@ mod tests {
         let tree = Tree::default();
         let (first, _) = generate(&tree);
         let (again, _) = generate(&tree);
-        assert_eq!(first, again, "generation is a pure function of the component");
+        assert_eq!(
+            first, again,
+            "generation is a pure function of the component"
+        );
 
         let (other, _) = generate(&Tree { seed: 1, ..tree });
         assert_eq!(
@@ -823,7 +840,10 @@ mod tests {
         };
         let (a, _) = generate(&tree);
         let (b, _) = generate(&Tree { seed: 99, ..tree });
-        assert_eq!(a.positions, b.positions, "no jitter, no crook: no randomness");
+        assert_eq!(
+            a.positions, b.positions,
+            "no jitter, no crook: no randomness"
+        );
     }
 
     #[test]
@@ -832,11 +852,29 @@ mod tests {
         // allocated, so it has to be the truth and not an estimate.
         for tree in [
             Tree::default(),
-            Tree { levels: 0, ..Tree::default() },
-            Tree { levels: 3, whorl: 2, branches: 3, ..Tree::default() },
-            Tree { leaf: TreeLeaf::Cluster, leaves_per_branch: 3, ..Tree::default() },
-            Tree { leaf: TreeLeaf::None, ..Tree::default() },
-            Tree { branches: 0, ..Tree::default() },
+            Tree {
+                levels: 0,
+                ..Tree::default()
+            },
+            Tree {
+                levels: 3,
+                whorl: 2,
+                branches: 3,
+                ..Tree::default()
+            },
+            Tree {
+                leaf: TreeLeaf::Cluster,
+                leaves_per_branch: 3,
+                ..Tree::default()
+            },
+            Tree {
+                leaf: TreeLeaf::None,
+                ..Tree::default()
+            },
+            Tree {
+                branches: 0,
+                ..Tree::default()
+            },
         ] {
             let (bark, leaves) = generate(&tree);
             let actual = (bark.positions.len() + leaves.positions.len()) as u64;
@@ -863,7 +901,10 @@ mod tests {
             lowest = lowest.min(p.y);
             reach = reach.max(p.length());
         }
-        assert!(lowest > -0.01, "the trunk grew below its own base: {lowest}");
+        assert!(
+            lowest > -0.01,
+            "the trunk grew below its own base: {lowest}"
+        );
         assert!(
             reach < tree.height * 2.0,
             "a branch left the tree's envelope: {reach} for a {}m tree",
@@ -927,11 +968,7 @@ mod tests {
         // And the branches genuinely do droop, or the rule has cost us the
         // feature it was protecting.
         let (bark, _) = generate(&spruce);
-        let lowest = bark
-            .positions
-            .iter()
-            .map(|p| p[1])
-            .fold(f32::MAX, f32::min);
+        let lowest = bark.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
         let attachment = spruce.height * spruce.branch_start;
         assert!(
             lowest < attachment,
@@ -944,16 +981,26 @@ mod tests {
         // Compounding a whorl at every level multiplies the tree by itself:
         // `whorl: 5` would be 25 children per node and then 125. Botanically
         // it is also wrong — a spruce's limbs carry ordinary alternate shoots.
-        let alternate = Tree { whorl: 1, levels: 2, ..Tree::default() };
-        let whorled = Tree { whorl: 4, ..alternate };
+        let alternate = Tree {
+            whorl: 1,
+            levels: 2,
+            ..Tree::default()
+        };
+        let whorled = Tree {
+            whorl: 4,
+            ..alternate
+        };
         let ratio = vertex_count(&whorled) as f64 / vertex_count(&alternate) as f64;
         assert!(
             (3.5..4.5).contains(&ratio),
             "a whorl of 4 should cost about 4x, not {ratio}x"
         );
         // And it is the real geometry, not just the prediction.
-        assert_eq!(vertex_count(&whorled), generate(&whorled).0.positions.len() as u64
-            + generate(&whorled).1.positions.len() as u64);
+        assert_eq!(
+            vertex_count(&whorled),
+            generate(&whorled).0.positions.len() as u64
+                + generate(&whorled).1.positions.len() as u64
+        );
     }
 
     #[test]
@@ -982,7 +1029,10 @@ mod tests {
         // The renderer's upload cache and `MeshSource`'s contract both key on
         // `Arc` identity; a fresh copy per frame would re-upload every tree in
         // the scene every frame.
-        let tree = Tree { seed: 4242, ..Tree::default() };
+        let tree = Tree {
+            seed: 4242,
+            ..Tree::default()
+        };
         let first = meshes_for(&tree);
         let again = meshes_for(&tree);
         assert!(Arc::ptr_eq(&first.bark, &again.bark));
@@ -993,9 +1043,15 @@ mod tests {
 
     #[test]
     fn a_bare_tree_has_no_leaf_mesh_to_draw() {
-        let none = meshes_for(&Tree { leaf: TreeLeaf::None, ..Tree::default() });
+        let none = meshes_for(&Tree {
+            leaf: TreeLeaf::None,
+            ..Tree::default()
+        });
         assert!(none.leaves.is_none());
-        let empty = meshes_for(&Tree { leaves_per_branch: 0, ..Tree::default() });
+        let empty = meshes_for(&Tree {
+            leaves_per_branch: 0,
+            ..Tree::default()
+        });
         assert!(empty.leaves.is_none());
         let leafy = meshes_for(&Tree::default());
         assert!(leafy.leaves.is_some());

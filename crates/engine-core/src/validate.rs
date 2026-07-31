@@ -1978,7 +1978,38 @@ fn check_component(
         // HUD elements are fully described by the schema: anchor is a schema
         // enum, sizes/colors/opacity are schema ranges, and they reference no
         // files and need no Transform.
-        ComponentData::HudText(_) | ComponentData::HudRect(_) => {}
+        // The HUD family's own fields are covered by the schema walk (ranges,
+        // the anchor/layout/align vocabularies). What is left is relational —
+        // whether `parent` names a panel, whether the chain loops, whether a
+        // `HudInteract` has anything to hit — and needs either the whole
+        // entity or the whole scene in view, so it lives in the entity and
+        // scene passes.
+        ComponentData::HudText(_) | ComponentData::HudRect(_) | ComponentData::HudPanel(_) => {}
+
+        ComponentData::HudInteract(_) => {}
+
+        // An image's texture reference is checked exactly like a `Material`
+        // map: existence, extension and absolute-path rejection here, size
+        // (`texture_too_large`) and decodability in the engine-assets pass, so
+        // a broken PNG fails `validate` rather than the screenshot.
+        ComponentData::HudImage(ref image) => {
+            let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+            if let Err(resolve) = crate::texture::resolve_texture(&image.texture, base_dir) {
+                let mut error = cx
+                    .err(
+                        resolve.error,
+                        resolve.message.clone(),
+                        &format!("{component_path}/texture"),
+                    )
+                    .entity(entity)
+                    .component("HudImage")
+                    .field("texture");
+                if let Some(suggestion) = resolve.context().and_then(|c| c.did_you_mean.clone()) {
+                    error = error.did_you_mean(suggestion);
+                }
+                errors.push(error);
+            }
+        }
 
         // Every emitter constraint is a schema range; the simulation reads
         // whatever validated, so there is nothing semantic left to check.

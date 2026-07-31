@@ -1298,7 +1298,7 @@ fn diff_render(
         render_time,
         baseline.width,
         baseline.height,
-        &scene.hud_items(),
+        &scene.hud_tree(&assets),
         &hud,
     )?;
 
@@ -1491,7 +1491,7 @@ fn filmstrip(
             t,
             tile_width,
             tile_height,
-            &scene.hud_items(),
+            &scene.hud_tree(&assets),
             &[],
         )?;
         let tile = image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
@@ -1621,10 +1621,7 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
 
 /// Every clip in a glTF, reported the way a property clip is — same shape, so
 /// one `jq` expression reads both.
-fn gltf_clip_reports(
-    rig: &engine_core::skeleton::Rig,
-    display: &str,
-) -> Vec<serde_json::Value> {
+fn gltf_clip_reports(rig: &engine_core::skeleton::Rig, display: &str) -> Vec<serde_json::Value> {
     rig.clips
         .iter()
         .map(|clip| {
@@ -1760,7 +1757,11 @@ fn entity_joint_report(
     skinned: &engine_core::skeleton::SkinnedEntity,
     time: Option<f32>,
 ) -> serde_json::Value {
-    let skin = skinned.rig.skin.as_ref().expect("skinned_entities filtered");
+    let skin = skinned
+        .rig
+        .skin
+        .as_ref()
+        .expect("skinned_entities filtered");
     joint_report(
         &skinned.asset,
         Some(&skinned.name),
@@ -1897,7 +1898,7 @@ fn screenshot(
         render_time,
         width,
         height,
-        &scene.hud_items(),
+        &scene.hud_tree(&assets),
         &hud,
     )?;
 
@@ -1949,7 +1950,7 @@ fn run_scene(
     let lights = scene.lights().resolved();
     let environment = scene.environment;
     let daylight = scene.daylight.clone();
-    let hud_items = scene.hud_items();
+    let hud_items = scene.hud_tree(&assets);
     let title = format!("engine — {}", scene.name);
 
     // Physics and animated scenes come alive in the viewer; static scenes

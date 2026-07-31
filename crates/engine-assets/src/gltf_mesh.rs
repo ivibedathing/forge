@@ -51,7 +51,9 @@ pub fn load_gltf(path: &Path) -> Result<MeshData> {
     // exporter have at least one. A file with none gets its meshes loaded
     // with identity transforms rather than an error: deterministic, and the
     // geometry is all the engine wants from the file anyway.
-    let scene = document.default_scene().or_else(|| document.scenes().next());
+    let scene = document
+        .default_scene()
+        .or_else(|| document.scenes().next());
     match scene {
         Some(scene) => {
             for node in scene.nodes() {

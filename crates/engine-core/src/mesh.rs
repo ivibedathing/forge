@@ -204,7 +204,9 @@ fn sibling_candidates(asset: &str, resolved: &Path) -> Vec<String> {
         return candidates;
     };
 
-    let prefix = Path::new(asset).parent().filter(|p| !p.as_os_str().is_empty());
+    let prefix = Path::new(asset)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty());
     for entry in entries.flatten() {
         if !entry.path().is_file() {
             continue;
@@ -393,10 +395,8 @@ fn sphere() -> MeshData {
             );
             mesh.positions.push(position.to_array());
             mesh.normals.push(position.to_array());
-            mesh.uvs.push([
-                segment as f32 / SEGMENTS as f32,
-                ring as f32 / RINGS as f32,
-            ]);
+            mesh.uvs
+                .push([segment as f32 / SEGMENTS as f32, ring as f32 / RINGS as f32]);
         }
     }
 
@@ -703,7 +703,8 @@ mod tests {
 
     impl AssetDir {
         fn with_file(test: &str, file: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("engine-mesh-{test}-{}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("engine-mesh-{test}-{}", std::process::id()));
             std::fs::create_dir_all(dir.join("meshes")).unwrap();
             std::fs::write(dir.join(file), b"{}").unwrap();
             Self(dir)

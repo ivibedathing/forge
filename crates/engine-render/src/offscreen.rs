@@ -8,7 +8,7 @@ use engine_core::components::Camera;
 use engine_core::math::Mat4;
 use engine_core::particles::ParticleInstance;
 use engine_core::scene::{
-    CloudItem, EnvironmentSettings, HudItems, MeadowItem, RenderItem, ResolvedLights, RoadItem,
+    CloudItem, EnvironmentSettings, HudTree, MeadowItem, RenderItem, ResolvedLights, RoadItem,
     WaterItem,
 };
 use engine_core::{EngineError, Result};
@@ -65,7 +65,7 @@ pub fn render(
     time: f32,
     width: u32,
     height: u32,
-    hud: &HudItems,
+    hud: &HudTree,
     lines: &[String],
 ) -> Result<Image> {
     render_with_adapter(
@@ -110,7 +110,7 @@ pub fn render_with_adapter(
     time: f32,
     width: u32,
     height: u32,
-    hud: &HudItems,
+    hud: &HudTree,
     lines: &[String],
 ) -> Result<(Image, String)> {
     let (width, height) = (width.max(1), height.max(1));

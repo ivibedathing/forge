@@ -75,9 +75,7 @@ fn rebase(material_asset: &str, reference: &str) -> String {
     for component in dir.join(reference).components() {
         match component {
             std::path::Component::CurDir => {}
-            std::path::Component::ParentDir
-                if parts.last().is_some_and(|last| last != ".." ) =>
-            {
+            std::path::Component::ParentDir if parts.last().is_some_and(|last| last != "..") => {
                 parts.pop();
             }
             other => parts.push(other.as_os_str().to_owned()),
@@ -188,7 +186,10 @@ mod tests {
             rebase("materials/asphalt.json", "grain.png"),
             "materials/grain.png"
         );
-        assert_eq!(rebase("asphalt.json", "textures/grain.png"), "textures/grain.png");
+        assert_eq!(
+            rebase("asphalt.json", "textures/grain.png"),
+            "textures/grain.png"
+        );
         assert_eq!(
             rebase("a/b/m.json", "../../../shared/t.png"),
             "../shared/t.png",
@@ -208,7 +209,9 @@ mod tests {
             "asset_unsupported"
         );
         assert_eq!(
-            resolve_material("materials/nope.json", dir).unwrap_err().error,
+            resolve_material("materials/nope.json", dir)
+                .unwrap_err()
+                .error,
             "asset_not_found"
         );
     }

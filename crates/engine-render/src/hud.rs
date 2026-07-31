@@ -20,11 +20,16 @@
 //! linear space; the canvas the GPU receives is sRGB-encoded straight-alpha
 //! RGBA8.
 
-use engine_core::components::{HudAnchor, HudRect, HudText};
-use engine_core::scene::HudItems;
+use std::sync::Arc;
 
-/// Glyph cell edge in font units; the font is fixed 8×8.
-pub const GLYPH: u32 = 8;
+use engine_core::components::{HudImage, HudPanel, HudRect, HudText};
+use engine_core::texture::TextureData;
+use engine_core::ui::{self, HudKind, HudTree, PixelRect, UiLayout};
+
+/// Glyph cell edge in font units; the font is fixed 8×8. The layout engine
+/// owns the measurement formulas (M31) — this is a re-export so the rasterizer
+/// and the layout can never disagree about a glyph cell.
+pub use engine_core::ui::{text_scale, GLYPH};
 
 // Debug-line panel geometry and colors. These are pinned by the lap
 // baseline (`verify/baselines/m11_lap.png`): the panel bytes must land
@@ -152,17 +157,16 @@ impl Region {
     }
 }
 
-/// The integer scale factor `HudText.size` snaps to: `max(1, round(size / 8))`.
-pub fn text_scale(size: f32) -> u32 {
-    ((size / GLYPH as f32).round() as i64).max(1) as u32
-}
-
 /// One HUD element, identified so a cluster can redraw exactly its own
 /// members in the overall draw order.
+///
+/// Since M31 the draw order *is* `UiLayout::placed`, so an element is just an
+/// index into it — the rasterizer no longer decides who draws over whom, and
+/// no longer computes where anything is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Element {
-    Rect(usize),
-    Text(usize),
+    /// Index into [`UiLayout::placed`].
+    Placed(usize),
     /// The script debug-line panel, which is always drawn last.
     Lines,
 }
@@ -207,30 +211,52 @@ impl HudOverlay {
     }
 }
 
-/// Rasterize the overlay in draw order: component `rects` under component
-/// `texts`, each in the order given (scene-file order, per
-/// `Scene::hud_items`), and the script debug-line panel over everything.
-pub fn rasterize(hud: &HudItems, lines: &[String], width: u32, height: u32) -> HudOverlay {
-    // Measure first: everything is laid out from anchors and glyph cells, so
-    // every element's pixel box is known before a single pixel is blended.
+/// Rasterize the overlay, laying it out first.
+///
+/// Draw order is [`ui::layout`]'s: depth-first over the `parent` tree, a panel
+/// before its children, siblings by `(class, file order)` — which collapses to
+/// M12's "rects then texts, each in file order" for any scene where nothing
+/// names a parent. The script debug-line panel still draws over everything.
+pub fn rasterize(hud: &HudTree, lines: &[String], width: u32, height: u32) -> HudOverlay {
+    let layout = ui::layout(hud, width, height);
+    rasterize_laid_out(hud, &layout, lines, width, height)
+}
+
+/// Rasterize against a layout the caller already computed — the path the
+/// simulation loop takes, since it needs the same rectangles for hit-testing
+/// and recomputing them could only introduce a disagreement.
+pub fn rasterize_laid_out(
+    hud: &HudTree,
+    layout: &UiLayout,
+    lines: &[String],
+    width: u32,
+    height: u32,
+) -> HudOverlay {
+    // Measure first: layout has already resolved every pixel box, so all that
+    // is left is clipping them to the target.
     let mut placed: Vec<(Element, Region)> = Vec::new();
     let mut place = |element, bounds: Option<Region>| {
         if let Some(bounds) = bounds {
             placed.push((element, bounds));
         }
     };
-    for (index, rect) in hud.rects.iter().enumerate() {
-        place(Element::Rect(index), rect_bounds(rect, width, height));
-    }
-    for (index, text) in hud.texts.iter().enumerate() {
-        place(Element::Text(index), text_bounds(text, width, height));
+    for (index, element) in layout.placed.iter().enumerate() {
+        if !element.visible {
+            continue;
+        }
+        place(
+            Element::Placed(index),
+            element_bounds(&hud.nodes[element.node].kind, element.rect, width, height),
+        );
     }
     place(Element::Lines, lines_bounds(lines, width, height));
 
     HudOverlay {
         canvases: cluster(&placed)
             .into_iter()
-            .map(|(region, members)| draw_cluster(hud, lines, width, height, region, &members))
+            .map(|(region, members)| {
+                draw_cluster(hud, layout, lines, width, height, region, &members)
+            })
             .collect(),
     }
 }
@@ -263,12 +289,12 @@ fn cluster(placed: &[(Element, Region)]) -> Vec<(Region, Vec<Element>)> {
         clusters.push((region, members));
     }
 
-    // Draw order within a cluster is the order elements were placed in.
+    // Draw order within a cluster is the order elements were placed in — which
+    // is the layout's order, with the debug lines last.
     for (_, members) in &mut clusters {
         members.sort_by_key(|element| match element {
-            Element::Rect(index) => (0, *index),
-            Element::Text(index) => (1, *index),
-            Element::Lines => (2, 0),
+            Element::Placed(index) => (0, *index),
+            Element::Lines => (1, 0),
         });
     }
     clusters
@@ -276,7 +302,8 @@ fn cluster(placed: &[(Element, Region)]) -> Vec<(Region, Vec<Element>)> {
 
 /// Rasterize one cluster's members into a canvas covering just its region.
 fn draw_cluster(
-    hud: &HudItems,
+    hud: &HudTree,
+    layout: &UiLayout,
     lines: &[String],
     width: u32,
     height: u32,
@@ -290,11 +317,16 @@ fn draw_cluster(
 
     for member in members {
         match member {
-            Element::Rect(index) => {
-                draw_rect(&mut canvas, region, width, height, &hud.rects[*index])
-            }
-            Element::Text(index) => {
-                draw_text(&mut canvas, region, width, height, &hud.texts[*index])
+            Element::Placed(index) => {
+                let element = &layout.placed[*index];
+                draw_element(
+                    &mut canvas,
+                    region,
+                    width,
+                    height,
+                    &hud.nodes[element.node].kind,
+                    element.rect,
+                );
             }
             Element::Lines => draw_lines(&mut canvas, region, width, height, lines),
         }
@@ -321,84 +353,62 @@ fn draw_cluster(
     }
 }
 
-/// Pixel box of a HUD element: top-left corner from the anchor rule
-/// (`HudAnchor` doc), rounded to whole pixels.
-fn anchored_box(
-    anchor: HudAnchor,
-    offset: glam::Vec2,
-    element: (f32, f32),
-    canvas: (u32, u32),
-) -> (i64, i64) {
-    let (w, h) = element;
-    let (cw, ch) = (canvas.0 as f32, canvas.1 as f32);
-    let (x, y) = match anchor {
-        HudAnchor::TopLeft => (offset.x, offset.y),
-        HudAnchor::TopRight => (cw - offset.x - w, offset.y),
-        HudAnchor::BottomLeft => (offset.x, ch - offset.y - h),
-        HudAnchor::BottomRight => (cw - offset.x - w, ch - offset.y - h),
-        HudAnchor::Center => (
-            cw / 2.0 + offset.x - w / 2.0,
-            ch / 2.0 + offset.y - h / 2.0,
-        ),
-    };
-    (x.round() as i64, y.round() as i64)
-}
-
-/// The pixel box a `HudRect` covers. Rounding the far edge (not the size)
-/// keeps adjacent rects gapless.
-fn rect_bounds(rect: &HudRect, width: u32, height: u32) -> Option<Region> {
-    let (x0, y0) = anchored_box(
-        rect.anchor,
-        rect.offset,
-        (rect.size.x, rect.size.y),
-        (width, height),
-    );
+/// The pixel box an element covers, clipped to the target.
+///
+/// A fully transparent panel is skipped outright — it produces no canvas — so
+/// an invisible layout group costs exactly what it did before it existed. That
+/// is what lets a scene be restructured into panels without any of its pixels
+/// or its canvas clustering changing.
+fn element_bounds(kind: &HudKind, rect: PixelRect, width: u32, height: u32) -> Option<Region> {
+    if let HudKind::Panel(panel) = kind {
+        if panel.opacity <= 0.0 {
+            return None;
+        }
+    }
     Region::clipped(
-        x0,
-        y0,
-        x0 + rect.size.x.round() as i64,
-        y0 + rect.size.y.round() as i64,
+        rect.x,
+        rect.y,
+        rect.x + rect.width as i64,
+        rect.y + rect.height as i64,
         width,
         height,
     )
 }
 
-/// The pixel box a `HudText` covers: the whole glyph-cell block, whether or
-/// not every cell has lit pixels.
-fn text_bounds(text: &HudText, width: u32, height: u32) -> Option<Region> {
-    let scale = text_scale(text.size);
-    let cell = (GLYPH * scale) as i64;
-    let text_width = (text.text.chars().count() as u32 * GLYPH * scale) as f32;
-    let (x0, y0) = anchored_box(
-        text.anchor,
-        text.offset,
-        (text_width, (GLYPH * scale) as f32),
-        (width, height),
-    );
-    Region::clipped(
-        x0,
-        y0,
-        x0 + text.text.chars().count() as i64 * cell,
-        y0 + cell,
-        width,
-        height,
-    )
+fn draw_element(
+    canvas: &mut [[f32; 4]],
+    region: Region,
+    width: u32,
+    height: u32,
+    kind: &HudKind,
+    rect: PixelRect,
+) {
+    match kind {
+        HudKind::Panel(panel) => draw_panel(canvas, region, width, height, panel, rect),
+        HudKind::Rect(r) => draw_rect(canvas, region, width, height, r, rect),
+        HudKind::Image(image, texture) => {
+            draw_image(canvas, region, width, height, image, texture.as_ref(), rect)
+        }
+        HudKind::Text(text) => draw_text(canvas, region, width, height, text, rect),
+    }
 }
 
-fn draw_rect(canvas: &mut [[f32; 4]], region: Region, width: u32, height: u32, rect: &HudRect) {
-    let (x0, y0) = anchored_box(
-        rect.anchor,
-        rect.offset,
-        (rect.size.x, rect.size.y),
-        (width, height),
-    );
-    let x1 = x0 + rect.size.x.round() as i64;
-    let y1 = y0 + rect.size.y.round() as i64;
-
-    let color = [rect.color.x, rect.color.y, rect.color.z];
-    let alpha = rect.opacity.clamp(0.0, 1.0);
-    for y in y0.max(0)..y1.min(height as i64) {
-        for x in x0.max(0)..x1.min(width as i64) {
+/// Fill a laid-out box with a flat colour — the one primitive behind both
+/// `HudRect` and a `HudPanel`'s background.
+fn fill(
+    canvas: &mut [[f32; 4]],
+    region: Region,
+    width: u32,
+    height: u32,
+    rect: PixelRect,
+    color: glam::Vec3,
+    opacity: f32,
+) {
+    let color = [color.x, color.y, color.z];
+    let alpha = opacity.clamp(0.0, 1.0);
+    let (x1, y1) = (rect.x + rect.width as i64, rect.y + rect.height as i64);
+    for y in rect.y.max(0)..y1.min(height as i64) {
+        for x in rect.x.max(0)..x1.min(width as i64) {
             if let Some(i) = region.index(x, y) {
                 blend(&mut canvas[i], color, alpha);
             }
@@ -406,38 +416,182 @@ fn draw_rect(canvas: &mut [[f32; 4]], region: Region, width: u32, height: u32, r
     }
 }
 
-fn draw_text(canvas: &mut [[f32; 4]], region: Region, width: u32, height: u32, text: &HudText) {
+fn draw_rect(
+    canvas: &mut [[f32; 4]],
+    region: Region,
+    width: u32,
+    height: u32,
+    rect: &HudRect,
+    box2: PixelRect,
+) {
+    fill(
+        canvas,
+        region,
+        width,
+        height,
+        box2,
+        rect.color,
+        rect.opacity,
+    );
+}
+
+fn draw_panel(
+    canvas: &mut [[f32; 4]],
+    region: Region,
+    width: u32,
+    height: u32,
+    panel: &HudPanel,
+    box2: PixelRect,
+) {
+    fill(
+        canvas,
+        region,
+        width,
+        height,
+        box2,
+        panel.color,
+        panel.opacity,
+    );
+}
+
+/// Where a destination coordinate reads from in the source, under nine-slice.
+///
+/// The three bands are: a `start`-wide corner copied 1:1, a middle that
+/// **tiles**, and an `end`-wide corner copied 1:1 from the source's far edge.
+/// Tiling rather than stretching, because tiling at nearest is exact and
+/// stretching at nearest is a moiré pattern.
+///
+/// When the destination is too small to hold both corners they are shrunk in
+/// proportion (integer arithmetic, left rounding down) rather than overlapping
+/// — a 12-pixel frame drawn into an 8-pixel box still reads as a frame.
+fn slice_source(destination: i64, dest_size: u32, source_size: u32, start: u32, end: u32) -> u32 {
+    if source_size == 0 {
+        return 0;
+    }
+    let (start, end) = (start.min(source_size), end.min(source_size));
+    let (start, end) = if start + end <= dest_size {
+        (start, end)
+    } else {
+        match (dest_size * start).checked_div(start + end) {
+            Some(scaled) => (scaled, dest_size - scaled),
+            // Both insets are zero, so there are no corners to shrink.
+            None => (0, 0),
+        }
+    };
+
+    let d = destination.clamp(0, dest_size.saturating_sub(1) as i64) as u32;
+    if d < start {
+        return d;
+    }
+    if d >= dest_size.saturating_sub(end) {
+        return source_size - (dest_size - d);
+    }
+    // The tiling middle. With no middle band in the source (the insets meet),
+    // clamp to the last texel of the start band rather than dividing by zero.
+    let middle = source_size.saturating_sub(start + end);
+    if middle == 0 {
+        return start.min(source_size - 1);
+    }
+    start + (d - start) % middle
+}
+
+/// Draw a textured rectangle, sampled **nearest-neighbour** — the filter is a
+/// format contract (a render sits under a baseline), and nearest is exactly
+/// reproducible where a bilinear filter is a float-rounding question.
+///
+/// Only the base mip is read: the overlay never minifies below one destination
+/// pixel per texel band, so a level selection would have no correct answer.
+fn draw_image(
+    canvas: &mut [[f32; 4]],
+    region: Region,
+    width: u32,
+    height: u32,
+    image: &HudImage,
+    texture: Option<&Arc<TextureData>>,
+    rect: PixelRect,
+) {
+    // No asset directory (a GPU-less test) or an unreadable file: lay out,
+    // draw nothing. The reference itself was checked by `validate`.
+    let Some(texture) = texture else {
+        return;
+    };
+    if texture.width == 0 || texture.height == 0 || rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    let pixels = texture.rgba();
+    let inset = |v: f32| v.max(0.0) as u32;
+    let (left, top) = (inset(image.slice[0]), inset(image.slice[1]));
+    let (right, bottom) = (inset(image.slice[2]), inset(image.slice[3]));
+    let tint = [image.tint.x, image.tint.y, image.tint.z];
+    let opacity = image.opacity.clamp(0.0, 1.0);
+
+    let (x1, y1) = (rect.x + rect.width as i64, rect.y + rect.height as i64);
+    for y in rect.y.max(0)..y1.min(height as i64) {
+        let sy = slice_source(y - rect.y, rect.height, texture.height, top, bottom);
+        for x in rect.x.max(0)..x1.min(width as i64) {
+            let Some(i) = region.index(x, y) else {
+                continue;
+            };
+            let sx = slice_source(x - rect.x, rect.width, texture.width, left, right);
+            let texel = ((sy * texture.width + sx) * 4) as usize;
+            let alpha = pixels[texel + 3] as f32 / 255.0 * opacity;
+            if alpha <= 0.0 {
+                continue;
+            }
+            // The texture is sRGB-encoded bytes; decode so the tint multiplies
+            // in linear space like every other colour in the engine.
+            let color = [
+                decode_srgb(pixels[texel]) * tint[0],
+                decode_srgb(pixels[texel + 1]) * tint[1],
+                decode_srgb(pixels[texel + 2]) * tint[2],
+            ];
+            blend(&mut canvas[i], color, alpha);
+        }
+    }
+}
+
+fn draw_text(
+    canvas: &mut [[f32; 4]],
+    region: Region,
+    width: u32,
+    height: u32,
+    text: &HudText,
+    box2: PixelRect,
+) {
     let scale = text_scale(text.size);
     let cell = (GLYPH * scale) as i64;
-    let text_width = (text.text.chars().count() as u32 * GLYPH * scale) as f32;
-    let (x0, y0) = anchored_box(
-        text.anchor,
-        text.offset,
-        (text_width, (GLYPH * scale) as f32),
-        (width, height),
-    );
-
     let color = [text.color.x, text.color.y, text.color.z];
-    for (index, ch) in text.text.chars().enumerate() {
-        // Outside the font's ASCII coverage: a filled box — visibly wrong in
-        // the screenshot, never a panic (hud-design.md §2).
-        let bitmap = glyph(ch as u32);
-        let gx = x0 + index as i64 * cell;
-        for (row, bits) in bitmap.iter().enumerate() {
-            for col in 0..GLYPH as usize {
-                if bits >> col & 1 == 0 {
-                    continue;
-                }
-                // One font pixel is a scale×scale block, fully opaque.
-                for dy in 0..scale as i64 {
-                    for dx in 0..scale as i64 {
-                        let x = gx + (col as i64 * scale as i64) + dx;
-                        let y = y0 + (row as i64 * scale as i64) + dy;
-                        if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
-                            continue;
-                        }
-                        if let Some(i) = region.index(x, y) {
-                            blend(&mut canvas[i], color, 1.0);
+    let lines = ui::text_lines(text);
+    let step = cell as f32 + text.line_gap;
+
+    for (row, line) in lines.iter().enumerate() {
+        let line_width = (line.chars().count() as i64 * cell) as f32;
+        // Both offsets are zero for a single unwrapped left-aligned line — the
+        // M12 case — so its glyphs land exactly where they always have.
+        let x0 = box2.x + ui::line_offset(text.align, box2.width as f32, line_width).round() as i64;
+        let y0 = box2.y + (row as f32 * step).round() as i64;
+
+        for (index, ch) in line.chars().enumerate() {
+            // Outside the font's ASCII coverage: a filled box — visibly wrong
+            // in the screenshot, never a panic (hud-design.md §2).
+            let bitmap = glyph(ch as u32);
+            let gx = x0 + index as i64 * cell;
+            for (row, bits) in bitmap.iter().enumerate() {
+                for col in 0..GLYPH as usize {
+                    if bits >> col & 1 == 0 {
+                        continue;
+                    }
+                    // One font pixel is a scale×scale block, fully opaque.
+                    for dy in 0..scale as i64 {
+                        for dx in 0..scale as i64 {
+                            let x = gx + (col as i64 * scale as i64) + dx;
+                            let y = y0 + (row as i64 * scale as i64) + dy;
+                            if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
+                                continue;
+                            }
+                            if let Some(i) = region.index(x, y) {
+                                blend(&mut canvas[i], color, 1.0);
+                            }
                         }
                     }
                 }
@@ -594,6 +748,8 @@ fn decode_srgb(byte: u8) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_core::components::{HudAnchor, HudTextAlign};
+    use engine_core::ui::HudNode;
     use glam::{Vec2, Vec3};
 
     fn rect(anchor: HudAnchor, offset: [f32; 2], size: [f32; 2]) -> HudRect {
@@ -603,6 +759,9 @@ mod tests {
             size: Vec2::from(size),
             color: Vec3::ONE,
             opacity: 1.0,
+            parent: None,
+            visible: true,
+            stretch: [false, false],
         }
     }
 
@@ -613,17 +772,39 @@ mod tests {
             offset: Vec2::from(offset),
             size,
             color: Vec3::ONE,
+            parent: None,
+            visible: true,
+            stretch: [false, false],
+            align: HudTextAlign::Left,
+            wrap: 0.0,
+            line_gap: 0.0,
         }
     }
 
-    fn only_rects(rects: Vec<HudRect>) -> HudItems {
-        HudItems {
-            rects,
-            texts: vec![],
+    fn only_rects(rects: Vec<HudRect>) -> HudTree {
+        items(rects, vec![])
+    }
+
+    /// The M12 shape as a tree: two lists, nothing naming a parent. This is
+    /// exactly the arrangement the draw-order collapse is about, which is why
+    /// these tests still read the same and still assert the same pixels.
+    fn items(rects: Vec<HudRect>, texts: Vec<HudText>) -> HudTree {
+        HudTree {
+            nodes: rects
+                .into_iter()
+                .map(HudKind::Rect)
+                .chain(texts.into_iter().map(HudKind::Text))
+                .enumerate()
+                .map(|(i, kind)| HudNode {
+                    entity: format!("E{i}"),
+                    kind,
+                    interact: None,
+                })
+                .collect(),
         }
     }
 
-    fn components(hud: &HudItems, width: u32, height: u32) -> HudOverlay {
+    fn components(hud: &HudTree, width: u32, height: u32) -> HudOverlay {
         rasterize(hud, &[], width, height)
     }
 
@@ -653,7 +834,7 @@ mod tests {
 
     #[test]
     fn empty_hud_is_fully_transparent() {
-        let canvas = components(&HudItems::default(), 8, 8);
+        let canvas = components(&HudTree::default(), 8, 8);
         assert!(canvas.is_empty(), "an empty HUD rasterizes nothing at all");
     }
 
@@ -743,14 +924,7 @@ mod tests {
         blue.color = Vec3::new(0.0, 0.0, 1.0);
         let mut red_rect = rect(HudAnchor::TopLeft, [0.0, 0.0], [8.0, 8.0]);
         red_rect.color = Vec3::new(1.0, 0.0, 0.0);
-        let canvas = components(
-            &HudItems {
-                rects: vec![red_rect],
-                texts: vec![blue],
-            },
-            8,
-            8,
-        );
+        let canvas = components(&items(vec![red_rect], vec![blue]), 8, 8);
         assert_eq!(&canvas.canvases[0].pixels[0..4], &[0, 0, 255, 255]);
     }
 
@@ -768,10 +942,7 @@ mod tests {
         // 'L' is bottom-left-heavy, '.' sits in the bottom half. A flipped
         // bit-order or row-order breaks at least one.
         let l = components(
-            &HudItems {
-                rects: vec![],
-                texts: vec![text("L", HudAnchor::TopLeft, [0.0, 0.0], 8.0)],
-            },
+            &items(vec![], vec![text("L", HudAnchor::TopLeft, [0.0, 0.0], 8.0)]),
             8,
             8,
         );
@@ -783,10 +954,7 @@ mod tests {
         assert!(bottom_row_lit >= 3, "'L' has a bottom bar: {on:?}");
 
         let dot = components(
-            &HudItems {
-                rects: vec![],
-                texts: vec![text(".", HudAnchor::TopLeft, [0.0, 0.0], 8.0)],
-            },
+            &items(vec![], vec![text(".", HudAnchor::TopLeft, [0.0, 0.0], 8.0)]),
             8,
             8,
         );
@@ -802,15 +970,15 @@ mod tests {
         // Right-anchored text must measure itself to sit flush: two glyphs at
         // 2× are 32px wide, so offset 0 puts the last column at the edge.
         let canvas = components(
-            &HudItems {
-                rects: vec![],
-                texts: vec![text(
+            &items(
+                vec![],
+                vec![text(
                     "\u{2588}\u{2588}",
                     HudAnchor::TopRight,
                     [0.0, 0.0],
                     16.0,
                 )],
-            },
+            ),
             64,
             16,
         );
@@ -823,10 +991,10 @@ mod tests {
     #[test]
     fn unknown_glyphs_render_as_a_filled_box() {
         let canvas = components(
-            &HudItems {
-                rects: vec![],
-                texts: vec![text("\u{2588}", HudAnchor::TopLeft, [0.0, 0.0], 8.0)],
-            },
+            &items(
+                vec![],
+                vec![text("\u{2588}", HudAnchor::TopLeft, [0.0, 0.0], 8.0)],
+            ),
             8,
             8,
         );
@@ -837,7 +1005,7 @@ mod tests {
 
     fn lines_only(lines: &[&str], width: u32, height: u32) -> HudOverlay {
         let lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-        rasterize(&HudItems::default(), &lines, width, height)
+        rasterize(&HudTree::default(), &lines, width, height)
     }
 
     #[test]
@@ -957,10 +1125,10 @@ mod tests {
     fn cost_follows_content_not_screen_size() {
         // The property the whole region split exists for: the same HUD on a
         // four-times-larger frame rasterizes the same number of pixels.
-        let hud = HudItems {
-            rects: vec![rect(HudAnchor::BottomLeft, [10.0, 10.0], [120.0, 8.0])],
-            texts: vec![text("SPEED 42", HudAnchor::TopRight, [10.0, 10.0], 16.0)],
-        };
+        let hud = items(
+            vec![rect(HudAnchor::BottomLeft, [10.0, 10.0], [120.0, 8.0])],
+            vec![text("SPEED 42", HudAnchor::TopRight, [10.0, 10.0], 16.0)],
+        );
         let small = rasterize(&hud, &["LAP 3".into()], 640, 360);
         let large = rasterize(&hud, &["LAP 3".into()], 2560, 1440);
         assert_eq!(small.covered_pixels(), large.covered_pixels());

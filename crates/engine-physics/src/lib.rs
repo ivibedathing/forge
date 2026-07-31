@@ -16,9 +16,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
 
 use engine_core::components::{
-    BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent,
-    Name, RigidBody as RigidBodyData, Road, Terrain as TerrainData, Transform,
-    Wheel as WheelData,
+    BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent, Name,
+    RigidBody as RigidBodyData, Road, Terrain as TerrainData, Transform, Wheel as WheelData,
 };
 use engine_core::mesh::MeshSource;
 use engine_core::scene::PhysicsSettings;
@@ -328,10 +327,15 @@ impl PhysicsWorld {
         // indices follow that order.
         let mut wheels_by_chassis: Vec<(String, Vec<(String, Entity, WheelData)>)> = Vec::new();
         for (entity, name, wheel) in world.query::<(Entity, &Name, &WheelData)>().iter() {
-            match wheels_by_chassis.iter_mut().find(|(c, _)| *c == wheel.vehicle) {
+            match wheels_by_chassis
+                .iter_mut()
+                .find(|(c, _)| *c == wheel.vehicle)
+            {
                 Some((_, list)) => list.push((name.0.clone(), entity, wheel.clone())),
-                None => wheels_by_chassis
-                    .push((wheel.vehicle.clone(), vec![(name.0.clone(), entity, wheel.clone())])),
+                None => wheels_by_chassis.push((
+                    wheel.vehicle.clone(),
+                    vec![(name.0.clone(), entity, wheel.clone())],
+                )),
             }
         }
         wheels_by_chassis.sort_by(|a, b| a.0.cmp(&b.0));
@@ -538,7 +542,11 @@ impl PhysicsWorld {
     /// Callers apply them via [`apply_breaks`](crate::apply_breaks).
     pub fn take_pending_breaks(&mut self) -> Vec<PendingBreak> {
         let mut breaks = std::mem::take(&mut self.pending_breaks);
-        breaks.sort_by(|a, b| self.name_of.get(&a.entity).cmp(&self.name_of.get(&b.entity)));
+        breaks.sort_by(|a, b| {
+            self.name_of
+                .get(&a.entity)
+                .cmp(&self.name_of.get(&b.entity))
+        });
         breaks.dedup_by_key(|b| b.entity);
         breaks
     }
@@ -589,7 +597,11 @@ impl PhysicsWorld {
                 if distance >= explosion.radius {
                     continue;
                 }
-                let direction = if distance > 1e-6 { delta / distance } else { Vec3::Y };
+                let direction = if distance > 1e-6 {
+                    delta / distance
+                } else {
+                    Vec3::Y
+                };
                 let falloff = 1.0 - distance / explosion.radius;
                 body.apply_impulse(direction * (explosion.impulse * falloff), true);
             }
@@ -744,8 +756,7 @@ impl PhysicsWorld {
                     Err(_) => continue,
                 };
                 let length = state.raycast_info().suspension_length;
-                let center = chassis_position
-                    + chassis_rotation * (offset - Vec3::Y * length);
+                let center = chassis_position + chassis_rotation * (offset - Vec3::Y * length);
                 let pose = chassis_rotation
                     * Quat::from_rotation_y(state.steering)
                     * Quat::from_rotation_x(state.rotation)
@@ -779,7 +790,8 @@ impl PhysicsWorld {
         }
         for (entity, impulse) in peak {
             if impulse >= self.break_thresholds[&entity] {
-                self.pending_breaks.push(PendingBreak { entity, kick: None });
+                self.pending_breaks
+                    .push(PendingBreak { entity, kick: None });
             }
         }
 
@@ -817,9 +829,7 @@ impl PhysicsWorld {
         let mut names: Vec<String> = self
             .body_of
             .iter()
-            .filter(|(_, &handle)| {
-                self.bodies.get(handle).is_some_and(RigidBody::is_dynamic)
-            })
+            .filter(|(_, &handle)| self.bodies.get(handle).is_some_and(RigidBody::is_dynamic))
             .filter_map(|(&entity, _)| world.get::<&Name>(entity).ok().map(|n| n.0.clone()))
             .collect();
         names.sort();
@@ -937,31 +947,31 @@ fn build_collider(
             // collidable without a mesh file duplicating what the renderer
             // already draws — and, for a road, they are what makes the surface
             // driven and the surface drawn impossible to author apart.
-            let (asset, mesh, from_road) = match (collider.asset.as_deref().or(entity_mesh), terrain, road)
-            {
-                (Some(asset), _, _) => (
-                    asset.to_string(),
-                    meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
-                    false,
-                ),
-                (None, Some(terrain), _) => (
-                    "the entity's Terrain".to_string(),
-                    engine_core::terrain::surface_grid(
-                        terrain,
-                        glam::Vec2::new(transform.position.x, transform.position.z),
-                        glam::Vec2::new(scale.x, scale.z),
+            let (asset, mesh, from_road) =
+                match (collider.asset.as_deref().or(entity_mesh), terrain, road) {
+                    (Some(asset), _, _) => (
+                        asset.to_string(),
+                        meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
+                        false,
                     ),
-                    false,
-                ),
-                (None, None, Some(road)) => (
-                    format!("the Road on {entity:?}"),
-                    engine_core::road::surface(road).mesh.clone(),
-                    true,
-                ),
-                (None, None, None) => {
-                    return Err(shape_bug(entity, "mesh collider with no asset in reach"))
-                }
-            };
+                    (None, Some(terrain), _) => (
+                        "the entity's Terrain".to_string(),
+                        engine_core::terrain::surface_grid(
+                            terrain,
+                            glam::Vec2::new(transform.position.x, transform.position.z),
+                            glam::Vec2::new(scale.x, scale.z),
+                        ),
+                        false,
+                    ),
+                    (None, None, Some(road)) => (
+                        format!("the Road on {entity:?}"),
+                        engine_core::road::surface(road).mesh.clone(),
+                        true,
+                    ),
+                    (None, None, None) => {
+                        return Err(shape_bug(entity, "mesh collider with no asset in reach"))
+                    }
+                };
             let vertices: Vec<Vec3> = mesh
                 .positions
                 .iter()
@@ -1220,7 +1230,10 @@ mod tests {
             high > 3.0,
             "restitution 1.0 should bounce back most of the way, apex {high}"
         );
-        assert!(low < 1.0, "restitution 0.0 should not meaningfully bounce, apex {low}");
+        assert!(
+            low < 1.0,
+            "restitution 0.0 should not meaningfully bounce, apex {low}"
+        );
     }
 
     #[test]
@@ -1267,8 +1280,14 @@ mod tests {
         let hit = physics
             .raycast(Vec3::new(0.0, 10.0, 0.0), Vec3::NEG_Y)
             .expect("straight down must hit something");
-        assert_eq!(hit.entity, "Cube", "the cube sits on the ground, so it is hit first");
-        assert!((hit.point.y - 1.05).abs() < 0.03, "top of the settled cube, got {hit:?}");
+        assert_eq!(
+            hit.entity, "Cube",
+            "the cube sits on the ground, so it is hit first"
+        );
+        assert!(
+            (hit.point.y - 1.05).abs() < 0.03,
+            "top of the settled cube, got {hit:?}"
+        );
         assert!(hit.normal.y > 0.9);
 
         let miss = physics.raycast(Vec3::new(50.0, 10.0, 0.0), Vec3::NEG_Y);
@@ -1293,7 +1312,10 @@ mod tests {
         let (scene, _, _) = simulate(&scaled, 300);
         let y = position_of(&scene, "Cube").y;
         // Scaled cube has half-extent 1.0 → rests at 0.05 + 1.0.
-        assert!((y - 1.05).abs() < 0.02, "scaled cube should rest at ≈1.05, is at {y}");
+        assert!(
+            (y - 1.05).abs() < 0.02,
+            "scaled cube should rest at ≈1.05, is at {y}"
+        );
     }
 
     /// A script writing `RigidBody.linear_velocity` between steps must reach
@@ -1464,7 +1486,11 @@ mod tests {
         let start = position_of(&scene, "Chassis");
         for name in ["WheelBL", "WheelBR"] {
             let entity = scene.entity(name).unwrap();
-            scene.world.get::<&mut WheelData>(entity).unwrap().engine_force = 1500.0;
+            scene
+                .world
+                .get::<&mut WheelData>(entity)
+                .unwrap()
+                .engine_force = 1500.0;
         }
         for _ in 0..120 {
             physics.step(&mut scene.world);
@@ -1484,7 +1510,10 @@ mod tests {
         let entity = scene.entity("WheelBL").unwrap();
         let rotation = scene.world.get::<&Transform>(entity).unwrap().rotation;
         let spun = rotation.x.abs() + rotation.z.abs();
-        assert!(spun > 1.0, "a driving wheel's visual should spin: {rotation}");
+        assert!(
+            spun > 1.0,
+            "a driving wheel's visual should spin: {rotation}"
+        );
     }
 
     #[test]
@@ -1505,7 +1534,11 @@ mod tests {
         }
         for name in ["WheelBL", "WheelBR"] {
             let entity = scene.entity(name).unwrap();
-            scene.world.get::<&mut WheelData>(entity).unwrap().engine_force = 600.0;
+            scene
+                .world
+                .get::<&mut WheelData>(entity)
+                .unwrap()
+                .engine_force = 600.0;
         }
         for name in ["WheelFL", "WheelFR"] {
             let entity = scene.entity(name).unwrap();
@@ -1535,7 +1568,10 @@ mod tests {
             physics.step(&mut scene.world);
         }
         let drive = |world: &mut hecs::World, scene_entity: hecs::Entity, force: f32| {
-            world.get::<&mut WheelData>(scene_entity).unwrap().engine_force = force;
+            world
+                .get::<&mut WheelData>(scene_entity)
+                .unwrap()
+                .engine_force = force;
         };
         let bl = scene.entity("WheelBL").unwrap();
         let br = scene.entity("WheelBR").unwrap();
@@ -1560,7 +1596,10 @@ mod tests {
             .unwrap()
             .linear_velocity
             .length();
-        assert!(speed < 0.2, "braked vehicle should stop, still moving at {speed}");
+        assert!(
+            speed < 0.2,
+            "braked vehicle should stop, still moving at {speed}"
+        );
     }
 
     /// `locked_rotations` holds the axis fixed even under off-center impact.
@@ -1676,7 +1715,9 @@ mod tests {
             "the ball must rest on the trimesh plane at ≈0.5, is at {ball:?}"
         );
         assert!(
-            events.iter().any(|e| e.a == "Ball" && e.b == "Track" && e.started),
+            events
+                .iter()
+                .any(|e| e.a == "Ball" && e.b == "Track" && e.started),
             "the landing must appear as a contact event: {events:?}"
         );
     }
@@ -1709,4 +1750,3 @@ mod tests {
         );
     }
 }
-

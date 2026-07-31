@@ -5503,8 +5503,7 @@ mod water_anchor {
                              \x20   clock: vec4<f32>,\n";
     /// Where the path length through the body is measured. The bend is scaled
     /// by it, so the sample is taken here rather than at the composite.
-    pub const THICKNESS: &str =
-        "    // Absorption along the view ray through the water body.\n\
+    pub const THICKNESS: &str = "    // Absorption along the view ray through the water body.\n\
          \x20   let thickness = water_thickness(in.clip, in.world);\n";
     /// The last line of the fragment stage.
     pub const RETURN: &str =

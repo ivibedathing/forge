@@ -41,8 +41,10 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
     // Textures are keyed on (reference, colour space): the space decides how
     // the mip chain is filtered, so one file read as albedo and as ORM really
     // is two decodes, and a failure in either is worth reporting.
-    let mut texture_verdicts: HashMap<(String, engine_core::texture::ColorSpace), Option<EngineError>> =
-        HashMap::new();
+    let mut texture_verdicts: HashMap<
+        (String, engine_core::texture::ColorSpace),
+        Option<EngineError>,
+    > = HashMap::new();
 
     for (entity_index, entity) in file.entities.iter().enumerate() {
         for (component_index, component) in entity.components.iter().enumerate() {

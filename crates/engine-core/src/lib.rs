@@ -26,6 +26,7 @@ pub mod skeleton;
 pub mod terrain;
 pub mod texture;
 pub mod tree;
+pub mod ui;
 pub mod validate;
 pub mod water;
 
