@@ -42,6 +42,9 @@ pub enum Content {
         /// The scene's roads (M23). Refreshed with `water` for the same
         /// reason: a script can move or repaint one.
         roads: Vec<engine_core::scene::RoadItem>,
+        /// The scene's meadows (M29). Refreshed with `roads` for the same
+        /// reason: a script can change what a field is made of between steps.
+        meadows: Vec<engine_core::scene::MeadowItem>,
         camera: Camera,
         camera_model: Mat4,
         lights: engine_core::scene::ResolvedLights,
@@ -110,14 +113,21 @@ impl InputRecorder {
         Ok(Self { file, last: None })
     }
 
-    /// Record `held` as the set in effect from `step` onward, if it changed.
+    /// Record `held` as the state in effect from `step` onward, if it
+    /// changed. Comparison is against the **quantized** state (M28): the
+    /// cursor is what the file will say, so a hand that has not moved a
+    /// thousandth of the frame records nothing.
     fn sample(&mut self, step: u64, held: &InputState) -> Result<()> {
+        let held = &held.quantized();
         if self.last.as_ref() == Some(held) {
             return Ok(());
         }
-        // An initial empty set is the file's implicit starting state; only
-        // record it as a line when it is a *return* to empty.
-        if self.last.is_none() && held.is_empty() {
+        // Nothing held with the cursor at the centre is the file's implicit
+        // starting state; only record it as a line when it is a *return* to
+        // that. Compared against the whole default state rather than against
+        // `is_empty()`, so the first mouse movement of a session — which
+        // happens before any button is pressed — is recorded.
+        if self.last.is_none() && held == &InputState::default() {
             return Ok(());
         }
         writeln!(self.file, "{}", held.timeline_line(step))
@@ -313,6 +323,7 @@ impl ViewerApp {
                     water,
                     clouds,
                     roads,
+                    meadows,
                     camera,
                     camera_model,
                     lights,
@@ -335,11 +346,7 @@ impl ViewerApp {
 
                     // System order: sample animations → physics → render.
                     if !sim.players.is_empty() {
-                        engine_core::animation::apply_all(
-                            &mut sim.scene,
-                            &sim.players,
-                            sim.t,
-                        );
+                        engine_core::animation::apply_all(&mut sim.scene, &sim.players, sim.t);
                     }
                     if sim.physics.is_some()
                         || sim.scripts.is_some()
@@ -355,12 +362,33 @@ impl ViewerApp {
                                 }
                             }
                             if let Some(scripts) = &sim.scripts {
+                                // Where the pointer points this step (M28),
+                                // resolved exactly as the headless path
+                                // resolves it: same camera selection, same
+                                // frame, same function — so what a script
+                                // aims at while you play is what it aims at
+                                // when the timeline is replayed.
+                                let (view_width, view_height) = target.size();
+                                let view = engine_core::input::Viewport::new(
+                                    view_width,
+                                    view_height,
+                                    sim.camera_name.as_deref(),
+                                );
+                                let pointer = engine_core::input::Pointer::resolve(
+                                    &sim.held,
+                                    &view,
+                                    sim.scene
+                                        .camera(sim.camera_name.as_deref())
+                                        .ok()
+                                        .map(|(camera, transform)| (camera, transform.matrix())),
+                                );
                                 // A failing script ends the session with a
                                 // structured error, like any render failure.
                                 match scripts.step(
                                     &mut sim.scene.world,
                                     sim.step_index,
                                     &sim.held,
+                                    &pointer,
                                     &sim.contacts,
                                 ) {
                                     Ok(lines) => sim.hud_lines = lines,
@@ -413,12 +441,17 @@ impl ViewerApp {
                             sim.accumulator -= dt;
                         }
                     }
-                    if let Ok(fresh) = sim.scene.render_items(&sim.assets) {
+                    // The same whole-fixed-step clock water and daylight run
+                    // on, so a rig walks in the viewer at the pose a
+                    // screenshot at this step number would show.
+                    let posed = sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32;
+                    if let Ok(fresh) = sim.scene.render_items_at(&sim.assets, Some(posed)) {
                         *items = fresh;
                     }
                     *water = sim.scene.water_items();
                     *clouds = sim.scene.cloud_items();
                     *roads = sim.scene.road_items();
+                    *meadows = sim.scene.meadow_items();
                     *hud_items = sim.scene.hud_items();
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
@@ -438,9 +471,7 @@ impl ViewerApp {
                 // and its water sits at its t = 0 pose.
                 let simulated_time = simulation
                     .as_ref()
-                    .map(|sim| {
-                        sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32
-                    })
+                    .map(|sim| sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32)
                     .unwrap_or(0.0);
                 // Daylight runs on that same clock, for the same reason water
                 // does: the viewer must show what a screenshot at this step
@@ -483,6 +514,7 @@ impl ViewerApp {
                             water,
                             clouds,
                             roads,
+                            meadows,
                             particles: &particles,
                             view_projection,
                             camera_position: camera_model.w_axis.truncate(),
@@ -594,6 +626,55 @@ impl ApplicationHandler for ViewerApp {
                         match key.state {
                             ElementState::Pressed => sim.held.press(&name),
                             ElementState::Released => sim.held.release(&name),
+                        }
+                    }
+                }
+            }
+
+            // The mouse (M28). A cursor position is normalized against the
+            // window it arrived in, because that is the only coordinate a
+            // recorded timeline can carry across window sizes.
+            //
+            // `CursorLeft` is deliberately not handled: the cursor keeps its
+            // last position when it leaves the window, since a menu button
+            // under a pointer that slid out of frame should not appear to be
+            // clicked at the centre of the screen.
+            WindowEvent::CursorMoved { position, .. } => {
+                let size = self
+                    .window
+                    .as_ref()
+                    .map(|w| w.inner_size())
+                    .unwrap_or_default();
+                if let Content::Scene {
+                    simulation: Some(sim),
+                    ..
+                } = &mut self.content
+                {
+                    sim.held.set_cursor(engine_core::math::Vec2::new(
+                        position.x as f32 / size.width.max(1) as f32,
+                        position.y as f32 / size.height.max(1) as f32,
+                    ));
+                }
+            }
+
+            WindowEvent::MouseInput { state, button, .. } => {
+                if let Content::Scene {
+                    simulation: Some(sim),
+                    ..
+                } = &mut self.content
+                {
+                    // Buttons outside the three named ones are dropped the
+                    // way keys outside the allowlist already are.
+                    let name = match button {
+                        winit::event::MouseButton::Left => Some("MouseLeft"),
+                        winit::event::MouseButton::Right => Some("MouseRight"),
+                        winit::event::MouseButton::Middle => Some("MouseMiddle"),
+                        _ => None,
+                    };
+                    if let Some(name) = name {
+                        match state {
+                            ElementState::Pressed => sim.held.press(name),
+                            ElementState::Released => sim.held.release(name),
                         }
                     }
                 }

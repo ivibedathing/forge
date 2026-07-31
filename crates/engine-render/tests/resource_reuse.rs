@@ -38,6 +38,7 @@ fn item(mesh: &Arc<MeshData>, x: f32) -> RenderItem {
         material: Material::default(),
         textures: Default::default(),
         terrain: None,
+        joints: Vec::new(),
     }
 }
 
@@ -79,6 +80,7 @@ fn draw_frames(gpu: &Gpu, renderer: &mut SceneRenderer, items: &[RenderItem], fr
                 water: &[],
                 clouds: &[],
                 roads: &[],
+                meadows: &[],
                 particles: &[],
                 view_projection: Mat4::IDENTITY,
                 camera_position: Vec3::ZERO,

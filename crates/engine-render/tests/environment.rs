@@ -38,6 +38,7 @@ fn render(source: &str) -> Image {
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &[],
         &camera,
         camera_transform.matrix(),
@@ -320,8 +321,6 @@ fn msaa_smooths_edges_without_disturbing_flat_interiors() {
 
     // Somewhere along the cube's silhouette the two must disagree, or MSAA is
     // not running at all.
-    let differs = (0..SIZE).any(|y| {
-        (0..SIZE).any(|x| aliased.pixel(x, y) != smoothed.pixel(x, y))
-    });
+    let differs = (0..SIZE).any(|y| (0..SIZE).any(|x| aliased.pixel(x, y) != smoothed.pixel(x, y)));
     assert!(differs, "4x MSAA should change at least one edge pixel");
 }

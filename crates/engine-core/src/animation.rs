@@ -454,6 +454,11 @@ pub fn set_field(
                 "crest_foam" => c.crest_foam = scalar,
                 "shore_foam" => c.shore_foam = scalar,
                 "foam_color" => c.foam_color = v3,
+                // Animatable, unlike `Terrain`'s shape fields: the IOR is a
+                // uniform the shader reads, so a clip on it regenerates
+                // nothing. It does switch pipelines the step it leaves 1.0,
+                // which is a pipeline lookup and not a rebuild.
+                "ior" => c.ior = scalar,
                 _ => return false,
             }
         }
@@ -494,6 +499,23 @@ pub fn set_field(
                 "texture_scale" => c.texture_scale = scalar,
                 "color_variation" => c.color_variation = scalar,
                 "bump" => c.bump = scalar,
+                _ => return false,
+            }
+        }
+        "Meadow" => {
+            let Ok(mut c) = world.get::<&mut Meadow>(entity) else {
+                return false;
+            };
+            match field {
+                // Uniforms only — every one of these reaches the shader without
+                // moving a vertex or replacing an instance. The placement and
+                // template fields are in `NOT_ANIMATABLE` and never reach here.
+                "cycle_length" => c.cycle_length = scalar,
+                "phase" => c.phase = scalar,
+                "wind" => c.wind = scalar,
+                "wind_speed" => c.wind_speed = scalar,
+                "wind_direction" => c.wind_direction = scalar,
+                "flower_color" => c.flower_color = v3,
                 _ => return false,
             }
         }
@@ -550,6 +572,20 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     ("Road", "skirt"),
     ("Road", "segment_length"),
     ("Road", "segment_angle"),
+    // A meadow's placement and its plant template are generated and
+    // `Arc`-cached the same way, and these are exactly the fields its cache key
+    // covers — animating one would rebuild the template and re-scatter every
+    // plant in the field every frame it changed. `stagger` is in here for the
+    // same reason and it is the one that looks animatable: a plant's phase
+    // offset is drawn once, at placement, and baked into the instance buffer.
+    ("Meadow", "density"),
+    ("Meadow", "height"),
+    ("Meadow", "blade_width"),
+    ("Meadow", "splay"),
+    ("Meadow", "head_size"),
+    ("Meadow", "size_jitter"),
+    ("Meadow", "stagger"),
+    ("Meadow", "max_slope"),
     // A different reason, and the only one of its kind: a clip's values are
     // scalars and 3-vectors, and these are 2-vectors, which the format cannot
     // spell. Scrolling UVs is the feature that would want them and it is
@@ -571,7 +607,10 @@ fn field_shape(schema: &serde_json::Value, component: &str, field: &str) -> Opti
         .iter()
         .find(|v| v["properties"]["type"]["const"] == component)?;
     let property = &variant["properties"][field];
-    let property = match property["$ref"].as_str().and_then(|r| r.strip_prefix("#/$defs/")) {
+    let property = match property["$ref"]
+        .as_str()
+        .and_then(|r| r.strip_prefix("#/$defs/"))
+    {
         Some(name) => &schema["$defs"][name],
         None => property,
     };
@@ -657,18 +696,16 @@ pub fn validate_clip_source(source: &str, path: &str) -> Vec<EngineError> {
         };
 
         // Property path against the schema.
-        let shape = track.property.split_once('.').and_then(|(component, field)| {
-            field_shape(&schema, component, field)
-        });
+        let shape = track
+            .property
+            .split_once('.')
+            .and_then(|(component, field)| field_shape(&schema, component, field));
         match (track.property.split_once('.'), shape) {
             (None, _) => {
                 errors.push(located(
                     EngineError::new(
                         codes::UNKNOWN_PROPERTY,
-                        format!(
-                            "property {:?} is not \"Component.field\"",
-                            track.property
-                        ),
+                        format!("property {:?} is not \"Component.field\"", track.property),
                     )
                     .field("property"),
                     &format!("{track_path}/property"),
@@ -679,15 +716,10 @@ pub fn validate_clip_source(source: &str, path: &str) -> Vec<EngineError> {
                 errors.push(located(
                     EngineError::new(
                         codes::UNKNOWN_PROPERTY,
-                        format!(
-                            "{component:?} has no animatable field {field:?}"
-                        ),
+                        format!("{component:?} has no animatable field {field:?}"),
                     )
                     .field("property")
-                    .suggest_from(
-                        &track.property,
-                        suggestions.iter().map(String::as_str),
-                    ),
+                    .suggest_from(&track.property, suggestions.iter().map(String::as_str)),
                     &format!("{track_path}/property"),
                 ));
             }
@@ -788,6 +820,15 @@ pub fn load_players(scene: &crate::Scene, scene_path: &Path) -> Result<Vec<Loade
     let base_dir = scene_path.parent().unwrap_or(Path::new(""));
     let mut players = Vec::new();
     for player in scene.world.query::<&AnimationPlayer>().iter() {
+        // Skeletal references (`path#Clip`) name a rig inside a glTF, not a
+        // property clip: they are sampled by `engine_core::skeleton` against
+        // the asset, and there is nothing here to write into a component.
+        if matches!(
+            crate::skeleton::ClipRef::parse(&player.clip),
+            crate::skeleton::ClipRef::Skeletal { .. }
+        ) {
+            continue;
+        }
         let clip = load_clip(&base_dir.join(&player.clip))?;
         players.push(LoadedPlayer {
             player: player.clone(),
@@ -905,13 +946,25 @@ mod tests {
             property: "Transform.position".into(),
             interpolation: Interpolation::Cubic,
             keys: vec![
-                Key { time: 0.0, value: KeyValue::Vec3([0.0, 0.0, 0.0]) },
-                Key { time: 1.0, value: KeyValue::Vec3([1.0, 2.0, 0.0]) },
-                Key { time: 2.0, value: KeyValue::Vec3([2.0, 0.0, 0.0]) },
+                Key {
+                    time: 0.0,
+                    value: KeyValue::Vec3([0.0, 0.0, 0.0]),
+                },
+                Key {
+                    time: 1.0,
+                    value: KeyValue::Vec3([1.0, 2.0, 0.0]),
+                },
+                Key {
+                    time: 2.0,
+                    value: KeyValue::Vec3([2.0, 0.0, 0.0]),
+                },
             ],
         };
         // Passes exactly through keys…
-        assert_eq!(sample_track(&track, 1.0), Some(KeyValue::Vec3([1.0, 2.0, 0.0])));
+        assert_eq!(
+            sample_track(&track, 1.0),
+            Some(KeyValue::Vec3([1.0, 2.0, 0.0]))
+        );
         // …and overshoots nowhere near the ends (clamped tangents).
         let KeyValue::Vec3(v) = sample_track(&track, 0.5).unwrap() else {
             panic!()
@@ -922,8 +975,14 @@ mod tests {
     #[test]
     fn sampling_clamps_outside_the_key_range() {
         let track = spin_track(Interpolation::Linear);
-        assert_eq!(sample_track(&track, -1.0), Some(KeyValue::Vec3([0.0, 0.0, 0.0])));
-        assert_eq!(sample_track(&track, 99.0), Some(KeyValue::Vec3([0.0, 360.0, 0.0])));
+        assert_eq!(
+            sample_track(&track, -1.0),
+            Some(KeyValue::Vec3([0.0, 0.0, 0.0]))
+        );
+        assert_eq!(
+            sample_track(&track, 99.0),
+            Some(KeyValue::Vec3([0.0, 360.0, 0.0]))
+        );
     }
 
     #[test]
@@ -941,7 +1000,11 @@ mod tests {
             looping: false,
             ..player.clone()
         };
-        assert_eq!(local_time(&once, 2.0, 5.0), 2.0, "clamped to the final pose");
+        assert_eq!(
+            local_time(&once, 2.0, 5.0),
+            2.0,
+            "clamped to the final pose"
+        );
     }
 
     #[test]
@@ -1021,7 +1084,8 @@ mod tests {
                 {"type":"Water"},
                 {"type":"Cloud"},
                 {"type":"Terrain"},
-                {"type":"Road"}
+                {"type":"Road"},
+                {"type":"Meadow"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are
@@ -1062,7 +1126,10 @@ mod tests {
         assert!(codes.contains(&"unsorted_keys"), "{codes:?}");
         assert!(codes.contains(&"type_mismatch"), "{codes:?}");
 
-        let property = errors.iter().find(|e| e.error == "unknown_property").unwrap();
+        let property = errors
+            .iter()
+            .find(|e| e.error == "unknown_property")
+            .unwrap();
         assert_eq!(
             property.context().unwrap().did_you_mean.as_deref(),
             Some("Transform.rotation")

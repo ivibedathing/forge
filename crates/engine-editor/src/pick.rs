@@ -97,6 +97,7 @@ mod tests {
             material: Material::default(),
             textures: Default::default(),
             terrain: None,
+            joints: Vec::new(),
         }
     }
 

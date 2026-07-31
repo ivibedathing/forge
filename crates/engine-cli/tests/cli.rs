@@ -1139,6 +1139,120 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ── The mouse (M28) ────────────────────────────────────────────────────
+
+/// The M28 fixture, end to end: the committed timeline's cursor drives a
+/// marker across the ground through the engine's own inverse projection, and
+/// a held button over the HUD's plate is a click.
+///
+/// The numbers here are *not* eyeballed — each is where the ray through that
+/// cursor meets the plane, and the two baselines
+/// (`m28_pointer_{aim,click}.png`) are the same run rendered. A regression in
+/// the ray, the aspect, or the timeline's cursor field moves them together.
+#[test]
+fn the_mouse_aims_where_the_cursor_points() {
+    let scene = repo_path("examples/scenes/verify/m28_pointer.json");
+    let timeline = repo_path("examples/scenes/verify/m28_pointer.input.jsonl");
+
+    let at = |steps: &str| {
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", steps])
+            .arg("--input")
+            .arg(&timeline)
+            .args(["--entity", "Marker", "--entity", "Held"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        serde_json::from_str::<serde_json::Value>(&stdout_of(&output)).unwrap()
+    };
+    let position = |report: &serde_json::Value, entity: &str| -> Vec<f64> {
+        report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == entity)
+            .unwrap()["position"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    };
+
+    // Step 40: the cursor is at (0.2, 0.72) — left of centre and low, so the
+    // marker sits left of the camera axis and *nearer* than the origin.
+    let aim = at("40");
+    let marker = position(&aim, "Marker");
+    assert!(marker[0] < -3.0, "left of centre: {marker:?}");
+    assert!(marker[2] > 1.0, "and short of the origin: {marker:?}");
+    // MouseLeft is held here, but not over the button — so nothing fired.
+    // A click is a position on the HUD as much as a button state.
+    assert!(
+        position(&aim, "Held")[1] < 0.0,
+        "a click away from the button is not a press"
+    );
+
+    // Step 80: the cursor is over the plate in the bottom-right corner with
+    // MouseLeft down, and the script hit-tests it in pixels and fires.
+    //
+    // Through `screenshot` at the baseline's own size, and that is the point
+    // rather than an inconvenience: a HUD element is *pixel*-sized, so which
+    // element a cursor is over depends on the frame it is over (M28 §5).
+    // `simulate` renders nothing and runs at `Viewport::DEFAULT` — 960x540,
+    // the same 16:9 aspect, so it aims the ray identically and misses this
+    // 132x26 plate by twelve pixels.
+    let shot = std::env::temp_dir().join(format!("engine-m27-{}.png", std::process::id()));
+    let output = engine()
+        .arg("screenshot")
+        .arg(&scene)
+        .arg("--out")
+        .arg(&shot)
+        .args(["--steps", "80"])
+        .arg("--input")
+        .arg(&timeline)
+        .args(["--width", "640", "--height", "360"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let click: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+    let line = click["hud"][0].as_str().unwrap().to_string();
+    assert!(line.ends_with("FIRE"), "the press is on the HUD: {line}");
+
+    // And the ray is the same ray at the same aspect: the ground point the
+    // frame reports is the one `simulate` put the marker at.
+    let marker = position(&at("80"), "Marker");
+    let rounded = format!(
+        "G {} {}",
+        (marker[0] * 10.0).round() / 10.0,
+        (marker[2] * 10.0).round() / 10.0
+    );
+    assert!(
+        line.starts_with(&rounded),
+        "the aspect is all that matters to the ray: {line} vs {rounded}"
+    );
+    std::fs::remove_file(&shot).ok();
+
+    // The same timeline with the cursor field ignored would put the marker at
+    // the centre of the frame; check the "no --input at all" case does
+    // exactly that, since it is the M28 promise that keyboard-era files and
+    // no-input runs are unchanged.
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "80", "--entity", "Marker"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+    let centred = position(&report, "Marker");
+    assert!(
+        centred[0].abs() < 1e-3,
+        "no input means the cursor sits at the centre of the frame: {centred:?}"
+    );
+}
+
 /// The committed demo: replaying the recorded session drives the physical
 /// car (dynamic box chassis on four raycast-suspension Wheels; the script
 /// is only the driver) three laps around the generated Spa-in-miniature
@@ -3523,4 +3637,645 @@ fn import_writes_material_files_and_the_textures_they_reference() {
     }
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// M27: the water refraction fixture, from two cameras in one file.
+///
+/// Both baselines are hard bit-exact pins with no tolerance, which is
+/// deliberate and only defensible because the fixture obeys M22's rule — it
+/// aims at its subject, with no terrain anywhere in frame. Four consecutive
+/// sweeps came back at zero differing pixels.
+///
+/// The two cameras pin two different halves of the design:
+///
+/// - `Camera` looks down at the pool, where the bed's grid of bars is the
+///   thing refraction acts on. This is the frame that would go wrong if the
+///   exit point were stepped along the refracted ray by the view ray's path
+///   length instead of solved to the bed's depth — the bars scramble into
+///   blocks, which is what the first implementation drew.
+/// - `CameraGrazing` looks across it at 8°, where the boulder and the posts
+///   stand *in* the water. That is the framing the depth-validated sample
+///   exists for: dropping the check moves ~22k pixels of it by up to 99, as
+///   the water behind each object drags the object's colour out across itself.
+#[test]
+fn the_m27_water_refraction_fixture_pins_a_bent_bed_and_a_clean_waterline() {
+    let scene = repo_path("examples/scenes/verify/m27_water_refraction.json");
+
+    for (baseline, extra) in [
+        ("m27_water_refraction.png", Vec::new()),
+        ("m27_water_grazing.png", vec!["--camera", "CameraGrazing"]),
+    ] {
+        let baseline = repo_path(&format!("examples/scenes/verify/baselines/{baseline}"));
+        let diff = engine()
+            .arg("diff-render")
+            .arg(&scene)
+            .arg(&baseline)
+            .args(["--steps", "120"])
+            .args(&extra)
+            .output()
+            .unwrap();
+        if !diff.status.success() {
+            let stderr = String::from_utf8_lossy(&diff.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "diff-render failed for a non-GPU reason: {stderr}"
+            );
+            eprintln!("skipping render pin: no usable GPU on this machine");
+            return;
+        }
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+    }
+
+    // The claim the whole milestone rests on: `ior` is the only reason this
+    // scene renders differently from the M18 surface. Drop it back to the
+    // default and the committed baseline must stop matching — otherwise the
+    // pins above would pass just as well with refraction wired to nothing,
+    // which is the failure mode a splice makes easy to miss.
+    let source = std::fs::read_to_string(&scene).unwrap();
+    let unrefracted = source.replace(r#""ior": 1.33"#, r#""ior": 1.0"#);
+    assert_ne!(source, unrefracted, "the fixture must author `ior` explicitly");
+    let plain = scene.with_file_name("m27_unrefracted.json");
+    std::fs::write(&plain, unrefracted).unwrap();
+
+    let report = engine()
+        .arg("diff-render")
+        .arg(&plain)
+        .arg(repo_path(
+            "examples/scenes/verify/baselines/m27_water_refraction.png",
+        ))
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout_of(&report).trim()).unwrap();
+    let _ = std::fs::remove_file(&plain);
+    assert_eq!(
+        parsed["pass"], false,
+        "with `ior` back at its default the baseline must not match: {parsed}"
+    );
+}
+// ── Skeletal animation (M30 S0) ───────────────────────────────────────────
+
+/// The milestone's fixture: two copies of the rigged arm, one playing `Wave`.
+fn skeletal_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m30_skeletal.json")
+}
+
+fn json_stdout(output: &Output) -> serde_json::Value {
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_str(stdout_of(output).trim()).expect("stdout must be one JSON object")
+}
+
+#[test]
+fn the_skeletal_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(skeletal_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The M30 fixture rendered: a rigged arm mid-`Wave` beside an identical one
+/// with no player, pinned bit-exactly.
+///
+/// The two arms are the assertion. They share a file, a mesh and a material,
+/// so anything that made *both* wrong — a palette that never reached the GPU,
+/// a bind group off by a slot — would still leave them identical; only real
+/// skinning makes one bend and the other stand. And the bent arm's shadow
+/// bends with it, which is the skinned caster: `shadow.wgsl` reads nothing but
+/// the model matrix, so without a second pipeline a walking character casts
+/// its rest pose, a wrongness that reads as a renderer bug.
+///
+/// Aimed at its subject with no terrain in frame (M22's rule), so it carries a
+/// hard pin rather than a `diff_args` tolerance. Measured, not assumed: unlike
+/// tree and cloud baselines this one renders identically from the debug and
+/// release binaries — three joints of slerp is not enough libm to reach a
+/// pixel.
+#[test]
+fn the_m30_skeletal_fixture_pins_a_posed_rig_and_its_shadow() {
+    let scene = skeletal_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m30_skeletal.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--time")
+        .arg("0.4")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The pose is a pure function of (files, time), the M9 property — now on a
+/// skinned mesh, where the joints reach the GPU as a uniform rather than the
+/// components reaching it as a transform.
+#[test]
+fn a_skinned_render_is_a_pure_function_of_the_file_and_the_clock() {
+    let dir = std::env::temp_dir().join(format!("engine-m30-skin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let shot = |name: &str, time: &str| {
+        let out = dir.join(name);
+        let output = engine()
+            .arg("screenshot")
+            .arg(skeletal_scene())
+            .arg("--out")
+            .arg(&out)
+            .arg("--width")
+            .arg("160")
+            .arg("--height")
+            .arg("90")
+            .arg("--time")
+            .arg(time)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            return None;
+        }
+        Some(std::fs::read(&out).unwrap())
+    };
+
+    let Some(first) = shot("a.png", "0.4") else {
+        eprintln!("skipping render determinism: no usable GPU on this machine");
+        std::fs::remove_dir_all(&dir).ok();
+        return;
+    };
+    let again = shot("b.png", "0.4").unwrap();
+    let elsewhere = shot("c.png", "0.9").unwrap();
+
+    assert_eq!(first, again, "same file, same time, same bytes");
+    assert_ne!(
+        first, elsewhere,
+        "a different time has to pose the rig differently, or the clock is \
+         not reaching the palette at all"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `world.joint_position` / `world.joint_transform`: the two read-only getters
+/// that make a rig reachable from gameplay (M30 §8).
+///
+/// The test is the design's own worked example — parent a prop to a hand — and
+/// it asserts the two things a wrong implementation would still satisfy
+/// separately: the prop is *not* at the rig's origin (so a palette really was
+/// applied) and it *moves between steps* (so the clock reaches it).
+#[test]
+fn a_script_can_hang_a_prop_off_a_joint() {
+    let dir = repo_path("examples/meshes");
+    let script = dir.join("_m30_torch.rhai");
+    std::fs::write(
+        &script,
+        r#"fn step(world, step) {
+            let p = world.joint_position("Arm", "Hand");
+            world.set_position("Torch", p[0], p[1], p[2]);
+            let t = world.joint_transform("Arm", "Hand");
+            world.hud("pitch " + t[3]);
+        }"#,
+    )
+    .unwrap();
+    let path = dir.join("_m30_joint_script.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"rigged_arm.gltf"},
+                {"type":"AnimationPlayer","clip":"rigged_arm.gltf#Wave","looping":true},
+                {"type":"Script","source":"_m30_torch.rhai"}
+            ]},
+            {"name":"Torch","components":[
+                {"type":"Transform"},
+                {"type":"Mesh","asset":"builtin:sphere"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let at = |steps: &str| {
+        let output = engine()
+            .arg("simulate")
+            .arg(&path)
+            .arg("--steps")
+            .arg(steps)
+            .arg("--entity")
+            .arg("Torch")
+            .output()
+            .unwrap();
+        json_stdout(&output)
+    };
+    let early = at("6");
+    let later = at("30");
+
+    let position = |report: &serde_json::Value| -> Vec<f64> {
+        report["entities"][0]["position"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    };
+    let (a, b) = (position(&early), position(&later));
+
+    // The rig's root is at the origin and the hand is 2 m up it, so a prop
+    // that landed at the origin means no palette was applied at all.
+    assert!(a[1] > 0.5, "the hand is well above the ground, got {a:?}");
+    assert_ne!(a, b, "the clip has to move the hand between two step counts");
+    // And `joint_transform` reports an orientation, not just a place.
+    let pitch = later["hud"][0].as_str().unwrap();
+    assert!(pitch.starts_with("pitch "), "got {pitch:?}");
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A mistyped joint is a located runtime error with a suggestion, matching
+/// `world.key` — not a silent identity transform.
+#[test]
+fn a_mistyped_joint_name_is_a_located_error_with_a_suggestion() {
+    let dir = repo_path("examples/meshes");
+    let script = dir.join("_m30_typo.rhai");
+    std::fs::write(
+        &script,
+        "fn step(world, step) {\n    world.joint_position(\"Arm\", \"Hnad\");\n}",
+    )
+    .unwrap();
+    let path = dir.join("_m30_joint_typo.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"rigged_arm.gltf"},
+                {"type":"Script","source":"_m30_typo.rhai"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine()
+        .arg("simulate")
+        .arg(&path)
+        .arg("--steps")
+        .arg("1")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&script);
+
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stderr_lines(&output);
+    assert!(codes_of(&lines).contains(&"script_runtime_error".to_string()));
+    let message = lines[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("did you mean \\\"Hand\\\"") || message.contains("did you mean \"Hand\""),
+        "the error must suggest the real joint: {message}"
+    );
+    assert_eq!(lines[0]["line"], 2, "and point at the script line");
+}
+
+#[test]
+fn list_joints_reports_a_rig_out_of_a_gltf_directly() {
+    let output = engine()
+        .arg("list-joints")
+        .arg(repo_path("examples/meshes/rigged_arm.gltf"))
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let rig = &report["rigs"][0];
+
+    assert_eq!(rig["skin"], "ArmRig");
+    assert_eq!(rig["joint_count"], 3);
+    // The skin's own order, carrying its index — a joint's index is written
+    // into the vertex data, so it is a fact about the asset.
+    let names: Vec<&str> = rig["joints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Shoulder", "Elbow", "Hand"]);
+    assert_eq!(rig["joints"][2]["index"], 2);
+    assert_eq!(rig["joints"][2]["parent"], 1);
+    assert_eq!(rig["joints"][2]["parent_name"], "Elbow");
+    assert_eq!(rig["joints"][0]["parent"], serde_json::Value::Null);
+    // No `--time`: the rest pose, and no `time` key claiming otherwise.
+    assert!(rig.get("time").is_none());
+}
+
+#[test]
+fn list_joints_needs_no_collider_and_no_gpu_to_say_where_a_hand_is() {
+    // The claim the milestone makes about itself: motion verified without a
+    // pixel. The hand is somewhere different at t=0.5 than at rest, and the
+    // arm that plays no clip has not moved at all.
+    let at = |time: &str| -> serde_json::Value {
+        let output = engine()
+            .arg("list-joints")
+            .arg(skeletal_scene())
+            .arg("--time")
+            .arg(time)
+            .output()
+            .unwrap();
+        json_stdout(&output)
+    };
+
+    let hand_of = |report: &serde_json::Value, entity: &str| -> [f64; 3] {
+        let rig = report["rigs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["entity"] == entity)
+            .unwrap_or_else(|| panic!("no rig for {entity}"));
+        let joint = rig["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["name"] == "Hand")
+            .unwrap();
+        let p = joint["world"]["position"].as_array().unwrap();
+        [
+            p[0].as_f64().unwrap(),
+            p[1].as_f64().unwrap(),
+            p[2].as_f64().unwrap(),
+        ]
+    };
+
+    let rest = hand_of(&at("0"), "Arm");
+    let bent = hand_of(&at("0.5"), "Arm");
+    let back = hand_of(&at("1"), "Arm");
+
+    assert!(
+        (bent[2] - rest[2]).abs() > 0.5 && bent[1] < rest[1],
+        "the hand did not swing: {rest:?} -> {bent:?}"
+    );
+    assert!(
+        (back[1] - rest[1]).abs() < 1e-4 && (back[2] - rest[2]).abs() < 1e-4,
+        "the clip did not return: {back:?}"
+    );
+
+    // The entity's own Transform places the rig — glTF ignores the skinned
+    // mesh node's transform, so nothing out of the file competes with it.
+    assert!((rest[0] - -1.1).abs() < 1e-4, "Arm is not where the scene put it");
+
+    // The arm with no player stays at rest at every time.
+    assert_eq!(hand_of(&at("0"), "Rest"), hand_of(&at("0.5"), "Rest"));
+}
+
+#[test]
+fn list_joints_narrows_to_one_entity_and_suggests_on_a_typo() {
+    let output = engine()
+        .arg("list-joints")
+        .arg(skeletal_scene())
+        .arg("--entity")
+        .arg("Arm")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    assert_eq!(report["rigs"].as_array().unwrap().len(), 1);
+    assert_eq!(report["rigs"][0]["entity"], "Arm");
+    assert_eq!(report["rigs"][0]["clip"], "Wave");
+
+    let output = engine()
+        .arg("list-joints")
+        .arg(skeletal_scene())
+        .arg("--entity")
+        .arg("Arn")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must be empty on failure");
+    let lines = stderr_lines(&output);
+    assert_eq!(codes_of(&lines), ["unknown_entity"]);
+    assert_eq!(lines[0]["did_you_mean"], "Arm");
+}
+
+#[test]
+fn list_joints_takes_a_negative_time() {
+    // M24 put `allow_hyphen_values` on the class of signed arguments; a new
+    // one joins it rather than teaching the guide to write `--time=`.
+    let output = engine()
+        .arg("list-joints")
+        .arg(skeletal_scene())
+        .arg("--time")
+        .arg("-0.5")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    assert_eq!(report["rigs"][0]["time"], -0.5);
+    // The arm's player loops a one-second clip, so the pose sampled is the
+    // wrap — reported beside the time asked for rather than in place of it.
+    assert_eq!(report["rigs"][0]["clip_time"], 0.5);
+}
+
+#[test]
+fn list_animations_reads_a_gltf_and_names_the_channel_it_ignores() {
+    let output = engine()
+        .arg("list-animations")
+        .arg(repo_path("examples/meshes/rigged_arm.gltf"))
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+
+    let names: Vec<&str> = report["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Wave", "Sway"]);
+
+    let wave = &report["clips"][0];
+    assert_eq!(wave["kind"], "skeletal");
+    assert_eq!(wave["duration"], 1.0);
+
+    // `Marker` is a node in the scene that is in no skin: glTF allows the
+    // channel, sampling ignores it, and the report names it. An ignored
+    // channel nothing reports is invisible.
+    let marker = wave["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["node_name"] == "Marker")
+        .expect("the ignored channel is reported");
+    assert_eq!(marker["joint"], serde_json::Value::Null);
+    assert_eq!(marker["sampled"], false);
+
+    let elbow = wave["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["node_name"] == "Elbow")
+        .unwrap();
+    assert_eq!(elbow["joint"], 1);
+    assert_eq!(elbow["sampled"], true);
+    assert_eq!(elbow["property"], "rotation");
+    assert_eq!(elbow["interpolation"], "linear");
+}
+
+#[test]
+fn list_animations_on_a_scene_reports_both_kinds_of_clip() {
+    let output = engine()
+        .arg("list-animations")
+        .arg(skeletal_scene())
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let clips = report["clips"].as_array().unwrap();
+    assert_eq!(clips.len(), 1, "only the arm plays a clip");
+    assert_eq!(clips[0]["kind"], "skeletal");
+    assert_eq!(clips[0]["entity"], "Arm");
+
+    // The M9 property-clip fixture still reports as it always did, now
+    // saying which kind it is.
+    let output = engine()
+        .arg("list-animations")
+        .arg(repo_path("examples/scenes/verify/m9_spin.json"))
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    assert_eq!(report["clips"][0]["kind"], "property");
+    assert!(report["clips"][0]["tracks"].is_array());
+}
+
+#[test]
+fn a_gltf_clip_reference_without_a_fragment_is_an_error_not_a_guess() {
+    // Defaulting to the only clip in the file is friendlier right up until
+    // someone exports a second one, at which point which clip plays changes
+    // silently.
+    let scene = format!(
+        r#"{{"name":"s","entities":[
+            {{"name":"Cam","components":[{{"type":"Camera","active":true}}]}},
+            {{"name":"Arm","components":[
+                {{"type":"Mesh","asset":"{arm}"}},
+                {{"type":"AnimationPlayer","clip":"{arm}"}}
+            ]}}
+        ]}}"#,
+        arm = repo_path("examples/meshes/rigged_arm.gltf")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/")
+    );
+    // An absolute path is its own error, so use a relative one: the scene
+    // goes next to the asset instead.
+    let dir = repo_path("examples/meshes");
+    let path = dir.join("_m30_fragment_check.json");
+    let relative = scene.replace(
+        &repo_path("examples/meshes/rigged_arm.gltf")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+        "rigged_arm.gltf",
+    );
+    std::fs::write(&path, relative).unwrap();
+
+    let output = engine().arg("validate").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&output));
+    assert!(
+        codes.contains(&"clip_needs_fragment".to_string()),
+        "got {codes:?}"
+    );
+}
+
+#[test]
+fn a_skeletal_player_must_name_its_entitys_own_mesh() {
+    let dir = repo_path("examples/meshes");
+    let path = dir.join("_m30_mismatch_check.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"pyramid.gltf"},
+                {"type":"AnimationPlayer","clip":"rigged_arm.gltf#Wave"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine().arg("validate").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&output));
+    assert!(
+        codes.contains(&"skeletal_player_mesh_mismatch".to_string()),
+        "got {codes:?}"
+    );
+}
+
+#[test]
+fn an_unknown_clip_fragment_suggests_a_real_one() {
+    let dir = repo_path("examples/meshes");
+    let path = dir.join("_m30_unknown_clip_check.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"rigged_arm.gltf"},
+                {"type":"AnimationPlayer","clip":"rigged_arm.gltf#Wav"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine().arg("validate").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stderr_lines(&output);
+    let unknown = lines
+        .iter()
+        .find(|l| l["error"] == "unknown_clip")
+        .unwrap_or_else(|| panic!("got {:?}", codes_of(&lines)));
+    assert_eq!(unknown["did_you_mean"], "Wave");
+}
+
+#[test]
+fn a_skeletal_player_on_an_unrigged_file_says_so() {
+    let dir = repo_path("examples/meshes");
+    let path = dir.join("_m30_no_skin_check.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"P","components":[
+                {"type":"Mesh","asset":"pyramid.gltf"},
+                {"type":"AnimationPlayer","clip":"pyramid.gltf#Wave"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine().arg("validate").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&output));
+    assert!(codes.contains(&"mesh_has_no_skin".to_string()), "got {codes:?}");
 }

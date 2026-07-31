@@ -101,6 +101,37 @@
    ]
   },
   {
+   "name": "Meadow",
+   "components": [
+    {
+     "type": "Transform",
+     "position": [
+      -2.0,
+      0.0,
+      19.0
+     ],
+     "scale": [
+      24.0,
+      1.0,
+      14.0
+     ]
+    },
+    {
+     "type": "Meadow",
+     "seed": 21,
+     "density": 26.0,
+     "height": 0.5,
+     "cycle_length": 5.0,
+     "stagger": 0.3,
+     "wind": 13.0,
+     "wind_speed": 3.4,
+     "wind_direction": 205.0,
+     "max_slope": 34.0,
+     "terrain": "Ground"
+    }
+   ]
+  },
+  {
    "name": "Monolith",
    "components": [
     {
@@ -954,6 +985,46 @@
    ]
   },
   {
+   "name": "Walker",
+   "components": [
+    {
+     "type": "Transform",
+     "position": [
+      -13.4,
+      0.0,
+      -8.2
+     ]
+    },
+    {
+     "type": "Mesh",
+     "asset": "../meshes/rigged_walker.gltf"
+    },
+    {
+     "type": "Material",
+     "albedo": [
+      0.3,
+      0.28,
+      0.26
+     ],
+     "metallic": 0.18,
+     "roughness": 0.62,
+     "orm_map": "../textures/plate_orm.png",
+     "normal_map": "../textures/plate_normal.png",
+     "uv_scale": [
+      2.0,
+      2.0
+     ],
+     "normal_strength": 1.1
+    },
+    {
+     "type": "AnimationPlayer",
+     "clip": "../meshes/rigged_walker.gltf#Walk",
+     "speed": 1.0,
+     "looping": true
+    }
+   ]
+  },
+  {
    "name": "FirePit",
    "components": [
     {
@@ -1470,7 +1541,8 @@
       0.88,
       0.92,
       0.94
-     ]
+     ],
+     "ior": 1.33
     }
    ]
   },

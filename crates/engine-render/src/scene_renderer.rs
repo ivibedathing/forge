@@ -27,12 +27,14 @@ use std::sync::Arc;
 
 use engine_core::components::{Camera, ParticleBlend, Terrain, Water, MAX_POINT_LIGHTS};
 use engine_core::math::{Mat4, Vec3};
+use engine_core::meadow::MAX_GROWTH_STAGES;
 use engine_core::mesh::MeshData;
 use engine_core::particles::ParticleInstance;
 use engine_core::road::MAX_ROAD_KERBS;
 use engine_core::scene::{
-    CloudItem, EnvironmentSettings, RenderItem, ResolvedLights, RoadItem, WaterItem,
+    CloudItem, EnvironmentSettings, MeadowItem, RenderItem, ResolvedLights, RoadItem, WaterItem,
 };
+use engine_core::skeleton::MAX_JOINTS;
 use engine_core::terrain::MAX_TERRAIN_LAYERS;
 use engine_core::water::MAX_WAVES;
 
@@ -151,6 +153,48 @@ struct FrameUniform {
     view_proj: [[f32; 4]; 4],
 }
 
+/// One skinned draw's joint palette, matching WGSL `JointPalette` (M30).
+///
+/// Fixed-size at [`MAX_JOINTS`], the `MAX_POINT_LIGHTS` / `MAX_ROAD_KERBS`
+/// idiom: a rig with more joints is `too_many_joints` at *validate* time,
+/// before a device exists, rather than a character that renders correctly up to
+/// joint 128 and explodes past it. Unused slots are zeroed and never read — no
+/// vertex indexes them, because validation refused the file that could.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct JointPaletteUniform {
+    /// Three rows per joint. See `skin.wgsl` for why the fourth is not stored.
+    joints: [[[f32; 4]; 3]; MAX_JOINTS],
+}
+
+impl Default for JointPaletteUniform {
+    fn default() -> Self {
+        Self {
+            joints: [[[0.0; 4]; 3]; MAX_JOINTS],
+        }
+    }
+}
+
+impl JointPaletteUniform {
+    /// Pack a CPU palette into the rows the shader reads.
+    ///
+    /// glam matrices are column-major, so a transpose is what turns columns
+    /// into the rows this packs — and the fourth row, which an affine matrix
+    /// always leaves at (0, 0, 0, 1), is the one dropped.
+    fn from_palette(palette: &[Mat4]) -> Self {
+        let mut out = Self::default();
+        for (slot, matrix) in out.joints.iter_mut().zip(palette) {
+            let rows = matrix.transpose();
+            *slot = [
+                rows.x_axis.to_array(),
+                rows.y_axis.to_array(),
+                rows.z_axis.to_array(),
+            ];
+        }
+        out
+    }
+}
+
 /// One point light as the frame uniform carries it, matching WGSL
 /// `PointLightData`.
 #[repr(C)]
@@ -182,7 +226,12 @@ struct WaterUniform {
     foam: [f32; 4],
     /// x = roughness, y = opacity, z = crest foam, w = detail cell size.
     params: [f32; 4],
-    /// x = wave count, y = time in seconds; z and w are padding.
+    /// x = wave count, y = time in seconds, z = index of refraction (M27);
+    /// w is padding.
+    ///
+    /// The IOR rides in a slot M18 declared padding so that **one** uniform
+    /// layout feeds both water pipelines — the plain shader simply never reads
+    /// it, and `water_objects` stays a single buffer.
     clock: [f32; 4],
     /// Two vec4s per wave, [`MAX_WAVES`] of them: `(dir.x, dir.z, amplitude, k)`
     /// then `(q, omega, 0, 0)`. Packed by [`pack_waves`].
@@ -238,6 +287,41 @@ struct RoadUniform {
     kerbs: [[f32; 4]; MAX_ROAD_KERBS],
 }
 
+/// One life-cycle keyframe as the shader reads it, matching WGSL
+/// `GrowthStageData` (M29).
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct GrowthStageData {
+    /// x = at, y = height fraction, z = width fraction, w = lean in **radians**
+    /// (the file authors degrees; the conversion happens once, here).
+    shape: [f32; 4],
+    /// rgb = colour at the plant's base, w = sway multiplier.
+    color_sway: [f32; 4],
+    /// rgb = colour at the plant's tip, w padding.
+    tip: [f32; 4],
+}
+
+/// Per-meadow shader data, matching WGSL `MeadowUniform` (M29).
+///
+/// No model matrix, unlike every other per-object uniform here: a meadow's
+/// instances are placed in world space, because their altitude came off the
+/// terrain and a transform applied afterwards would lift them back off it.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MeadowUniform {
+    view_proj: [[f32; 4]; 4],
+    /// x = scene time in seconds, y = cycle length in seconds (0 = frozen),
+    /// z = base phase, w = live stage count.
+    clock: [f32; 4],
+    /// xy = unit wind direction in XZ, z = wind strength in radians,
+    /// w = gust travel speed in m/s.
+    wind: [f32; 4],
+    /// rgb = flower colour, w = reseed jitter radius in metres.
+    flower: [f32; 4],
+    /// Unused slots are zeroed and never read — the shader loops to the count.
+    stages: [GrowthStageData; MAX_GROWTH_STAGES],
+}
+
 /// Per-pass particle data, matching WGSL `ParticleFrame`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -277,10 +361,42 @@ struct CachedMesh {
     /// M23, because a road's markings are painted from surface coordinates it
     /// carries there — before that nothing on the GPU read a UV at all.
     uvs_offset: u64,
+    /// Where the skinning influences start in the same buffer (M30), for a
+    /// skinned mesh. `None` for everything else — which is every mesh
+    /// committed before M30 — so no existing vertex buffer grew by a byte.
+    skin_offsets: Option<SkinOffsets>,
     indices: wgpu::Buffer,
     index_count: u32,
     /// Frame counter at the last draw that used this mesh; entries idle for
     /// [`MESH_CACHE_LIFETIME`] frames are dropped.
+    last_used: u64,
+}
+
+/// Where a skinned mesh's two extra vertex slots start in its shared buffer.
+#[derive(Clone, Copy)]
+struct SkinOffsets {
+    joints: u64,
+    weights: u64,
+}
+
+/// One uploaded meadow, cached across frames (M29).
+///
+/// Three buffers rather than two, because a meadow is the one thing in this
+/// engine drawn instanced from geometry of its own: the plant template, its
+/// indices, and where every copy of it stands. All three are static — the life
+/// cycle is evaluated in the vertex stage — so this uploads once and is never
+/// rewritten however many generations pass.
+///
+/// `_patch` keeps the source `Arc` alive for `CachedMesh`'s reason: the cache is
+/// keyed on that allocation's address, and holding a strong reference is what
+/// stops a freed patch's address from being reused by a different one.
+struct CachedMeadow {
+    _patch: Arc<engine_core::meadow::MeadowPatch>,
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    instances: wgpu::Buffer,
+    index_count: u32,
+    instance_count: u32,
     last_used: u64,
 }
 
@@ -359,12 +475,7 @@ impl SceneDepth {
     ///
     /// Returns whether it reallocated, which is what tells the frame-textures
     /// bind group that it has to be rebuilt.
-    fn ensure(
-        slot: &mut Option<Self>,
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-    ) -> bool {
+    fn ensure(slot: &mut Option<Self>, device: &wgpu::Device, width: u32, height: u32) -> bool {
         let fits = slot
             .as_ref()
             .is_some_and(|held| held.width == width.max(1) && held.height == height.max(1));
@@ -619,6 +730,10 @@ pub struct ScenePass<'a> {
     /// Pass `&[]` for a scene with no road, which then issues exactly the draws
     /// it did before roads existed.
     pub roads: &'a [RoadItem],
+    /// Meadows (M29), drawn with the opaque geometry after the roads. Pass
+    /// `&[]` for a scene with no ground cover, which then issues exactly the
+    /// draws it did before meadows existed.
+    pub meadows: &'a [MeadowItem],
     /// Particle billboards, drawn after the meshes (alpha-blended, depth-read
     /// only). Pass `&[]` when nothing simulates particles.
     pub particles: &'a [ParticleInstance],
@@ -648,6 +763,78 @@ pub struct ScenePass<'a> {
     pub hud: Option<&'a crate::hud::HudOverlay>,
 }
 
+/// Everything a skinned draw needs, built the **first time a frame has one**
+/// (M30) and kept for the life of the renderer.
+///
+/// Lazy for the reason the shadow map, the 1×1 white texture and the colour
+/// copy are: a scene with no skinned mesh pays nothing, and "nothing" here is
+/// six shader compilations at startup — which every `engine screenshot` in this
+/// repo but one would otherwise pay on every invocation.
+///
+/// The variants mirror the unskinned ones exactly, so routing a skinned draw is
+/// the same decision with the same inputs; anything else would be a second
+/// place for "which pipeline does this material want" to disagree with itself.
+struct SkinnedPipelines {
+    opaque: wgpu::RenderPipeline,
+    textured: wgpu::RenderPipeline,
+    transparent: wgpu::RenderPipeline,
+    textured_transparent: wgpu::RenderPipeline,
+    refractive: wgpu::RenderPipeline,
+    shadow: wgpu::RenderPipeline,
+    shadow_cutout: wgpu::RenderPipeline,
+}
+
+/// Which optional vertex slots and bind groups one skinned pipeline declares.
+///
+/// Two variants' worth of difference, spelled out rather than inferred: a
+/// vertex-buffer slot bound in the wrong order is a character that renders as
+/// noise, and there is no way to see from the noise which slot was wrong.
+#[derive(Clone, Copy)]
+struct SkinnedInputs {
+    /// Whether the stage reads a normal. The solid caster does not.
+    normal: bool,
+    /// The material's maps and the group they bind at — 3 in the mesh passes,
+    /// 2 in the cut-out caster, which has no frame textures to read because it
+    /// *is* what writes one of them.
+    material: Option<([usize; 4], u32)>,
+}
+
+impl SkinnedInputs {
+    const CASTER: Self = Self {
+        normal: false,
+        material: None,
+    };
+    const LIT: Self = Self {
+        normal: true,
+        material: None,
+    };
+    fn textured(key: [usize; 4]) -> Self {
+        Self {
+            normal: true,
+            material: Some((key, 3)),
+        }
+    }
+    fn cutout_caster(key: [usize; 4]) -> Self {
+        Self {
+            normal: true,
+            material: Some((key, 2)),
+        }
+    }
+}
+
+/// The palette buffer and the group-0 bind group naming it beside the object
+/// uniforms.
+///
+/// Rebuilt when either buffer is reallocated, which the recorded capacities
+/// detect: a bind group holds its buffers by identity, and `Uniforms::ensure`
+/// mints a new one whenever the draw list outgrows the old.
+struct SkinnedObjects {
+    palette: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    palette_size: u64,
+    objects_size: u64,
+}
+
 pub struct SceneRenderer {
     pipeline: wgpu::RenderPipeline,
     /// Same shader as `pipeline`, blended and depth-write-off, for materials
@@ -674,11 +861,19 @@ pub struct SceneRenderer {
     shadow_cutout_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     water_pipeline: wgpu::RenderPipeline,
+    /// The same with refraction spliced in (M27), used only by a surface whose
+    /// `ior` is not 1. Chosen per surface, so an unrefracting pond in a scene
+    /// that also holds a refracting one still compiles to the M18 shader.
+    refractive_water_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
     /// Roads (M23): opaque, shadow-casting, and the only pipeline that reads a
     /// vertex UV — a road's markings are painted from surface coordinates.
     road_pipeline: wgpu::RenderPipeline,
     road_layout: wgpu::BindGroupLayout,
+    /// Meadows (M29): opaque, instanced, double-sided, and the only pipeline
+    /// whose vertex stage decides what the geometry *is*.
+    meadow_pipeline: wgpu::RenderPipeline,
+    meadow_layout: wgpu::BindGroupLayout,
     depth_resolve_pipeline: wgpu::RenderPipeline,
     /// Puts the opaque colour copy back over the frame — see `blit.wgsl` for
     /// the one path that needs it.
@@ -691,6 +886,14 @@ pub struct SceneRenderer {
     /// additively — for `ParticleEmitter.blend: "additive"` (fire, sparks).
     additive_particle_pipeline: wgpu::RenderPipeline,
     object_layout: wgpu::BindGroupLayout,
+    /// Group 1 everywhere. Kept because the skinned pipelines are built
+    /// lazily, long after the constructor that made it.
+    frame_layout: wgpu::BindGroupLayout,
+    /// Group 0 for a skinned draw (M30): the object uniform at binding 0, as
+    /// everywhere else, plus the joint palette at binding 1 with its own
+    /// dynamic offset. Built up front because it is cheap and the lazily-built
+    /// pipelines need it; nothing binds it until a skinned draw appears.
+    skinned_object_layout: wgpu::BindGroupLayout,
     hud_pipeline: wgpu::RenderPipeline,
     hud_layout: wgpu::BindGroupLayout,
     /// Group 2 everywhere: shadow map, depth copy, colour copy. See
@@ -716,6 +919,9 @@ pub struct SceneRenderer {
     /// scenes which never do pay nothing for it.
     shadow_map: Option<ShadowMap>,
     meshes: HashMap<usize, CachedMesh>,
+    /// Uploaded meadows, keyed on the `Arc<MeadowPatch>` identity — the mesh
+    /// cache's rule, for the same reason.
+    meadow_meshes: HashMap<usize, CachedMeadow>,
     /// Uploaded material maps, keyed on the `Arc<TextureData>` identity — M15's
     /// rule, which is why `TextureSource` must hand back the same `Arc`.
     textures: HashMap<usize, CachedTexture>,
@@ -742,6 +948,17 @@ pub struct SceneRenderer {
     /// big to ride in the object uniform every mesh shares.
     road_objects: Option<Uniforms>,
     road_stride: u64,
+    /// The skinned set (M30), absent until a frame has a skinned draw.
+    skinned: Option<SkinnedPipelines>,
+    skinned_objects: Option<SkinnedObjects>,
+    /// Distance between consecutive joint palettes: 6 KiB rounded up to the
+    /// device's dynamic-offset alignment, which on every adapter this runs on
+    /// leaves it exactly 6 KiB.
+    palette_stride: u64,
+    /// And again for meadows, whose life-cycle table is the largest uniform of
+    /// the four.
+    meadow_objects: Option<Uniforms>,
+    meadow_stride: u64,
     /// The opaque depth copy the water pass reads, allocated on the first frame
     /// that has any water in it and resized with the target.
     scene_depth: Option<SceneDepth>,
@@ -808,6 +1025,48 @@ impl SceneRenderer {
             Some(std::mem::size_of::<ObjectUniform>() as u64),
         );
         let frame_layout = uniform_layout("frame-uniforms", None);
+
+        // The same group 0 with the joint palette beside it (M27). A second
+        // *layout*, not a second group index: `downlevel_defaults` caps
+        // `max_bind_groups` at 4 and M26 spent the fourth, so the palette rides
+        // in group 0 under a layout the skinned pipelines alone use — which
+        // costs the plain pipelines nothing, because they keep theirs.
+        let skinned_object_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("skinned-object-uniforms"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: true,
+                            min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<
+                                ObjectUniform,
+                            >(
+                            )
+                                as u64),
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        // Vertex only: the palette moves vertices and nothing
+                        // in a fragment stage has ever asked where a joint is.
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: true,
+                            min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<
+                                JointPaletteUniform,
+                            >(
+                            )
+                                as u64),
+                        },
+                        count: None,
+                    },
+                ],
+            });
 
         // Group 2: the frame's textures — the shadow map and its comparison
         // sampler, the opaque depth copy, and the opaque colour copy with the
@@ -1243,6 +1502,23 @@ impl SceneRenderer {
             &vertex_layouts[..1],
             format,
             multisample,
+            std::borrow::Cow::Borrowed(include_str!("shaders/water.wgsl")),
+        );
+        // The same again with refraction spliced in (M27), for the surfaces
+        // that bend what is behind them. A second pipeline rather than a
+        // branch, for M22's and M26's measured reason: compiling the variant
+        // for every water draw is a change to the code around the M18 shader's
+        // arithmetic, and that is enough to move a pixel in a pond that does
+        // not refract.
+        let refractive_water_pipeline = Self::water_pipeline(
+            device,
+            &water_layout,
+            &frame_layout,
+            &frame_textures_layout,
+            &vertex_layouts[..1],
+            format,
+            multisample,
+            with_water_refraction(),
         );
         // Clouds (M20). Its own uniform and shader, the mesh pass's frame
         // binding, and nothing else: no shadow map (the engine has one cascade
@@ -1275,6 +1551,21 @@ impl SceneRenderer {
             &frame_textures_layout,
             &road_layout,
             &vertex_layouts,
+            format,
+            multisample,
+        );
+
+        // Meadows (M29): its own uniform, the mesh pass's frame binding, and
+        // the shadow map — grass receives shadows even though it casts none.
+        let meadow_layout = uniform_layout(
+            "meadow-uniforms",
+            Some(std::mem::size_of::<MeadowUniform>() as u64),
+        );
+        let meadow_pipeline = Self::meadow_pipeline(
+            device,
+            &meadow_layout,
+            &frame_layout,
+            &frame_textures_layout,
             format,
             multisample,
         );
@@ -1459,8 +1750,11 @@ impl SceneRenderer {
             std::mem::size_of::<ObjectUniform>().next_multiple_of(alignment as usize) as u64;
 
         let shadow_placeholder = ShadowMap::new(device, 1);
-        let depth_placeholder =
-            placeholder_texture(device, "scene-depth-placeholder", wgpu::TextureFormat::R32Float);
+        let depth_placeholder = placeholder_texture(
+            device,
+            "scene-depth-placeholder",
+            wgpu::TextureFormat::R32Float,
+        );
         let color_placeholder = placeholder_texture(device, "scene-color-placeholder", format);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow-sampler"),
@@ -1489,6 +1783,10 @@ impl SceneRenderer {
             std::mem::size_of::<CloudUniform>().next_multiple_of(alignment as usize) as u64;
         let road_stride =
             std::mem::size_of::<RoadUniform>().next_multiple_of(alignment as usize) as u64;
+        let palette_stride =
+            std::mem::size_of::<JointPaletteUniform>().next_multiple_of(alignment as usize) as u64;
+        let meadow_stride =
+            std::mem::size_of::<MeadowUniform>().next_multiple_of(alignment as usize) as u64;
 
         Self {
             pipeline,
@@ -1503,11 +1801,20 @@ impl SceneRenderer {
             shadow_cutout_pipeline,
             sky_pipeline,
             water_pipeline,
+            refractive_water_pipeline,
             cloud_pipeline,
             road_pipeline,
             road_layout,
             road_objects: None,
             road_stride,
+            skinned: None,
+            skinned_objects: None,
+            palette_stride,
+            meadow_pipeline,
+            meadow_layout,
+            meadow_objects: None,
+            meadow_stride,
+            meadow_meshes: HashMap::new(),
             depth_resolve_pipeline,
             blit_pipeline,
             water_layout,
@@ -1516,6 +1823,8 @@ impl SceneRenderer {
             particle_pipeline,
             additive_particle_pipeline,
             object_layout,
+            frame_layout,
+            skinned_object_layout,
             hud_pipeline,
             hud_layout,
             frame_textures_layout,
@@ -1546,6 +1855,299 @@ impl SceneRenderer {
             particle_uniform,
             hud_targets: Vec::new(),
             frame_index: 0,
+        }
+    }
+
+    /// Build the skinned pipeline set, once, on the first frame that has a
+    /// skinned draw (M27).
+    ///
+    /// Six shader modules, which is why this is lazy rather than part of the
+    /// constructor: every `engine screenshot` in this repo but one has no
+    /// skinned mesh in it and should not pay for compiling them. The precedent
+    /// is the shadow map, the 1×1 white texture, and the colour copy — all
+    /// allocated by the first frame that needs them.
+    fn build_skinned(&self, device: &wgpu::Device) -> SkinnedPipelines {
+        let multisample = wgpu::MultisampleState {
+            count: self.samples,
+            ..Default::default()
+        };
+        let module = |label: &str, source: std::borrow::Cow<'static, str>| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(with_sky_common(&source)),
+            })
+        };
+        let plain = module("skinned-shader", with_surface(&[skin_producer()]));
+        let textured = module(
+            "skinned-textured-shader",
+            with_surface(&[skin_producer(), texture_producer()]),
+        );
+        let refractive = module(
+            "skinned-refractive-shader",
+            with_surface(&[skin_producer(), refraction_producer()]),
+        );
+        let textured_blended = module(
+            "skinned-textured-blended-shader",
+            with_surface(&[skin_producer(), texture_producer(), refraction_producer()]),
+        );
+
+        // Position, normal, UV, joints, weights. The joints arrive as
+        // `Uint16x4` — a 16-bit index is what glTF writes and what 128 joints
+        // need — and land in the shader as `vec4<u32>`.
+        let joints = wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Uint16x4,
+            }],
+        };
+        let weights = wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 4,
+                format: wgpu::VertexFormat::Float32x4,
+            }],
+        };
+        let position = wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            }],
+        };
+        let normal = wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+            }],
+        };
+        let uv = wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        };
+
+        // Untextured skinning skips the UV slot entirely rather than binding a
+        // padded one: the shader does not declare `@location(2)`, and a layout
+        // that provides an attribute the stage never reads is a mismatch worth
+        // not relying on.
+        let plain_layouts = [
+            Some(position.clone()),
+            Some(normal.clone()),
+            Some(joints.clone()),
+            Some(weights.clone()),
+        ];
+        let textured_layouts = [
+            Some(position.clone()),
+            Some(normal.clone()),
+            Some(uv.clone()),
+            Some(joints.clone()),
+            Some(weights.clone()),
+        ];
+        let caster_layouts = [Some(position), Some(joints), Some(weights)];
+
+        let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("skinned-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&self.skinned_object_layout),
+                Some(&self.frame_layout),
+                Some(&self.frame_textures_layout),
+            ],
+            immediate_size: 0,
+        });
+        let material_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("skinned-textured-pipeline-layout"),
+                bind_group_layouts: &[
+                    Some(&self.skinned_object_layout),
+                    Some(&self.frame_layout),
+                    Some(&self.frame_textures_layout),
+                    Some(&self.material_layout),
+                ],
+                immediate_size: 0,
+            });
+
+        let format = self.format;
+        let mesh_pipeline = |label: &str,
+                             module: &wgpu::ShaderModule,
+                             layout: &wgpu::PipelineLayout,
+                             buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                             blend: wgpu::BlendState,
+                             depth_write: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some("vs_main"),
+                    buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(depth_write),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample,
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        let caster = |label: &str,
+                      module: &wgpu::ShaderModule,
+                      layout: &wgpu::PipelineLayout,
+                      buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                      fragment: Option<wgpu::FragmentState<'_>>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some("vs_main"),
+                    buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment,
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    // Front-face culled, exactly like the unskinned casters:
+                    // the map should record each caster's far side.
+                    cull_mode: Some(wgpu::Face::Front),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: wgpu::DepthBiasState {
+                        constant: 2,
+                        slope_scale: 2.0,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        let shadow_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("skinned-shadow-shader"),
+            source: wgpu::ShaderSource::Wgsl(skinned_shadow().into()),
+        });
+        let shadow_cutout_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("skinned-shadow-cutout-shader"),
+            source: wgpu::ShaderSource::Wgsl(skinned_shadow_cutout().into()),
+        });
+        let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("skinned-shadow-pipeline-layout"),
+            bind_group_layouts: &[Some(&self.skinned_object_layout), Some(&self.frame_layout)],
+            immediate_size: 0,
+        });
+        let shadow_cutout_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("skinned-shadow-cutout-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&self.skinned_object_layout),
+                Some(&self.frame_layout),
+                // The material group at 2, not 3: this pipeline has no frame
+                // textures to read — it *is* what writes one of them.
+                Some(&self.material_layout),
+            ],
+            immediate_size: 0,
+        });
+
+        SkinnedPipelines {
+            opaque: mesh_pipeline(
+                "skinned-pipeline",
+                &plain,
+                &mesh_layout,
+                &plain_layouts,
+                wgpu::BlendState::REPLACE,
+                true,
+            ),
+            textured: mesh_pipeline(
+                "skinned-textured-pipeline",
+                &textured,
+                &material_pipeline_layout,
+                &textured_layouts,
+                wgpu::BlendState::REPLACE,
+                true,
+            ),
+            transparent: mesh_pipeline(
+                "skinned-transparent-pipeline",
+                &plain,
+                &mesh_layout,
+                &plain_layouts,
+                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                false,
+            ),
+            textured_transparent: mesh_pipeline(
+                "skinned-textured-transparent-pipeline",
+                &textured_blended,
+                &material_pipeline_layout,
+                &textured_layouts,
+                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                false,
+            ),
+            refractive: mesh_pipeline(
+                "skinned-refractive-pipeline",
+                &refractive,
+                &mesh_layout,
+                &plain_layouts,
+                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                false,
+            ),
+            shadow: caster(
+                "skinned-shadow-pipeline",
+                &shadow_module,
+                &shadow_layout,
+                &caster_layouts,
+                None,
+            ),
+            shadow_cutout: caster(
+                "skinned-shadow-cutout-pipeline",
+                &shadow_cutout_module,
+                &shadow_cutout_layout,
+                &textured_layouts,
+                Some(wgpu::FragmentState {
+                    module: &shadow_cutout_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
+            ),
         }
     }
 
@@ -1752,10 +2354,14 @@ impl SceneRenderer {
         vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
         format: wgpu::TextureFormat,
         multisample: wgpu::MultisampleState,
+        // The M18 file as it sits on disk, or the M27 variant with refraction
+        // spliced in. Passed rather than branched on, so the plain pipeline's
+        // source is `include_str!` and nothing else.
+        source: std::borrow::Cow<'static, str>,
     ) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("water-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("shaders/water.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&source)),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("water-pipeline-layout"),
@@ -1942,6 +2548,109 @@ impl SceneRenderer {
         })
     }
 
+    /// The meadow pass (M29): opaque, depth-writing, and **instanced**.
+    ///
+    /// Two vertex buffers rather than the mesh pass's three, and both are this
+    /// pipeline's own: a plant template with channels no `MeshData` has, and a
+    /// per-instance record of where each copy of it stands. That is why the
+    /// layout is interleaved here where every other pipeline's is split — a
+    /// meadow does not share the geometry cache, so there is no mesh with no
+    /// normals to keep unpadded.
+    ///
+    /// **Culling is off**, and it is load-bearing: a blade of grass is a
+    /// single-sided strip, half of every tuft faces away from any given camera,
+    /// and back-face culling would delete it. The alternative — emitting both
+    /// faces — doubles the template for nothing, since the fragment stage can
+    /// flip the normal toward the viewer in one line. `clouds.wgsl` set this
+    /// precedent for its own reason.
+    ///
+    /// There is no shadow-caster twin. See `meadow.wgsl`'s header.
+    fn meadow_pipeline(
+        device: &wgpu::Device,
+        meadow_layout: &wgpu::BindGroupLayout,
+        frame_layout: &wgpu::BindGroupLayout,
+        frame_textures_layout: &wgpu::BindGroupLayout,
+        format: wgpu::TextureFormat,
+        multisample: wgpu::MultisampleState,
+    ) -> wgpu::RenderPipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("meadow-shader"),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("shaders/meadow.wgsl"))),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("meadow-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(meadow_layout),
+                Some(frame_layout),
+                Some(frame_textures_layout),
+            ],
+            immediate_size: 0,
+        });
+
+        // `MeadowVertex`: centre, normal, offset, anchor, span, organ.
+        const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+            0 => Float32x3,
+            1 => Float32x3,
+            2 => Float32x3,
+            3 => Float32x3,
+            4 => Float32x3,
+            5 => Uint32,
+        ];
+        // `MeadowInstance`: position+scale, yaw+phase+gradient, seed.
+        const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![
+            6 => Float32x4,
+            7 => Float32x4,
+            8 => Uint32,
+        ];
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("meadow-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<MeadowVertexRaw>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &VERTEX_ATTRIBUTES,
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<MeadowInstanceRaw>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &INSTANCE_ATTRIBUTES,
+                    }),
+                ],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
     /// The depth copy pass (M18): one fullscreen triangle turning the opaque
     /// pass's depth attachment into something the water shader can read.
     ///
@@ -1958,8 +2667,8 @@ impl SceneRenderer {
         } else {
             "texture_depth_2d"
         };
-        let source = include_str!("shaders/depth_resolve.wgsl")
-            .replace("SOURCE_TEXTURE_TYPE", source_type);
+        let source =
+            include_str!("shaders/depth_resolve.wgsl").replace("SOURCE_TEXTURE_TYPE", source_type);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("depth-resolve-shader"),
@@ -2127,6 +2836,7 @@ impl SceneRenderer {
             water,
             clouds,
             roads,
+            meadows,
             particles,
             view_projection,
             camera_position,
@@ -2320,6 +3030,48 @@ impl SceneRenderer {
             queue.write_buffer(&objects.buffer, 0, &object_bytes);
         }
 
+        // Joint palettes (M27): one slot per skinned draw in one buffer,
+        // addressed during the pass by dynamic offset — the arrangement water,
+        // clouds and roads already use, and the reason the palette could ride
+        // in group 0 beside the object uniform rather than needing a fifth bind
+        // group the device does not have.
+        //
+        // `skin_slots[i]` is where item `i`'s palette landed, or `None` for
+        // everything that is not a skinned mesh — which is every draw in this
+        // repo but one, and the test that keeps them on the pipelines that
+        // compile `mesh.wgsl` as it sits on disk.
+        let mut skin_slots: Vec<Option<usize>> = vec![None; items.len()];
+        let mut palettes: Vec<JointPaletteUniform> = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            if item.joints.is_empty() || !item.mesh.is_skinned() {
+                continue;
+            }
+            skin_slots[index] = Some(palettes.len());
+            palettes.push(JointPaletteUniform::from_palette(&item.joints));
+        }
+        if !palettes.is_empty() {
+            if self.skinned.is_none() {
+                self.skinned = Some(self.build_skinned(device));
+            }
+            let stride = self.palette_stride as usize;
+            let mut palette_bytes = vec![0u8; stride * palettes.len()];
+            for (index, palette) in palettes.iter().enumerate() {
+                let at = index * stride;
+                palette_bytes[at..at + std::mem::size_of::<JointPaletteUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(palette));
+            }
+            let objects = self.objects.as_ref().expect("skinned draws write objects");
+            SkinnedObjects::ensure(
+                &mut self.skinned_objects,
+                device,
+                &self.skinned_object_layout,
+                objects,
+                palette_bytes.len() as u64,
+            );
+            let skinned = self.skinned_objects.as_ref().expect("just ensured");
+            queue.write_buffer(&skinned.palette, 0, &palette_bytes);
+        }
+
         // Water surfaces: their grids join the same geometry cache (one upload
         // per tessellation for the life of the run, since `surface_grid` hands
         // back the same `Arc` every frame), and their uniforms the same
@@ -2396,6 +3148,35 @@ impl SceneRenderer {
                 Some(std::mem::size_of::<RoadUniform>() as u64),
             );
             queue.write_buffer(&objects.buffer, 0, &road_bytes);
+        }
+
+        // Meadows: the same arrangement once more. Their templates and instance
+        // buffers join a cache of their own, keyed on `Arc<MeadowPatch>`
+        // identity, so a field that is not being edited uploads once for the
+        // life of the run — the life cycle is a uniform and a vertex-stage
+        // evaluation, never new geometry.
+        let meadow_keys: Vec<usize> = meadows
+            .iter()
+            .map(|item| self.upload_meadow(device, &item.patch))
+            .collect();
+        if !meadows.is_empty() {
+            let stride = self.meadow_stride as usize;
+            let mut meadow_bytes = vec![0u8; stride * meadows.len()];
+            for (index, item) in meadows.iter().enumerate() {
+                let uniform = meadow_uniform(item, view_projection, time);
+                let at = index * stride;
+                meadow_bytes[at..at + std::mem::size_of::<MeadowUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(&uniform));
+            }
+            let objects = Uniforms::ensure(
+                &mut self.meadow_objects,
+                device,
+                &self.meadow_layout,
+                "meadow-uniforms",
+                meadow_bytes.len() as u64,
+                Some(std::mem::size_of::<MeadowUniform>() as u64),
+            );
+            queue.write_buffer(&objects.buffer, 0, &meadow_bytes);
         }
 
         // Split the draw list by blend mode. Opaque keeps file order (it is
@@ -2593,7 +3374,7 @@ impl SceneRenderer {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 };
                 for &index in &opaque {
-                    if cutout[index] {
+                    if cutout[index] || skin_slots[index].is_some() {
                         continue;
                     }
                     cast(&mut shadow_pass, index, &self.meshes[&keys[index]]);
@@ -2603,10 +3384,12 @@ impl SceneRenderer {
                 // `alpha_cutoff` never enters this loop.
                 let mut switched = false;
                 for &index in &opaque {
-                    if !cutout[index] {
+                    if !cutout[index] || skin_slots[index].is_some() {
                         continue;
                     }
-                    let Some(key) = material_keys[index] else { continue };
+                    let Some(key) = material_keys[index] else {
+                        continue;
+                    };
                     if !switched {
                         shadow_pass.set_pipeline(&self.shadow_cutout_pipeline);
                         shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
@@ -2624,6 +3407,60 @@ impl SceneRenderer {
                     shadow_pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
                     shadow_pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+                // Skinned casters (M27), in their own two runs. Without them a
+                // walking character casts its **rest pose** — a wrongness that
+                // reads as a renderer bug and is actually a missing pipeline.
+                if let (Some(skinned), Some(skin_objects)) = (&self.skinned, &self.skinned_objects)
+                {
+                    let mut solid = false;
+                    for &index in &opaque {
+                        let Some(slot) = skin_slots[index] else {
+                            continue;
+                        };
+                        if cutout[index] {
+                            continue;
+                        }
+                        if !solid {
+                            shadow_pass.set_pipeline(&skinned.shadow);
+                            shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                            solid = true;
+                        }
+                        self.draw_skinned(
+                            &mut shadow_pass,
+                            skin_objects,
+                            keys[index],
+                            index,
+                            slot,
+                            SkinnedInputs::CASTER,
+                        );
+                    }
+                    let mut cut = false;
+                    for &index in &opaque {
+                        let Some(slot) = skin_slots[index] else {
+                            continue;
+                        };
+                        if !cutout[index] {
+                            continue;
+                        }
+                        let Some(key) = material_keys[index] else {
+                            continue;
+                        };
+                        if !cut {
+                            shadow_pass.set_pipeline(&skinned.shadow_cutout);
+                            shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                            cut = true;
+                        }
+                        self.draw_skinned(
+                            &mut shadow_pass,
+                            skin_objects,
+                            keys[index],
+                            index,
+                            slot,
+                            SkinnedInputs::cutout_caster(key),
+                        );
+                    }
+                    switched |= solid || cut;
                 }
                 if switched {
                     shadow_pass.set_pipeline(&self.shadow_pipeline);
@@ -2662,7 +3499,13 @@ impl SceneRenderer {
         // pass structure, the attachments and the load/store ops are byte for
         // byte the pre-M26 ones.
         let refracting: Vec<bool> = items.iter().map(|item| item.material.refracts()).collect();
-        let refraction_present = refracting.iter().any(|&yes| yes);
+        // Water refracts through the same copy since M27, so it joins the
+        // disjunction rather than getting a second one: a scene with neither a
+        // refracting material nor a refracting surface still renders the
+        // pre-M26 pass structure exactly.
+        let refracting_water: Vec<bool> = water.iter().map(|item| item.water.refracts()).collect();
+        let refraction_present =
+            refracting.iter().any(|&yes| yes) || refracting_water.iter().any(|&yes| yes);
         let split_pass = water_present || refraction_present;
         if refraction_present {
             SceneColor::ensure(
@@ -2674,7 +3517,12 @@ impl SceneRenderer {
             );
         }
         if water_present {
-            SceneDepth::ensure(&mut self.scene_depth, device, target_size[0], target_size[1]);
+            SceneDepth::ensure(
+                &mut self.scene_depth,
+                device,
+                target_size[0],
+                target_size[1],
+            );
             // The source view changes every frame in the viewer (a new
             // swapchain-sized depth texture on resize) and cannot be compared
             // for identity, so this bind group is rebuilt rather than cached.
@@ -2807,7 +3655,10 @@ impl SceneRenderer {
                     pass.set_pipeline(&self.pipeline);
                 }
                 for &index in &opaque {
-                    if items[index].terrain.is_none() && material_keys[index].is_none() {
+                    if items[index].terrain.is_none()
+                        && material_keys[index].is_none()
+                        && skin_slots[index].is_none()
+                    {
                         draw(&mut pass, index);
                     }
                 }
@@ -2820,7 +3671,12 @@ impl SceneRenderer {
                 // blessed before M26 issuing exactly the draws it always did.
                 let mut textured = false;
                 for &index in &opaque {
-                    let Some(key) = material_keys[index] else { continue };
+                    let Some(key) = material_keys[index] else {
+                        continue;
+                    };
+                    if skin_slots[index].is_some() {
+                        continue;
+                    }
                     if !textured {
                         pass.set_pipeline(&self.textured_pipeline);
                         textured = true;
@@ -2837,6 +3693,55 @@ impl SceneRenderer {
                     pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+                // And the skinned draws (M27), each in its own run for the
+                // reason terrain and the textured meshes get one: the pipeline
+                // switches at most once a frame. A scene with no skinned mesh
+                // never enters either loop, and its `self.skinned` was never
+                // built.
+                if let (Some(skinned), Some(objects)) = (&self.skinned, &self.skinned_objects) {
+                    let mut plain = false;
+                    for &index in &opaque {
+                        let Some(slot) = skin_slots[index] else {
+                            continue;
+                        };
+                        if material_keys[index].is_some() {
+                            continue;
+                        }
+                        if !plain {
+                            pass.set_pipeline(&skinned.opaque);
+                            plain = true;
+                        }
+                        self.draw_skinned(
+                            &mut pass,
+                            objects,
+                            keys[index],
+                            index,
+                            slot,
+                            SkinnedInputs::LIT,
+                        );
+                    }
+                    let mut mapped = false;
+                    for &index in &opaque {
+                        let Some(slot) = skin_slots[index] else {
+                            continue;
+                        };
+                        let Some(key) = material_keys[index] else {
+                            continue;
+                        };
+                        if !mapped {
+                            pass.set_pipeline(&skinned.textured);
+                            mapped = true;
+                        }
+                        self.draw_skinned(
+                            &mut pass,
+                            objects,
+                            keys[index],
+                            index,
+                            slot,
+                            SkinnedInputs::textured(key),
+                        );
+                    }
                 }
                 // Nothing after this assumes a bound pipeline: the road block
                 // and `draw_blended` each set their own.
@@ -2874,6 +3779,42 @@ impl SceneRenderer {
                 // sets its own for the first item it draws.
             }
 
+            // Meadows, last in the opaque run. They write depth like the grass
+            // they are: a plant standing in front of a rock occludes it, water
+            // absorbs against the field, and particles sort against it.
+            //
+            // Drawing *after* the terrain is not merely tidy — M22 measured that
+            // this adapter renders a big relief patch differently run to run
+            // when it is the last thing in an MSAA pass, and that any draw after
+            // it removes the flake. A meadow is also the finest geometry this
+            // engine has ever put against that same relief, so which way this
+            // actually falls is measured per fixture rather than assumed; see
+            // the design doc's §9.
+            if let Some(uniforms) = &self.meadow_objects {
+                if !meadows.is_empty() {
+                    pass.set_pipeline(&self.meadow_pipeline);
+                    pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                    pass.set_bind_group(2, opaque_frame_textures, &[]);
+                    for (index, _) in meadows.iter().enumerate() {
+                        let meadow = &self.meadow_meshes[&meadow_keys[index]];
+                        if meadow.instance_count == 0 {
+                            continue;
+                        }
+                        pass.set_bind_group(
+                            0,
+                            &uniforms.bind_group,
+                            &[(index as u64 * self.meadow_stride) as u32],
+                        );
+                        pass.set_vertex_buffer(0, meadow.vertices.slice(..));
+                        pass.set_vertex_buffer(1, meadow.instances.slice(..));
+                        pass.set_index_buffer(meadow.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..meadow.index_count, 0, 0..meadow.instance_count);
+                    }
+                    // Nothing after this assumes a bound pipeline: `draw_blended`
+                    // sets its own for the first item it draws.
+                }
+            }
+
             // Blended geometry after every opaque surface has written depth, so
             // it is occluded by what is in front of it, and back-to-front among
             // itself. With water or refraction in the scene this waits for the
@@ -2887,6 +3828,8 @@ impl SceneRenderer {
                     &cloud_keys,
                     &material_keys,
                     &refracting,
+                    &skin_slots,
+                    &refracting_water,
                     opaque_frame_textures,
                 );
                 self.draw_particles(&mut pass, particle_count, alpha_particles);
@@ -2975,6 +3918,8 @@ impl SceneRenderer {
                 &cloud_keys,
                 &material_keys,
                 &refracting,
+                &skin_slots,
+                &refracting_water,
                 frame_textures,
             );
             self.draw_particles(&mut pass, particle_count, alpha_particles);
@@ -3036,7 +3981,11 @@ impl SceneRenderer {
             depth: self.scene_depth.as_ref().map(|d| (d.width, d.height)),
             color: self.scene_color.as_ref().map(|c| (c.width, c.height)),
         };
-        if self.frame_textures.as_ref().is_some_and(|held| held.key == key) {
+        if self
+            .frame_textures
+            .as_ref()
+            .is_some_and(|held| held.key == key)
+        {
             return;
         }
 
@@ -3095,6 +4044,54 @@ impl SceneRenderer {
     /// pipeline layouts differ (clouds have only two groups) and a pipeline
     /// change with an incompatible layout invalidates what was bound. Tracking
     /// the previous kind keeps that to one switch per run of same-kind items.
+    /// One skinned draw: group 0 carries both dynamic offsets, and the mesh
+    /// binds its two extra vertex slots.
+    ///
+    /// `inputs` says which of the optional slots this pipeline declares: the
+    /// untextured variants declare no `@location(2)`, so binding a UV buffer
+    /// for them would be providing an attribute nothing reads, and the solid
+    /// caster reads position alone.
+    fn draw_skinned(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        objects: &SkinnedObjects,
+        mesh_key: usize,
+        index: usize,
+        slot: usize,
+        inputs: SkinnedInputs,
+    ) {
+        let mesh = &self.meshes[&mesh_key];
+        let Some(skin) = mesh.skin_offsets else {
+            // A palette with no influences behind it cannot skin anything;
+            // `skin_slots` already refuses to build one, so this is belt and
+            // braces rather than a live path.
+            return;
+        };
+        pass.set_bind_group(
+            0,
+            &objects.bind_group,
+            &[
+                (index as u64 * self.object_stride) as u32,
+                (slot as u64 * self.palette_stride) as u32,
+            ],
+        );
+        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+        let mut next = 1;
+        if inputs.normal {
+            pass.set_vertex_buffer(next, mesh.vertices.slice(mesh.normals_offset..));
+            next += 1;
+        }
+        if let Some((key, group)) = inputs.material {
+            pass.set_bind_group(group, &self.materials[&key].bind_group, &[]);
+            pass.set_vertex_buffer(next, mesh.vertices.slice(mesh.uvs_offset..));
+            next += 1;
+        }
+        pass.set_vertex_buffer(next, mesh.vertices.slice(skin.joints..));
+        pass.set_vertex_buffer(next + 1, mesh.vertices.slice(skin.weights..));
+        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+    }
+
     fn draw_blended(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -3104,35 +4101,71 @@ impl SceneRenderer {
         cloud_keys: &[usize],
         material_keys: &[Option<[usize; 4]>],
         refracting: &[bool],
+        skin_slots: &[Option<usize>],
+        refracting_water: &[bool],
         frame_textures: &wgpu::BindGroup,
     ) {
         // 0 = transparent mesh, 1 = water, 2 = cloud, 3 = textured transparent
-        // mesh.
+        // mesh, 5 = refracting water.
         let mut current: Option<u8> = None;
         for entry in blended {
             match *entry {
                 Blended::Mesh(index) => {
-                    let Some(objects) = &self.objects else { continue };
+                    let Some(objects) = &self.objects else {
+                        continue;
+                    };
                     let material = material_keys[index];
                     // 0 = plain, 3 = textured, 4 = plain refracting. A textured
                     // material refracts through its own pipeline, which carries
                     // both producers: there is no baseline to protect on that
                     // path, so it does not need splitting the way the plain one
-                    // did.
-                    let kind = match (material.is_some(), refracting[index]) {
-                        (true, _) => 3,
-                        (false, true) => 4,
-                        (false, false) => 0,
+                    // did. 5, 6 and 7 are the skinned twins of the three, which
+                    // exist so that a transparent skinned surface is a
+                    // *transparent skinned surface* rather than a silently
+                    // rest-posed one.
+                    let skinned = skin_slots[index];
+                    let kind = match (material.is_some(), refracting[index], skinned.is_some()) {
+                        (true, _, false) => 3,
+                        (false, true, false) => 4,
+                        (false, false, false) => 0,
+                        (true, _, true) => 5,
+                        (false, true, true) => 6,
+                        (false, false, true) => 7,
                     };
                     if current != Some(kind) {
-                        pass.set_pipeline(match kind {
-                            3 => &self.textured_transparent_pipeline,
-                            4 => &self.refractive_pipeline,
-                            _ => &self.transparent_pipeline,
-                        });
+                        let Some(pipeline) = (match kind {
+                            3 => Some(&self.textured_transparent_pipeline),
+                            4 => Some(&self.refractive_pipeline),
+                            0 => Some(&self.transparent_pipeline),
+                            _ => self.skinned.as_ref().map(|s| match kind {
+                                5 => &s.textured_transparent,
+                                6 => &s.refractive,
+                                _ => &s.transparent,
+                            }),
+                        }) else {
+                            continue;
+                        };
+                        pass.set_pipeline(pipeline);
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
                         pass.set_bind_group(2, frame_textures, &[]);
                         current = Some(kind);
+                    }
+                    if let Some(slot) = skinned {
+                        let Some(skin_objects) = &self.skinned_objects else {
+                            continue;
+                        };
+                        self.draw_skinned(
+                            pass,
+                            skin_objects,
+                            keys[index],
+                            index,
+                            slot,
+                            match material {
+                                Some(key) => SkinnedInputs::textured(key),
+                                None => SkinnedInputs::LIT,
+                            },
+                        );
+                        continue;
                     }
                     let mesh = &self.meshes[&keys[index]];
                     pass.set_bind_group(
@@ -3153,11 +4186,18 @@ impl SceneRenderer {
                     let Some(surfaces) = &self.water_objects else {
                         continue;
                     };
-                    if current != Some(1) {
-                        pass.set_pipeline(&self.water_pipeline);
+                    // Per surface (M27), not per scene: a pond at the default
+                    // `ior: 1.0` keeps the M18 shader even when another body of
+                    // water in the same frame refracts.
+                    let kind = if refracting_water[index] { 5 } else { 1 };
+                    if current != Some(kind) {
+                        pass.set_pipeline(match kind {
+                            5 => &self.refractive_water_pipeline,
+                            _ => &self.water_pipeline,
+                        });
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
                         pass.set_bind_group(2, frame_textures, &[]);
-                        current = Some(1);
+                        current = Some(kind);
                     }
                     let mesh = &self.meshes[&water_keys[index]];
                     pass.set_bind_group(
@@ -3171,7 +4211,9 @@ impl SceneRenderer {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
                 Blended::Cloud(index) => {
-                    let Some(objects) = &self.cloud_objects else { continue };
+                    let Some(objects) = &self.cloud_objects else {
+                        continue;
+                    };
                     if current != Some(2) {
                         pass.set_pipeline(&self.cloud_pipeline);
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
@@ -3387,6 +4429,17 @@ impl SceneRenderer {
                 let missing = geometry.positions.len().saturating_sub(geometry.uvs.len());
                 vertex_bytes.resize(vertex_bytes.len() + missing * 8, 0);
 
+                // The two skinning slots, appended only for a skinned mesh
+                // (M27) — which is what keeps every buffer committed before it
+                // byte-identical to what it always was.
+                let skin_offsets = geometry.is_skinned().then(|| {
+                    let joints = vertex_bytes.len() as u64;
+                    vertex_bytes.extend_from_slice(bytemuck::cast_slice(&geometry.joint_indices));
+                    let weights = vertex_bytes.len() as u64;
+                    vertex_bytes.extend_from_slice(bytemuck::cast_slice(&geometry.joint_weights));
+                    SkinOffsets { joints, weights }
+                });
+
                 CachedMesh {
                     _geometry: Arc::clone(geometry),
                     vertices: buffer_with(
@@ -3397,6 +4450,7 @@ impl SceneRenderer {
                     ),
                     normals_offset,
                     uvs_offset,
+                    skin_offsets,
                     indices: buffer_with(
                         device,
                         "mesh-indices",
@@ -3410,11 +4464,176 @@ impl SceneRenderer {
         key
     }
 
+    /// Upload a meadow if this is the first time it has been seen, and return
+    /// its cache key (the shared allocation's address).
+    ///
+    /// All three buffers are static for the life of the patch — the life cycle
+    /// runs in the vertex stage — so a meadow that is not being edited uploads
+    /// once for the life of the run, however many generations pass in front of
+    /// the camera.
+    fn upload_meadow(
+        &mut self,
+        device: &wgpu::Device,
+        patch: &Arc<engine_core::meadow::MeadowPatch>,
+    ) -> usize {
+        let key = Arc::as_ptr(patch) as usize;
+        let frame_index = self.frame_index;
+        self.meadow_meshes
+            .entry(key)
+            .and_modify(|meadow| meadow.last_used = frame_index)
+            .or_insert_with(|| {
+                // engine-core carries no `bytemuck` (it is the GPU-free crate),
+                // so the POD mirrors live here and the conversion happens once,
+                // at upload.
+                let vertices: Vec<MeadowVertexRaw> = patch
+                    .vertices
+                    .iter()
+                    .map(|v| MeadowVertexRaw {
+                        centre: v.centre,
+                        normal: v.normal,
+                        offset: v.offset,
+                        anchor: v.anchor,
+                        span: v.span,
+                        organ: v.organ,
+                    })
+                    .collect();
+                let instances: Vec<MeadowInstanceRaw> = patch
+                    .instances
+                    .iter()
+                    .map(|i| MeadowInstanceRaw {
+                        pos_scale: [i.position[0], i.position[1], i.position[2], i.scale],
+                        params: [
+                            i.yaw,
+                            i.phase_offset,
+                            i.ground_gradient[0],
+                            i.ground_gradient[1],
+                        ],
+                        seed: i.seed,
+                    })
+                    .collect();
+
+                CachedMeadow {
+                    _patch: Arc::clone(patch),
+                    vertices: buffer_with(
+                        device,
+                        "meadow-template",
+                        wgpu::BufferUsages::VERTEX,
+                        bytemuck::cast_slice(&vertices),
+                    ),
+                    indices: buffer_with(
+                        device,
+                        "meadow-indices",
+                        wgpu::BufferUsages::INDEX,
+                        bytemuck::cast_slice(&patch.indices),
+                    ),
+                    instances: buffer_with(
+                        device,
+                        "meadow-instances",
+                        wgpu::BufferUsages::VERTEX,
+                        bytemuck::cast_slice(&instances),
+                    ),
+                    index_count: patch.indices.len() as u32,
+                    instance_count: patch.instances.len() as u32,
+                    last_used: frame_index,
+                }
+            });
+        key
+    }
+
     /// How many meshes are currently uploaded — the cache's observable
     /// behavior, for tests.
     pub fn cached_mesh_count(&self) -> usize {
         self.meshes.len()
     }
+}
+
+impl SkinnedObjects {
+    /// Make sure the palette buffer holds `size` bytes and that the group-0
+    /// bind group names it beside the current object buffer.
+    ///
+    /// Rebuilt only when one of the two buffers was reallocated, which the
+    /// recorded capacities detect: a bind group holds its buffers by identity,
+    /// so a draw list that outgrew the object buffer would otherwise keep
+    /// binding the freed one.
+    fn ensure(
+        slot: &mut Option<Self>,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        objects: &Uniforms,
+        size: u64,
+    ) {
+        let fits = slot
+            .as_ref()
+            .is_some_and(|held| held.palette_size >= size && held.objects_size == objects.size);
+        if fits {
+            return;
+        }
+
+        let palette = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("joint-palettes"),
+            size: size.max(std::mem::size_of::<JointPaletteUniform>() as u64),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("skinned-object-uniforms"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &objects.buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(
+                                std::mem::size_of::<ObjectUniform>() as u64
+                            ),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &palette,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(
+                                std::mem::size_of::<JointPaletteUniform>() as u64,
+                            ),
+                        }),
+                    },
+                ],
+            });
+        *slot = Some(Self {
+            palette_size: size,
+            objects_size: objects.size,
+            palette,
+            bind_group,
+        });
+    }
+}
+
+/// `MeadowVertex` with the derives the GPU path needs. Field for field with
+/// `engine_core::meadow::MeadowVertex`, and the vertex layout in
+/// [`SceneRenderer::meadow_pipeline`] is written against this.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MeadowVertexRaw {
+    centre: [f32; 3],
+    normal: [f32; 3],
+    offset: [f32; 3],
+    anchor: [f32; 3],
+    span: [f32; 3],
+    organ: u32,
+}
+
+/// `MeadowInstance`, repacked into the vec4 lanes the shader reads.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MeadowInstanceRaw {
+    /// xyz = world position, w = metres of plant per unit of template height.
+    pos_scale: [f32; 4],
+    /// x = yaw, y = phase offset, zw = the ground's slope here.
+    params: [f32; 4],
+    seed: u32,
 }
 
 impl Uniforms {
@@ -3574,6 +4793,43 @@ fn cloud_uniform(item: &CloudItem, view_projection: Mat4, time: f32) -> CloudUni
     }
 }
 
+/// Pack a meadow's clock, wind and life-cycle table for the shader (M29).
+///
+/// The two conversions that happen here rather than in the shader are the file's
+/// units meeting the maths: `lean` and `wind` are authored in degrees and used
+/// as rotation angles, and `wind_direction` is a heading in degrees that becomes
+/// a unit XZ vector through [`wave_direction`](engine_core::water::wave_direction)
+/// — the *same* function `Water`'s waves use, so "0° travels toward −Z" cannot
+/// come to mean two different things in two components.
+fn meadow_uniform(item: &MeadowItem, view_projection: Mat4, time: f32) -> MeadowUniform {
+    let m = &item.meadow;
+    let mut stages = [GrowthStageData::default(); MAX_GROWTH_STAGES];
+    for (slot, stage) in stages
+        .iter_mut()
+        .zip(m.stages.iter().take(MAX_GROWTH_STAGES))
+    {
+        *slot = GrowthStageData {
+            shape: [stage.at, stage.height, stage.width, stage.lean.to_radians()],
+            color_sway: stage.color.extend(stage.sway).to_array(),
+            tip: stage.tip_color.extend(0.0).to_array(),
+        };
+    }
+
+    let direction = engine_core::water::wave_direction(m.wind_direction);
+    MeadowUniform {
+        view_proj: view_projection.to_cols_array_2d(),
+        clock: [
+            time,
+            m.cycle_length,
+            m.phase,
+            m.stages.len().min(MAX_GROWTH_STAGES) as f32,
+        ],
+        wind: [direction.x, direction.y, m.wind.to_radians(), m.wind_speed],
+        flower: m.flower_color.extend(item.patch.jitter_radius).to_array(),
+        stages,
+    }
+}
+
 /// Pack a terrain's layer table for the mesh shader (M22), zeroed for every
 /// other draw.
 ///
@@ -3600,12 +4856,7 @@ fn terrain_layers(terrain: Option<&Terrain>) -> [TerrainLayerUniform; MAX_TERRAI
             layer.slope_range[0],
             layer.slope_range[1],
         ];
-        slot.blend_noise = [
-            layer.height_blend,
-            layer.noise,
-            layer.slope_blend,
-            0.0,
-        ];
+        slot.blend_noise = [layer.height_blend, layer.noise, layer.slope_blend, 0.0];
     }
 
     layers
@@ -3649,7 +4900,7 @@ fn water_uniform(item: &WaterItem, view_projection: Mat4, time: f32) -> WaterUni
         deep_fade: w.deep_color.extend(w.depth_fade).to_array(),
         foam: w.foam_color.extend(w.shore_foam).to_array(),
         params: [w.roughness, w.opacity, w.crest_foam, w.detail_scale],
-        clock: [count as f32, time, 0.0, 0.0],
+        clock: [count as f32, time, w.ior, 0.0],
         waves,
     }
 }
@@ -3738,7 +4989,15 @@ mod anchor {
     pub const UNIFORM_TAIL: &str = "    // x = alpha, y = transmission; z and w unused.\n\
                                     \x20   surface: vec4<f32>,\n\
                                     };\n";
-    /// The whole vertex stage, for a producer that needs another attribute.
+    /// The whole vertex stage. Unlike every other anchor this one is not
+    /// *replaced* by a producer but **reassembled** from their
+    /// [`VertexContribution`](super::VertexContribution)s, because since M27
+    /// two producers need it at once: texturing needs a UV attribute the plain
+    /// stage does not carry, and skinning needs two more. Whole-stage
+    /// replacement worked while exactly one producer did it and does not
+    /// survive two — and a textured skinned character is precisely the case
+    /// that has to compose. The assembly with no contributions is asserted to
+    /// be this string, byte for byte.
     pub const VERTEX_STAGE: &str = "struct VertexOut {\n\
         \x20   @builtin(position) clip_position: vec4<f32>,\n\
         \x20   @location(0) world_position: vec3<f32>,\n\
@@ -3770,8 +5029,7 @@ mod anchor {
     pub const FILL: &str = "            fill = albedo * hemisphere;\n";
     /// The frame uniform's tail, where the refraction variant appends the
     /// view-projection it needs to project an exit point.
-    pub const FRAME_TAIL: &str =
-        "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
+    pub const FRAME_TAIL: &str = "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
     /// Where the fragment's running colour and alpha are declared.
     pub const VARS: &str = "    var color = base_color;\n    var out_alpha = 1.0;\n";
     /// The last line of the fragment stage.
@@ -3836,10 +5094,12 @@ fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, str> {
 
     let mut out = source.to_string();
     let substitutions = || producers.iter().flat_map(|p| p.substitutions.iter());
-    for (anchor, _) in substitutions().chain(std::iter::once(&(
-        anchor::UNIFORM_TAIL,
-        EXTENDED_UNIFORM_TAIL,
-    ))) {
+    for (anchor, _) in substitutions().chain([
+        &(anchor::UNIFORM_TAIL, EXTENDED_UNIFORM_TAIL),
+        // Not in any producer's substitution list — it is reassembled rather
+        // than replaced — but just as load-bearing, so it is asserted here.
+        &(anchor::VERTEX_STAGE, ""),
+    ]) {
         assert_eq!(
             source.matches(anchor).count(),
             1,
@@ -3858,6 +5118,10 @@ fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, str> {
         "struct ObjectUniform {",
         &format!("{EXTENDED_UNIFORM_TYPES}\n{preludes}\nstruct ObjectUniform {{"),
     );
+    out = out.replace(
+        anchor::VERTEX_STAGE,
+        &vertex_stage(producers.iter().filter_map(|p| p.vertex.as_ref())),
+    );
     for (anchor, replacement) in substitutions() {
         out = out.replace(anchor, replacement);
     }
@@ -3866,20 +5130,104 @@ fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, str> {
 }
 
 /// One producer at the seam: declarations to put ahead of the object uniform,
-/// and the anchored substitutions that route the shader through them.
+/// its addition to the vertex stage, and the anchored substitutions that route
+/// the fragment stage through it.
 ///
-/// Composable, because a textured surface can also refract and the two touch
-/// different anchors. Composition is what keeps the variant matrix from being a
-/// matrix of hand-written shaders.
+/// Composable, because a textured surface can also refract and can also be
+/// skinned. Composition is what keeps the variant matrix from being a matrix of
+/// hand-written shaders.
 struct Producer {
     prelude: &'static str,
+    /// What this producer adds to the vertex stage, if anything. Terrain and
+    /// refraction add nothing: they resolve a surface per pixel.
+    vertex: Option<VertexContribution>,
     substitutions: Vec<(&'static str, &'static str)>,
+}
+
+/// One producer's addition to the vertex stage.
+///
+/// Every field is a fragment of WGSL pasted into a fixed skeleton, and an
+/// all-empty set of contributions assembles to [`anchor::VERTEX_STAGE`]
+/// verbatim — which is the property that keeps the plain pipeline compiling
+/// `mesh.wgsl` as it sits on disk. `producers_compose_without_a_hand_written_stage`
+/// pins it.
+#[derive(Default)]
+struct VertexContribution {
+    /// Extra `vs_main` parameters: whole `    @location(n) name: T,\n` lines.
+    attributes: &'static str,
+    /// Extra `VertexOut` fields, in the same shape.
+    varyings: &'static str,
+    /// Statements run before the position and normal are transformed.
+    body: &'static str,
+    /// The expression transformed in place of the `position` attribute — how a
+    /// producer moves a vertex. At most one producer may set it.
+    position: Option<&'static str>,
+    /// And in place of `normal`, for the same reason and under the same rule.
+    normal: Option<&'static str>,
+    /// Statements run after `out` is filled, writing the extra varyings.
+    tail: &'static str,
+}
+
+/// Assemble the vertex stage from its contributions, in producer order.
+///
+/// Ordered, and the order is the meaning: skinning moves the vertex and
+/// texturing then passes that position through untouched, so a producer list
+/// of `[skin, texture]` is a skinned textured surface rather than two
+/// half-applied ones.
+fn vertex_stage<'a>(contributions: impl Iterator<Item = &'a VertexContribution> + Clone) -> String {
+    let concat = |field: fn(&VertexContribution) -> &'static str| -> String {
+        contributions.clone().map(field).collect()
+    };
+    // A second producer moving the vertex would silently win or silently lose
+    // depending on iteration order; neither is a thing to discover from a
+    // render.
+    let one = |what: &str, field: fn(&VertexContribution) -> Option<&'static str>| {
+        let mut found = contributions.clone().filter_map(field);
+        let first = found.next();
+        assert!(
+            found.next().is_none(),
+            "two producers both claim to compute the vertex {what}; the stage \
+             can only transform one expression"
+        );
+        first
+    };
+
+    let varyings = concat(|c| c.varyings);
+    let attributes = concat(|c| c.attributes);
+    let body = concat(|c| c.body);
+    let tail = concat(|c| c.tail);
+    let position = one("position", |c| c.position).unwrap_or("position");
+    let normal = one("normal", |c| c.normal).unwrap_or("normal");
+
+    format!(
+        "struct VertexOut {{\n\
+         \x20   @builtin(position) clip_position: vec4<f32>,\n\
+         \x20   @location(0) world_position: vec3<f32>,\n\
+         \x20   @location(1) normal: vec3<f32>,\n\
+         {varyings}}};\n\
+         \n\
+         @vertex\n\
+         fn vs_main(\n\
+         \x20   @location(0) position: vec3<f32>,\n\
+         \x20   @location(1) normal: vec3<f32>,\n\
+         {attributes}) -> VertexOut {{\n\
+         \x20   var out: VertexOut;\n\
+         {body}\x20   out.clip_position = object.mvp * vec4<f32>({position}, 1.0);\n\
+         \x20   out.world_position = (object.model * vec4<f32>({position}, 1.0)).xyz;\n\
+         \x20   out.normal = (object.normal_matrix * vec4<f32>({normal}, 0.0)).xyz;\n\
+         {tail}\x20   return out;\n\
+         }}\n"
+    )
 }
 
 /// The terrain producer (M22): a generative material in place of the uniform's.
 fn terrain_producer() -> Producer {
     Producer {
         prelude: include_str!("shaders/terrain.wgsl"),
+        // Terrain resolves its material per pixel from the world position the
+        // plain stage already interpolates, so it adds nothing to the vertex
+        // stage.
+        vertex: None,
         substitutions: vec![
             (
                 anchor::PROLOGUE,
@@ -3912,30 +5260,15 @@ fn terrain_producer() -> Producer {
 fn texture_producer() -> Producer {
     Producer {
         prelude: include_str!("shaders/textured.wgsl"),
+        // A UV attribute the plain stage does not carry, interpolated to the
+        // fragment stage under the material's own scale and offset.
+        vertex: Some(VertexContribution {
+            attributes: "    @location(2) uv: vec2<f32>,\n",
+            varyings: "    @location(2) uv: vec2<f32>,\n",
+            tail: "    out.uv = uv * object.map_uv.xy + object.map_uv.zw;\n",
+            ..VertexContribution::default()
+        }),
         substitutions: vec![
-            (
-                anchor::VERTEX_STAGE,
-                "struct VertexOut {\n\
-                 \x20   @builtin(position) clip_position: vec4<f32>,\n\
-                 \x20   @location(0) world_position: vec3<f32>,\n\
-                 \x20   @location(1) normal: vec3<f32>,\n\
-                 \x20   @location(2) uv: vec2<f32>,\n\
-                 };\n\
-                 \n\
-                 @vertex\n\
-                 fn vs_main(\n\
-                 \x20   @location(0) position: vec3<f32>,\n\
-                 \x20   @location(1) normal: vec3<f32>,\n\
-                 \x20   @location(2) uv: vec2<f32>,\n\
-                 ) -> VertexOut {\n\
-                 \x20   var out: VertexOut;\n\
-                 \x20   out.clip_position = object.mvp * vec4<f32>(position, 1.0);\n\
-                 \x20   out.world_position = (object.model * vec4<f32>(position, 1.0)).xyz;\n\
-                 \x20   out.normal = (object.normal_matrix * vec4<f32>(normal, 0.0)).xyz;\n\
-                 \x20   out.uv = uv * object.map_uv.xy + object.map_uv.zw;\n\
-                 \x20   return out;\n\
-                 }\n",
-            ),
             (
                 anchor::PROLOGUE,
                 "    let sampled = sample_maps(in.uv);\n\
@@ -3986,6 +5319,9 @@ fn texture_producer() -> Producer {
 fn refraction_producer() -> Producer {
     Producer {
         prelude: include_str!("shaders/refraction.wgsl"),
+        // Refraction is entirely a fragment-stage decision: it bends a view
+        // ray, it does not move a vertex.
+        vertex: None,
         substitutions: vec![
             (
                 anchor::FRAME_TAIL,
@@ -4046,6 +5382,90 @@ fn refraction_producer() -> Producer {
     }
 }
 
+/// The skinning producer (M27).
+///
+/// The only producer so far that *moves* a vertex, which is why the vertex
+/// stage had to become an assembly: it needs two attributes the plain stage
+/// does not carry, and so does texturing, and a rigged character is precisely
+/// the thing that wants both.
+fn skin_producer() -> Producer {
+    Producer {
+        prelude: include_str!("shaders/skin.wgsl"),
+        vertex: Some(VertexContribution {
+            attributes: "    @location(3) joint_indices: vec4<u32>,\n\
+                         \x20   @location(4) joint_weights: vec4<f32>,\n",
+            body:
+                "    let skinned = skin_vertex(position, normal, joint_indices, joint_weights);\n",
+            position: Some("skinned.position"),
+            normal: Some("skinned.normal"),
+            ..VertexContribution::default()
+        }),
+        // Nothing in the fragment stage: a skinned surface is shaded exactly
+        // like any other, which is the point of doing this in the vertex
+        // stage at all.
+        substitutions: Vec::new(),
+    }
+}
+
+/// The two shadow casters, skinned (M27).
+///
+/// `shadow.wgsl` reads nothing but the object uniform's model matrix, so a
+/// walking character would otherwise cast its rest pose — a wrongness that
+/// reads as a renderer bug and is actually a missing pipeline. Spliced rather
+/// than copied, for `with_surface`'s reason: two more hand-maintained shadow
+/// shaders are two more things to drift out of step with the pass they belong
+/// to.
+///
+/// Note for whoever debugs a missing shadow here: the solid caster is
+/// **front-face culled** (M16's peeling margin), which applies to characters
+/// as much as to M26's single-sided cards.
+fn with_skinned_caster(source: &'static str, anchor: &str, replacement: &str) -> String {
+    assert_eq!(
+        source.matches(anchor).count(),
+        1,
+        "the shadow caster no longer contains this anchor exactly once, so the \
+         skinned variant would compile as if skinning were absent:\n{anchor}"
+    );
+    format!(
+        "{}\n{}",
+        include_str!("shaders/skin.wgsl"),
+        source.replace(anchor, replacement)
+    )
+}
+
+fn skinned_shadow() -> String {
+    with_skinned_caster(
+        include_str!("shaders/shadow.wgsl"),
+        "fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {\n\
+         \x20   return frame.light_view_proj * object.model * vec4<f32>(position, 1.0);\n\
+         }\n",
+        "fn vs_main(\n\
+         \x20   @location(0) position: vec3<f32>,\n\
+         \x20   @location(3) joint_indices: vec4<u32>,\n\
+         \x20   @location(4) joint_weights: vec4<f32>,\n\
+         ) -> @builtin(position) vec4<f32> {\n\
+         \x20   let skinned = skin_vertex(position, vec3<f32>(0.0, 1.0, 0.0), joint_indices, joint_weights);\n\
+         \x20   return frame.light_view_proj * object.model * vec4<f32>(skinned.position, 1.0);\n\
+         }\n",
+    )
+}
+
+fn skinned_shadow_cutout() -> String {
+    with_skinned_caster(
+        include_str!("shaders/shadow_cutout.wgsl"),
+        "    out.clip = frame.light_view_proj * object.model * vec4<f32>(position, 1.0);\n",
+        "    let skinned = skin_vertex(position, normal, joint_indices, joint_weights);\n\
+         \x20   out.clip = frame.light_view_proj * object.model * vec4<f32>(skinned.position, 1.0);\n",
+    )
+    .replace(
+        "    @location(2) uv: vec2<f32>,\n) -> VertexOut {",
+        "    @location(2) uv: vec2<f32>,\n\
+         \x20   @location(3) joint_indices: vec4<u32>,\n\
+         \x20   @location(4) joint_weights: vec4<f32>,\n\
+         ) -> VertexOut {",
+    )
+}
+
 /// The mesh shader with terrain's generative material spliced in (M22).
 fn with_terrain() -> std::borrow::Cow<'static, str> {
     with_surface(&[terrain_producer()])
@@ -4063,6 +5483,101 @@ fn with_refraction() -> std::borrow::Cow<'static, str> {
 
 fn with_textures_and_refraction() -> std::borrow::Cow<'static, str> {
     with_surface(&[texture_producer(), refraction_producer()])
+}
+
+/// The anchors `with_water_refraction` splices against — existing lines of
+/// `water.wgsl`, exactly as `anchor` holds existing lines of `mesh.wgsl`.
+///
+/// The file itself is **not edited by this milestone, including its comments**:
+/// the plain pipeline compiles it as it sits on disk, byte-identical by
+/// construction, and the substitution that claims each anchor is where the
+/// variant's version of that text lives.
+mod water_anchor {
+    /// The depth copy's binding, and the last of the group-2 declarations —
+    /// where the variant's own colour-copy bindings go in after it.
+    pub const BINDINGS: &str = "@group(2) @binding(2) var scene_depth: texture_2d<f32>;\n";
+    /// The clock, whose `z` M18 declared padding and M27 fills with the IOR.
+    /// A comment-only substitution, and it earns its place: the disk file keeps
+    /// describing the pipeline that actually compiles it.
+    pub const CLOCK: &str = "    // x = wave count, y = time in seconds, z and w unused.\n\
+                             \x20   clock: vec4<f32>,\n";
+    /// Where the path length through the body is measured. The bend is scaled
+    /// by it, so the sample is taken here rather than at the composite.
+    pub const THICKNESS: &str =
+        "    // Absorption along the view ray through the water body.\n\
+         \x20   let thickness = water_thickness(in.clip, in.world);\n";
+    /// The last line of the fragment stage.
+    pub const RETURN: &str =
+        "    return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);\n";
+}
+
+/// The water shader with refraction spliced in (M27).
+///
+/// Same discipline as [`with_surface`]: every anchor must appear exactly once,
+/// because a splice that silently did nothing renders the feature as if it were
+/// absent — the failure mode hardest to see, since the scene still draws.
+fn with_water_refraction() -> std::borrow::Cow<'static, str> {
+    let source = include_str!("shaders/water.wgsl");
+    let substitutions = [
+        (
+            water_anchor::BINDINGS,
+            concat!(
+                "@group(2) @binding(2) var scene_depth: texture_2d<f32>;\n\n",
+                include_str!("shaders/water_refraction.wgsl"),
+            ),
+        ),
+        (
+            water_anchor::CLOCK,
+            "    // x = wave count, y = time in seconds, z = index of refraction\n\
+             \x20   // (M27), w unused.\n\
+             \x20   clock: vec4<f32>,\n",
+        ),
+        (
+            water_anchor::THICKNESS,
+            "    // Absorption along the view ray through the water body.\n\
+             \x20   let thickness = water_thickness(in.clip, in.world);\n\
+             \x20   // What is behind the surface, bent (M27). Sampled here,\n\
+             \x20   // where the measured thickness that scales the bend is in\n\
+             \x20   // hand, and held out of the running colour until after fog:\n\
+             \x20   // the copy was already fogged at its own depth when the\n\
+             \x20   // opaque pass drew it, and fogging it twice is what turns\n\
+             \x20   // clear water into a pale slab.\n\
+             \x20   let bed = refracted_bed(\n\
+             \x20       in.clip,\n\
+             \x20       in.world,\n\
+             \x20       v,\n\
+             \x20       n,\n\
+             \x20       surface.clock.z,\n\
+             \x20       thickness,\n\
+             \x20   );\n",
+        ),
+        (
+            water_anchor::RETURN,
+            "    // The bed last, and the surface opaque once it carries it: the\n\
+             \x20   // blend unit must not add the framebuffer's un-refracted\n\
+             \x20   // version on top. `1 - out_alpha` is exactly what that blend\n\
+             \x20   // would have admitted, which is the whole claim — refraction\n\
+             \x20   // moves where the bed is read from, not how much of it comes\n\
+             \x20   // back, so turning it on cannot change how deep the water\n\
+             \x20   // looks. Foam has already driven `out_alpha` toward 1 where\n\
+             \x20   // it is opaque, and you cannot see through foam.\n\
+             \x20   color = color + bed * (1.0 - out_alpha);\n\
+             \x20   out_alpha = 1.0;\n\
+             \x20   return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);\n",
+        ),
+    ];
+
+    let mut out = source.to_string();
+    for (anchor, replacement) in substitutions {
+        assert_eq!(
+            source.matches(anchor).count(),
+            1,
+            "water.wgsl no longer contains this anchor exactly once, so the \
+             refracting pipeline would compile as if refraction were absent:\n{anchor}"
+        );
+        out = out.replace(anchor, replacement);
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// A buffer holding `contents`, created once and never rewritten — the shape
@@ -4158,8 +5673,7 @@ pub fn depth_texture_multisampled(
             // no water nothing — the copy pass only runs when there is water to
             // absorb with — and it means no caller has to know whether the
             // scene it is about to draw has any.
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
         .create_view(&wgpu::TextureViewDescriptor::default())
@@ -4304,9 +5818,8 @@ fn light_view_projection(
     let depth = radius * 4.0 + 50.0;
     let eye = center - travel * (depth * 0.5);
     let view = glam::camera::rh::view::look_to_mat4(eye, travel, up);
-    let projection = glam::camera::rh::proj::directx::orthographic(
-        -radius, radius, -radius, radius, 0.1, depth,
-    );
+    let projection =
+        glam::camera::rh::proj::directx::orthographic(-radius, radius, -radius, radius, 0.1, depth);
     projection * view
 }
 
@@ -4352,9 +5865,114 @@ mod seam_tests {
             "@location(2) uv: vec2<f32>,",
             "map_params: vec4<f32>,",
         ] {
-            assert!(textured.contains(expected), "textured splice lost {expected:?}");
+            assert!(
+                textured.contains(expected),
+                "textured splice lost {expected:?}"
+            );
         }
         // And the shared lighting body is still the one from the file.
         assert!(textured.contains("let base_color = direct + ambient + emissive;"));
+    }
+
+    /// The property the whole vertex-stage assembly rests on (M27): with no
+    /// contributions it reproduces the stage `mesh.wgsl` ships, byte for byte.
+    ///
+    /// Without this the refactor would be a rewrite of the one mechanism that
+    /// guards M16's four untouchable lines, verified by hoping.
+    #[test]
+    fn an_unassisted_vertex_stage_is_the_one_in_the_file() {
+        assert_eq!(
+            super::vertex_stage(std::iter::empty()),
+            super::anchor::VERTEX_STAGE,
+        );
+        // And a producer that adds nothing to the vertex stage leaves it the
+        // file's, which is what kept M22's and M26's committed baselines from
+        // moving when the assembly replaced whole-stage substitution.
+        for variant in [super::with_terrain(), super::with_refraction()] {
+            assert!(
+                variant.contains(super::anchor::VERTEX_STAGE),
+                "a producer with no vertex contribution must leave the stage alone"
+            );
+        }
+    }
+
+    /// Two producers both needing the vertex stage is what forced the assembly
+    /// (M27 §7): a rigged character is precisely the thing that also wants an
+    /// albedo map, so the two must compose rather than compete.
+    #[test]
+    fn producers_compose_without_a_hand_written_stage() {
+        let both = super::with_surface(&[super::skin_producer(), super::texture_producer()]);
+
+        for expected in [
+            // Both attributes reached `vs_main`…
+            "    @location(2) uv: vec2<f32>,\n",
+            "    @location(3) joint_indices: vec4<u32>,\n",
+            "    @location(4) joint_weights: vec4<f32>,\n",
+            // …and the skinned position is what gets transformed, once.
+            "out.clip_position = object.mvp * vec4<f32>(skinned.position, 1.0);",
+            "out.world_position = (object.model * vec4<f32>(skinned.position, 1.0)).xyz;",
+            "out.normal = (object.normal_matrix * vec4<f32>(skinned.normal, 0.0)).xyz;",
+            "out.uv = uv * object.map_uv.xy + object.map_uv.zw;",
+            // …and the fragment stage still samples maps.
+            "let sampled = sample_maps(in.uv);",
+        ] {
+            assert!(both.contains(expected), "composed stage lost {expected:?}");
+        }
+        assert!(
+            !both.contains("object.mvp * vec4<f32>(position, 1.0)"),
+            "the unskinned position must not survive alongside the skinned one"
+        );
+    }
+
+    /// The joint palette reaches the GPU as three *rows*, and glam matrices are
+    /// stored as columns (M27).
+    ///
+    /// A transpose dropped here is the kind of bug that renders — a character
+    /// appears, moves when the clip moves it, and is inside out — so it is
+    /// pinned by arithmetic rather than by looking.
+    #[test]
+    fn a_palette_entry_packs_as_rows_not_columns() {
+        let matrix = glam::Mat4::from_scale_rotation_translation(
+            glam::Vec3::new(1.0, 2.0, 3.0),
+            glam::Quat::from_rotation_y(0.7),
+            glam::Vec3::new(4.0, 5.0, 6.0),
+        );
+        let packed = super::JointPaletteUniform::from_palette(&[matrix]);
+
+        // The translation is the *fourth element of each row*, which is where
+        // the shader's `dot(row, vec4(position, 1.0))` picks it up. Under a
+        // column packing it would be the first three elements of row 3, which
+        // is not even stored.
+        assert_eq!(
+            [
+                packed.joints[0][0][3],
+                packed.joints[0][1][3],
+                packed.joints[0][2][3]
+            ],
+            [4.0, 5.0, 6.0],
+        );
+        // And the whole transform agrees with the matrix, for a point that is
+        // not the origin.
+        let point = glam::Vec3::new(0.3, -1.1, 2.0);
+        let expected = matrix.transform_point3(point);
+        let homogeneous = point.extend(1.0);
+        let by_rows = glam::Vec3::new(
+            glam::Vec4::from_array(packed.joints[0][0]).dot(homogeneous),
+            glam::Vec4::from_array(packed.joints[0][1]).dot(homogeneous),
+            glam::Vec4::from_array(packed.joints[0][2]).dot(homogeneous),
+        );
+        assert!(
+            (by_rows - expected).length() < 1e-5,
+            "packed rows transform to {by_rows:?}, the matrix to {expected:?}"
+        );
+    }
+
+    /// Every slot past the rig's joint count is zero, and nothing indexes them
+    /// — validation refused the file that could (`too_many_joints`).
+    #[test]
+    fn unused_palette_slots_are_zeroed() {
+        let packed = super::JointPaletteUniform::from_palette(&[glam::Mat4::IDENTITY]);
+        assert_eq!(packed.joints[1], [[0.0; 4]; 3]);
+        assert_eq!(packed.joints[super::MAX_JOINTS - 1], [[0.0; 4]; 3]);
     }
 }

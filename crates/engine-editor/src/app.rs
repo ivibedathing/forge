@@ -172,23 +172,24 @@ impl EditorApp {
         }
 
         let mut finished = Vec::new();
-        self.imports.retain(|pending| match pending.receiver.try_recv() {
-            Ok(result) => {
-                finished.push((pending.label.clone(), result));
-                false
-            }
-            Err(mpsc::TryRecvError::Empty) => true,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                finished.push((
-                    pending.label.clone(),
-                    Err(EngineError::new(
-                        engine_core::codes::IMPORT_FAILED,
-                        "the import worker died",
-                    )),
-                ));
-                false
-            }
-        });
+        self.imports
+            .retain(|pending| match pending.receiver.try_recv() {
+                Ok(result) => {
+                    finished.push((pending.label.clone(), result));
+                    false
+                }
+                Err(mpsc::TryRecvError::Empty) => true,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    finished.push((
+                        pending.label.clone(),
+                        Err(EngineError::new(
+                            engine_core::codes::IMPORT_FAILED,
+                            "the import worker died",
+                        )),
+                    ));
+                    false
+                }
+            });
 
         for (label, result) in finished {
             match result {
@@ -216,8 +217,7 @@ impl EditorApp {
                     }
                 }
                 Err(e) => {
-                    self.doc.notice =
-                        Some(format!("import of {label} failed — {}", e.message));
+                    self.doc.notice = Some(format!("import of {label} failed — {}", e.message));
                 }
             }
         }
@@ -304,10 +304,7 @@ impl EditorApp {
             .map(|p| Vec2::new(p.x - rect.min.x, p.y - rect.min.y));
 
         // ── Gizmo interaction (before picking, so a grab wins) ───────
-        let file_transform = self
-            .selected
-            .as_ref()
-            .and_then(|s| self.file_transform(s));
+        let file_transform = self.selected.as_ref().and_then(|s| self.file_transform(s));
         let gizmo_origin = file_transform.map(|t| match &self.drag {
             Some(drag) => drag.preview_transform().position,
             None => t.position,
@@ -324,24 +321,15 @@ impl EditorApp {
                 let pivot = drag.start.position;
                 match drag.mode {
                     GizmoMode::Rotate => {
-                        if let Some(angle) = gizmo::ring_angle(
-                            view_projection,
-                            logical,
-                            pivot,
-                            axis,
-                            pointer,
-                        ) {
+                        if let Some(angle) =
+                            gizmo::ring_angle(view_projection, logical, pivot, axis, pointer)
+                        {
                             drag.delta = gizmo::angle_delta(angle, drag.grab_t);
                         }
                     }
                     GizmoMode::Translate | GizmoMode::Scale => {
-                        let t = gizmo::axis_parameter(
-                            view_projection,
-                            logical,
-                            pivot,
-                            axis,
-                            pointer,
-                        );
+                        let t =
+                            gizmo::axis_parameter(view_projection, logical, pivot, axis, pointer);
                         drag.delta = t - drag.grab_t;
                     }
                 }
@@ -379,21 +367,13 @@ impl EditorApp {
                     let axis_index = self.hot_axis.expect("checked above");
                     let axis = gizmo::AXES[axis_index].0;
                     let grab_t = match self.mode {
-                        GizmoMode::Rotate => gizmo::ring_angle(
-                            view_projection,
-                            logical,
-                            origin,
-                            axis,
-                            pointer,
-                        )
-                        .unwrap_or(0.0),
-                        GizmoMode::Translate | GizmoMode::Scale => gizmo::axis_parameter(
-                            view_projection,
-                            logical,
-                            origin,
-                            axis,
-                            pointer,
-                        ),
+                        GizmoMode::Rotate => {
+                            gizmo::ring_angle(view_projection, logical, origin, axis, pointer)
+                                .unwrap_or(0.0)
+                        }
+                        GizmoMode::Translate | GizmoMode::Scale => {
+                            gizmo::axis_parameter(view_projection, logical, origin, axis, pointer)
+                        }
                     };
                     self.drag = Some(Drag {
                         entity: self.selected.clone().expect("gizmo needs a selection"),
@@ -413,8 +393,7 @@ impl EditorApp {
         if response.clicked() && self.drag.is_none() && self.hot_axis.is_none() {
             if let Some(pointer) = pointer {
                 let (origin, direction) = pick::ray_through(view_projection, logical, pointer);
-                self.selected = pick::pick(&self.doc.items, origin, direction)
-                    .map(str::to_string);
+                self.selected = pick::pick(&self.doc.items, origin, direction).map(str::to_string);
             }
         }
 
@@ -437,6 +416,7 @@ impl EditorApp {
             &self.doc.water,
             &self.doc.clouds,
             &self.doc.roads,
+            &self.doc.meadows,
             view_projection,
             camera_eye,
             lights,
@@ -457,16 +437,14 @@ impl EditorApp {
         // and it is entirely ours.
         if let Some(path) = self.options.screenshot.clone() {
             if !self.screenshot_sent
-                && self.started.elapsed()
-                    >= Duration::from_millis(self.options.screenshot_after_ms)
+                && self.started.elapsed() >= Duration::from_millis(self.options.screenshot_after_ms)
             {
                 self.screenshot_sent = true;
-                let saved = viewport.read_back(render_state).and_then(
-                    |(width, height, pixels)| {
-                        image::RgbaImage::from_raw(width, height, pixels)
-                            .map(|i| i.save(&path))
-                    },
-                );
+                let saved = viewport
+                    .read_back(render_state)
+                    .and_then(|(width, height, pixels)| {
+                        image::RgbaImage::from_raw(width, height, pixels).map(|i| i.save(&path))
+                    });
                 match saved {
                     Some(Ok(())) => {
                         eprintln!("[self-screenshot] wrote {}", path.display());
@@ -477,10 +455,7 @@ impl EditorApp {
                             "{}",
                             engine_core::EngineError::new(
                                 engine_core::codes::PNG_WRITE_FAILED,
-                                format!(
-                                    "could not write screenshot to {}",
-                                    path.display()
-                                ),
+                                format!("could not write screenshot to {}", path.display()),
                             )
                             .to_json()
                         );
@@ -495,8 +470,7 @@ impl EditorApp {
             if !self.read_only() {
                 let arm = gizmo::arm_length(origin, self.camera.eye());
                 let painter = ui.painter_at(rect);
-                let to_screen =
-                    |p: Vec2| egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
+                let to_screen = |p: Vec2| egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
                 let stroke_for = |hot: bool, color: Color32| {
                     Stroke::new(
                         if hot { 4.0 } else { 2.5 },
@@ -507,39 +481,28 @@ impl EditorApp {
                     GizmoMode::Rotate => {
                         for (i, (axis, color)) in gizmo::AXES.iter().enumerate() {
                             let stroke = stroke_for(self.hot_axis == Some(i), *color);
-                            let points: Vec<Option<Vec2>> =
-                                gizmo::ring_points(origin, *axis, arm)
-                                    .into_iter()
-                                    .map(|p| gizmo::project(view_projection, logical, p))
-                                    .collect();
+                            let points: Vec<Option<Vec2>> = gizmo::ring_points(origin, *axis, arm)
+                                .into_iter()
+                                .map(|p| gizmo::project(view_projection, logical, p))
+                                .collect();
                             for pair in points.windows(2) {
                                 if let (Some(a), Some(b)) = (pair[0], pair[1]) {
-                                    painter.line_segment(
-                                        [to_screen(a), to_screen(b)],
-                                        stroke,
-                                    );
+                                    painter.line_segment([to_screen(a), to_screen(b)], stroke);
                                 }
                             }
                         }
                     }
                     GizmoMode::Translate | GizmoMode::Scale => {
-                        if let Some(root) =
-                            gizmo::project(view_projection, logical, origin)
-                        {
+                        if let Some(root) = gizmo::project(view_projection, logical, origin) {
                             for (i, (axis, color)) in gizmo::AXES.iter().enumerate() {
-                                let Some(tip) = gizmo::project(
-                                    view_projection,
-                                    logical,
-                                    origin + *axis * arm,
-                                ) else {
+                                let Some(tip) =
+                                    gizmo::project(view_projection, logical, origin + *axis * arm)
+                                else {
                                     continue;
                                 };
                                 let hot = self.hot_axis == Some(i);
                                 let stroke = stroke_for(hot, *color);
-                                painter.line_segment(
-                                    [to_screen(root), to_screen(tip)],
-                                    stroke,
-                                );
+                                painter.line_segment([to_screen(root), to_screen(tip)], stroke);
                                 let tip_size = if hot { 6.0 } else { 4.5 };
                                 if self.mode == GizmoMode::Scale {
                                     // Square tips: the visual tell that this
@@ -553,11 +516,7 @@ impl EditorApp {
                                         stroke.color,
                                     );
                                 } else {
-                                    painter.circle_filled(
-                                        to_screen(tip),
-                                        tip_size,
-                                        stroke.color,
-                                    );
+                                    painter.circle_filled(to_screen(tip), tip_size, stroke.color);
                                 }
                             }
                         }
@@ -657,35 +616,34 @@ impl EditorApp {
     }
 
     fn validation_ui(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-            for diagnostic in &self.doc.diagnostics {
-                let warning = diagnostic.is_warning();
-                let color = if warning {
-                    Color32::from_rgb(220, 180, 60)
-                } else {
-                    Color32::from_rgb(235, 90, 90)
-                };
-                let context = diagnostic.context();
-                let line = context
-                    .and_then(|c| c.line)
-                    .map(|l| format!("line {l}"))
-                    .unwrap_or_default();
-                let entity = context.and_then(|c| c.entity.clone());
+        egui::ScrollArea::vertical()
+            .max_height(140.0)
+            .show(ui, |ui| {
+                for diagnostic in &self.doc.diagnostics {
+                    let warning = diagnostic.is_warning();
+                    let color = if warning {
+                        Color32::from_rgb(220, 180, 60)
+                    } else {
+                        Color32::from_rgb(235, 90, 90)
+                    };
+                    let context = diagnostic.context();
+                    let line = context
+                        .and_then(|c| c.line)
+                        .map(|l| format!("line {l}"))
+                        .unwrap_or_default();
+                    let entity = context.and_then(|c| c.entity.clone());
 
-                let text = format!(
-                    "[{}] {} — {}",
-                    diagnostic.error, line, diagnostic.message
-                );
-                let response = ui.colored_label(color, text);
-                if let Some(entity) = entity {
-                    // Click-to-navigate: an error that names an entity
-                    // selects it.
-                    if response.interact(Sense::click()).clicked() {
-                        self.selected = Some(entity);
+                    let text = format!("[{}] {} — {}", diagnostic.error, line, diagnostic.message);
+                    let response = ui.colored_label(color, text);
+                    if let Some(entity) = entity {
+                        // Click-to-navigate: an error that names an entity
+                        // selects it.
+                        if response.interact(Sense::click()).clicked() {
+                            self.selected = Some(entity);
+                        }
                     }
                 }
-            }
-        });
+            });
     }
 
     fn status_ui(&self, ui: &mut egui::Ui) {

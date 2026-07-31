@@ -55,6 +55,11 @@ build fails.
 | `unsorted_keys` | 1 | key times must be strictly increasing |
 | `conflicting_tracks` | 1 | two active clips animate the same property of the same entity |
 | `animation_on_dynamic_body` | 1 | a clip animates the Transform of a dynamic RigidBody; make it kinematic |
+| `clip_needs_fragment` | 1 | a glTF clip reference must name a clip: path#ClipName |
+| `unknown_clip` | 1 | a #ClipName fragment names no animation in that glTF file |
+| `mesh_has_no_skin` | 1 | a skeletal AnimationPlayer's glTF file carries no skin |
+| `skeletal_player_mesh_mismatch` | 1 | a skeletal AnimationPlayer and its entity's Mesh name different files |
+| `too_many_joints` | 1 | a skin has more joints than the fixed-size palette holds |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |
@@ -79,6 +84,12 @@ build fails.
 | `tree_too_complex` | 1 | a Tree's parameters would generate more vertices than the engine will grow |
 | `cloud_with_mesh` | 1 | a Cloud entity owns its own geometry; it may not also have a Mesh or a Material |
 | `cloud_too_complex` | 1 | a Cloud's parameters would generate more vertices than the engine will grow |
+| `meadow_with_mesh` | 1 | a Meadow entity owns its own geometry; it may not also have a Mesh or a Material |
+| `meadow_too_complex` | 1 | a Meadow's density and footprint would grow more triangles than the engine will draw |
+| `meadow_terrain_not_found` | 1 | a Meadow's "terrain" names no entity in the scene |
+| `meadow_terrain_invalid` | 1 | a Meadow's "terrain" must name an entity that has a Terrain component |
+| `meadow_stages_invalid` | 1 | a Meadow needs at least two life-cycle stages with strictly increasing "at" |
+| `too_many_growth_stages` | 1 | a Meadow has more life-cycle stages than the shader's table holds |
 | `input_unreadable` | 1 | the input timeline file could not be read |
 | `input_parse_error` | 1 | an input timeline line is not a valid {"step", "held"} object |
 | `unknown_key` | 1 | an input timeline holds a name that is no known key |

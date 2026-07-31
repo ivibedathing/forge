@@ -37,6 +37,7 @@ fn render_at(source: &str, time: f32) -> Image {
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &[],
         &camera,
         camera_transform.matrix(),
@@ -155,8 +156,14 @@ fn density_is_how_much_of_the_sky_a_cloud_hides() {
         return;
     }
     let sky_only = luma(centre(&render_at(&sky(NOTHING), 0.0)));
-    let thin = luma(centre(&render_at(&sky(&one_lobe(", \"density\": 0.25")), 0.0)));
-    let thick = luma(centre(&render_at(&sky(&one_lobe(", \"density\": 1.0")), 0.0)));
+    let thin = luma(centre(&render_at(
+        &sky(&one_lobe(", \"density\": 0.25")),
+        0.0,
+    )));
+    let thick = luma(centre(&render_at(
+        &sky(&one_lobe(", \"density\": 1.0")),
+        0.0,
+    )));
     assert!(
         thin > sky_only && thick > thin,
         "density should grade the sky ({sky_only}) through thin ({thin}) to thick ({thick})"
@@ -224,7 +231,12 @@ fn a_cloud_is_visible_from_inside_it() {
     // Culling is off for the cloud pipeline, and this is why: with it on, a
     // cloud would vanish the instant the camera entered one. The camera sits at
     // the origin, inside a lobe that spans 10 m in every direction.
-    let move_in = |s: String| s.replace("\"position\": [0.0, 0.0, 26.0]", "\"position\": [0.0, 0.0, 0.0]");
+    let move_in = |s: String| {
+        s.replace(
+            "\"position\": [0.0, 0.0, 26.0]",
+            "\"position\": [0.0, 0.0, 0.0]",
+        )
+    };
     let image = render_at(&move_in(sky(&one_lobe(""))), 0.0);
     let sky_only = render_at(&move_in(sky(NOTHING)), 0.0);
     assert_ne!(

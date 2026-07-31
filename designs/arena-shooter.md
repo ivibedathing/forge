@@ -21,10 +21,14 @@ bin/engine run-scene examples/scenes/arena_shooter.json
 
 ```
 WASD    move        world-relative, the way a top-down game moves
-Arrows  aim         independent of movement — twin-stick, on a keyboard
-Space   fire
+Mouse   aim         the gun points at the ground under the cursor
+Click   fire
 R       reload
+Esc     pause
 ```
+
+The run opens on a title screen and pauses to a menu. Both are described
+under [The menu](#the-menu) below.
 
 Three waves of hovering drones home in on you: four, then three, then three.
 Three bolts kill one, or shoot one of the four red barrels and the blast takes
@@ -41,10 +45,14 @@ bin/engine screenshot examples/scenes/arena_shooter.json --out /tmp/f.png \
 ```
 
 Same file, same steps, same input → the same bytes. There is no randomness in
-the script, so the whole run is a pure function of those three inputs. (The
-canned demo is a fixed key timeline, not an AI: it drives, shoots, blows up two
-barrels, and eventually gets cornered and killed. That is the point of it — it
-exercises every system in one render.)
+the script, so the whole run is a pure function of those inputs — **plus the
+frame size, which the mouse added**: a cursor is a fraction of the frame and
+the ray through it depends on the aspect, so render the demo at 16:9 or it
+aims somewhere else (`designs/mouse-input-design.md` §5).
+
+The canned demo clicks PLAY, then fights: it kills seven of the ten drones and
+reaches wave three without losing a point of health. It is a choreography, not
+an AI — see [Regenerating the demo](#regenerating-the-demo).
 
 ## How it is put together
 
@@ -90,6 +98,22 @@ scene showed. Two further reasons the floor is a flat box and not terrain: a
 body sliding on a trimesh hits the internal-edge bug M23 documents, and a
 top-down shooter wants a floor whose geometry never argues with movement.
 
+**The aim is a point, not an angle.** `world.cursor_ground(player_y)` returns
+where the pointer's ray meets the plane the player stands on, and the aim is
+just the direction from the player to that point — normalized, with a 0.7 m
+deadzone so a cursor sitting on the player does not spin the gun on noise.
+There is no slew and that is deliberate: the arrow keys had one because a held
+key is a *rate* and something has to integrate it, while a cursor is already a
+position. Easing toward it would be lag with no gameplay behind it.
+
+**A paused game is `gdt = 0`, not a branch.** Everything that moves reads a
+game clock that is `world.dt()` while playing and zero otherwise, so the menu
+freezes bullets, cooldowns, reloads, drones and the camera by arithmetic. The
+one thing that needs a line of its own is the player's velocity: the blend
+toward the target speed is a no-op at `gdt = 0`, so a pause would leave the
+player coasting. Wrapping the whole body in `if playing { … }` was not
+available anyway — see the depth note below.
+
 **Two nested loops, no more.** Rhai's *function* expression-depth limit is **16
 in a debug build** (32 in release), and blocks are expensive against it —
 measured on this engine, three nested blocks inside `fn step` is the ceiling, and
@@ -99,6 +123,49 @@ build and fails to *parse* under the one this repo actually uses. That is why
 every inner loop in the script lives in its own function — a function body starts
 the budget over — and why subexpressions are pulled out into locals rather than
 nested. It reads like an over-cautious style rule and is not one.
+
+## The menu
+
+Three screens, all of them ordinary `HudText` and `HudRect` components this
+script positions and hit-tests. There is no menu system in the engine and this
+did not add one.
+
+| screen | what it says | how it ends |
+| --- | --- | --- |
+| title | `ARENA SHOOTER`, the controls, `PLAY` | clicking the button |
+| pause | `PAUSED`, `RESUME` | the button, or Esc again |
+| end | `GAME OVER` / `ARENA CLEARED` with the score | nothing — see below |
+
+**The layout is measured from the centre of the frame**, and that is what
+makes one recorded timeline click the same button at any window size: a
+*fraction* of the frame near the middle lands on the same element whether the
+frame is 640 or 2560 pixels wide. The button's rectangle is computed by the
+script (`menu_rect`), the cursor is put in the same pixel space by
+`cursor_x() * viewport_width()`, and the hit test is four comparisons. The
+engine is not told that any of this is a button.
+
+**Hiding a HUD element is a zero size or an empty string.** There is no
+visibility flag on `HudText`/`HudRect`, and this did not add one either: a
+zero-width rect covers no pixels and an empty string draws no glyphs. What a
+script wants to hide it can already size away.
+
+**The end card has no button.** A restart would have to put ten broken drones
+and four broken barrels back, and the engine cannot spawn entities — so a
+cleared arena stays cleared, and offering `RETRY` would be offering something
+that cannot work. The card says the score and stops.
+
+**A click edge is two lines of `world.state`.** `world.mouse` is a held-state
+predicate like `world.key`, so "the frame the button went down" is
+`held && !held_last_step`, stored in the same numeric memory everything else
+here uses. That is the whole reason the input API has no pressed/released
+query.
+
+**One bug worth keeping written down**: the cursor's pixel coordinates were
+first called `cx`/`cy`, and three hundred lines further on the camera section
+binds `cx`/`cy` to the *eye's* world position. Rhai's `let` rebinds in the
+same scope, so the crosshair drew itself at (0, 20.9) — twenty metres up the
+left edge of the frame — while the aim itself was perfectly correct. They are
+`cur_x`/`cur_y` now.
 
 ## Surfaces
 
@@ -161,6 +228,30 @@ surface; a second copy of the grime would read as two.
 
 Deliberately still flat: the player's head, the bullets, and the drone
 fragments. They are stand-ins the way the tour's critters are.
+
+## Regenerating the demo
+
+`make_arena_demo.py` writes `arena_shooter_demo.input.jsonl`. It exists
+because the mouse made the old approach impossible: fourteen hand-written
+lines could say "hold ArrowUp for two seconds", but nobody can write down
+which *pixel* is on a drone at step 431. So the timeline is authored the way
+`make_car_track_lap.py` authors the car's lap — a closed loop that replays
+what it has written so far, asks `engine simulate` where everything ended up,
+projects the nearest live drone onto the frame, and appends the next tenth of
+a second:
+
+```
+python3 examples/scenes/make_arena_demo.py
+```
+
+Two things about it. The projection is **a second implementation of the
+inverse of `world.cursor_ground`**, which this repo normally refuses; it is
+taken deliberately, because the alternative is a demo that shoots at nothing,
+and it is checked by the outcome the script prints (a drifted projection kills
+no drones) rather than by an agreement test. And **it finds out what it killed
+from the engine's own error**: `--entity Drone03` on a drone that has already
+broken is `entity_not_found` with the name in it, so the director drops that
+name and asks again.
 
 ## Regenerating the scene
 

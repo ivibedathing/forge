@@ -38,7 +38,8 @@ engine road-centerline <scene.json> [--entity Name]
 engine terrain-height <scene.json> --at x,z [--entity Name]   # where the ground is
 engine inspect <scene.json> [--entity Name]       # every field, with the defaults filled in
 engine list-components [--component Name]         # the scene + component JSON Schemas
-engine list-animations <scene-or-clip> [--schema]
+engine list-animations <scene-or-clip-or-gltf> [--schema]
+engine list-joints <scene-or-gltf> [--entity Name] [--time T]  # where every joint is
 engine import <model.glb> [--into scene.json]     # a model's materials, as files
 engine run-scene <scene.json> [--record-input f]  # windowed viewer; keyboard reaches scripts
 engine edit <scene.json> [--watch]                # GUI editor: a live view onto the file
@@ -131,6 +132,7 @@ The schema says what a component *can* hold; these say what yours *does*.
 engine inspect scene.json --entity Ground        # every field, defaults filled in
 engine terrain-height scene.json --at -12,8      # the world Y of the ground there
 engine road-centerline scene.json                # where a Road actually goes
+engine list-joints scene.json --entity Robot --time 0.7   # where every joint is
 engine raycast scene.json --from -6,20,6 --dir 0,-1,0
 ```
 
@@ -142,6 +144,15 @@ at rest — for what a scene *does*, `simulate --steps N`.
 `engine terrain-height` is the height field, not a raycast: it needs no
 `Collider`, and it is the same sampler `world.terrain_height` answers with in a
 script, so a prop you place from the shell lands where a script would put it.
+
+`engine list-joints` is the same idea for a rigged mesh, and it is how you check
+an animation without reading pixels: a filmstrip shows that *something* moved
+and never that the hand reached the doorknob. Without `--time` it reports the
+rig — name, parent, index, rest transform; with it, each joint's posed world
+transform at that moment. It needs no GPU. Scripts ask the same question with
+`world.joint_position(entity, joint)`, which is how you hang a prop off a hand:
+there is no way to *move* a joint, deliberately, so a character's pose stays a
+function of its files and the clock.
 
 Negative coordinates are ordinary arguments — `--from -6,20,6` needs no `=`.
 
@@ -253,6 +264,28 @@ Reads and writes by entity name: `position` / `set_position`, `rotation` /
 `touching` / `contacts_started`, `terrain_height`, `light_intensity` /
 `set_light_intensity`, `particle_rate` / `set_particle_rate`, `hud`, and
 `state` / `set_state` for numeric memory between steps.
+
+The mouse is the same shape: `mouse("MouseLeft")` for the buttons,
+`cursor_x()` / `cursor_y()` for where the pointer is as a fraction of the
+frame, `viewport_width()` / `viewport_height()` to put that in HUD pixels, and
+`cursor_ground(y)` for the world point under the cursor — the call a top-down
+game aims with. `hud_offset` / `set_hud_offset` moves a `HudText` or `HudRect`,
+which is how a crosshair follows the pointer and how a menu lays itself out.
+
+```rhai
+fn step(world, step) {
+    let g = world.cursor_ground(0.0);        // where the pointer meets y = 0
+    if world.mouse("MouseLeft") {
+        world.set_position("Marker", g[0], 0.05, g[2]);
+    }
+}
+```
+
+Input lives in an `*.input.jsonl` timeline headlessly — keys and buttons in
+one `held` array, plus an optional `"cursor": [x, y]` as a fraction of the
+frame — so a mouse-driven game screenshots and diff-renders like anything
+else. Note that the cursor's *ray* depends on the frame's aspect: render a
+mouse-driven scene at the size its timeline was recorded at.
 
 System order per step: animations → scripts → physics → particles → render.
 
