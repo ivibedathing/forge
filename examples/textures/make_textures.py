@@ -440,6 +440,197 @@ def tread_normal(size=256, strength=2.2):
     return normal_from(lambda x, y: tread_height(x, y, size), size, strength)
 
 
+def deck_height(x, y, size):
+    """The arena floor: a poured slab, jointed at the tile border.
+
+    The joint runs around the *edge* of the tile rather than across it, which
+    makes the grid invariant under `builtin:cube`'s face-by-face disagreement
+    about which way `u` runs — one tile of this is one slab whichever way it
+    lands. The pockmarks are a thresholded noise so they stay sparse: a floor
+    pitted everywhere reads as gravel.
+    """
+    u, v = x / size, y / size
+    joint = max(
+        math.exp(-((min(u, 1.0 - u) / 0.018) ** 2)),
+        math.exp(-((min(v, 1.0 - v) / 0.018) ** 2)),
+    )
+    grit = 0.20 * smooth(x, y, size, 16, 51) + 0.10 * smooth(x, y, size, 4, 52)
+    pit = max(0.0, smooth(x, y, size, 8, 53) - 0.72) * 2.0
+    return 0.70 + grit - 0.62 * joint - 0.40 * pit
+
+
+def deck_tone(x, y, size):
+    """The same slab's albedo: relief, darkened under broad patches of grime.
+
+    Grime is a *separate*, much lower frequency than the relief on purpose —
+    the floor is the largest surface in the scene, and one frequency across it
+    tiles visibly at the 3 m the joints repeat on. The blotches are what break
+    that up.
+    """
+    grime = 0.6 * smooth(x, y, size, 64, 54) + 0.4 * smooth(x, y, size, 18, 57)
+    return deck_height(x, y, size) * (0.62 + 0.50 * grime)
+
+
+def deck(size=256):
+    return grey(
+        lambda x, y: deck_tone(x, y, size),
+        size,
+        low=0.22,
+        high=0.97,
+        warmth=(0.97, 0.98, 1.0),
+        speckle=0.06,
+        salt=55,
+    )
+
+
+def deck_normal(size=256, strength=2.4):
+    return normal_from(lambda x, y: deck_height(x, y, size), size, strength)
+
+
+def deck_orm(size=256):
+    """The slab's occlusion and roughness. B is left saturated for `plate_orm`'s
+    reason: metallic is the material's business.
+
+    G is doing the visible work — grime is matte and the worn slab between the
+    grime is not, which is the whole reason a floor lit by four lamps and a sun
+    does not read as one flat sheet.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            u, v = x / size, y / size
+            joint = max(
+                math.exp(-((min(u, 1.0 - u) / 0.022) ** 2)),
+                math.exp(-((min(v, 1.0 - v) / 0.022) ** 2)),
+            )
+            grime = 0.65 * smooth(x, y, size, 80, 54) + 0.35 * smooth(x, y, size, 20, 56)
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes(
+                (
+                    int(255 * (1.0 - 0.60 * joint)),
+                    int(255 * (0.58 + 0.40 * grime)),
+                    255,
+                )
+            ) + b"\xff"
+    return size, size, pixels
+
+
+def concrete_height(x, y, size):
+    """Cast concrete, for the arena's barriers.
+
+    A chamfer around the tile edge and isotropic aggregate — deliberately
+    nothing directional. A barrier is a freestanding box seen from both sides,
+    and `builtin:cube` transposes `u` and `v` between the two faces of a pair,
+    so anything with a grain would run lengthwise on one side of a barrier and
+    up the other. Aggregate has no grain to transpose.
+    """
+    u, v = x / size, y / size
+    edge = min(u, 1.0 - u, v, 1.0 - v)
+    chamfer = math.exp(-((edge / 0.055) ** 2))
+    aggregate = 0.24 * smooth(x, y, size, 12, 61) + 0.13 * smooth(x, y, size, 5, 62)
+    void = max(0.0, smooth(x, y, size, 6, 63) - 0.80) * 3.0  # trapped air, as pits
+    return 0.68 + aggregate - 0.26 * chamfer - 0.55 * void
+
+
+def concrete(size=256):
+    return grey(
+        lambda x, y: concrete_height(x, y, size),
+        size,
+        low=0.36,
+        high=0.94,
+        warmth=(0.99, 0.99, 1.0),
+        speckle=0.10,
+        salt=64,
+    )
+
+
+def concrete_normal(size=256, strength=2.0):
+    return normal_from(lambda x, y: concrete_height(x, y, size), size, strength)
+
+
+def barrel_height(x, y, size):
+    """A pressed-steel drum: two rolling hoops, rimmed top and bottom.
+
+    Upright on a `builtin:cylinder`, `u` runs around the circumference and `v`
+    from the top cap to the bottom — so a hoop is a line of constant `v` and the
+    weld seam is a line of constant `u`. That is the same reading the tread map
+    takes, one axis apart, and it is why neither can be authored by eye.
+    """
+    u, v = x / size, y / size
+    hoop = max(math.exp(-(((v - centre) / 0.030) ** 2)) for centre in (0.24, 0.76))
+    rim = math.exp(-((min(v, 1.0 - v) / 0.035) ** 2))
+    weld = math.exp(-((abs(u - 0.5) / 0.008) ** 2))
+    dent = max(0.0, smooth(x, y, size, 10, 71) - 0.70) * 1.6
+    return 0.55 + 0.40 * hoop + 0.34 * rim + 0.10 * weld - 0.45 * dent
+
+
+def barrel(size=256):
+    """The drum's albedo — and the one map here that carries its own colour.
+
+    The rule the tour set is that maps stay near-neutral because `albedo_map` is
+    *multiplied* by `albedo`, so a coloured map can only be tinted toward black.
+    A hazard band is the case that rule cannot serve: black-and-yellow chevrons
+    are a *colour* contrast, and multiplying a bright band by a red barrel gives
+    two shades of red, which is not a warning stripe. So this file owns its hue
+    and the material tints it near-white. It stays private to the barrels for
+    exactly that reason — nothing else can reuse it.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            u, v = x / size, y / size
+            relief = barrel_height(x, y, size)
+            rust = max(0.0, smooth(x, y, size, 14, 73) - 0.60) * 1.5
+            # The drum body: red steel, going brown where it has rusted through
+            # the paint.
+            tone = 0.42 + 0.50 * relief
+            colour = [tone * 0.86, tone * 0.20, tone * 0.14]
+            if 0.355 < v < 0.645:
+                # The hazard band, feathered at its edges so the paint has one.
+                band = min(1.0, min(v - 0.355, 0.645 - v) / 0.018)
+                phase = (u * 8.0 + v * 2.4) % 1.0  # diagonal, and closes at the seam
+                stripe = (
+                    [0.98 * tone, 0.80 * tone, 0.10 * tone]
+                    if phase < 0.5
+                    else [0.10 * tone, 0.09 * tone, 0.09 * tone]
+                )
+                colour = [c * (1 - band) + s * band for c, s in zip(colour, stripe)]
+            colour = [c * (1.0 - 0.45 * rust) + 0.20 * rust for c in colour]
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes(
+                tuple(max(0, min(255, int(255 * c))) for c in colour)
+            ) + b"\xff"
+    return size, size, pixels
+
+
+def barrel_normal(size=256, strength=2.6):
+    return normal_from(lambda x, y: barrel_height(x, y, size), size, strength)
+
+
+def drone_eye(size=128):
+    """The drones' emissive mask: a round lens, four corner status lamps.
+
+    Round and corner-symmetric because it goes on a `builtin:cube`, whose faces
+    transpose `u` and `v` against each other — a slit or a bar would lie down on
+    half the drone. Multiplied by `Material.emissive`, so the *shape* lives here
+    and the colour lives in the scene; near-black elsewhere is what turns a cube
+    that glowed all over into a machine with a light on it.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            u = x / (size - 1) * 2.0 - 1.0
+            v = y / (size - 1) * 2.0 - 1.0
+            lens = math.exp(-((math.hypot(u, v) / 0.26) ** 2))
+            lamp = 0.0
+            for cx, cy in ((-0.68, -0.68), (0.68, -0.68), (-0.68, 0.68), (0.68, 0.68)):
+                lamp = max(lamp, math.exp(-((math.hypot(u - cx, v - cy) / 0.07) ** 2)))
+            value = min(1.0, lens + 0.7 * lamp)
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes((int(255 * value),) * 3) + b"\xff"
+    return size, size, pixels
+
+
 if __name__ == "__main__":
     for name, make in [
         ("checker.png", checker),
@@ -455,6 +646,14 @@ if __name__ == "__main__":
         ("plate_normal.png", plate_normal),
         ("plate_orm.png", plate_orm),
         ("tread_normal.png", tread_normal),
+        ("deck.png", deck),
+        ("deck_normal.png", deck_normal),
+        ("deck_orm.png", deck_orm),
+        ("concrete.png", concrete),
+        ("concrete_normal.png", concrete_normal),
+        ("barrel.png", barrel),
+        ("barrel_normal.png", barrel_normal),
+        ("drone_eye.png", drone_eye),
     ]:
         width, height, pixels = make()
         write_png(HERE / name, width, height, pixels)

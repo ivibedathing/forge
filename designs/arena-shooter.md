@@ -10,7 +10,8 @@ has — no engine code was changed to make it. It is three files:
 | `examples/scenes/make_arena.py` | emits the scene from a table of positions |
 
 Plus `examples/scenes/arena_shooter_demo.input.jsonl`, a canned 15-second run
-for headless rendering.
+for headless rendering, and the M26 material set described under
+[Surfaces](#surfaces).
 
 ## Playing it
 
@@ -98,6 +99,68 @@ build and fails to *parse* under the one this repo actually uses. That is why
 every inner loop in the script lives in its own function — a function body starts
 the budget over — and why subexpressions are pulled out into locals rather than
 nested. It reads like an over-cautious style rule and is not one.
+
+## Surfaces
+
+The arena shipped in flat colour. It is textured now, entirely with M26's
+`Material` — again with no engine change. Four map sets were added to
+`examples/textures/make_textures.py` beside the tour's, and three of the tour's
+own are reused:
+
+| surface | maps | why |
+| --- | --- | --- |
+| floor, floor paint | `deck` + `deck_normal` + `deck_orm` | a jointed poured slab; by far the largest thing on screen |
+| perimeter walls, lamp posts, player, drone hulls | `plate_normal` + `plate_orm` | the tour's pressed steel, at four tilings |
+| barriers | `concrete` + `concrete_normal` | cast concrete, chamfered and aggregated |
+| barrels | `barrel` + `barrel_normal` | a hazard-striped drum |
+| drone lens | `drone_eye` as `emissive_map` | the glow was the whole cube; now it is a lens |
+| crates | `examples/materials/crate_wood.json` | the tour's crate boards, shared by eleven entities |
+| trees | `examples/materials/bark.json` | the tour's bark, shared outright |
+
+Five things came out of authoring it.
+
+**A cube's faces disagree about `u` in pairs, not in axes.** The tour recorded
+this as "vertical on ±X, horizontal on ±Z", which is half of it. `mesh.rs`
+builds the six faces as `quad(+X, Y, Z)`, `quad(−X, Z, Y)`, `quad(+Z, X, Y)`,
+`quad(−Z, Y, X)` — so the two faces *within* each pair are transposed against
+each other as well. `u` is vertical on +X and horizontal on −X. That is why the
+four perimeter walls carry four different `uv_scale`s: each is chosen for the
+one face that points into the arena, and each of those four is a different face
+of the cube. `side_uv` in `make_arena.py` takes the metres each of a *named
+face's* own axes spans, rather than the box's dimensions, precisely so this
+cannot be got wrong silently — a transposed wall tiles 39 panels up 3.2 m and
+one panel along 62, which is unmistakable but only after you look.
+
+**The floor's `uv_scale` swaps its arguments.** `builtin:cube`'s +Y face is
+`quad(+Y, +Z, +X)`, so `u` runs along local +Z and `v` along +X. Passing
+`(size_x, size_z)` straight through draws stretched bands on every floor
+marking. `top_uv` does the swap once, and the paint decals reach it through the
+same helper, so a 56 × 2.6 m lane tiles at the same 3.1 m as the concrete
+around it.
+
+**The barrels are the one map that carries its own colour.** The tour's rule is
+that maps stay near-neutral because `albedo_map` is *multiplied* by `albedo`, so
+a coloured map can only be tinted toward black. A hazard band is exactly the
+case that rule cannot serve: black-and-yellow chevrons are a colour contrast,
+and multiplying a bright band by a red barrel yields two shades of red, which is
+not a warning stripe. So `barrel.png` owns its hue, the material tints it
+near-white, and the file stays private to the barrels — nothing else can reuse
+it, which is the cost of the exception, stated rather than discovered later.
+
+**The eleven crates share a material file and the six barriers cannot.**
+`Material.asset` is exclusive with every other field, so a shared file cannot be
+tuned per entity. The crates are all the same wood at the same tiling and share
+`crate_wood.json`; the barriers each need their own `uv_scale`, because a 12 m
+one and an 11 m one are long along different axes. Same rule, opposite answer,
+and it is the rule that decides — not a judgement about how alike they look.
+
+**The paint takes the deck's normal map and not its albedo.** Paint follows the
+slab it was rolled onto, and a marking is a separate box: its joints could never
+line up with the floor's underneath. Relief at matching scale reads as one
+surface; a second copy of the grime would read as two.
+
+Deliberately still flat: the player's head, the bullets, and the drone
+fragments. They are stand-ins the way the tour's critters are.
 
 ## Regenerating the scene
 
