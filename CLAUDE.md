@@ -937,6 +937,17 @@ stations — forest / campfire / water+ice / breaking / wide — with every syst
 four scripts (`scripts/tour_{director,wildlife,effects,truck}.rhai`) and six 640×360 baselines
 (per-adapter, checked by hand with `diff-render`, not by a CLI test).
 
+**The camera path is a closed cycle, not a timeline that ends.** Six legs over seven keys (the
+seventh is the first again), read through `p = step % 1080`, so past step 900 leg 5 flies the camera
+home from the wide finale and the five stations come round again on an 18-second lap — the director
+used to clamp its station index, which replayed the finale's own three seconds forever while the
+world went on moving. **Nothing resets on a lap**: breaks stay one-shot, so station 04 later shows a
+debris field, and `day_length: 300` means lap two is dusk. The first lap is *arithmetically* the
+pre-loop one (`step % 1080` is the identity below 1080, and the time bar picks a numerator and
+denominator rather than scaling a fraction), so all six baselines diff at zero pixels. Rhai's
+function-expression depth budget is **16 in a debug build**, which is why the director spells
+sub-expressions into `let`s instead of nesting one more paren.
+
 **Its growth contract is a test**: `repo_contracts.rs::showcase_tour_uses_every_component_the_engine_has`
 fails on any schema component the tour does not use, so a new component's commit adds an entity here
 — there is no allowlist, deliberately. `showcase_tour_uses_every_scene_block_the_format_has` sits

@@ -41,12 +41,16 @@ not match the sky it fades into reads as a grey wall, and one field cannot be
 set inconsistently with itself.
 
 900 steps at 60 Hz — exactly fifteen seconds — split into five 180-step
-stations. `scripts/tour_director.rhai` holds the whole timeline: six camera
-keys, six aim points, the station captions, and the three timed events the
+stations. `scripts/tour_director.rhai` holds the whole timeline: seven camera
+keys, seven aim points, the station captions, and the three timed events the
 breaking station is built around. The dolly runs the full segment while the
 aim stays pinned on the current station for its first two thirds, so each
 station is *looked at* rather than driven past, and the camera never stops
 moving.
+
+The seventh key is the first one again, because the path is a **closed cycle**
+of six legs and not five legs that stop — see [past the fifteen
+seconds](#past-the-fifteen-seconds).
 
 | steps | station | what is on screen | systems |
 |-------|---------|-------------------|---------|
@@ -55,6 +59,7 @@ moving.
 | 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
 | 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
 | 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4 (tread `normal_map`), `Material.orm_map`, `HudText`, `HudRect`, the camera |
+| 900–1079 | 06 the way back | the descent home, over the burning fire and the debris field, and then all of the above again | the loop |
 
 Running underneath all five, from the `environment` block rather than from any
 component: a gradient sky with the sun in it, distance fog, sun shadows from
@@ -98,6 +103,48 @@ in the order the design doc lists them:
 Which crate each trigger claims is float-level detail that moves between
 optimisation levels; the CLI test pins the *sequence*, not the casualties.
 
+### Past the fifteen seconds
+
+The tour is fifteen seconds long and the world it is touring is not. In
+`run-scene` the clock keeps going, and it used to go somewhere silly: the
+director clamped its station index at the last one, so `local` swept 0→1
+forever and the camera replayed the finale's own three-second leg on repeat
+while the fire burned, the truck drove and the daylight kept warming. The
+symptom was the camera; the cause was that the key path had an end.
+
+So it does not have one. The path is a cycle of six legs over seven keys —
+the seventh being the first again — and `p = step % 1080` is the lap position
+the whole director reads instead of the step. Leg 5 is the flight home:
+900–1079 descends from the wide finale over the burning fire and the debris
+field back to the forest key, and then the five stations run again.
+
+Three properties are load-bearing:
+
+- **The first lap is arithmetically untouched.** For `step < 1080` the
+  modulo is the identity, so every expression a committed baseline was
+  blessed from is the same expression evaluated on the same integer. The six
+  showcase baselines diff at zero pixels across this change, which is how it
+  was checked. The same care is why the time bar picks a *numerator and
+  denominator* rather than scaling a fraction — `320 * x / n` and
+  `320 * (x / n)` are not the same float.
+- **Nothing resets.** A lap is a camera move, not a replay: the crates stay
+  broken, the fragments stay where they settled, the daylight keeps
+  advancing (`day_length: 300`, so lap two is dusk and lap three is night),
+  and `Breakable` stays one-shot. The tour is not a loop of a film; it is a
+  camera that keeps going round a world that keeps running. Station 04 on a
+  later lap shows a debris field rather than a stack of crates, and that is
+  the honest thing for it to show.
+- **The leg is captioned like a station**, "06 THE WAY BACK / NOTHING RESET .
+  THE WORLD KEPT RUNNING", because an uncaptioned three seconds reads as the
+  narration having broken. The HUD line switches from `TOUR 900/900` to
+  `TOUR LAP 2`, which is also what makes the lap visible to `simulate` with
+  no pixels involved — `the_showcase_tour_keeps_touring_past_its_fifteen_seconds`
+  pins exactly that plus the camera's return to its opening key.
+
+The second lap has no committed baseline and should not get one. What is
+worth pinning is that the camera *moves on*; what it happens to see two laps
+in is a function of a world that has been running for forty-five seconds.
+
 ## The growth contract
 
 **Every component the engine has must appear in this scene.**
@@ -124,9 +171,13 @@ mutually exclusive, extend it the same way: derive, never enumerate.
 
 When a system is bigger than one component — a renderer feature, a shader
 path, a whole subsystem — it does not trip that test, so add it here by hand
-and say so in the table above. A sixth station is cheap: extend `eyes`,
-`aims`, `titles` and `systems` in `tour_director.rhai` by one entry each and
-change `seg` so the run still totals fifteen seconds.
+and say so in the table above. Another station is cheap, with one thing to
+remember since the path closed: insert its key into `eyes` and `aims` *before*
+the wrap entry (they end with a copy of the first key, and it has to stay
+last), its caption into `titles` and `systems` before the way-back one, and
+then set `total` and `cycle` — `seg` times the station count, and `seg` times
+one more than that. Keeping the run at fifteen seconds instead means shrinking
+`seg`, which re-blesses all six baselines; growing the tour does not.
 
 ## What is honest and what is faked
 
@@ -249,9 +300,10 @@ The viewer draws an FPS readout in the top-right (`run-scene`, averaged over
 engine run-scene examples/scenes/showcase_tour.json
 ```
 
-The tour runs its fifteen seconds and then keeps going: the camera parks at
-the last key, the truck keeps circling, the fire keeps burning. Breaks are
-one-shot, so it does not loop.
+The tour runs its fifteen seconds and then keeps touring: the camera flies
+home and takes the stations round again on an eighteen-second lap, while the
+truck keeps circling, the fire keeps burning and the day keeps setting. Breaks
+are one-shot, so a later lap finds a debris field where the crate stack was.
 
 Two headless numbers are worth watching alongside it, because they separate
 simulation cost from frame cost:
