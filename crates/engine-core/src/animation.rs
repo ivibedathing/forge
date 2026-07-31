@@ -320,6 +320,13 @@ pub fn set_field(
                 "offset" => c.offset = v3.truncate(),
                 "size" => c.size = scalar,
                 "color" => c.color = v3,
+                // M31's layout fields animate like any other number: layout is
+                // a pure function recomputed per frame, so a clip driving
+                // `wrap` costs a re-measure and nothing else. This is the
+                // opposite of `Terrain`'s shape fields, which are in
+                // `NOT_ANIMATABLE` because they would regenerate a mesh.
+                "wrap" => c.wrap = scalar,
+                "line_gap" => c.line_gap = scalar,
                 _ => return false,
             }
         }
@@ -332,6 +339,48 @@ pub fn set_field(
                 "size" => c.size = v3.truncate(),
                 "color" => c.color = v3,
                 "opacity" => c.opacity = scalar,
+                _ => return false,
+            }
+        }
+        "HudPanel" => {
+            let Ok(mut c) = world.get::<&mut HudPanel>(entity) else {
+                return false;
+            };
+            match field {
+                "offset" => c.offset = v3.truncate(),
+                "padding" => c.padding = scalar,
+                "gap" => c.gap = scalar,
+                // `width`/`height` are `Option<f32>`: a clip sets a size,
+                // which is exactly "stop hugging and be this big".
+                "width" => c.width = Some(scalar),
+                "height" => c.height = Some(scalar),
+                "color" => c.color = v3,
+                "opacity" => c.opacity = scalar,
+                _ => return false,
+            }
+        }
+        "HudImage" => {
+            let Ok(mut c) = world.get::<&mut HudImage>(entity) else {
+                return false;
+            };
+            match field {
+                "offset" => c.offset = v3.truncate(),
+                "size" => c.size = v3.truncate(),
+                "tint" => c.tint = v3,
+                "opacity" => c.opacity = scalar,
+                // `slice` is four numbers, not three: a clip that drove it
+                // through the vec3 path would silently drop the fourth, so it
+                // is in `NOT_ANIMATABLE` instead.
+                _ => return false,
+            }
+        }
+        "HudInteract" => {
+            let Ok(mut c) = world.get::<&mut HudInteract>(entity) else {
+                return false;
+            };
+            match field {
+                "hover_tint" => c.hover_tint = v3,
+                "press_tint" => c.press_tint = v3,
                 _ => return false,
             }
         }
@@ -593,6 +642,11 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     // doc's §12.
     ("Material", "uv_scale"),
     ("Material", "uv_offset"),
+    // A nine-slice inset is *four* numbers, one per edge, and a clip's values
+    // are scalars and 3-vectors. Driving it through the vector path would
+    // silently drop the bottom inset, which renders as a frame that has lost
+    // one edge — so it is refused rather than three-quarters supported.
+    ("HudImage", "slice"),
 ];
 
 /// Whether a field is vector-shaped in the published schema (3-element
@@ -1079,6 +1133,9 @@ mod tests {
                 {"type":"Wheel","vehicle":"E"},
                 {"type":"HudText","text":"x"},
                 {"type":"HudRect","size":[1.0,1.0]},
+                {"type":"HudPanel"},
+                {"type":"HudImage","texture":"x.png","size":[1.0,1.0]},
+                {"type":"HudInteract"},
                 {"type":"ParticleEmitter"},
                 {"type":"Tree"},
                 {"type":"Water"},
