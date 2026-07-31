@@ -254,6 +254,28 @@ Reads and writes by entity name: `position` / `set_position`, `rotation` /
 `set_light_intensity`, `particle_rate` / `set_particle_rate`, `hud`, and
 `state` / `set_state` for numeric memory between steps.
 
+The mouse is the same shape: `mouse("MouseLeft")` for the buttons,
+`cursor_x()` / `cursor_y()` for where the pointer is as a fraction of the
+frame, `viewport_width()` / `viewport_height()` to put that in HUD pixels, and
+`cursor_ground(y)` for the world point under the cursor — the call a top-down
+game aims with. `hud_offset` / `set_hud_offset` moves a `HudText` or `HudRect`,
+which is how a crosshair follows the pointer and how a menu lays itself out.
+
+```rhai
+fn step(world, step) {
+    let g = world.cursor_ground(0.0);        // where the pointer meets y = 0
+    if world.mouse("MouseLeft") {
+        world.set_position("Marker", g[0], 0.05, g[2]);
+    }
+}
+```
+
+Input lives in an `*.input.jsonl` timeline headlessly — keys and buttons in
+one `held` array, plus an optional `"cursor": [x, y]` as a fraction of the
+frame — so a mouse-driven game screenshots and diff-renders like anything
+else. Note that the cursor's *ray* depends on the frame's aspect: render a
+mouse-driven scene at the size its timeline was recorded at.
+
 System order per step: animations → scripts → physics → particles → render.
 
 ## Rendering the same frame twice

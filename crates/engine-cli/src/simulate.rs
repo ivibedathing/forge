@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use engine_core::components::{RigidBody, Transform};
 use engine_core::formatter::{self, number_from_f32, SetComponentField};
-use engine_core::input::{InputState, InputTimeline};
+use engine_core::input::{InputState, InputTimeline, Pointer, Viewport};
 use engine_core::particles::ParticleSystem;
 use engine_core::{codes, EngineError, Result, Scene};
 use engine_physics::PhysicsWorld;
@@ -22,15 +22,25 @@ fn vec3_json(v: Vec3) -> Value {
     Value::Array(v.to_array().into_iter().map(number_from_f32).collect())
 }
 
+fn vec2_json(v: glam::Vec2) -> Value {
+    Value::Array(v.to_array().into_iter().map(number_from_f32).collect())
+}
+
 /// Step a scene `steps` times — scripts, physics, then particles, per the
 /// fixed system order — optionally replaying an input timeline and writing a
 /// JSONL trace. No timeline means no keys held, which keeps every pre-input
 /// trace and baseline byte-identical.
+///
+/// `view` is the frame the timeline's cursor is measured in (M28): the real
+/// one for commands that render, [`Viewport::DEFAULT`] for the ones that do
+/// not. It is what turns a cursor into a world ray, so a mouse-driven scene
+/// is a function of it — see `designs/mouse-input-design.md` §5.
 pub fn run(
     scene: &mut Scene,
     scene_path: &Path,
     steps: u32,
     input: Option<&InputTimeline>,
+    view: &Viewport,
     mut trace: Option<&mut dyn Write>,
 ) -> Result<StepRun> {
     let mut scripts =
@@ -56,7 +66,19 @@ pub fn run(
         if let Some(scripts) = &scripts {
             let step_index = u64::from(step) - 1;
             let held = input.map_or(&no_keys, |t| t.held_at(step_index));
-            hud = scripts.step(&mut scene.world, step_index, held, &contact_state)?;
+            // The pointer is resolved against the camera *this* step will be
+            // scripted with, through the same `Scene::camera` selection the
+            // render makes — so what a script aims at is what the picture
+            // shows, and the viewer runs this identical resolution.
+            let pointer = Pointer::resolve(
+                held,
+                view,
+                scene
+                    .camera(view.camera.as_deref())
+                    .ok()
+                    .map(|(camera, transform)| (camera, transform.matrix())),
+            );
+            hud = scripts.step(&mut scene.world, step_index, held, &pointer, &contact_state)?;
             for blast in scripts.take_explosions() {
                 physics.queue_explosion(engine_physics::Explosion {
                     center: Vec3::from(blast.center),
@@ -276,6 +298,12 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                         Value::String(current.text.clone()),
                     ));
                 }
+                // A moved element is script-driven HUD state like a re-worded
+                // one (M28): a crosshair the run left somewhere reopens
+                // there.
+                if current.offset != rest.offset {
+                    edits.push(field_edit("offset", "HudText", vec2_json(current.offset)));
+                }
             }
         }
         if def.components.iter().any(|c| matches!(c, ComponentData::HudRect(_))) {
@@ -289,13 +317,10 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                     })
                     .expect("guarded above");
                 if current.size != rest.size {
-                    edits.push(field_edit(
-                        "size",
-                        "HudRect",
-                        Value::Array(
-                            current.size.to_array().into_iter().map(number_from_f32).collect(),
-                        ),
-                    ));
+                    edits.push(field_edit("size", "HudRect", vec2_json(current.size)));
+                }
+                if current.offset != rest.offset {
+                    edits.push(field_edit("offset", "HudRect", vec2_json(current.offset)));
                 }
             }
         }
@@ -494,6 +519,9 @@ pub fn simulate_command(
         &scene_path,
         steps,
         input.as_ref(),
+        // `simulate` renders nothing and so has no frame of its own; a
+        // mouse-driven script sees the documented default (M28 §5).
+        &Viewport::DEFAULT,
         trace_file.as_mut().map(|f| f as &mut dyn Write),
     )?;
 
@@ -634,7 +662,15 @@ pub fn raycast_command(
     let mut scene = Scene::from_source(&source, &display)
         .map_err(|mut errors| errors.pop().expect("non-empty"))?;
 
-    let mut physics = run(&mut scene, &scene_path, steps, input.as_ref(), None)?.physics;
+    let mut physics = run(
+        &mut scene,
+        &scene_path,
+        steps,
+        input.as_ref(),
+        &Viewport::DEFAULT,
+        None,
+    )?
+    .physics;
     physics.refresh_queries();
 
     let result = match physics.raycast(from, direction) {

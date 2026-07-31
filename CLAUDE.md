@@ -13,7 +13,7 @@ it are still open (§9).
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
-M29 meadows. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
+M28 the mouse, M29 meadows. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -43,7 +43,7 @@ engine list-animations <scene-or-clip> [--schema]
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
 engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
-engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; FPS readout is viewer-only
+engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; keyboard AND mouse; FPS readout is viewer-only
 engine init [dir] [--force]              # scaffold a project: starter scene + AGENTS.md/CLAUDE.md
 engine agent-guide                       # the agent orientation as markdown (a stdout exception)
 engine import <model.glb> [--into scene.json] [--textures dir] [--materials dir]  # glTF materials (M26)
@@ -219,6 +219,46 @@ parse errors fail `engine validate` with the script's file/line; runtime errors 
 differing from the file's rest value is spliced — which is how script-driven kinematics land in baked
 files. Kinematic-vs-fixed contact events are opted in via `ActiveCollisionTypes` (rapier skips them
 by default). Bake next to the scene, not /tmp — relative paths.
+
+## The mouse (M28, `designs/mouse-input-design.md`)
+
+M11's §7 said "no mouse"; this reverses that one item and nothing else. **Buttons ride the same
+`held` set the keys do** (`MouseLeft`/`MouseRight`/`MouseMiddle`, own allowlist so `world.key` and
+`world.mouse` each reject the other kind *naming the call that would have worked*), and the cursor
+is a `"cursor": [x, y]` **fraction of the frame**, origin top-left — not pixels, because a timeline
+outlives the window it was recorded in. **An absent `cursor` is the centre of the frame**, so every
+pre-M28 timeline parses unchanged; recorded cursors quantize to three decimals (`CURSOR_SCALE`,
+written as a scale and not a step of 0.001, or the file says `0.41300002`).
+
+- **The cursor is a point on the frame; the *ray* is the engine's job.** `input::Pointer::resolve`
+  is computed by the **caller** of `ScriptHost::step` — the code that already knows which camera it
+  is about to render through — so the script host holds no camera-selection policy and the viewer
+  and the headless path provably agree. Scripts get `world.mouse`, `cursor_x`/`cursor_y`,
+  `viewport_width`/`viewport_height`, and `cursor_ground(y)`; a scene with no camera makes
+  `cursor_ground` a **runtime error** (M21's precedent for `time_of_day` without a `daylight`
+  block), while a ray that never meets the plane degrades to `MAX_GROUND_DISTANCE` rather than NaN.
+- **The ray is the inverse of `scene_renderer::view_projection`, written out longhand in
+  engine-core**, which cannot depend on engine-render — so `engine-render/tests/pointer.rs` is the
+  agreement test (project a cursor's ray back through the renderer's own matrix; it must land where
+  it started, at the centre and all four corners, at several distances and two aspects).
+- **A mouse-driven run is a function of the frame size**, which no earlier input was. `screenshot`
+  passes its own size, `diff-render` the baseline's, and `simulate`/`raycast` — which render
+  nothing — `Viewport::DEFAULT`, **960×540**. Same aspect ⇒ same ray, so `simulate` and a 16:9
+  screenshot aim identically; a *pixel-sized* HUD hit test is another matter and the M28 CLI test
+  documents exactly that (960×540 misses the arena fixture's 132×26 plate that 640×360 hits).
+- **`set_hud_offset` / `hud_offset`** (either HUD component, offsets mean the same on both) is the
+  one non-mouse addition: a HUD that could be resized and re-worded but not *moved* cannot draw a
+  crosshair. It bakes change-based like every other script-driven field.
+- The viewer maps `CursorMoved` against the window's inner size and drops buttons outside the three;
+  **`CursorLeft` is deliberately unhandled** — a pointer that slid out of frame must not read as a
+  click at the centre of the screen. The recorder compares **quantized** states, so a still hand
+  records nothing, and its "an initial empty set is implicit" rule now compares against the whole
+  default state, or the first mouse movement of a session (which happens before any button) is lost.
+
+Fixture `verify/m28_pointer.json` + timeline, **two baselines from one file** (`--steps 40` and
+`--steps 80`). Not here: scroll wheel, relative motion / pointer capture (which is what a
+first-person mouselook needs, and it wants its own milestone), click edges (`world.state`, two
+lines), and cursor visibility control.
 
 ## Input (M11, `designs/input-design.md`)
 
@@ -802,7 +842,13 @@ images ~100 pixels apart (delta ≤ 18) in the distant tree canopy. It is the on
 `diff_args` tolerance in `baselines.json` (`--threshold 24`). `showcase_810.png` has since been
 seen to flake the same way **once** — 29 pixels at a channel delta of 1, along the treeline, clean on
 the next three runs — so it is the same residue and not a second bug; it is left without a tolerance
-deliberately, since one flake in four sweeps is worth re-running rather than blessing away. **The general rule: fine geometry
+deliberately, since one flake in four sweeps is worth re-running rather than blessing away.
+M27 saw the same signature on **`showcase_450` (22 px) and `showcase_585` (24 px), both at delta 1**,
+in one of seven consecutive full sweeps, the other six clean. Same residue, same verdict, no
+tolerance: **the whole tour is in this class, not three named frames**, so a failure on any
+`showcase_*` at a delta of 1 and a couple of dozen pixels is worth a second sweep before it is worth
+debugging. Everything else in the manifest is bit-exact and a failure there is real — the M27
+fixtures, which aim at their subject with no terrain in frame, never flaked across ten sweeps. **The general rule: fine geometry
 against relief under MSAA is where this adapter stops being reproducible, so a new fixture wanting a
 hard pin should aim its camera at its subject rather than across a landscape.** Verified by
 `engine-render/tests/terrain.rs` (including `a_flat_single_layer_patch_is_exactly_a_painted_plane`,
@@ -1103,7 +1149,12 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
   `quad(−Z, Y, X)`, so `u` is vertical on +X and *horizontal* on −X. Anything strongly directional on
   a cube therefore draws differently on all four sides, and a box's tiling is a property of the
   **face** you care about rather than of the box (the arena shooter's four perimeter walls carry four
-  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`).
+  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`, which M28 also gave
+  a mouse-driven title/pause/end menu built from ordinary `HudText`/`HudRect`: the layout is measured
+  from the **centre** of the frame so one recorded timeline clicks the same button at any window
+  size, hiding an element is a zero size or an empty string, and its demo timeline is now authored by
+  a closed-loop director, `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a
+  drone at step 431).
   The crate texture is a *framed* panel with a centre batten for that reason: a border is invariant
   under it. `Tree` tubes are the well-behaved case (`u` around the ring, `v` along the branch), which
   is also why bark fissures must vary in `u` — transposed, a trunk wears tyre tread.
@@ -1197,8 +1248,9 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**16 of the 32 baselines are pinned by no test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`,
-both `m10`, `m11_lap`, `m13_smoke`, `m14_break`, `m29_meadow`, and all six `showcase_*`) — the sweep is their only
+**16 of the 34 baselines are pinned by no test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`,
+both `m10`, `m11_lap`, `m13_smoke`, `m14_break`, `m29_meadow`, and all six `showcase_*`) — the sweep
+is their only
 check. `m11_lap.png` is the one to be careful about when reading older notes: the lap CLI test pins
 the *drive* (positions, elevation, parked HUD strings) and names the PNG in a comment, but nothing
 diff-renders it. A sweep failure that will not reproduce twice in a row is worth suspecting before it

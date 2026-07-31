@@ -1139,6 +1139,120 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ── The mouse (M28) ────────────────────────────────────────────────────
+
+/// The M28 fixture, end to end: the committed timeline's cursor drives a
+/// marker across the ground through the engine's own inverse projection, and
+/// a held button over the HUD's plate is a click.
+///
+/// The numbers here are *not* eyeballed — each is where the ray through that
+/// cursor meets the plane, and the two baselines
+/// (`m28_pointer_{aim,click}.png`) are the same run rendered. A regression in
+/// the ray, the aspect, or the timeline's cursor field moves them together.
+#[test]
+fn the_mouse_aims_where_the_cursor_points() {
+    let scene = repo_path("examples/scenes/verify/m28_pointer.json");
+    let timeline = repo_path("examples/scenes/verify/m28_pointer.input.jsonl");
+
+    let at = |steps: &str| {
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", steps])
+            .arg("--input")
+            .arg(&timeline)
+            .args(["--entity", "Marker", "--entity", "Held"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        serde_json::from_str::<serde_json::Value>(&stdout_of(&output)).unwrap()
+    };
+    let position = |report: &serde_json::Value, entity: &str| -> Vec<f64> {
+        report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == entity)
+            .unwrap()["position"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    };
+
+    // Step 40: the cursor is at (0.2, 0.72) — left of centre and low, so the
+    // marker sits left of the camera axis and *nearer* than the origin.
+    let aim = at("40");
+    let marker = position(&aim, "Marker");
+    assert!(marker[0] < -3.0, "left of centre: {marker:?}");
+    assert!(marker[2] > 1.0, "and short of the origin: {marker:?}");
+    // MouseLeft is held here, but not over the button — so nothing fired.
+    // A click is a position on the HUD as much as a button state.
+    assert!(
+        position(&aim, "Held")[1] < 0.0,
+        "a click away from the button is not a press"
+    );
+
+    // Step 80: the cursor is over the plate in the bottom-right corner with
+    // MouseLeft down, and the script hit-tests it in pixels and fires.
+    //
+    // Through `screenshot` at the baseline's own size, and that is the point
+    // rather than an inconvenience: a HUD element is *pixel*-sized, so which
+    // element a cursor is over depends on the frame it is over (M28 §5).
+    // `simulate` renders nothing and runs at `Viewport::DEFAULT` — 960x540,
+    // the same 16:9 aspect, so it aims the ray identically and misses this
+    // 132x26 plate by twelve pixels.
+    let shot = std::env::temp_dir().join(format!("engine-m27-{}.png", std::process::id()));
+    let output = engine()
+        .arg("screenshot")
+        .arg(&scene)
+        .arg("--out")
+        .arg(&shot)
+        .args(["--steps", "80"])
+        .arg("--input")
+        .arg(&timeline)
+        .args(["--width", "640", "--height", "360"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let click: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+    let line = click["hud"][0].as_str().unwrap().to_string();
+    assert!(line.ends_with("FIRE"), "the press is on the HUD: {line}");
+
+    // And the ray is the same ray at the same aspect: the ground point the
+    // frame reports is the one `simulate` put the marker at.
+    let marker = position(&at("80"), "Marker");
+    let rounded = format!(
+        "G {} {}",
+        (marker[0] * 10.0).round() / 10.0,
+        (marker[2] * 10.0).round() / 10.0
+    );
+    assert!(
+        line.starts_with(&rounded),
+        "the aspect is all that matters to the ray: {line} vs {rounded}"
+    );
+    std::fs::remove_file(&shot).ok();
+
+    // The same timeline with the cursor field ignored would put the marker at
+    // the centre of the frame; check the "no --input at all" case does
+    // exactly that, since it is the M28 promise that keyboard-era files and
+    // no-input runs are unchanged.
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "80", "--entity", "Marker"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+    let centred = position(&report, "Marker");
+    assert!(
+        centred[0].abs() < 1e-3,
+        "no input means the cursor sits at the centre of the frame: {centred:?}"
+    );
+}
+
 /// The committed demo: replaying the recorded session drives the physical
 /// car (dynamic box chassis on four raycast-suspension Wheels; the script
 /// is only the driver) three laps around the generated Spa-in-miniature
