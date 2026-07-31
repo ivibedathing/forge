@@ -94,7 +94,7 @@ engine diff-render <scene.json> <baseline.png> [--out diff.png] [--camera N]
                    [--threshold N] [--max-diff-percent P]
 engine edit <scene.json> [--watch]           # GUI editor; --watch = read-only
 engine simulate <scene.json> --steps N [--input f.input.jsonl]
-                [--bake out.json] [--trace t.jsonl]
+                [--bake out.json] [--trace t.jsonl] [--entity Name]...
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine filmstrip <scene.json> --out strip.png [--start/--end/--frames/--columns]
 engine list-animations <scene-or-clip> [--schema]
@@ -185,6 +185,19 @@ to ~1e-4 (quantization + disposable solver caches), not byte-for-byte.
 `--steps N` on `screenshot` and `diff-render` is the edit → simulate → LOOK
 loop; `engine raycast` answers spatial questions in JSON
 (`{"hit": {"entity", "point", "normal", "distance"}}` or `{"hit": null}`).
+
+The `simulate` report carries **`entities`**: where everything ended up, so
+reading one final position needs neither a trace file nor a bake. Each row is
+the trace's row — `entity`, `position`, `rotation`, and `linear_velocity` when
+the entity has a `RigidBody` — and the default membership is the trace's too:
+the dynamic bodies, re-enumerated after the run (so fragments are in and a
+broken parent is out), **name-sorted**. The sort is a contract, not cosmetics:
+it is what makes an unchanged scene report identically instead of in archetype
+order. `--entity NAME` (repeatable) narrows, and reaches entities no trace
+enumerates — a fixed floor, a scripted kinematic platform, a camera a chase
+script drives. Unknown names are reported all at once (`entity_not_found` with
+`did_you_mean`), like every other diagnostic here. The trace and bake formats
+are untouched, and so are the committed golden traces.
 
 ## Animation
 
@@ -283,6 +296,33 @@ make_car_track.py` is the worked example: it writes the road, asks where it
 went, and writes the scene again with the barriers on it. With no `--entity`
 the scene must contain exactly one road; naming one that is not there is
 `entity_not_found` with a `did_you_mean`.
+
+## The render digest
+
+`screenshot` and `filmstrip` report a `digest` of the frame they wrote:
+
+```json
+"digest": {"mean_luminance": 0.405, "background": [63, 69, 85], "coverage": 0.523}
+```
+
+`entities_drawn` catches "nothing loaded". It does not catch **"nothing is in
+the frame"** — a camera aimed past the scene submits the same geometry and
+renders a perfectly correct empty picture — which is the most common bad render
+and the one whose diagnosis otherwise costs an image read. `background` is the
+most common exact color in the frame (the clear color, or the sky) as sRGB
+bytes; `coverage` is the fraction of pixels that are something else, so
+`coverage: 0.0` means nothing reached the frame. `mean_luminance` is over the
+**encoded** bytes the PNG carries, not linearized — the question is whether the
+image looks black, and the image is the encoded one.
+
+**A diagnostic, never a pin.** `diff-render` is what pins a render, bit-exactly
+and with a diff image showing where. The digest's numbers are quantized to three
+decimals precisely so that this adapter's MSAA nondeterminism (M22: ~24 pixels
+of a terrain frame, run to run) cannot move a reported digit and turn a
+diagnostic into a phantom diff. Read the image when the digest says something is
+there; skip it when the digest says the frame is empty. There is deliberately no
+hash: a hash would invite comparing two renders by number, which is the job
+`diff-render` already does properly.
 
 ## Asking the engine instead of reconstructing the answer
 

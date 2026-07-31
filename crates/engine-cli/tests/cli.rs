@@ -3120,3 +3120,249 @@ fn inspect_suggests_a_near_miss_entity() {
     assert_eq!(codes_of(&lines), ["entity_not_found"]);
     assert_eq!(lines[0]["did_you_mean"], "Cube");
 }
+
+// ── M25: reports carry what the command already computed ──────────────────
+//
+// Two existing stdout objects that computed the answer to the most common
+// follow-up question and threw it away. Both additions fail against the
+// pre-M25 binary, which reports neither key.
+
+/// A ball dropped onto a fixed floor: something moves, something does not.
+const DROP: &str = r#"{"name":"drop","entities":[
+    {"name":"Cam","components":[
+        {"type":"Camera","active":true},
+        {"type":"Transform","position":[0.0,2.0,8.0]}]},
+    {"name":"Floor","components":[
+        {"type":"Transform","position":[0.0,-1.0,0.0]},
+        {"type":"RigidBody","body":"fixed"},
+        {"type":"Collider","shape":"cuboid","half_extents":[8.0,0.5,8.0]}]},
+    {"name":"Ball","components":[
+        {"type":"Transform","position":[0.0,4.0,0.0]},
+        {"type":"RigidBody","body":"dynamic"},
+        {"type":"Collider","shape":"sphere","radius":0.5}]}
+]}"#;
+
+#[test]
+fn simulate_says_where_everything_ended_up() {
+    // Before M25 the whole report was {contacts, simulated_steps,
+    // timestep_hz}: to learn a body's final position an agent wrote a trace
+    // and parsed its tail, or baked a scene file and read a Transform back.
+    let scene = scene_file("m25-drop", DROP);
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    let entities = report["entities"].as_array().expect("the report says where things are");
+
+    // The trace's rule for who appears: the dynamic bodies, name-sorted. The
+    // fixed floor is not one of them.
+    let names: Vec<&str> = entities.iter().map(|e| e["entity"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Ball"]);
+
+    let ball = &entities[0];
+    let y = ball["position"][1].as_f64().unwrap();
+    assert!((-0.6..=0.1).contains(&y), "the ball should be resting on the floor, not at {y}");
+    assert!(ball["linear_velocity"].is_array(), "a body reports its velocity");
+    assert!(ball["rotation"].is_array());
+
+    // Existing keys keep their meaning: this is an addition, not a reshape.
+    assert_eq!(report["simulated_steps"], 120);
+    assert_eq!(report["timestep_hz"], 60);
+    assert!(report["contacts"].as_u64().is_some());
+}
+
+#[test]
+fn simulate_entity_reaches_what_the_trace_never_enumerates() {
+    // A trace lists dynamic bodies. A fixed floor, a scripted kinematic
+    // platform, a camera a chase script drives are all invisible to it — and
+    // are exactly the entities an agent asks about.
+    let scene = scene_file("m25-named", DROP);
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "30", "--entity", "Floor", "--entity", "Cam"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    let names: Vec<&str> = report["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["entity"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Cam", "Floor"], "named entities, still name-sorted");
+
+    // The camera has no RigidBody, so it reports placement and no velocity.
+    let cam = &report["entities"][0];
+    assert_eq!(cam["position"], serde_json::json!([0.0, 2.0, 8.0]));
+    assert!(cam["linear_velocity"].is_null());
+}
+
+#[test]
+fn simulate_reports_every_unknown_entity_at_once() {
+    let scene = scene_file("m25-typos", DROP);
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "1", "--entity", "Bal", "--entity", "Flor"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout_of(&output).is_empty(), "failure writes nothing to stdout");
+    let lines = stderr_lines(&output);
+    assert_eq!(codes_of(&lines), ["entity_not_found", "entity_not_found"]);
+    let suggestions: Vec<&str> = lines
+        .iter()
+        .map(|l| l["did_you_mean"].as_str().unwrap())
+        .collect();
+    assert!(suggestions.contains(&"Ball") && suggestions.contains(&"Floor"), "{suggestions:?}");
+}
+
+#[test]
+fn a_screenshot_report_says_whether_anything_is_in_the_frame() {
+    // `entities_drawn` catches "nothing loaded". It cannot catch "the camera
+    // is aimed at nothing", which renders a perfectly correct empty frame —
+    // and diagnosing that used to cost an image read.
+    let visible = scene_file(
+        "m25-visible",
+        r#"{"name":"visible","entities":[
+    {"name":"Cam","components":[
+        {"type":"Camera","active":true},
+        {"type":"Transform","position":[0.0,0.0,5.0]}]},
+    {"name":"Cube","components":[
+        {"type":"Transform"},
+        {"type":"Mesh","asset":"builtin:cube"},
+        {"type":"Material","albedo":[0.8,0.2,0.2]}]}
+]}"#,
+    );
+    let out = visible.with_file_name("visible.png");
+    let output = engine()
+        .arg("screenshot")
+        .arg(&visible)
+        .arg("--out")
+        .arg(&out)
+        .args(["--width", "160", "--height", "120"])
+        .output()
+        .unwrap();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "screenshot failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    }
+
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    let digest = &report["digest"];
+    assert!(digest["coverage"].as_f64().unwrap() > 0.0, "the cube is in shot");
+    assert!(digest["mean_luminance"].as_f64().unwrap() > 0.0);
+    assert_eq!(
+        digest["background"].as_array().unwrap().len(),
+        3,
+        "the background is reported as sRGB bytes"
+    );
+
+    // The same scene shot from behind the camera's own back: one entity
+    // drawn, nothing in the frame. The digest is the difference.
+    let empty_source = std::fs::read_to_string(&visible)
+        .unwrap()
+        .replace("[0.0,0.0,5.0]", "[0.0,0.0,-500.0]");
+    let empty = visible.with_file_name("empty.json");
+    std::fs::write(&empty, empty_source).unwrap();
+    let empty_out = visible.with_file_name("empty.png");
+    let output = engine()
+        .arg("screenshot")
+        .arg(&empty)
+        .arg("--out")
+        .arg(&empty_out)
+        .args(["--width", "160", "--height", "120"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+
+    let empty_report: serde_json::Value =
+        serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    assert_eq!(
+        empty_report["entities_drawn"], report["entities_drawn"],
+        "the same geometry was submitted both times"
+    );
+    assert_eq!(
+        empty_report["digest"]["coverage"].as_f64().unwrap(),
+        0.0,
+        "nothing but background reached the frame"
+    );
+}
+
+#[test]
+fn the_digest_is_stable_across_runs_of_an_unchanged_scene() {
+    // The trap M25 was planned around: a full-precision mean over a frame
+    // would differ in its low digits run to run wherever this adapter's MSAA
+    // is nondeterministic (M22), turning a diagnostic into phantom diffs.
+    let scene = repo_path("examples/scenes/verify/m16_environment.json");
+    let out = std::env::temp_dir().join(format!("engine-digest-{}.png", std::process::id()));
+
+    let mut digests = Vec::new();
+    for _ in 0..3 {
+        let output = engine()
+            .arg("screenshot")
+            .arg(&scene)
+            .arg("--out")
+            .arg(&out)
+            .args(["--width", "320", "--height", "180"])
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "screenshot failed for a non-GPU reason: {stderr}"
+            );
+            eprintln!("skipping: no usable GPU on this machine");
+            return;
+        }
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+        digests.push(report["digest"].clone());
+    }
+    assert_eq!(digests[0], digests[1]);
+    assert_eq!(digests[1], digests[2]);
+}
+
+#[test]
+fn a_filmstrip_reports_the_digest_of_the_sheet_it_wrote() {
+    let scene = repo_path("examples/scenes/demo_scene.json");
+    let out = std::env::temp_dir().join(format!("engine-strip-{}.png", std::process::id()));
+    let output = engine()
+        .arg("filmstrip")
+        .arg(&scene)
+        .arg("--out")
+        .arg(&out)
+        .args(["--frames", "2", "--columns", "2", "--width", "80", "--height", "60"])
+        .output()
+        .unwrap();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "filmstrip failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    }
+
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    assert_eq!(report["frames"], 2, "existing keys keep their meaning");
+    assert!(
+        report["digest"]["mean_luminance"].as_f64().is_some(),
+        "the strip that was written is summarized too"
+    );
+}

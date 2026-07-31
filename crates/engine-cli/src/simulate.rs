@@ -462,6 +462,7 @@ pub fn simulate_command(
     input_path: Option<PathBuf>,
     bake_path: Option<PathBuf>,
     trace_path: Option<PathBuf>,
+    requested: Vec<String>,
 ) -> Result<()> {
     let input = load_input(input_path.as_deref())?;
     let report = crate::report_scene_diagnostics(&scene_path);
@@ -500,10 +501,13 @@ pub fn simulate_command(
         bake(&source, &scene, bake_path)?;
     }
 
+    let entities = final_states(&scene, &outcome.physics, &requested, &display)?;
+
     let mut result = json!({
         "simulated_steps": steps,
         "timestep_hz": scene.physics.timestep_hz,
         "contacts": outcome.contacts,
+        "entities": entities,
     });
     if !outcome.hud.is_empty() {
         // The final step's HUD, so an agent reads the lap timer without a
@@ -518,6 +522,91 @@ pub fn simulate_command(
     }
     println!("{result}");
     Ok(())
+}
+
+/// Where everything ended up, for the `simulate` report (M25).
+///
+/// The report used to be `{contacts, simulated_steps, timestep_hz}` — three
+/// numbers, none of which is where anything is. Learning that a body landed at
+/// y = 1.2 meant writing a trace (125 lines and 17.8 KB for a 120-step run) and
+/// parsing its tail, or baking a whole scene file and reading a `Transform` back
+/// out; the M22 CLI test does the second to assert one number. The data was
+/// already here.
+///
+/// **The rows are the trace's rows.** Same fields, same name-sorted order, same
+/// rule for which entities appear by default — the dynamic bodies, re-enumerated
+/// after the run, so fragments are in and a broken parent is out. An agent that
+/// can read one can read the other, and the sort is not cosmetic: it is what
+/// makes an unchanged scene report identically instead of in whatever order
+/// hecs laid out its archetypes.
+///
+/// `--entity NAME` narrows to named entities and reaches ones the trace does
+/// not enumerate at all — a scripted kinematic platform, a camera a chase
+/// script is driving — which is the case `--trace` cannot serve today.
+fn final_states(
+    scene: &Scene,
+    physics: &PhysicsWorld,
+    requested: &[String],
+    display: &str,
+) -> Result<Vec<Value>> {
+    let names: Vec<String> = if requested.is_empty() {
+        physics.dynamic_entity_names(&scene.world)
+    } else {
+        // Every unknown name at once, the way validation reports: an agent
+        // fixing three typos should learn all three from one run.
+        let unknown: Vec<&String> = requested
+            .iter()
+            .filter(|name| scene.entity(name).is_none())
+            .collect();
+        if let Some(last) = unknown.last() {
+            for name in &unknown[..unknown.len() - 1] {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {name:?}"),
+                )
+                .entity(*name)
+                .file(display)
+                .suggest_from(name, scene.names())
+                .emit();
+            }
+            return Err(EngineError::new(
+                codes::ENTITY_NOT_FOUND,
+                format!("no entity named {last:?}"),
+            )
+            .entity(*last)
+            .file(display)
+            .suggest_from(last, scene.names()));
+        }
+        let mut names: Vec<String> = requested.to_vec();
+        names.sort();
+        names.dedup();
+        names
+    };
+
+    Ok(names
+        .iter()
+        .filter_map(|name| {
+            let entity = scene.entity(name)?;
+            let transform = scene
+                .world
+                .get::<&Transform>(entity)
+                .map(|t| *t)
+                .unwrap_or_default();
+            let mut state = json!({
+                "entity": name,
+                "position": vec3_json(transform.position),
+                "rotation": vec3_json(transform.rotation),
+            });
+            // Exactly the trace's fields, including its omissions: no
+            // angular velocity, no scale. Parity is the contract — one shape
+            // to learn — and a field is cheap to add later and breaking to
+            // remove.
+            if let Ok(body) = scene.world.get::<&RigidBody>(entity) {
+                state["linear_velocity"] = vec3_json(body.linear_velocity);
+            }
+            Some(state)
+        })
+        .collect())
 }
 
 /// The `engine raycast` command.

@@ -6,6 +6,7 @@
 //! `engine screenshot` uses them directly.
 
 pub mod diff;
+pub mod digest;
 pub mod gpu;
 pub mod hud;
 pub mod offscreen;

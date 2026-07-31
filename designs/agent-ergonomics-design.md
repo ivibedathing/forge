@@ -2,8 +2,31 @@
 
 ## 0. Status
 
-**M24 is implemented and merged; M25 is still a plan.** What implementation
-settled, beyond what §2 planned:
+**Both milestones are implemented and merged.** What M25's implementation
+settled, beyond what §3 planned:
+
+- **The digest is three numbers, and one of them is the background.** §3.2 asked
+  for mean luminance plus "the fraction of pixels differing from the frame's own
+  background/clear value", which needs a definition of *background* that a sky
+  gradient does not break. It is the **most common exact color in the frame**,
+  reported alongside the fraction — so an agent reading
+  `{"background": [63,69,85], "coverage": 0.0}` is told both that the frame is
+  empty and what it is full of. Ties break toward the numerically smallest
+  color, or `HashMap` order would decide it.
+- **Quantization is three decimals, chosen against the measured noise.** M22's
+  worst case (~100 pixels at ≤18/255 over 640×360) moves the mean luminance by
+  ~3e-5 against a 1e-3 step — three to four orders of magnitude of margin.
+  That margin is a property of how small the noise is, not a guarantee, which is
+  the second reason nothing may pin the digest.
+- **`entities` rows are the trace's rows, omissions included** — no angular
+  velocity, no scale. One shape to learn for both, and a field is cheap to add
+  later and breaking to remove.
+- **`engine_render::digest` is a pure CPU module beside `diff`**, called from the
+  CLI *between* `offscreen::render` and the PNG encode. So §3.3's condition
+  never triggered: `offscreen::render`'s structure is untouched, and
+  `verify-baselines` at 30 of 30 is the whole pixel claim.
+
+What M24's implementation settled, beyond what §2 planned:
 
 - **`inspect` is the file at rest** — the §2.4 open question, resolved the way
   it leaned. No `--steps`, so "what did you author" and "what happened" stay

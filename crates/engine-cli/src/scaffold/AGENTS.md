@@ -32,7 +32,7 @@ engine screenshot <scene.json> --out x.png [--steps N] [--time T] [--camera Name
 engine diff-render <scene.json> <baseline.png> [--steps N] [--out diff.png]
                    [--threshold N] [--max-diff-percent P]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
-engine simulate <scene.json> --steps N [--bake out.json] [--trace t.jsonl]
+engine simulate <scene.json> --steps N [--entity Name]... [--bake out.json] [--trace t.jsonl]
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine road-centerline <scene.json> [--entity Name]
 engine terrain-height <scene.json> --at x,z [--entity Name]   # where the ground is
@@ -182,10 +182,20 @@ Add a scene-level `"physics"` block for gravity and timestep, a `RigidBody`
 (`dynamic` / `kinematic` / `fixed`) and a `Collider` to an entity. A dynamic body
 with no collider is an error — it would fall through everything.
 
-`engine simulate --steps N` runs the world without drawing it and reports where
-things ended up; `--trace t.jsonl` logs every step, and `--bake out.json` writes
-the settled state back as an ordinary scene. Simulation is deterministic: the
-same file and the same step count give byte-identical results.
+`engine simulate --steps N` runs the world without drawing it and its report
+carries **`entities`** — where each dynamic body ended up, name-sorted, with
+`position`, `rotation`, and `linear_velocity`:
+
+```bash
+engine simulate scene.json --steps 120 | jq '.entities[] | select(.entity=="Ball").position'
+engine simulate scene.json --steps 120 --entity Platform   # narrows; reaches
+                                                           # non-dynamic entities too
+```
+
+Reach for that before `--trace t.jsonl` (every step, as JSONL — for *how* it got
+there) or `--bake out.json` (the settled state as an ordinary scene file).
+Simulation is deterministic: the same file and the same step count give
+byte-identical results.
 
 ## Scripting
 
@@ -228,8 +238,12 @@ Two limits worth knowing before you build a workflow on it:
 
 ## When something looks wrong
 
-- **Nothing rendered.** Check the camera is `"active": true` and pointed at the
-  scene (it looks down its own local −Z), and that lights exist.
+- **Nothing rendered.** Read the `digest` in the `screenshot` report before you
+  read the image: `coverage: 0.0` means nothing but background reached the
+  frame, and `mean_luminance` near 0 means it rendered dark. `entities_drawn`
+  only tells you geometry was *submitted*. Then check the camera is
+  `"active": true` and pointed at the scene (it looks down its own local −Z),
+  and that lights exist.
 - **Geometry is invisible from one side.** Backface culling is on and front
   faces are counter-clockwise. A wrongly wound triangle renders nothing.
 - **A scene validates but looks off.** Read the warnings on stderr — `zero_scale`
