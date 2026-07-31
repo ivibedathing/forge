@@ -97,7 +97,8 @@ engine simulate <scene.json> --steps N [--input f.input.jsonl]
                 [--bake out.json] [--trace t.jsonl] [--entity Name]...
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine filmstrip <scene.json> --out strip.png [--start/--end/--frames/--columns]
-engine list-animations <scene-or-clip> [--schema]
+engine list-animations <scene-or-clip-or-gltf> [--schema]
+engine list-joints <scene-or-gltf> [--entity Name] [--time T] [--clip Name]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
@@ -206,8 +207,12 @@ Pose is a pure function of (files, time): `--time T` on `screenshot` and
 equal times give byte-identical PNGs. `engine filmstrip` tiles N frames over
 a time range into one contact-sheet PNG (default range: the longest clip in
 the scene). `engine list-animations` dumps every clip reachable from a scene
-(or a single `.anim.json`) as JSON — name, duration, track targets — and
-`--schema` prints the clip-file JSON Schema. `engine validate` accepts clip
+(or a single `.anim.json`, or a `.gltf`/`.glb`) as JSON — name, duration,
+track or channel targets — and `--schema` prints the clip-file JSON Schema.
+`engine list-joints` does the same for a rig: every joint's name, parent,
+index and rest transform, plus its **posed world transform** under `--time`.
+That is the half a filmstrip cannot give you — a contact sheet shows that
+something moved, never that the hand reached the doorknob. `engine validate` accepts clip
 files directly (structural checks; entity-name resolution needs a scene and
 happens when validating the scene). Ordering everywhere: sample animations →
 physics (`--steps`) → render.

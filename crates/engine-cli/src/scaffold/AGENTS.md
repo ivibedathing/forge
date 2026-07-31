@@ -38,7 +38,8 @@ engine road-centerline <scene.json> [--entity Name]
 engine terrain-height <scene.json> --at x,z [--entity Name]   # where the ground is
 engine inspect <scene.json> [--entity Name]       # every field, with the defaults filled in
 engine list-components [--component Name]         # the scene + component JSON Schemas
-engine list-animations <scene-or-clip> [--schema]
+engine list-animations <scene-or-clip-or-gltf> [--schema]
+engine list-joints <scene-or-gltf> [--entity Name] [--time T]  # where every joint is
 engine import <model.glb> [--into scene.json]     # a model's materials, as files
 engine run-scene <scene.json> [--record-input f]  # windowed viewer; keyboard reaches scripts
 engine edit <scene.json> [--watch]                # GUI editor: a live view onto the file

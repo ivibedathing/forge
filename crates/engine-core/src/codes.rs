@@ -139,6 +139,18 @@ registry! {
     ANIMATION_ON_DYNAMIC_BODY = "animation_on_dynamic_body", Input,
         "a clip animates the Transform of a dynamic RigidBody; make it kinematic";
 
+    // ── Skeletal animation (M27) ───────────────────────────────────────
+    CLIP_NEEDS_FRAGMENT = "clip_needs_fragment", Input,
+        "a glTF clip reference must name a clip: path#ClipName";
+    UNKNOWN_CLIP = "unknown_clip", Input,
+        "a #ClipName fragment names no animation in that glTF file";
+    MESH_HAS_NO_SKIN = "mesh_has_no_skin", Input,
+        "a skeletal AnimationPlayer's glTF file carries no skin";
+    SKELETAL_PLAYER_MESH_MISMATCH = "skeletal_player_mesh_mismatch", Input,
+        "a skeletal AnimationPlayer and its entity's Mesh name different files";
+    TOO_MANY_JOINTS = "too_many_joints", Input,
+        "a skin has more joints than the fixed-size palette holds";
+
     // ── Breaking (M14) ─────────────────────────────────────────────────
     BREAKABLE_WITHOUT_COLLIDER = "breakable_without_collider", Input,
         "a Breakable sets impulse_threshold but the entity has no Collider to be hit on";

@@ -1,0 +1,154 @@
+{
+  "name": "m27_skeletal",
+  "environment": {
+    "sky": true,
+    "shadows": true,
+    "shadow_distance": 20.0,
+    "samples": 4
+  },
+  "entities": [
+    {
+      "name": "Cam",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            1.8,
+            5.4
+          ],
+          "rotation": [
+            -6.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "fov": 40.0,
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "rotation": [
+            -46.0,
+            -34.0,
+            0.0
+          ]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [
+            1.0,
+            0.97,
+            0.9
+          ],
+          "intensity": 3.1
+        }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [
+            0.55,
+            0.63,
+            0.78
+          ],
+          "intensity": 0.34
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        {
+          "type": "Transform",
+          "scale": [
+            12.0,
+            1.0,
+            12.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:plane"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.32,
+            0.34,
+            0.3
+          ],
+          "roughness": 0.9
+        }
+      ]
+    },
+    {
+      "name": "Arm",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.1,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/rigged_arm.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.82,
+            0.4,
+            0.24
+          ],
+          "roughness": 0.55
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../../meshes/rigged_arm.gltf#Wave",
+          "speed": 1.0,
+          "looping": true
+        }
+      ]
+    },
+    {
+      "name": "Rest",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.1,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/rigged_arm.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.3,
+            0.45,
+            0.7
+          ],
+          "roughness": 0.55
+        }
+      ]
+    }
+  ]
+}

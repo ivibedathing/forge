@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use engine_core::error::Result;
 use engine_core::mesh::{MeshAsset, MeshData, MeshSource};
+use engine_core::skeleton::{Rig, RigSource};
 use engine_core::texture::{resolve_texture, ColorSpace, TextureData, TextureSource};
 
 /// Resolves and loads mesh assets relative to a root directory — in practice,
@@ -26,6 +27,9 @@ pub struct AssetServer {
     /// was filtered, so one file read as albedo and as ORM really is two
     /// different sets of pixels.
     textures: RefCell<HashMap<(String, ColorSpace), Arc<TextureData>>>,
+    /// Rigs (M27), cached for the same reason as geometry: a palette is
+    /// recomputed every frame and must not re-parse the `.glb` behind it.
+    rigs: RefCell<HashMap<String, Arc<Rig>>>,
 }
 
 impl AssetServer {
@@ -34,6 +38,7 @@ impl AssetServer {
             root: root.into(),
             cache: RefCell::new(HashMap::new()),
             textures: RefCell::new(HashMap::new()),
+            rigs: RefCell::new(HashMap::new()),
         }
     }
 
@@ -59,6 +64,26 @@ impl MeshSource for AssetServer {
             .borrow_mut()
             .insert(asset.to_string(), Arc::clone(&data));
         Ok(data)
+    }
+}
+
+impl RigSource for AssetServer {
+    fn load_rig(&self, asset: &str) -> Result<Arc<Rig>> {
+        if let Some(hit) = self.rigs.borrow().get(asset) {
+            return Ok(Arc::clone(hit));
+        }
+
+        let rig = Arc::new(match MeshAsset::resolve(asset, &self.root)? {
+            // A `builtin:` primitive is generated geometry with no file behind
+            // it, so it has no rig — an empty one, not an error.
+            MeshAsset::Builtin(_) => Rig::default(),
+            MeshAsset::File(path) => crate::gltf_skin::load_rig(&path)?,
+        });
+
+        self.rigs
+            .borrow_mut()
+            .insert(asset.to_string(), Arc::clone(&rig));
+        Ok(rig)
     }
 }
 

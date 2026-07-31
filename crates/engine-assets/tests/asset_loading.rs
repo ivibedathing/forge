@@ -330,3 +330,181 @@ fn one_texture_asset_is_one_arc() {
     assert!(!Arc::ptr_eq(&first, &linear));
     assert_eq!(linear.space, ColorSpace::Linear);
 }
+
+// ── Rigs (M27) ────────────────────────────────────────────────────────────
+
+#[test]
+fn the_rigged_arm_loads_its_skin_in_the_files_joint_order() {
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    let skin = rig.skin.expect("rigged_arm.gltf has a skin");
+
+    assert_eq!(skin.name.as_deref(), Some("ArmRig"));
+    // The skin's own `joints` order, not sorted — a joint's index is written
+    // into the vertex data.
+    let names: Vec<&str> = skin.joints.iter().map(|j| j.name.as_str()).collect();
+    assert_eq!(names, ["Shoulder", "Elbow", "Hand"]);
+
+    assert_eq!(skin.joints[0].parent, None);
+    assert_eq!(skin.joints[1].parent, Some(0));
+    assert_eq!(skin.joints[2].parent, Some(1));
+}
+
+#[test]
+fn the_rest_pose_puts_each_joint_where_the_file_says() {
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    let skin = rig.skin.unwrap();
+    let globals = engine_core::skeleton::joint_globals(&skin, None, 0.0);
+
+    for (index, expected) in [0.0f32, 1.0, 2.0].iter().enumerate() {
+        let position = globals[index].transform_point3(glam::Vec3::ZERO);
+        assert!(
+            (position - glam::Vec3::new(0.0, *expected, 0.0)).length() < 1e-5,
+            "joint {index} is at {position}, expected y={expected}"
+        );
+    }
+
+    // Rest pose == bind pose, so every palette entry is the identity: a
+    // skinned mesh with no clip renders exactly where its vertices sit.
+    for matrix in engine_core::skeleton::palette(&skin, None, 0.0) {
+        assert!(
+            (matrix - glam::Mat4::IDENTITY).abs_diff_eq(glam::Mat4::ZERO, 1e-5),
+            "{matrix} is not the identity"
+        );
+    }
+}
+
+#[test]
+fn the_wave_clip_moves_the_hand_and_returns_it() {
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    let skin = rig.skin.unwrap();
+    let wave = rig.clips.iter().find(|c| c.name == "Wave").unwrap();
+    assert_eq!(engine_core::skeleton::duration(wave), 1.0);
+
+    let hand_at = |t| {
+        engine_core::skeleton::joint_globals(&skin, Some(wave), t)[2]
+            .transform_point3(glam::Vec3::ZERO)
+    };
+
+    let rest = hand_at(0.0);
+    let bent = hand_at(0.5);
+    let back = hand_at(1.0);
+
+    // The claim the milestone makes about itself: motion is verifiable
+    // without a pixel.
+    assert!(
+        (bent - rest).length() > 0.5,
+        "the hand barely moved: {rest} -> {bent}"
+    );
+    // A 60° bend at the elbow swings the hand forward (-Z) and down.
+    assert!(bent.z < -0.8, "the hand did not swing forward: {bent}");
+    assert!(bent.y < rest.y, "the hand did not drop: {bent}");
+    assert!((back - rest).length() < 1e-5, "the clip did not return: {back}");
+}
+
+#[test]
+fn a_channel_outside_the_skin_is_loaded_and_then_ignored() {
+    // `Marker` is a node in the scene that is in no skin. glTF allows the
+    // channel; sampling ignores it; `list-animations` reports it — an ignored
+    // channel nothing names is invisible.
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    let wave = rig.clips.iter().find(|c| c.name == "Wave").unwrap();
+    let skin = rig.skin.unwrap();
+
+    let marker = wave
+        .channels
+        .iter()
+        .find(|c| c.node_name.as_deref() == Some("Marker"))
+        .expect("the Marker channel survived loading");
+    assert!(skin.joint_of_node(marker.node).is_none());
+
+    // Every joint that the elbow rotation does not reach is exactly at rest.
+    let posed = engine_core::skeleton::joint_globals(&skin, Some(wave), 1.0);
+    let rest = engine_core::skeleton::joint_globals(&skin, None, 0.0);
+    assert_eq!(posed[0], rest[0]);
+}
+
+#[test]
+fn every_clip_in_the_file_is_addressable_by_name() {
+    let rig = engine_assets::load_rig(&example("meshes/rigged_arm.gltf")).unwrap();
+    assert_eq!(rig.clip_names(), ["Wave", "Sway"]);
+    assert!(rig.clip_named("Sway").is_some());
+    assert!(rig.clip_named("Walk").is_none());
+}
+
+#[test]
+fn an_unrigged_file_loads_an_empty_rig_rather_than_failing() {
+    // Every mesh in the repo is one of these; "does this file have a rig" is
+    // a question the caller asks, not a failure.
+    let rig = engine_assets::load_rig(&example("meshes/pyramid.gltf")).unwrap();
+    assert!(rig.skin.is_none());
+    assert!(rig.clips.is_empty());
+}
+
+/// A minimal text glTF carrying a skin of `count` joints and nothing else.
+///
+/// No geometry: `load_rig` does not need any, and the point is the joint
+/// budget rather than the mesh.
+fn skin_only_gltf(count: usize) -> String {
+    let nodes: Vec<String> = (0..count)
+        .map(|i| {
+            let children = if i + 1 < count {
+                format!(", \"children\": [{}]", i + 1)
+            } else {
+                String::new()
+            };
+            format!("{{\"name\": \"j{i}\", \"translation\": [0, 1, 0]{children}}}")
+        })
+        .collect();
+    let joints: Vec<String> = (0..count).map(|i| i.to_string()).collect();
+    format!(
+        r#"{{
+          "asset": {{"version": "2.0"}},
+          "scene": 0,
+          "scenes": [{{"nodes": [0]}}],
+          "nodes": [{}],
+          "skins": [{{"name": "Long", "joints": [{}]}}]
+        }}"#,
+        nodes.join(","),
+        joints.join(",")
+    )
+}
+
+#[test]
+fn a_skin_over_the_palette_budget_fails_validation_before_any_device_exists() {
+    // The `MAX_POINT_LIGHTS` / `MAX_ROAD_KERBS` idiom: a fixed-size uniform
+    // gets an error at validate time, never a character that renders
+    // correctly up to joint 128 and explodes past it.
+    let fixture = Fixture::new("too-many-joints");
+    let over = engine_core::skeleton::MAX_JOINTS + 1;
+    fixture.write("long.gltf", skin_only_gltf(over));
+    fixture.write("ok.gltf", skin_only_gltf(engine_core::skeleton::MAX_JOINTS));
+
+    let scene = |asset: &str| {
+        format!(
+            r#"{{"name":"s","entities":[{{"name":"A","components":[
+                {{"type":"Mesh","asset":"{asset}"}},
+                {{"type":"AnimationPlayer","clip":"{asset}#Nope"}}
+            ]}}]}}"#
+        )
+    };
+
+    let path = fixture.write("scene.json", scene("long.gltf"));
+    let errors =
+        engine_assets::validate_scene_assets(&scene("long.gltf"), &path.display().to_string());
+    let codes: Vec<&str> = errors.iter().map(|e| e.error).collect();
+    assert!(
+        codes.contains(&"too_many_joints"),
+        "a {over}-joint skin was accepted: {codes:?}"
+    );
+
+    // Exactly at the limit is fine — the ceiling is inclusive.
+    let path = fixture.write("ok.json", scene("ok.gltf"));
+    let errors =
+        engine_assets::validate_scene_assets(&scene("ok.gltf"), &path.display().to_string());
+    let codes: Vec<&str> = errors.iter().map(|e| e.error).collect();
+    assert!(
+        !codes.contains(&"too_many_joints"),
+        "a {}-joint skin was refused: {codes:?}",
+        engine_core::skeleton::MAX_JOINTS
+    );
+}

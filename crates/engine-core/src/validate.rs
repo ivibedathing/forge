@@ -240,6 +240,11 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut seen_types: Vec<String> = Vec::new();
         let mut has_mesh = false;
         let mut mesh_path: Option<String> = None;
+        // The `Mesh.asset` string, kept beside the path so a skeletal player
+        // can be checked against the file its skin has to live in (M27).
+        let mut mesh_asset: Option<String> = None;
+        // A skeletal `AnimationPlayer`: (glTF asset, clip name, JSON path).
+        let mut skeletal_player: Option<(String, String, String)> = None;
         let mut tree_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
@@ -313,7 +318,16 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     rigid_body = Some((rb.body, component_path));
                 }
                 Some(ComponentData::AnimationPlayer(player)) => {
+                    if let crate::skeleton::ClipRef::Skeletal { asset, clip } =
+                        crate::skeleton::ClipRef::parse(&player.clip)
+                    {
+                        skeletal_player =
+                            Some((asset.to_string(), clip.to_string(), component_path.clone()));
+                    }
                     players.push((name.to_string(), player, component_path));
+                }
+                Some(ComponentData::Mesh(mesh)) => {
+                    mesh_asset = Some(mesh.asset.clone());
                 }
                 Some(ComponentData::Collider(c)) => {
                     collider = Some((c, component_path));
@@ -340,6 +354,50 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     road = Some((r, component_path));
                 }
                 _ => {}
+            }
+        }
+
+        // ── Skeletal ownership (M27) ──────────────────────────────────
+        //
+        // The skin lives inside the mesh file, so a player pointing anywhere
+        // else is describing a rig that will never be applied. Checking the
+        // reference rather than the file keeps this in engine-core, where no
+        // glTF can be opened; `mesh_has_no_skin` is the asset pass's half.
+        if let Some((asset, _, player_path)) = &skeletal_player {
+            match mesh_asset.as_deref() {
+                Some(mesh) if mesh == asset => {}
+                Some(mesh) => {
+                    errors.push(
+                        cx.err(
+                            codes::SKELETAL_PLAYER_MESH_MISMATCH,
+                            format!(
+                                "entity {name:?} plays a skeletal clip from {asset:?} but \
+                                 its Mesh is {mesh:?}; the skin lives in the mesh file, \
+                                 so the rig would never be applied"
+                            ),
+                            player_path,
+                        )
+                        .entity(name)
+                        .component("AnimationPlayer")
+                        .field("clip"),
+                    );
+                }
+                None => {
+                    errors.push(
+                        cx.err(
+                            codes::SKELETAL_PLAYER_MESH_MISMATCH,
+                            format!(
+                                "entity {name:?} plays a skeletal clip from {asset:?} but \
+                                 has no Mesh; a skeletal player belongs on the entity \
+                                 whose Mesh owns the skin"
+                            ),
+                            player_path,
+                        )
+                        .entity(name)
+                        .component("AnimationPlayer")
+                        .field("clip"),
+                    );
+                }
             }
         }
 
@@ -992,7 +1050,11 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     let mut claimed: std::collections::HashMap<(String, String), String> =
         std::collections::HashMap::new();
     for (player_entity, player, player_path) in &players {
+        // Skeletal references (M27) are the asset pass's business; a glTF
+        // path with no fragment already has its own error. Either way, this
+        // pass would only try to read a binary as JSON.
         if player.clip.contains('#')
+            || crate::skeleton::is_gltf_path(&player.clip)
             || Path::new(&player.clip).is_absolute()
         {
             continue; // Already reported by the component check.
@@ -1946,21 +2008,10 @@ fn check_component(
         // file/line.
         ComponentData::AnimationPlayer(player) => {
             let path = &format!("{component_path}/clip");
-            if player.clip.contains('#') {
-                errors.push(
-                    cx.err(
-                        codes::ASSET_UNSUPPORTED,
-                        format!(
-                            "clip {:?} is a glTF fragment reference; skeletal                              clips are not yet supported — use a .anim.json                              property clip",
-                            player.clip
-                        ),
-                        path,
-                    )
-                    .entity(entity)
-                    .component("AnimationPlayer")
-                    .field("clip"),
-                );
-            } else if Path::new(&player.clip).is_absolute() {
+            let reference = crate::skeleton::ClipRef::parse(&player.clip);
+            let asset = reference.asset();
+
+            if Path::new(asset).is_absolute() {
                 errors.push(
                     cx.err(
                         codes::ASSET_PATH_NOT_RELATIVE,
@@ -1974,15 +2025,41 @@ fn check_component(
                     .component("AnimationPlayer")
                     .field("clip"),
                 );
-            } else {
+            } else if matches!(reference, crate::skeleton::ClipRef::Property(_))
+                && crate::skeleton::is_gltf_path(asset)
+            {
+                // A glTF path with no `#Clip`. Defaulting to the only clip in
+                // the file is friendlier right up until someone exports a
+                // second one, at which point which clip plays changes
+                // silently — the failure class this engine trades convenience
+                // to avoid.
+                errors.push(
+                    cx.err(
+                        codes::CLIP_NEEDS_FRAGMENT,
+                        format!(
+                            "clip {:?} names a glTF file but no clip inside it; write \
+                             {asset}#ClipName (engine list-animations {asset} lists them)",
+                            player.clip
+                        ),
+                        path,
+                    )
+                    .entity(entity)
+                    .component("AnimationPlayer")
+                    .field("clip"),
+                );
+            } else if !asset.starts_with("builtin:") {
+                // A `builtin:` reference resolves to generated geometry with
+                // no file behind it, so there is nothing to find on disk;
+                // `mesh_has_no_skin` is what has something useful to say
+                // about it, and it comes from the asset pass.
                 let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
-                if !base_dir.join(&player.clip).is_file() {
+                if !base_dir.join(asset).is_file() {
                     errors.push(
                         cx.err(
                             codes::ASSET_NOT_FOUND,
                             format!(
-                                "no clip file at {:?} (clip paths resolve relative                                  to the scene file)",
-                                player.clip
+                                "no clip file at {asset:?} (clip paths resolve relative \
+                                 to the scene file)"
                             ),
                             path,
                         )

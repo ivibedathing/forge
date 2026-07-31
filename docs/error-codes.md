@@ -55,6 +55,11 @@ build fails.
 | `unsorted_keys` | 1 | key times must be strictly increasing |
 | `conflicting_tracks` | 1 | two active clips animate the same property of the same entity |
 | `animation_on_dynamic_body` | 1 | a clip animates the Transform of a dynamic RigidBody; make it kinematic |
+| `clip_needs_fragment` | 1 | a glTF clip reference must name a clip: path#ClipName |
+| `unknown_clip` | 1 | a #ClipName fragment names no animation in that glTF file |
+| `mesh_has_no_skin` | 1 | a skeletal AnimationPlayer's glTF file carries no skin |
+| `skeletal_player_mesh_mismatch` | 1 | a skeletal AnimationPlayer and its entity's Mesh name different files |
+| `too_many_joints` | 1 | a skin has more joints than the fixed-size palette holds |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |

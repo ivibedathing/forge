@@ -72,6 +72,30 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                 }
             }
 
+            // A skeletal AnimationPlayer (M27). The reference-level rules —
+            // the fragment being required, the player and the Mesh naming one
+            // file — are engine-core's, because they need no file opened.
+            // These three do: the file has to have a skin, the fragment has to
+            // name a clip that is in it, and the skin has to fit the palette.
+            if let ComponentData::AnimationPlayer(player) = component {
+                if let engine_core::skeleton::ClipRef::Skeletal { asset, clip } =
+                    engine_core::skeleton::ClipRef::parse(&player.clip)
+                {
+                    let json_path = format!("{component_path}/clip");
+                    for mut error in check_rig(asset, clip, base_dir) {
+                        error = error
+                            .file(path)
+                            .entity(entity.name.clone())
+                            .component("AnimationPlayer")
+                            .field("clip");
+                        if let Some(line) = index.line_of_or_parent(&json_path) {
+                            error = error.line(line);
+                        }
+                        errors.push(error.path(json_path.clone()));
+                    }
+                }
+            }
+
             // Every mesh reference this component holds: a Mesh's `asset`,
             // a Collider's mesh-collider `asset` (M12), or each fragment
             // `mesh` of a Breakable (M14).
@@ -139,6 +163,78 @@ fn check_asset(asset: &str, base_dir: &Path) -> Option<EngineError> {
         Ok(MeshAsset::File(path)) => crate::gltf_mesh::load_gltf(&path).err(),
         Err(e) => Some(e),
     }
+}
+
+/// Open a skeletal player's glTF and check what only the file can answer.
+///
+/// Returns templates: location context is attached by the caller, the way
+/// every other verdict in this pass is.
+fn check_rig(asset: &str, clip: &str, base_dir: &Path) -> Vec<EngineError> {
+    let path = match MeshAsset::resolve(asset, base_dir) {
+        // A `builtin:` primitive is generated geometry; it can no more carry a
+        // skin than it can carry a texture, and saying so beats "no skin".
+        Ok(MeshAsset::Builtin(_)) => {
+            return vec![EngineError::new(
+                engine_core::codes::MESH_HAS_NO_SKIN,
+                format!(
+                    "clip {asset}#{clip} names the builtin primitive {asset:?}, which \
+                     has no skeleton; skeletal clips come from glTF files"
+                ),
+            )]
+        }
+        Ok(MeshAsset::File(path)) => path,
+        // The reference itself is engine-core's to report; this pass would
+        // only say it twice.
+        Err(_) => return Vec::new(),
+    };
+
+    let rig = match crate::gltf_skin::load_rig(&path) {
+        Ok(rig) => rig,
+        // A file that will not parse is already reported against whatever
+        // `Mesh` references it — and if nothing does, the mismatch rule fired.
+        Err(_) => return Vec::new(),
+    };
+
+    let mut errors = Vec::new();
+
+    match &rig.skin {
+        None => errors.push(EngineError::new(
+            engine_core::codes::MESH_HAS_NO_SKIN,
+            format!(
+                "glTF file {asset:?} carries no skin, so a skeletal player on it \
+                 could only draw the rest pose forever"
+            ),
+        )),
+        Some(skin) if skin.joints.len() > engine_core::skeleton::MAX_JOINTS => {
+            // Before a device exists, rather than a character that renders
+            // correctly up to joint 128 and explodes past it.
+            errors.push(EngineError::new(
+                engine_core::codes::TOO_MANY_JOINTS,
+                format!(
+                    "glTF file {asset:?} has a skin with {} joints; the joint palette \
+                     holds {}",
+                    skin.joints.len(),
+                    engine_core::skeleton::MAX_JOINTS
+                ),
+            ));
+        }
+        Some(_) => {}
+    }
+
+    if rig.clip_named(clip).is_none() {
+        errors.push(
+            EngineError::new(
+                engine_core::codes::UNKNOWN_CLIP,
+                format!(
+                    "glTF file {asset:?} has no animation named {clip:?} (engine \
+                     list-animations {asset} lists them)"
+                ),
+            )
+            .suggest_from(clip, rig.clip_names()),
+        );
+    }
+
+    errors
 }
 
 /// The same for a texture: decode it, which is also where `texture_too_large`

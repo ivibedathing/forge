@@ -13,12 +13,14 @@
 
 mod gltf_material;
 mod gltf_mesh;
+mod gltf_skin;
 mod server;
 mod texture;
 mod validate;
 
 pub use gltf_material::{import_materials, Imported};
 pub use gltf_mesh::load_gltf;
+pub use gltf_skin::load_rig;
 pub use server::AssetServer;
 pub use texture::load_texture;
 pub use validate::validate_scene_assets;
