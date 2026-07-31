@@ -259,22 +259,41 @@ exactly the post-break world — pinned bit-exact by CLI test. A thresholded
 
 ## Input
 
-Keyboard input is sampled per fixed step — scripts ask `world.key("ArrowUp")`
-— and exists headlessly only as an `*.input.jsonl` timeline: sparse JSONL
-keyframes of the *complete* held set, each in effect from its `step` (0-based)
-until the next line, nothing held before the first:
+Keyboard and mouse input is sampled per fixed step — scripts ask
+`world.key("ArrowUp")` and `world.mouse("MouseLeft")` — and exists headlessly
+only as an `*.input.jsonl` timeline: sparse JSONL keyframes of the *complete*
+held set, each in effect from its `step` (0-based) until the next line,
+nothing held before the first:
 
 ```jsonl
 {"step": 0, "held": ["ArrowUp"]}
-{"step": 120, "held": ["ArrowUp", "ArrowLeft"]}
-{"step": 300, "held": []}
+{"step": 120, "held": ["ArrowUp", "ArrowLeft"], "cursor": [0.62, 0.41]}
+{"step": 300, "held": ["MouseLeft"], "cursor": [0.62, 0.41]}
 ```
 
 Key names are the W3C `KeyboardEvent.code` values from a curated allowlist
-(arrows, `KeyA`–`KeyZ`, `Digit0`–`Digit9`, `Space`, `Enter`, shift/control);
-an unknown name is `unknown_key` with `did_you_mean`, malformed lines are
-`input_parse_error`, non-increasing steps are `unsorted_input_steps` — every
-error at once, with the timeline's file/line.
+(arrows, `KeyA`–`KeyZ`, `Digit0`–`Digit9`, `Space`, `Enter`, `Escape`,
+shift/control); the three mouse buttons are `MouseLeft`, `MouseRight` and
+`MouseMiddle`, and they ride the same `held` array, since a keyframe is one
+complete snapshot of what the player is doing. An unknown name is
+`unknown_key` with `did_you_mean`, malformed lines are `input_parse_error`,
+non-increasing steps are `unsorted_input_steps` — every error at once, with
+the timeline's file/line.
+
+**`cursor` is optional and is a fraction of the frame**, `[x, y]` in `[0, 1]`
+with the origin at the top-left corner — not pixels, because a timeline
+outlives the window it was recorded in. Values outside the range clamp to the
+edge; an **absent `cursor` is the centre of the frame** (`[0.5, 0.5]`), so
+every pre-M28 timeline parses unchanged and means what it always meant.
+Recorded cursors are quantized to three decimals, which is what the file says
+and therefore what replays.
+
+The ray through the cursor depends on the frame's **aspect**, so a
+mouse-driven run is a function of `--width`/`--height` as well as of the
+scene, the steps and the timeline. `screenshot` uses its own frame,
+`diff-render` uses the baseline's, and `simulate`/`raycast` — which render
+nothing — use a documented default of **960×540**. See
+`designs/mouse-input-design.md` §5.
 
 `--input <f>` on `simulate` / `screenshot` / `diff-render` / `raycast`
 replays a timeline while stepping; the same timeline twice is byte-identical

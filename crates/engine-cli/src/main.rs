@@ -1228,7 +1228,11 @@ fn diff_render(
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
     let (particles, hud) = if steps > 0 {
-        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
+        // The cursor is a fraction of the frame, and the frame here is the
+        // baseline's own dimensions — the same ones this render uses, so a
+        // mouse-driven fixture is pinned at the size it was blessed at.
+        let view = engine_core::input::Viewport::new(baseline.width, baseline.height, camera_name);
+        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
         (outcome.particles.instances(&scene.world), outcome.hud)
     } else {
         (Vec::new(), Vec::new())
@@ -1563,7 +1567,10 @@ fn screenshot(
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
     let (particles, hud) = if steps > 0 {
-        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
+        // The frame the cursor is measured in is the one about to be
+        // rendered (M28).
+        let view = engine_core::input::Viewport::new(width, height, camera_name);
+        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
         (outcome.particles.instances(&scene.world), outcome.hud)
     } else {
         (Vec::new(), Vec::new())
