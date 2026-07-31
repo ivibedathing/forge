@@ -1294,10 +1294,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             let parent_path = format!("{component_path}/parent");
             let mut chain = vec![owner.as_str()];
             let mut current = owner.as_str();
-            loop {
-                let Some(&next) = parent_of.get(current) else {
-                    break;
-                };
+            while let Some(&next) = parent_of.get(current) {
                 if let Some(at) = chain.iter().position(|seen| *seen == next) {
                     let ring: Vec<&str> = chain[at..].to_vec();
                     errors.push(

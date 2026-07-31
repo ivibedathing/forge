@@ -101,6 +101,7 @@ engine list-animations <scene-or-clip-or-gltf> [--schema]
 engine list-joints <scene-or-gltf> [--entity Name] [--time T] [--clip Name]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
+engine ui-layout <scene.json> [--width W --height H] [--entity Name]...  # where the UI landed
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
 engine list-components [--component Name]    # scene + component JSON Schemas
