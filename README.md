@@ -1,40 +1,38 @@
 # Forge
 
-**A 3D engine whose primary user is an AI coding agent, not a human in a GUI editor.**
+**An agent-native 3D engine: an agent can prove it didn't break your scene.**
 
-Every mainstream engine assumes a person clicking around a viewport. Scene state lives in binary
-files, errors are prose in a log panel, and "see what changed" means launching an editor. An agent
-can't do any of that — so integrations bolt an MCP server onto the side and hope the engine's
-internals leak enough to be useful.
+Every engine can hand a screenshot to an AI now. None of them can tell it whether the change it
+just made broke something else. Forge can, because three things are true at once:
 
-Forge inverts the tradeoff. Scenes are JSON, errors are structured JSON on stderr, and rendering a
-frame is one headless CLI command that writes a PNG. An agent edits a text file, validates it,
-builds, renders, **looks at the image**, and iterates — using only ordinary bash and file edits,
-with no bespoke integration layer.
+- **The file is the whole state.** JSON scenes, entities addressed by name, no GUIDs, no hidden
+  editor state. `git diff` is an exact record of what the agent did.
+- **Renders are reproducible.** Same file, same steps → byte-identical PNG and byte-identical
+  physics trace. A frame can be pinned like a unit test.
+- **Errors are machine-readable.** Every error at once, on stderr, with file, line, and a JSON
+  Pointer into the offending value — exit-coded by whose fault it is.
 
-Wherever machine-legibility and GUI convenience conflict, machine-legibility wins.
+Bolting an MCP server onto a conventional engine gives an agent hands. This gives it hands and a
+way to check its work.
 
-In practice that means: JSON scenes validated against generated schemas, headless PNG rendering
-and pixel-diffing against committed baselines, deterministic physics with traceable and bakeable
-simulation, property animation, sandboxed Rhai scripting with replayable input timelines, and a
-GUI editor that is strictly a live view onto the scene file — all driven from the `engine` CLI.
+## The loop
 
-## The agent feedback loop
+```bash
+engine validate scene.json                      # every error at once, no GPU, ~0.02s
+engine screenshot scene.json --out f.png        # headless render — look at it
+engine diff-render scene.json baseline.png      # and it still matches what you approved
+```
 
-The whole design serves this cycle:
+Discover by looking; verify by querying. `raycast`, `simulate --trace`, `road-centerline` and the
+HUD-in-the-report answer precisely what an image can only hint at — and `diff-render` collapses a
+frame to `diff_pixels` so a regression is a number, not an opinion.
 
-1. Edit a `.json` scene file, or a Rust component/system.
-2. `engine validate scene.json` — fast structural check against the component schemas.
-3. `engine build` — compiler and engine errors surface as structured JSON.
-4. `engine screenshot scene.json --out /tmp/check.png` — headless render.
-5. **View the PNG.** Claude Code can read images directly.
-6. Iterate. No human in the loop.
+Baselines are per-adapter artifacts: bless your own rather than expecting someone else's to match.
 
-`engine screenshot` is the single most important command in the project — it is what closes the
-loop. `engine diff-render` turns step 5 into a regression test: this scene must look like a
-committed baseline, within tolerance (bit-exact by default). Determinism is promised
-same-machine and same-adapter, so a baseline is an artifact of the machine that blessed it —
-bless your own rather than expecting someone else's to match.
+Underneath: PBR rendering, deterministic rapier physics with traceable and bakeable simulation,
+procedural terrain, water, roads, trees and clouds, particles, property animation, sandboxed Rhai
+scripting with replayable input timelines, and a GUI editor that is strictly a live view onto the
+scene file — all driven from the `engine` CLI.
 
 ## Install
 
