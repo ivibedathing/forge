@@ -126,8 +126,11 @@ two separate passes would fix which of them always draws over the other.
 
 ## 6. What is not here
 
-- **Refraction.** What is behind the surface is absorbed and tinted, never bent. This is the
-  upgrade M16 already named for transmissive materials, and water is now its loudest customer.
+- ~~**Refraction.**~~ **Landed in M27** — see `water-refraction-design.md`. One field, `ior`,
+  defaulting to `1.0` so every baseline on this page survived it. Water refracts by the thickness
+  it already measures rather than an authored one, keeps this section's absorption model rather
+  than gaining a second, and validates the sample against the depth copy so the shoreline does not
+  smear.
 - **Reflections of the scene.** The surface reflects the sky gradient (shared with `sky.wgsl`
   through `sky_common.wgsl`, so it cannot drift from the sky drawn behind it) and the sun. The
   trees standing next to a lake are not in it. Planar reflections — a second scene render from the

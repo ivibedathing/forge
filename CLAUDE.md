@@ -12,8 +12,8 @@ it are still open (§9).
 **M0–M28 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
-M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M28 the mouse. (M7
-editor at scope E0–E2 + validation panel + `--watch`.)
+M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
+M28 the mouse. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -594,10 +594,63 @@ scaling never stretches them and two water entities at the same height form one 
   body is lit with the **up** normal while the view-facing normal drives reflection, Fresnel, and
   specular — conflating them made water black from below.
 
-Not here, deliberately: refraction (what is behind is absorbed and tinted, never bent), scene
-reflections (sky and sun only), a CPU wave evaluator and therefore no buoyancy (`water.rs` is where
-the Rust mirror goes, with an agreement test, when a boat needs to float), and point lights on water.
+Not here, deliberately: scene reflections (sky and sun only), a CPU wave evaluator and therefore no
+buoyancy (`water.rs` is where the Rust mirror goes, with an agreement test, when a boat needs to
+float), and point lights on water. Refraction landed in M27 (below).
 Fixture `verify/m18_water.json` at `--steps 120`.
+
+## Water refraction (M27, `designs/water-refraction-design.md`)
+
+`Water` gains **one field, `ior`**, defaulting to `1.0` (no bending) — so every committed baseline
+survived the milestone untouched except the six the showcase tour's own edit re-blessed, and the
+sweep confirmed the other 27 bit-exact. `Water::refracts()` is `ior != 1.0`, and it joins
+`Material::refracts()` in the disjunction that allocates M26's opaque colour copy and splits the
+pass, so a scene with neither still renders the pre-M26 pass structure exactly.
+
+- **Three things `Material` needs that water does not.** No `thickness`: `water_thickness()` has
+  measured the view ray's path through the body since M18, so the bend scales with the water's own
+  depth. No `attenuation`: water already grades `shallow_color`→`deep_color` off that same
+  thickness, and the bed that reaches the camera is `1 - out_alpha`, the number the blend unit was
+  already using. **Refraction moves where the bed is read from, not how much of it comes back** —
+  which means turning `ior` on cannot change how deep the water looks, and it can go into a tuned
+  scene without re-tuning it. And no `FrameUniform` change: the exit point projects with
+  `surface.view_proj` out of `WaterUniform`, which water carries because waves displace in world
+  space.
+- **The exit point is solved to the bed's depth, not stepped along the refracted ray by the view
+  ray's path length.** This is the milestone's one real trap. `refraction.wgsl` steps, correctly,
+  because a mesh's `thickness` is an authored fudge; water measures a real quantity along a
+  *different* ray, and the refracted ray is always steeper for `ior > 1`. Measured on the fixture —
+  1.5 m pool at 66° from the normal — stepping overshoots the bed by 1.18 m and displaces the
+  sample 2.53 m instead of 1.42 m, which renders as the bed **diced into rectangular blocks**, not
+  as a bent pool bottom. The travel is capped at `thickness`, which is the `ior >= 1` bound as
+  arithmetic and makes the expression continuous at 1.0.
+- **The sample is validated against the depth copy** and falls back to the unrefracted one when it
+  lands in front of the water. The mesh path skips this (its ice is a block in mid-air); water
+  cannot, because a pond is bounded by a shoreline and by things standing in it. It costs one
+  `textureLoad` from a copy water already has bound. **It was measured before it was believed**: on
+  the fixture's overhead camera it changes *zero* pixels and was nearly deleted as dead code; at a
+  grazing 8° it changes ~22k by up to 99, smearing the boulder's silhouette across the water. Hence
+  the fixture's second camera.
+- **`water.wgsl` is not edited, including its comments.** The plain pipeline compiles it as it sits
+  on disk and a second `refractive-water-pipeline` compiles a variant assembled by
+  `with_water_refraction` (M22/M26's splice, four anchors, each asserted to appear exactly once).
+  The pipeline is chosen **per surface**, so an unrefracting pond beside a refracting one still
+  gets the M18 shader. The IOR rides in `clock.z`, a slot M18 declared padding, which is what keeps
+  one uniform layout feeding both pipelines.
+- **Authoring: refraction is only visible in water you can see through, and needs a pattern under
+  it.** A displacement of a uniform field is invisible by construction, and the displacement runs
+  *along* the view direction — so a bed pattern parallel to that axis barely moves (the first
+  render test split the bed left/right and saw 236 pixels change; bars laid across it see
+  thousands). The tour's pond is silty over a 0.2 m bed and `ior` still moves ~30k pixels of
+  `showcase_450`, because a grazing camera makes the path long even in a puddle.
+
+Fixture `verify/m27_water_refraction.json` at `--steps 120`, **two baselines from one file** via a
+second camera (`--camera CameraGrazing`) — the overhead one pins the bend, the grazing one pins the
+clean waterline. Both are hard bit-exact pins with no tolerance, which M22's rule allows because the
+fixture aims at its subject with no terrain in frame; four consecutive sweeps came back at zero.
+Not here: refracting another transparent surface (the copy is the *opaque* frame, so the ice
+floating in a pond is not in what the pond bends), chromatic dispersion, and planar reflections —
+still the other half of a water surface, and still missing.
 
 ## Trees (M19, `designs/tree-design.md`)
 
@@ -788,7 +841,13 @@ images ~100 pixels apart (delta ≤ 18) in the distant tree canopy. It is the on
 `diff_args` tolerance in `baselines.json` (`--threshold 24`). `showcase_810.png` has since been
 seen to flake the same way **once** — 29 pixels at a channel delta of 1, along the treeline, clean on
 the next three runs — so it is the same residue and not a second bug; it is left without a tolerance
-deliberately, since one flake in four sweeps is worth re-running rather than blessing away. **The general rule: fine geometry
+deliberately, since one flake in four sweeps is worth re-running rather than blessing away.
+M27 saw the same signature on **`showcase_450` (22 px) and `showcase_585` (24 px), both at delta 1**,
+in one of seven consecutive full sweeps, the other six clean. Same residue, same verdict, no
+tolerance: **the whole tour is in this class, not three named frames**, so a failure on any
+`showcase_*` at a delta of 1 and a couple of dozen pixels is worth a second sweep before it is worth
+debugging. Everything else in the manifest is bit-exact and a failure there is real — the M27
+fixtures, which aim at their subject with no terrain in frame, never flaked across ten sweeps. **The general rule: fine geometry
 against relief under MSAA is where this adapter stops being reproducible, so a new fixture wanting a
 hard pin should aim its camera at its subject rather than across a landscape.** Verified by
 `engine-render/tests/terrain.rs` (including `a_flat_single_layer_patch_is_exactly_a_painted_plane`,
@@ -1041,10 +1100,10 @@ components where twelve cylinder-and-sphere entities used to be), and four `Clou
 cameras are all ground-level and aimed *down*, so the clouds ride the horizon rather than filling the
 sky. Still faked and named as such in the doc: animals (scaled spheres on parametric loops) and the
 sky (a gradient, not scattering). The blast at station 04 emits no light, which is a wiring job rather
-than a missing feature. Refraction is the upgrade that would move this scene most, and the pond is
-now its loudest customer (`Water` has no `Material` to put an `ior` on); **alpha-cut leaves** are the
-last flat surface in frame, and they need `Tree::leaf_material` to grow map fields — an engine
-change, not authoring.
+than a missing feature. The pond **refracts** since M27 (`ior: 1.33` — `Water` carries its own, having no
+`Material` to put one on), which is what re-blessed the six baselines a second time; **alpha-cut
+leaves** are the last flat surface in frame, and they need `Tree::leaf_material` to grow map fields
+— an engine change, not authoring.
 
 **Building it found a physics bug** now fixed and regression-tested: priming the broad-phase BVH
 before the first step (vehicle worlds did this so wheel rays hit ground on step 0) consumed the pair
@@ -1116,7 +1175,7 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**15 of the 31 baselines are pinned by no test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`,
+**15 of the 33 baselines are pinned by no test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`,
 both `m10`, `m11_lap`, `m13_smoke`, `m14_break`, and all six `showcase_*`) — the sweep is their only
 check. `m11_lap.png` is the one to be careful about when reading older notes: the lap CLI test pins
 the *drive* (positions, elevation, parked HUD strings) and names the PNG in a comment, but nothing
@@ -1233,8 +1292,7 @@ M8 physics → M9 animation (A0–A1) → M10 scripting — **the roadmap is com
 M4 on ends by running its fixture from `designs/milestone-verification-scenes.md`.
 
 Deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF + GPU skinning, the
-M5-era deferrals (`--fix`, watch mode), and — after M16–M20 — refraction and scene-color sampling for
-transmissive materials (water's loudest missing feature), planar reflections, shadow cascades (which
+M5-era deferrals (`--fix`, watch mode), and — after M16–M20 — planar reflections, shadow cascades (which
 is also what cloud shadows need), shadows from point lights, spot lights, a CPU wave evaluator and
 buoyancy, a light on the tour's explosion, a sky-dome cloud layer for cirrus and overcast, and
 tree LOD and wind. (Refraction and texture-mapped materials landed in M26, and the showcase tour's

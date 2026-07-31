@@ -182,7 +182,12 @@ struct WaterUniform {
     foam: [f32; 4],
     /// x = roughness, y = opacity, z = crest foam, w = detail cell size.
     params: [f32; 4],
-    /// x = wave count, y = time in seconds; z and w are padding.
+    /// x = wave count, y = time in seconds, z = index of refraction (M27);
+    /// w is padding.
+    ///
+    /// The IOR rides in a slot M18 declared padding so that **one** uniform
+    /// layout feeds both water pipelines — the plain shader simply never reads
+    /// it, and `water_objects` stays a single buffer.
     clock: [f32; 4],
     /// Two vec4s per wave, [`MAX_WAVES`] of them: `(dir.x, dir.z, amplitude, k)`
     /// then `(q, omega, 0, 0)`. Packed by [`pack_waves`].
@@ -674,6 +679,10 @@ pub struct SceneRenderer {
     shadow_cutout_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     water_pipeline: wgpu::RenderPipeline,
+    /// The same with refraction spliced in (M27), used only by a surface whose
+    /// `ior` is not 1. Chosen per surface, so an unrefracting pond in a scene
+    /// that also holds a refracting one still compiles to the M18 shader.
+    refractive_water_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
     /// Roads (M23): opaque, shadow-casting, and the only pipeline that reads a
     /// vertex UV — a road's markings are painted from surface coordinates.
@@ -1243,6 +1252,23 @@ impl SceneRenderer {
             &vertex_layouts[..1],
             format,
             multisample,
+            std::borrow::Cow::Borrowed(include_str!("shaders/water.wgsl")),
+        );
+        // The same again with refraction spliced in (M27), for the surfaces
+        // that bend what is behind them. A second pipeline rather than a
+        // branch, for M22's and M26's measured reason: compiling the variant
+        // for every water draw is a change to the code around the M18 shader's
+        // arithmetic, and that is enough to move a pixel in a pond that does
+        // not refract.
+        let refractive_water_pipeline = Self::water_pipeline(
+            device,
+            &water_layout,
+            &frame_layout,
+            &frame_textures_layout,
+            &vertex_layouts[..1],
+            format,
+            multisample,
+            with_water_refraction(),
         );
         // Clouds (M20). Its own uniform and shader, the mesh pass's frame
         // binding, and nothing else: no shadow map (the engine has one cascade
@@ -1503,6 +1529,7 @@ impl SceneRenderer {
             shadow_cutout_pipeline,
             sky_pipeline,
             water_pipeline,
+            refractive_water_pipeline,
             cloud_pipeline,
             road_pipeline,
             road_layout,
@@ -1752,10 +1779,14 @@ impl SceneRenderer {
         vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
         format: wgpu::TextureFormat,
         multisample: wgpu::MultisampleState,
+        // The M18 file as it sits on disk, or the M27 variant with refraction
+        // spliced in. Passed rather than branched on, so the plain pipeline's
+        // source is `include_str!` and nothing else.
+        source: std::borrow::Cow<'static, str>,
     ) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("water-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("shaders/water.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&source)),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("water-pipeline-layout"),
@@ -2662,7 +2693,13 @@ impl SceneRenderer {
         // pass structure, the attachments and the load/store ops are byte for
         // byte the pre-M26 ones.
         let refracting: Vec<bool> = items.iter().map(|item| item.material.refracts()).collect();
-        let refraction_present = refracting.iter().any(|&yes| yes);
+        // Water refracts through the same copy since M27, so it joins the
+        // disjunction rather than getting a second one: a scene with neither a
+        // refracting material nor a refracting surface still renders the
+        // pre-M26 pass structure exactly.
+        let refracting_water: Vec<bool> = water.iter().map(|item| item.water.refracts()).collect();
+        let refraction_present =
+            refracting.iter().any(|&yes| yes) || refracting_water.iter().any(|&yes| yes);
         let split_pass = water_present || refraction_present;
         if refraction_present {
             SceneColor::ensure(
@@ -2887,6 +2924,7 @@ impl SceneRenderer {
                     &cloud_keys,
                     &material_keys,
                     &refracting,
+                    &refracting_water,
                     opaque_frame_textures,
                 );
                 self.draw_particles(&mut pass, particle_count, alpha_particles);
@@ -2975,6 +3013,7 @@ impl SceneRenderer {
                 &cloud_keys,
                 &material_keys,
                 &refracting,
+                &refracting_water,
                 frame_textures,
             );
             self.draw_particles(&mut pass, particle_count, alpha_particles);
@@ -3104,10 +3143,11 @@ impl SceneRenderer {
         cloud_keys: &[usize],
         material_keys: &[Option<[usize; 4]>],
         refracting: &[bool],
+        refracting_water: &[bool],
         frame_textures: &wgpu::BindGroup,
     ) {
         // 0 = transparent mesh, 1 = water, 2 = cloud, 3 = textured transparent
-        // mesh.
+        // mesh, 5 = refracting water.
         let mut current: Option<u8> = None;
         for entry in blended {
             match *entry {
@@ -3153,11 +3193,18 @@ impl SceneRenderer {
                     let Some(surfaces) = &self.water_objects else {
                         continue;
                     };
-                    if current != Some(1) {
-                        pass.set_pipeline(&self.water_pipeline);
+                    // Per surface (M27), not per scene: a pond at the default
+                    // `ior: 1.0` keeps the M18 shader even when another body of
+                    // water in the same frame refracts.
+                    let kind = if refracting_water[index] { 5 } else { 1 };
+                    if current != Some(kind) {
+                        pass.set_pipeline(match kind {
+                            5 => &self.refractive_water_pipeline,
+                            _ => &self.water_pipeline,
+                        });
                         pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
                         pass.set_bind_group(2, frame_textures, &[]);
-                        current = Some(1);
+                        current = Some(kind);
                     }
                     let mesh = &self.meshes[&water_keys[index]];
                     pass.set_bind_group(
@@ -3649,7 +3696,7 @@ fn water_uniform(item: &WaterItem, view_projection: Mat4, time: f32) -> WaterUni
         deep_fade: w.deep_color.extend(w.depth_fade).to_array(),
         foam: w.foam_color.extend(w.shore_foam).to_array(),
         params: [w.roughness, w.opacity, w.crest_foam, w.detail_scale],
-        clock: [count as f32, time, 0.0, 0.0],
+        clock: [count as f32, time, w.ior, 0.0],
         waves,
     }
 }
@@ -4063,6 +4110,101 @@ fn with_refraction() -> std::borrow::Cow<'static, str> {
 
 fn with_textures_and_refraction() -> std::borrow::Cow<'static, str> {
     with_surface(&[texture_producer(), refraction_producer()])
+}
+
+/// The anchors `with_water_refraction` splices against — existing lines of
+/// `water.wgsl`, exactly as `anchor` holds existing lines of `mesh.wgsl`.
+///
+/// The file itself is **not edited by this milestone, including its comments**:
+/// the plain pipeline compiles it as it sits on disk, byte-identical by
+/// construction, and the substitution that claims each anchor is where the
+/// variant's version of that text lives.
+mod water_anchor {
+    /// The depth copy's binding, and the last of the group-2 declarations —
+    /// where the variant's own colour-copy bindings go in after it.
+    pub const BINDINGS: &str = "@group(2) @binding(2) var scene_depth: texture_2d<f32>;\n";
+    /// The clock, whose `z` M18 declared padding and M27 fills with the IOR.
+    /// A comment-only substitution, and it earns its place: the disk file keeps
+    /// describing the pipeline that actually compiles it.
+    pub const CLOCK: &str = "    // x = wave count, y = time in seconds, z and w unused.\n\
+                             \x20   clock: vec4<f32>,\n";
+    /// Where the path length through the body is measured. The bend is scaled
+    /// by it, so the sample is taken here rather than at the composite.
+    pub const THICKNESS: &str =
+        "    // Absorption along the view ray through the water body.\n\
+         \x20   let thickness = water_thickness(in.clip, in.world);\n";
+    /// The last line of the fragment stage.
+    pub const RETURN: &str =
+        "    return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);\n";
+}
+
+/// The water shader with refraction spliced in (M27).
+///
+/// Same discipline as [`with_surface`]: every anchor must appear exactly once,
+/// because a splice that silently did nothing renders the feature as if it were
+/// absent — the failure mode hardest to see, since the scene still draws.
+fn with_water_refraction() -> std::borrow::Cow<'static, str> {
+    let source = include_str!("shaders/water.wgsl");
+    let substitutions = [
+        (
+            water_anchor::BINDINGS,
+            concat!(
+                "@group(2) @binding(2) var scene_depth: texture_2d<f32>;\n\n",
+                include_str!("shaders/water_refraction.wgsl"),
+            ),
+        ),
+        (
+            water_anchor::CLOCK,
+            "    // x = wave count, y = time in seconds, z = index of refraction\n\
+             \x20   // (M27), w unused.\n\
+             \x20   clock: vec4<f32>,\n",
+        ),
+        (
+            water_anchor::THICKNESS,
+            "    // Absorption along the view ray through the water body.\n\
+             \x20   let thickness = water_thickness(in.clip, in.world);\n\
+             \x20   // What is behind the surface, bent (M27). Sampled here,\n\
+             \x20   // where the measured thickness that scales the bend is in\n\
+             \x20   // hand, and held out of the running colour until after fog:\n\
+             \x20   // the copy was already fogged at its own depth when the\n\
+             \x20   // opaque pass drew it, and fogging it twice is what turns\n\
+             \x20   // clear water into a pale slab.\n\
+             \x20   let bed = refracted_bed(\n\
+             \x20       in.clip,\n\
+             \x20       in.world,\n\
+             \x20       v,\n\
+             \x20       n,\n\
+             \x20       surface.clock.z,\n\
+             \x20       thickness,\n\
+             \x20   );\n",
+        ),
+        (
+            water_anchor::RETURN,
+            "    // The bed last, and the surface opaque once it carries it: the\n\
+             \x20   // blend unit must not add the framebuffer's un-refracted\n\
+             \x20   // version on top. `1 - out_alpha` is exactly what that blend\n\
+             \x20   // would have admitted, which is the whole claim — refraction\n\
+             \x20   // moves where the bed is read from, not how much of it comes\n\
+             \x20   // back, so turning it on cannot change how deep the water\n\
+             \x20   // looks. Foam has already driven `out_alpha` toward 1 where\n\
+             \x20   // it is opaque, and you cannot see through foam.\n\
+             \x20   color = color + bed * (1.0 - out_alpha);\n\
+             \x20   out_alpha = 1.0;\n\
+             \x20   return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);\n",
+        ),
+    ];
+
+    let mut out = source.to_string();
+    for (anchor, replacement) in substitutions {
+        assert_eq!(
+            source.matches(anchor).count(),
+            1,
+            "water.wgsl no longer contains this anchor exactly once, so the \
+             refracting pipeline would compile as if refraction were absent:\n{anchor}"
+        );
+        out = out.replace(anchor, replacement);
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// A buffer holding `contents`, created once and never rewritten — the shape

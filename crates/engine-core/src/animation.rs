@@ -454,6 +454,11 @@ pub fn set_field(
                 "crest_foam" => c.crest_foam = scalar,
                 "shore_foam" => c.shore_foam = scalar,
                 "foam_color" => c.foam_color = v3,
+                // Animatable, unlike `Terrain`'s shape fields: the IOR is a
+                // uniform the shader reads, so a clip on it regenerates
+                // nothing. It does switch pipelines the step it leaves 1.0,
+                // which is a pipeline lookup and not a rebuild.
+                "ior" => c.ior = scalar,
                 _ => return false,
             }
         }
