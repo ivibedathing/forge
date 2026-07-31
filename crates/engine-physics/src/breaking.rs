@@ -89,7 +89,7 @@ pub fn apply_breaks(
             .get::<&Transform>(entity)
             .map(|t| *t)
             .unwrap_or_default();
-        let material = world.get::<&Material>(entity).map(|m| *m).ok();
+        let material = world.get::<&Material>(entity).map(|m| (*m).clone()).ok();
         let (linear, angular_degrees) = world
             .get::<&RigidBody>(entity)
             .map(|b| (b.linear_velocity, b.angular_velocity))
@@ -180,8 +180,8 @@ pub fn apply_breaks(
             builder.add(Mesh {
                 asset: fragment.mesh.clone(),
             });
-            if let Some(material) = material {
-                builder.add(material);
+            if let Some(material) = &material {
+                builder.add(material.clone());
             }
             builder.add(body);
             builder.add(collider.clone());

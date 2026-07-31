@@ -102,6 +102,8 @@ build fails.
 | `asset_unsupported` | 1 | the asset's format or feature is not one the engine reads |
 | `asset_path_not_relative` | 1 | asset paths must be relative to the scene file |
 | `asset_load_failed` | 1 | the asset file exists but could not be parsed |
+| `texture_too_large` | 1 | a texture is larger on a side than the engine's device limit |
+| `material_asset_with_fields` | 1 | a Material that names an asset may not also set fields inline |
 | `render_mismatch` | 1 | the rendered scene differs from its baseline beyond tolerance |
 | `baseline_not_found` | 1 | the baseline PNG path does not exist |
 | `baseline_invalid` | 1 | the baseline file is not a decodable, non-empty PNG |

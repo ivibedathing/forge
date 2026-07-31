@@ -18,5 +18,5 @@ mod validate;
 
 pub use gltf_mesh::load_gltf;
 pub use server::AssetServer;
-pub use texture::{load_texture, TextureData};
+pub use texture::load_texture;
 pub use validate::validate_scene_assets;

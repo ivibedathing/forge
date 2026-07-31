@@ -262,6 +262,10 @@ registry! {
         "asset paths must be relative to the scene file";
     ASSET_LOAD_FAILED = "asset_load_failed", Input,
         "the asset file exists but could not be parsed";
+    TEXTURE_TOO_LARGE = "texture_too_large", Input,
+        "a texture is larger on a side than the engine's device limit";
+    MATERIAL_ASSET_WITH_FIELDS = "material_asset_with_fields", Input,
+        "a Material that names an asset may not also set fields inline";
 
     // ── diff-render ────────────────────────────────────────────────────
     RENDER_MISMATCH = "render_mismatch", Input,

@@ -568,6 +568,34 @@ pub(crate) fn report_scene_diagnostics(path: &PathBuf) -> SceneReport {
     }
 }
 
+/// The `Material` component's field names, read from the published schema so
+/// this cannot drift as fields are added.
+///
+/// Used to recognise a `materials/*.json` by its shape rather than by its
+/// filename — the same choice `validate` already makes for clip files, and for
+/// the same reason: an agent should not have to learn a naming convention to
+/// get its file checked. One known field is enough, so a file with a *typo'd*
+/// field is still validated as a material and told which field is wrong,
+/// instead of being validated as a scene and told it has no entities.
+fn material_fields() -> &'static [String] {
+    use std::sync::OnceLock;
+    static FIELDS: OnceLock<Vec<String>> = OnceLock::new();
+    FIELDS.get_or_init(|| {
+        let schema = engine_core::schema::component_schema();
+        schema["oneOf"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|v| v["properties"]["type"]["const"] == "Material")
+            .and_then(|v| v["properties"].as_object())
+            .into_iter()
+            .flatten()
+            .map(|(name, _)| name.clone())
+            .filter(|name| name != "type" && name != "asset")
+            .collect()
+    })
+}
+
 /// `engine validate` — every diagnostic for every file, then an aggregate
 /// verdict. `--strict` promotes warnings to errors, for CI.
 fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
@@ -577,16 +605,30 @@ fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
     for path in scenes {
         // A clip file validates as a clip ("tracks", no "entities"): the
         // same all-at-once contract, structural checks only — entity-name
-        // resolution needs a scene.
-        let is_clip = std::fs::read_to_string(path)
+        // resolution needs a scene. A material file (M26) is routed the same
+        // way, and is recognised the same way: by shape, not by filename, so
+        // `materials/asphalt.json` and `asphalt.material.json` both work.
+        let parsed = std::fs::read_to_string(path)
             .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let is_clip = parsed
+            .as_ref()
             .is_some_and(|v| v.get("tracks").is_some() && v.get("entities").is_none());
-        if is_clip {
+        let is_material = parsed.as_ref().is_some_and(|v| {
+            v.get("entities").is_none()
+                && v.get("tracks").is_none()
+                && v.as_object().is_some_and(|o| {
+                    o.keys().any(|k| material_fields().iter().any(|f| f == k))
+                })
+        });
+        if is_clip || is_material {
             let display = path.display().to_string();
             let source = std::fs::read_to_string(path).unwrap_or_default();
-            let diagnostics =
-                engine_core::animation::validate_clip_source(&source, &display);
+            let diagnostics = if is_clip {
+                engine_core::animation::validate_clip_source(&source, &display)
+            } else {
+                engine_core::validate::validate_material_source(&source, &display)
+            };
             for diagnostic in &diagnostics {
                 diagnostic.emit();
             }

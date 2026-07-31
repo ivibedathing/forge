@@ -1,4 +1,4 @@
-//! The mesh source that actually reads files.
+//! The asset source that actually reads files.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use engine_core::error::Result;
 use engine_core::mesh::{MeshAsset, MeshData, MeshSource};
+use engine_core::texture::{resolve_texture, ColorSpace, TextureData, TextureSource};
 
 /// Resolves and loads mesh assets relative to a root directory — in practice,
 /// the directory of the scene file being rendered.
@@ -20,6 +21,11 @@ use engine_core::mesh::{MeshAsset, MeshData, MeshSource};
 pub struct AssetServer {
     root: PathBuf,
     cache: RefCell<HashMap<String, Arc<MeshData>>>,
+    /// The same arrangement for textures, keyed on the reference **and** the
+    /// colour space it was decoded for — the space decides how the mip chain
+    /// was filtered, so one file read as albedo and as ORM really is two
+    /// different sets of pixels.
+    textures: RefCell<HashMap<(String, ColorSpace), Arc<TextureData>>>,
 }
 
 impl AssetServer {
@@ -27,6 +33,7 @@ impl AssetServer {
         Self {
             root: root.into(),
             cache: RefCell::new(HashMap::new()),
+            textures: RefCell::new(HashMap::new()),
         }
     }
 
@@ -51,6 +58,21 @@ impl MeshSource for AssetServer {
         self.cache
             .borrow_mut()
             .insert(asset.to_string(), Arc::clone(&data));
+        Ok(data)
+    }
+}
+
+impl TextureSource for AssetServer {
+    fn load_texture(&self, asset: &str, space: ColorSpace) -> Result<Arc<TextureData>> {
+        let key = (asset.to_string(), space);
+        if let Some(hit) = self.textures.borrow().get(&key) {
+            return Ok(Arc::clone(hit));
+        }
+
+        let path = resolve_texture(asset, &self.root)?;
+        let data = Arc::new(crate::texture::load_texture(&path, space)?);
+
+        self.textures.borrow_mut().insert(key, Arc::clone(&data));
         Ok(data)
     }
 }

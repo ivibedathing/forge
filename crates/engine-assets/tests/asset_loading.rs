@@ -2,8 +2,10 @@
 //! fixtures generated into a temp directory per test.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use engine_core::mesh::{BuiltinMesh, MeshSource};
+use engine_core::texture::{ColorSpace, TextureSource};
 
 fn example(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -274,20 +276,57 @@ fn loads_a_png_texture_as_rgba8() {
     png.put_pixel(1, 1, image::Rgba([0, 0, 255, 128]));
     png.save(&path).unwrap();
 
-    let texture = engine_assets::load_texture(&path).unwrap();
+    let texture = engine_assets::load_texture(&path, ColorSpace::Srgb).unwrap();
     assert_eq!((texture.width, texture.height), (2, 2));
-    assert_eq!(texture.rgba.len(), 16);
-    assert_eq!(&texture.rgba[0..4], &[255, 0, 0, 255]);
-    assert_eq!(&texture.rgba[12..16], &[0, 0, 255, 128]);
+    assert_eq!(texture.rgba().len(), 16);
+    assert_eq!(&texture.rgba()[0..4], &[255, 0, 0, 255]);
+    assert_eq!(&texture.rgba()[12..16], &[0, 0, 255, 128]);
+    // And the mip chain the renderer needs, generated at load (M26).
+    assert_eq!(texture.mips.len(), 2, "2×2 chains down to 1×1");
 }
 
 #[test]
 fn texture_errors_are_structured() {
     let fixture = Fixture::new("texture-errors");
-    let missing = engine_assets::load_texture(&fixture.0.join("nope.png")).unwrap_err();
+    let missing =
+        engine_assets::load_texture(&fixture.0.join("nope.png"), ColorSpace::Srgb).unwrap_err();
     assert_eq!(missing.error, "asset_not_found");
 
     let bad = fixture.write("bad.png", "not a png");
-    let corrupt = engine_assets::load_texture(&bad).unwrap_err();
+    let corrupt = engine_assets::load_texture(&bad, ColorSpace::Srgb).unwrap_err();
     assert_eq!(corrupt.error, "asset_load_failed");
+}
+
+/// The device limit is refused before the chain is built, not at upload —
+/// `tree_too_complex`'s precedent, for `tree_too_complex`'s reason.
+#[test]
+fn a_texture_over_the_device_limit_fails_to_load() {
+    let fixture = Fixture::new("texture-too-large");
+    let path = fixture.0.join("huge.png");
+    image::RgbaImage::new(4096, 8).save(&path).unwrap();
+
+    let error = engine_assets::load_texture(&path, ColorSpace::Srgb).unwrap_err();
+    assert_eq!(error.error, "texture_too_large");
+    assert!(error.message.contains("4096"), "{}", error.message);
+}
+
+/// The M15 rule, asserted rather than assumed: the renderer keys its uploaded
+/// GPU textures on this `Arc`'s identity, and a fresh one per call would
+/// re-upload every texture every frame.
+#[test]
+fn one_texture_asset_is_one_arc() {
+    let fixture = Fixture::new("texture-cache");
+    let path = fixture.0.join("tex.png");
+    image::RgbaImage::new(4, 4).save(&path).unwrap();
+
+    let server = engine_assets::AssetServer::new(&fixture.0);
+    let first = server.load_texture("tex.png", ColorSpace::Srgb).unwrap();
+    let second = server.load_texture("tex.png", ColorSpace::Srgb).unwrap();
+    assert!(Arc::ptr_eq(&first, &second), "repeat loads share one Arc");
+
+    // A different colour space is a different decode — the mip chain is
+    // filtered in it — so it is a different entry rather than the same one.
+    let linear = server.load_texture("tex.png", ColorSpace::Linear).unwrap();
+    assert!(!Arc::ptr_eq(&first, &linear));
+    assert_eq!(linear.space, ColorSpace::Linear);
 }

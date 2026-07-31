@@ -444,13 +444,25 @@ impl Scene {
 
         // Validation already proved this parses; a failure here is a bug in
         // validation rather than in the scene, so it gets its own error code.
-        let file: SceneFile = serde_json::from_str(source).map_err(|e| {
+        let mut file: SceneFile = serde_json::from_str(source).map_err(|e| {
             vec![EngineError::new(
                 crate::codes::SCENE_PARSE_DESYNC,
                 format!("scene passed validation but failed to parse: {e}"),
             )
             .file(path)]
         })?;
+
+        // File-backed materials are filled in here rather than at every point
+        // of use, so nothing downstream has to know a material can live in
+        // another file. Validation has already proved each one resolves, so a
+        // failure at this point is a file that changed underneath us.
+        let base_dir = std::path::Path::new(path)
+            .parent()
+            .unwrap_or(std::path::Path::new(""));
+        let errors = crate::material::resolve_scene_materials(&mut file, base_dir);
+        if !errors.is_empty() {
+            return Err(errors.into_iter().map(|e| e.file(path)).collect());
+        }
 
         Ok(Self::instantiate(file))
     }
@@ -609,7 +621,7 @@ impl Scene {
             let material = self
                 .world
                 .get::<&crate::components::Material>(entity)
-                .map(|m| *m)
+                .map(|m| (*m).clone())
                 .unwrap_or_default();
 
             let name = self
@@ -647,7 +659,7 @@ impl Scene {
             let bark = self
                 .world
                 .get::<&crate::components::Material>(entity)
-                .map(|m| *m)
+                .map(|m| (*m).clone())
                 .unwrap_or_default();
 
             items.push(RenderItem {
