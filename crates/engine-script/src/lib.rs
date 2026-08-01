@@ -3367,6 +3367,89 @@ mod tests {
         (scene, scene_path)
     }
 
+    /// M39's three calls. `ragdoll` and `is_ragdoll` are an ordinary component
+    /// write and read; `ragdoll_impulse` is queued like an explosion, and is a
+    /// **located error** on a character that has not ragdolled — an impulse to
+    /// a kinematic proxy is a call that appears to work and does nothing.
+    #[test]
+    fn ragdoll_fires_once_and_an_impulse_before_it_is_refused() {
+        let dir = temp_dir("ragdoll");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                if step == 0 {
+                    world.set_state("before", if world.is_ragdoll("Walker") { 1.0 } else { 0.0 });
+                    world.ragdoll("Walker");
+                    world.set_state("after", if world.is_ragdoll("Walker") { 1.0 } else { 0.0 });
+                    world.ragdoll("Walker");
+                    world.ragdoll_impulse("Walker", "Head", 0.0, 1.0, 0.0);
+                }
+                if step == 1 { world.ragdoll_impulse("Other", "Head", 0.0, 1.0, 0.0); }
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Walker","components":[
+                {"type":"Transform"},
+                {"type":"Ragdoll"},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"Other","components":[{"type":"Transform"},{"type":"Ragdoll"}]}
+        ]}"#;
+        let path = dir.join("scene.json");
+        std::fs::write(&path, scene_json).unwrap();
+        let mut scene = Scene::instantiate(serde_json::from_str(scene_json).unwrap());
+        let host = host_for(&scene, &path);
+
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+
+        // The flag is a plain component field, so the write is visible to the
+        // same step that made it — and firing twice is a no-op, because the
+        // state is a bool rather than an event.
+        let entity = scene.entity("Walker").unwrap();
+        assert!(
+            scene
+                .world
+                .get::<&engine_core::components::Ragdoll>(entity)
+                .unwrap()
+                .active,
+            "world.ragdoll must set Ragdoll.active"
+        );
+        let kicks = host.take_kicks();
+        assert_eq!(kicks.len(), 1, "{kicks:?}");
+        assert_eq!(kicks[0].entity, "Walker");
+        assert_eq!(kicks[0].part, "Head");
+        assert!(host.take_kicks().is_empty(), "draining drains");
+
+        // And an impulse to a character still animating is refused rather than
+        // silently absorbed by a kinematic body.
+        let error = host
+            .step(
+                &mut scene.world,
+                1,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("not a ragdoll yet"),
+            "{}",
+            error.message
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn break_entity_queues_and_validates_at_call_time() {
         let dir = temp_dir("break");

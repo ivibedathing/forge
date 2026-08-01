@@ -47,6 +47,14 @@ they ended up.
   one axis "expressed in the local-space of both rigid-bodies", which is true only when the two
   bodies share an orientation — and two bones never do.
 
+**Nothing in the render path changed**, so the A/B said **34 of 34** comparable artifacts
+byte-identical. The seven exclusions are the new fixture and the six tour frames, and here they are
+excluded for an unusual reason: the base binary does not know the `Ragdoll` component, so it refuses
+those scenes at *validation* rather than rendering them differently. The tour is covered better than
+an A/B could anyway — `bin/verify-baselines --filter showcase` on this branch came back at **zero
+diff pixels on all six**, which is the direct measurement that an inert `Ragdoll` costs a scene
+nothing.
+
 **The one that cost the debugging session, and it is not about ragdolls.** The fixture's corpse left
 the scene at about **40 m/s** from a 6 N·s kick. Nothing was wrong with the joints, the limits, the
 anchors or the frames: **a collider's density only reaches its body when the body's mass properties
