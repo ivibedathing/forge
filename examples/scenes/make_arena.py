@@ -106,11 +106,58 @@ TREES = [
     (14.0, 58.0, 6),
 ]
 
+# Grass at the foot of the plateau: four strips ringing the arena, each one a
+# `Meadow` standing on `Landscape`. It is a ring rather than a field because
+# the camera looks *down* at the arena from 20 m and the only ground it ever
+# sees past the walls is the band immediately outside them — grass further out
+# would be plants nobody renders. Entries are (x, z, size_x, size_z, seed).
+#
+# Density is the number that decides whether this is scenery or a stall: the
+# component counts plants per square metre of footprint, so a strip is
+# `size_x * size_z * density` plants, and M29's budget (`MAX_MEADOW_TRIANGLES`,
+# 8M) is per entity and counted in triangles. Measured at these settings: a
+# plant is 64 triangles, a long strip ~20k plants (1.3M triangles) and a short
+# one ~12k (0.8M), so each sits well inside its own budget and the four
+# together are about 4M — which costs the frame nothing measurable, because
+# every one of them is two static buffers and a vertex shader.
+MEADOW_DENSITY = 11.0
+MEADOWS = [
+    (0.0, -40.0, 108.0, 17.0, 21),
+    (0.0, 40.0, 108.0, 17.0, 34),
+    (-40.0, 0.0, 17.0, 63.0, 47),
+    (40.0, 0.0, 17.0, 63.0, 58),
+]
+
 CLOUDS = [
     (-60.0, 46.0, -70.0, 1),
     (70.0, 52.0, -40.0, 4),
     (10.0, 58.0, 90.0, 8),
 ]
+
+# ---------------------------------------------------------------------------
+# The HUD
+# ---------------------------------------------------------------------------
+#
+# Four numbers and a string the script has to agree with. Everything else about
+# the layout — where the menu sits, how wide the button is, where the health
+# label goes — is the engine's business since M31, which is the point of the
+# component tree emitted at the bottom of this file.
+
+HEALTH_BAR = (224.0, 20.0)  # the gauge panel
+HEALTH_PAD = 3.0  # its padding, which *is* the bezel around the fill
+HEALTH_FILL = HEALTH_BAR[0] - 2 * HEALTH_PAD  # a full gauge, in pixels
+HEALTH_GOOD = [0.25, 0.85, 0.42]  # the fill at full health; the script fades it
+# The reticle is `ui_icon.png` drawn at its own 16 px, and that is not a
+# preference: a `HudImage` with no `slice` is all "middle band", and the middle
+# band **tiles**. Asking for 32 px of a 16 px icon does not scale it up, it
+# draws four of it — which is what the first render showed, a 2x2 of rings.
+CROSSHAIR = 16.0
+
+# The menu column's width, which is its widest unwrapped child: thirteen glyphs
+# of a 32-pixel title, the 8x8 font advancing one glyph height per character.
+MENU_WIDTH = 13 * 32.0
+CONTROLS = "WASD MOVE   MOUSE AIM   CLICK FIRE   R RELOAD   ESC PAUSE"
+
 
 # ---------------------------------------------------------------------------
 # Palette (linear RGB, like everything else in this engine)
@@ -765,6 +812,35 @@ def entities():
                 ],
             }
         )
+    for i, (x, z, sx, sz, seed) in enumerate(MEADOWS):
+        out.append(
+            {
+                "name": f"Grass{i + 1}",
+                "components": [
+                    t(position=(x, 0.0, z), scale=(sx, 1.0, sz)),
+                    {
+                        "type": "Meadow",
+                        "terrain": "Landscape",
+                        "seed": seed,
+                        "density": MEADOW_DENSITY,
+                        "height": 0.62,
+                        "blades": 4,
+                        "segments": 3,
+                        "blade_width": 0.008,
+                        "head_size": 0.015,
+                        "size_jitter": 0.4,
+                        "splay": 58.0,
+                        "max_slope": 34.0,
+                        "flower_color": [0.34, 0.30, 0.13],
+                        "wind": 12.0,
+                        "wind_direction": 24.0,
+                        "wind_speed": 4.0,
+                        "phase": 0.46,
+                        "stagger": 0.3,
+                    },
+                ],
+            }
+        )
     for i, (x, y, z, seed) in enumerate(CLOUDS):
         out.append(
             {
@@ -797,7 +873,13 @@ def entities():
         }
     )
 
-    # --- HUD ----------------------------------------------------------------
+    # --- HUD (M31) ----------------------------------------------------------
+    # The play HUD and the menu are one component tree, laid out by the engine.
+    # Before M31 every one of these was a top-level element the script placed
+    # by hand — a menu title centred by multiplying its length by the glyph
+    # advance, a button whose rectangle the script both drew and hit-tested. A
+    # `HudPanel` does the arranging now, `HudInteract` does the hit test, and
+    # what is left in the script is which words are on screen.
     out += [
         {
             "name": "ScoreText",
@@ -809,6 +891,7 @@ def entities():
                     "offset": [18.0, 16.0],
                     "size": 24.0,
                     "color": [1.0, 0.95, 0.8],
+                    "visible": False,
                 }
             ],
         },
@@ -822,6 +905,25 @@ def entities():
                     "offset": [18.0, 16.0],
                     "size": 24.0,
                     "color": [1.0, 0.62, 0.5],
+                    "visible": False,
+                }
+            ],
+        },
+        # The health readout is a column: label over gauge, the gauge a panel
+        # whose padding *is* the bezel. The three hand-kept numbers this
+        # replaces (a 224-wide back, a fill inset 3 px into it at 218, and a
+        # label offset 30 px above both) were three chances to disagree; now
+        # the only authored width is the panel's, and the fill's is the health.
+        {
+            "name": "HealthGroup",
+            "components": [
+                {
+                    "type": "HudPanel",
+                    "anchor": "bottom_left",
+                    "offset": [18.0, 18.0],
+                    "layout": "column",
+                    "gap": 6.0,
+                    "visible": False,
                 }
             ],
         },
@@ -831,23 +933,23 @@ def entities():
                 {
                     "type": "HudText",
                     "text": "HEALTH",
-                    "anchor": "bottom_left",
-                    "offset": [18.0, 48.0],
                     "size": 16.0,
                     "color": [0.85, 0.9, 1.0],
+                    "parent": "HealthGroup",
                 }
             ],
         },
         {
-            "name": "HealthBack",
+            "name": "HealthBar",
             "components": [
                 {
-                    "type": "HudRect",
-                    "anchor": "bottom_left",
-                    "offset": [18.0, 18.0],
-                    "size": [224.0, 20.0],
+                    "type": "HudPanel",
+                    "width": HEALTH_BAR[0],
+                    "height": HEALTH_BAR[1],
+                    "padding": HEALTH_PAD,
                     "color": [0.04, 0.05, 0.07],
                     "opacity": 0.65,
+                    "parent": "HealthGroup",
                 }
             ],
         },
@@ -856,11 +958,10 @@ def entities():
             "components": [
                 {
                     "type": "HudRect",
-                    "anchor": "bottom_left",
-                    "offset": [21.0, 21.0],
-                    "size": [218.0, 14.0],
-                    "color": [0.25, 0.85, 0.42],
+                    "size": [HEALTH_FILL, HEALTH_BAR[1] - 2 * HEALTH_PAD],
+                    "color": HEALTH_GOOD,
                     "opacity": 0.95,
+                    "parent": "HealthBar",
                 }
             ],
         },
@@ -874,25 +975,79 @@ def entities():
                     "offset": [18.0, 18.0],
                     "size": 24.0,
                     "color": [1.0, 0.95, 0.8],
+                    "visible": False,
                 }
             ],
         },
-        # --- the menu (M28) -------------------------------------------------
-        # Every piece is parked at zero size or empty text and laid out by the
-        # script from the live viewport, which is what lets one timeline click
-        # the same button at any window size: the layout is measured from the
-        # centre of the frame, so a *fraction* of the frame lands on it
-        # whatever the pixels are.
+        # Wave banner: centred, hidden, shown for a second and a half when a
+        # wave starts. It is one `visible` the script writes — which is the
+        # cheapest thing M31 added and the one this game wanted most, since
+        # before it a new wave arrived with no announcement at all.
+        {
+            "name": "WaveBanner",
+            "components": [
+                {
+                    "type": "HudText",
+                    "text": "WAVE 1",
+                    "anchor": "center",
+                    "offset": [0.0, -100.0],
+                    "size": 32.0,
+                    "align": "center",
+                    "color": [1.0, 0.72, 0.32],
+                    "visible": False,
+                }
+            ],
+        },
+        # --- the menu (M31) -------------------------------------------------
+        # Authored *open*, on the title screen, so `screenshot --steps 0` shows
+        # the game as it opens and the file says what the first frame is. The
+        # script closes it.
+        #
+        # The veil is a top-level stretched rect rather than a child of the
+        # menu: it covers the frame, and the menu covers its own contents.
         {
             "name": "MenuVeil",
             "components": [
                 {
                     "type": "HudRect",
-                    "anchor": "top_left",
-                    "offset": [0.0, 0.0],
                     "size": [0.0, 0.0],
+                    "stretch": [True, True],
                     "color": [0.015, 0.02, 0.03],
                     "opacity": 0.78,
+                }
+            ],
+        },
+        {
+            "name": "MenuRoot",
+            "components": [{"type": "HudPanel", "anchor": "center", "layout": "free"}],
+        },
+        # The frame is nine-sliced and stretched over whatever the column comes
+        # out as: corners 1:1, edges tiled. It is the reason the menu no longer
+        # has to be a flat rectangle sized by hand.
+        {
+            "name": "MenuFrame",
+            "components": [
+                {
+                    "type": "HudImage",
+                    "texture": "../textures/ui_frame.png",
+                    "size": [0.0, 0.0],
+                    "slice": [12.0, 12.0, 12.0, 12.0],
+                    "tint": [0.52, 0.60, 0.74],
+                    "parent": "MenuRoot",
+                    "stretch": [True, True],
+                }
+            ],
+        },
+        {
+            "name": "MenuColumn",
+            "components": [
+                {
+                    "type": "HudPanel",
+                    "layout": "column",
+                    "padding": 24.0,
+                    "gap": 16.0,
+                    "align": "center",
+                    "parent": "MenuRoot",
                 }
             ],
         },
@@ -901,38 +1056,54 @@ def entities():
             "components": [
                 {
                     "type": "HudText",
-                    "text": "",
-                    "anchor": "top_left",
-                    "offset": [0.0, 0.0],
-                    "size": 40.0,
+                    "text": "ARENA SHOOTER",
+                    "size": 32.0,
                     "color": [1.0, 0.85, 0.3],
+                    "parent": "MenuColumn",
                 }
             ],
         },
+        # `wrap` is what lets the controls line be one string in the script
+        # instead of a hand-broken three. It is set to the title's own width so
+        # the column is exactly as wide as its widest unwrapped child.
         {
             "name": "MenuLine",
             "components": [
                 {
                     "type": "HudText",
-                    "text": "",
-                    "anchor": "top_left",
-                    "offset": [0.0, 0.0],
+                    "text": CONTROLS,
                     "size": 16.0,
+                    "wrap": MENU_WIDTH,
+                    "line_gap": 5.0,
+                    "align": "center",
                     "color": [0.75, 0.82, 0.9],
+                    "parent": "MenuColumn",
+                    "stretch": [True, False],
                 }
             ],
         },
+        # The button. `HudInteract` is the whole of what the script used to do
+        # by hand: the hit box is this panel's laid-out rectangle, and the
+        # tints are the hover and press feedback the old menu faked by putting
+        # brackets around the label.
         {
             "name": "MenuButton",
             "components": [
                 {
-                    "type": "HudRect",
-                    "anchor": "top_left",
-                    "offset": [0.0, 0.0],
-                    "size": [0.0, 0.0],
+                    "type": "HudPanel",
+                    "layout": "column",
+                    "padding": 10.0,
+                    "align": "center",
                     "color": [0.10, 0.13, 0.18],
                     "opacity": 0.95,
-                }
+                    "parent": "MenuColumn",
+                    "stretch": [True, False],
+                },
+                {
+                    "type": "HudInteract",
+                    "hover_tint": [1.9, 1.9, 1.9],
+                    "press_tint": [0.5, 0.5, 0.5],
+                },
             ],
         },
         {
@@ -940,40 +1111,27 @@ def entities():
             "components": [
                 {
                     "type": "HudText",
-                    "text": "",
-                    "anchor": "top_left",
-                    "offset": [0.0, 0.0],
+                    "text": "PLAY",
                     "size": 24.0,
                     "color": [0.9, 0.95, 1.0],
+                    "parent": "MenuButton",
                 }
             ],
         },
-        # The crosshair: two bars the script parks on the cursor's pixel.
-        # Hidden (zero size) whenever the menu is up, since a menu has the
-        # window's own pointer.
+        # The crosshair is `ui_icon.png` — a ring with a dot, which is what a
+        # reticle is — parked on the cursor's pixel by the script and hidden
+        # with the rest of the play HUD whenever a menu is up, since a menu has
+        # the window's own pointer. Two bars used to stand in for it.
         {
             "name": "Crosshair",
             "components": [
                 {
-                    "type": "HudRect",
-                    "anchor": "top_left",
-                    "offset": [0.0, 0.0],
-                    "size": [0.0, 0.0],
-                    "color": [1.0, 0.85, 0.25],
+                    "type": "HudImage",
+                    "texture": "../textures/ui_icon.png",
+                    "size": [CROSSHAIR, CROSSHAIR],
+                    "tint": [1.0, 0.85, 0.25],
                     "opacity": 0.9,
-                }
-            ],
-        },
-        {
-            "name": "CrosshairStem",
-            "components": [
-                {
-                    "type": "HudRect",
-                    "anchor": "top_left",
-                    "offset": [0.0, 0.0],
-                    "size": [0.0, 0.0],
-                    "color": [1.0, 0.85, 0.25],
-                    "opacity": 0.9,
+                    "visible": False,
                 }
             ],
         },
@@ -1024,6 +1182,8 @@ def main():
     print(f"  BULLET_COUNT = {BULLETS}")
     print(f"  BARREL_COUNT = {len(BARRELS)}")
     print(f"  ARENA_HALF   = {HALF}")
+    print(f"  HEALTH_FILL  = {HEALTH_FILL}")
+    print(f"  CROSSHAIR    = {CROSSHAIR}")
     for w in (1, 2, 3):
         first = min(i for i, d in enumerate(DRONES) if d[2] == w) + 1
         last = max(i for i, d in enumerate(DRONES) if d[2] == w) + 1

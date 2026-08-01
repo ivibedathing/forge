@@ -27,8 +27,8 @@ R       reload
 Esc     pause
 ```
 
-The run opens on a title screen and pauses to a menu. Both are described
-under [The menu](#the-menu) below.
+The run opens on a title screen and pauses to a menu — a `HudPanel` tree the
+engine lays out and hit-tests, described under [The menu](#the-menu) below.
 
 Three waves of hovering drones home in on you: four, then three, then three.
 Three bolts kill one, or shoot one of the four red barrels and the blast takes
@@ -98,6 +98,22 @@ scene showed. Two further reasons the floor is a flat box and not terrain: a
 body sliding on a trimesh hits the internal-edge bug M23 documents, and a
 top-down shooter wants a floor whose geometry never argues with movement.
 
+**Grass grows at the foot of the plateau, and only there.** Four `Meadow`
+strips (M29) ring the arena on the `Landscape` patch. It is a ring rather than
+a field because the camera looks *down* from 20 m and the only ground it ever
+sees past the walls is the band immediately outside them — grass further out is
+plants nobody renders. Density is the number that decides whether this is
+scenery or a stall: the component counts plants per square metre of footprint,
+so a strip is `size_x * size_z * density` plants, and M29's budget is per entity
+and counted in triangles. Measured here: 64 triangles a plant, ~20k plants in a
+long strip and ~12k in a short one, about 4M triangles over the four — and no
+measurable cost to the frame, since a meadow is two static buffers and a vertex
+shader. There is no water, and the reason is in the terrain: the basins near
+enough to see are barely a metre deep across twenty-six, so a `Water` surface
+laid in one reads as a pale puddle draped over a slope rather than as a pond.
+Making one would mean reshaping `Landscape`, which is a change to the whole
+scene for something at the edge of the frame.
+
 **The aim is a point, not an angle.** `world.cursor_ground(player_y)` returns
 where the pointer's ray meets the plane the player stands on, and the aim is
 just the direction from the player to that point — normalized, with a 0.7 m
@@ -126,9 +142,8 @@ nested. It reads like an over-cautious style rule and is not one.
 
 ## The menu
 
-Three screens, all of them ordinary `HudText` and `HudRect` components this
-script positions and hit-tests. There is no menu system in the engine and this
-did not add one.
+Three screens, and since M31 they are a component tree the engine lays out and
+hit-tests rather than rectangles the script computed and tested itself.
 
 | screen | what it says | how it ends |
 | --- | --- | --- |
@@ -136,36 +151,76 @@ did not add one.
 | pause | `PAUSED`, `RESUME` | the button, or Esc again |
 | end | `GAME OVER` / `ARENA CLEARED` with the score | nothing — see below |
 
-**The layout is measured from the centre of the frame**, and that is what
-makes one recorded timeline click the same button at any window size: a
-*fraction* of the frame near the middle lands on the same element whether the
-frame is 640 or 2560 pixels wide. The button's rectangle is computed by the
-script (`menu_rect`), the cursor is put in the same pixel space by
-`cursor_x() * viewport_width()`, and the hit test is four comparisons. The
-engine is not told that any of this is a button.
+The card is a `HudPanel` anchored `center`, holding a nine-sliced `HudImage`
+stretched over it and a `column` panel of title, controls line and button. The
+panels **hug their contents**, which is why the three screens are three sizes:
+the pause card is as wide as the word `PAUSED`, the title card as wide as
+`ARENA SHOOTER` — thirteen glyphs of a 32-pixel title, which is also the width
+the controls line is told to wrap at — and neither card's size is written down.
 
-**Hiding a HUD element is a zero size or an empty string.** There is no
-visibility flag on `HudText`/`HudRect`, and this did not add one either: a
-zero-width rect covers no pixels and an empty string draws no glyphs. What a
-script wants to hide it can already size away.
+**What the script kept is which words are on screen.** What it lost is a
+`menu_rect` it both drew and hit-tested, an `inside` of four comparisons, and a
+centring multiply per string — `len * 40.0` for a 40-pixel title, which is the
+8×8 font's advance restated in a script that had no other reason to know it.
+`show_menu` is now six setters and `hide_menu` is two.
 
-**The end card has no button.** A restart would have to put ten broken drones
-and four broken barrels back, and the engine cannot spawn entities — so a
-cleared arena stays cleared, and offering `RETRY` would be offering something
-that cannot work. The card says the score and stops.
+**The button is a `HudInteract`, so the engine decides what a click is.** The
+hit box is the panel's laid-out rectangle; `world.clicked("MenuButton")` is
+true for exactly one step; and the hover and press states are `hover_tint` and
+`press_tint` multiplying the panel's own colour. The old menu faked hover by
+putting brackets around the label (`[ PLAY ]` versus `  PLAY  `) because the
+script had no colour to set — that is gone, and so is the label churn.
 
-**A click edge is two lines of `world.state`.** `world.mouse` is a held-state
-predicate like `world.key`, so "the frame the button went down" is
-`held && !held_last_step`, stored in the same numeric memory everything else
-here uses. That is the whole reason the input API has no pressed/released
-query.
+This is stricter than what it replaced, in one way worth knowing: the old test
+was a press edge anywhere inside a rectangle, and M31's is a **press capture** —
+press and release must both land on the element. A timeline that presses on the
+button and releases somewhere else no longer clicks, which is why
+`make_arena_demo.py` writes the release at the button too.
 
-**One bug worth keeping written down**: the cursor's pixel coordinates were
-first called `cx`/`cy`, and three hundred lines further on the camera section
-binds `cx`/`cy` to the *eye's* world position. Rhai's `let` rebinds in the
-same scope, so the crosshair drew itself at (0, 20.9) — twenty metres up the
-left edge of the frame — while the aim itself was perfectly correct. They are
-`cur_x`/`cur_y` now.
+**Hiding is `visible` now**, one field on every kind of element, where the old
+script hid
+a text by emptying its string and a rect by sizing it to zero — two spellings of
+one idea, and neither of them sayable in the scene file. The play HUD is
+authored *hidden*, so `screenshot --steps 0` shows the title screen and the file
+says what the first frame is; the script shows it when the run starts. Hiding a
+panel hides its subtree, which is what makes closing the menu two calls.
+
+**The end card has no button, and the card closes up around it.** A restart
+would have to put ten broken drones and four broken barrels back, and the engine
+cannot spawn entities — so a cleared arena stays cleared, and offering `RETRY`
+would be offering something that cannot work. An empty label hides the button
+panel, a hidden element leaves the flow entirely, and the card is shorter by
+exactly the gap.
+
+**One recorded timeline still clicks the button at any frame size**, though
+not for the reason the old menu gave. The card is centre-anchored and its
+contents are pixel-sized, so its rectangle moves with the frame: the button
+spans 0.554–0.635 of the height at 960×540 and 0.58–0.70 at 640×360. The demo
+clicks the centre of the rectangle the engine reports at 960×540, which is
+inside both — checked by replaying the same timeline at 640×360, where the run
+starts exactly as it does at the authored size. What does give way below about
+700 pixels wide is the top row: `SCORE` and `WAVE` are 24-pixel text anchored to
+opposite corners and they meet in the middle. That is the pixel HUD's own limit
+rather than the layout's, and the demo is authored at 960×540.
+
+**The layout is answerable without running the game**, which the hand-rolled
+version was not: `engine ui-layout examples/scenes/arena_shooter.json --width
+960 --height 540` reports every rectangle, and `--entity MenuButton` reports the
+one the demo has to click. That is where `make_arena_demo.py` gets it.
+
+**Two things the play HUD gained from the same components.** The health readout
+is a `column` of label over gauge, the gauge a panel whose `padding` *is* its
+bezel — three hand-kept numbers (a 224-wide back, a fill inset 3 px into it at
+218, a label offset 30 px above both) collapsed into one authored width. And the
+fill fades green through amber to red with `set_hud_color`, as the ammo counter
+does when the magazine is nearly out; a wave announcement is one `HudText` the
+script turns on for a second and a half.
+
+**One authoring trap, found by rendering it.** The reticle is `ui_icon.png`
+drawn at its own 16 px, and it has to be: a `HudImage` with no `slice` is all
+middle band, and the middle band **tiles**. Asking for 32 px of a 16 px icon
+does not draw it twice as large, it draws four of them — which is exactly what
+the first render showed, a 2×2 of rings where the crosshair should be.
 
 ## Surfaces
 
@@ -244,7 +299,7 @@ a second:
 python3 examples/scenes/make_arena_demo.py
 ```
 
-Two things about it. The projection is **a second implementation of the
+Three things about it. The projection is **a second implementation of the
 inverse of `world.cursor_ground`**, which this repo normally refuses; it is
 taken deliberately, because the alternative is a demo that shoots at nothing,
 and it is checked by the outcome the script prints (a drifted projection kills
@@ -252,6 +307,14 @@ no drones) rather than by an agreement test. And **it finds out what it killed
 from the engine's own error**: `--entity Drone03` on a drone that has already
 broken is `entity_not_found` with the name in it, so the director drops that
 name and asks again.
+
+And **where the PLAY button is comes from `engine ui-layout`**, not from a pair
+of hand-tuned fractions. It used to have to be hand-tuned: the menu was
+rectangles the game script computed at run time, so nothing outside that script
+could say where the button was. Now the director asks for `MenuButton`'s
+rectangle at the frame it is authoring for and clicks its centre — the same
+crossing between a pixel report and a fractional timeline that M31's own CLI
+test pins.
 
 ## Regenerating the scene
 
@@ -278,5 +341,7 @@ No baseline is committed for this scene and no CLI test pins it: it is a demo,
 not a verification fixture, and it is not in `verify/baselines.json`. Also
 absent, in rough order of how much each would add: cover that stops bullets,
 enemies that shoot back, a restart (the engine cannot spawn entities, so a
-cleared arena stays cleared), drone variety, and sound — of which the engine has
-none.
+cleared arena stays cleared), drone variety, a walking enemy off M30's rig, and
+sound — of which the engine has none. The menu is deliberately still 8×8 text:
+a bitmap-font atlas is the sanctioned next step for that everywhere in the repo,
+not something to solve once here.

@@ -6,10 +6,13 @@
 //   R       reload
 //   Esc     pause
 //
-// The run starts on a title screen and pauses to a menu (M28). Both are
-// ordinary HudText/HudRect components this script lays out from the live
-// viewport and hit-tests in pixels — there is no menu system in the engine,
-// and a menu is game logic like everything else here.
+// The run starts on a title screen and pauses to a menu. Both are a `HudPanel`
+// tree in the scene file (M31): the engine lays them out and hit-tests them,
+// and what is left here is which words are on screen and what a click means.
+// A menu is still game logic — `world.clicked` is polled, nothing dispatches
+// into a script — but the *layout* stopped being game logic in M31, and this
+// script lost a `menu_rect`, an `inside`, and a centring multiply per string
+// when it did.
 //
 // Three waves of hovering drones home in on the player. Shoot them, or shoot a
 // barrel and let the blast take everything near it. Health runs out, the run
@@ -238,70 +241,44 @@ fn drive_drone(world, n, ex, ey, ez, px, py, pz, speed, hover, touch) {
     1
 }
 
-// The menu's layout, in HUD pixels, measured from the centre of the frame.
+// Put the menu on screen: the veil over the frame, and the words in the card.
+// `label` empty means "no button" — the end card has nothing to press, and a
+// hidden element leaves the flow entirely, so the card closes up around it
+// instead of keeping a gap where a button would have been.
 //
-// Centre-relative is what makes one recorded timeline click the same button
-// at any window size: a *fraction* of the frame near the middle lands on the
-// same element whether the frame is 640 or 2560 wide. Returns the button's
-// rectangle as [left, top, width, height] — the script hit-tests it, because
-// the engine has no idea this rect is a button.
-fn menu_rect(w, h) {
-    // Wide enough for the longest label the menu has — `[ RESUME ]` at 24 px
-    // is 240 px of glyphs — plus a little air. The button is one size in every
-    // screen, so a timeline that hit it on the title screen hits it on the
-    // pause screen too.
-    let bw = 264.0;
-    let bh = 44.0;
-    let left = w * 0.5 - bw * 0.5;
-    let top = h * 0.5 + 14.0;
-    [left, top, bw, bh]
-}
-
-// Put the menu on screen: the veil over the whole frame, the title and the
-// line under it centred, and the button with its label. `label` empty means
-// "no button" — the end card has nothing to press.
-fn show_menu(world, w, h, title, line, label) {
-    world.set_hud_rect_size("MenuVeil", w, h);
-    world.set_hud_offset("MenuVeil", 0.0, 0.0);
-
-    let title_w = title.len.to_float() * 40.0;
+// This is the whole of the menu code now. It used to be this plus a
+// `menu_rect` the script both drew and hit-tested, a centring multiply per
+// string, and an `inside` of four comparisons — every one of them a layout
+// decision taken in a script because the engine had nowhere to put it. The
+// component tree in the scene holds them now, which is also what makes the
+// menu answerable: `engine ui-layout` reports the button's rectangle without
+// running the game.
+fn show_menu(world, title, line, label) {
+    world.set_hud_visible("MenuVeil", true);
+    world.set_hud_visible("MenuRoot", true);
     world.set_hud_text("MenuTitle", title);
-    world.set_hud_offset("MenuTitle", w * 0.5 - title_w * 0.5, h * 0.5 - 96.0);
-
-    let line_w = line.len.to_float() * 16.0;
     world.set_hud_text("MenuLine", line);
-    world.set_hud_offset("MenuLine", w * 0.5 - line_w * 0.5, h * 0.5 - 40.0);
-
-    let r = menu_rect(w, h);
-    let label_w = label.len.to_float() * 24.0;
     world.set_hud_text("MenuButtonText", label);
-    world.set_hud_offset("MenuButtonText", w * 0.5 - label_w * 0.5, r[1] + 10.0);
-    if label == "" {
-        world.set_hud_rect_size("MenuButton", 0.0, 0.0);
-    }
-    if label != "" {
-        world.set_hud_rect_size("MenuButton", r[2], r[3]);
-        world.set_hud_offset("MenuButton", r[0], r[1]);
-    }
+    world.set_hud_visible("MenuButton", label != "");
 }
 
-// Take the menu down. A zero-size rect and an empty string draw nothing at
-// all, which is how a HUD component hides — there is no visibility flag, and
-// adding one would be a component field for a script's convenience.
+// Take the menu down: one boolean per subtree, since hiding a panel hides
+// everything parented to it.
 fn hide_menu(world) {
-    world.set_hud_rect_size("MenuVeil", 0.0, 0.0);
-    world.set_hud_rect_size("MenuButton", 0.0, 0.0);
-    world.set_hud_text("MenuTitle", "");
-    world.set_hud_text("MenuLine", "");
-    world.set_hud_text("MenuButtonText", "");
+    world.set_hud_visible("MenuVeil", false);
+    world.set_hud_visible("MenuRoot", false);
 }
 
-fn inside(px, py, r) {
-    if px < r[0] { return false; }
-    if px > r[0] + r[2] { return false; }
-    if py < r[1] { return false; }
-    if py > r[1] + r[3] { return false; }
-    true
+// The health gauge's colour, green through amber to red. Returns [r, g, b] —
+// the fill is one rect and `set_hud_color` is one call, so a bar that says how
+// bad it is costs three lines rather than three components.
+fn health_color(fraction) {
+    let hurt = clampf((1.0 - fraction) * 2.0, 0.0, 1.0);
+    let dying = clampf((0.5 - fraction) * 2.5, 0.0, 1.0);
+    let r = 0.25 + hurt * 0.65;
+    let g = 0.85 - dying * 0.72;
+    let b = 0.42 - hurt * 0.30;
+    [r, g, b]
 }
 
 fn step(world, step) {
@@ -338,6 +315,14 @@ fn step(world, step) {
     let BLAST_R2 = 56.25;        // (7.5 m)^2
     let BLAST_IMPULSE = 260.0;
     let BARREL_SCORE = 50;
+
+    // HUD numbers the scene has to agree with; `make_arena.py` prints them.
+    let HEALTH_FILL = 218.0;     // px, the gauge panel less its 3 px bezel
+    // The reticle is ui_icon.png at its *own* size, and that is load-bearing:
+    // a HudImage with no `slice` is all middle band, and the middle band tiles.
+    // A 32 px box around a 16 px icon draws four reticles, not a bigger one.
+    let CROSSHAIR = 16.0;        // px
+    let BANNER_TIME = 1.5;       // s a wave announcement stays up
 
     let CAM_HEIGHT = 20.0;
     let CAM_BACK = 11.5;
@@ -377,15 +362,16 @@ fn step(world, step) {
     if dead > 0.5 { mode = 3; }
     if won > 0.5 { mode = 3; }
 
-    let click_was = world.state("click", 0) > 0.5;
+    // The button's click is the engine's answer, not a rectangle test: M31
+    // hit-tests the element's laid-out box before scripts run and `clicked` is
+    // true for exactly one step. Escape still needs its own edge, because a key
+    // is a held-state predicate with no element behind it — which is the line
+    // the input API draws, and why this game keeps one edge and lost the other.
     let pause_was = world.state("esc", 0) > 0.5;
-    let clicked = m_fire && !click_was;
     let paused_now = k_pause && !pause_was;
-    world.set_state("click", if m_fire { 1 } else { 0 });
     world.set_state("esc", if k_pause { 1 } else { 0 });
 
-    let button = menu_rect(vw, vh);
-    let on_button = inside(cur_x, cur_y, button);
+    let pressed_play = world.clicked("MenuButton");
 
     // Every transition is guarded on the mode this step *started* in, and
     // lands in `next`. Assigning `mode` in place instead reads as the same
@@ -393,10 +379,10 @@ fn step(world, step) {
     // -> 1` fires both in one step, and Escape does nothing at all. That cost
     // a render to notice, because the pause screen simply never appeared.
     let next = mode;
-    if mode == 0 && clicked && on_button { next = 1; }
+    if mode == 0 && pressed_play { next = 1; }
     if mode == 1 && paused_now { next = 2; }
     if mode == 2 && paused_now { next = 1; }
-    if mode == 2 && clicked && on_button { next = 1; }
+    if mode == 2 && pressed_play { next = 1; }
     mode = next;
     world.set_state("mode", mode);
 
@@ -517,6 +503,9 @@ fn step(world, step) {
 
     let want_fire = m_fire;
     if !playing { want_fire = false; }
+    // The click that dismissed a menu is not a shot: without this, pressing
+    // PLAY empties a round into the arena on the same step.
+    if pressed_play { want_fire = false; }
     if cooldown > 0.0 { want_fire = false; }
     if reload > 0.0 { want_fire = false; }
     if ammo <= 0 { want_fire = false; }
@@ -730,6 +719,23 @@ fn step(world, step) {
     }
     world.set_state("wave", wave);
 
+    // The wave announcement. `shown` is the wave the banner last named, so a
+    // wave that starts — including the first, when the run begins on wave 1 —
+    // is exactly "the counter moved since the banner last spoke".
+    let banner = world.state("banner", 0.0) - gdt;
+    let shown = world.state("shown", 0).to_int();
+    let announce = playing && wave != shown;
+    if announce {
+        world.set_hud_text("WaveBanner", "WAVE " + wave.to_string());
+        banner = BANNER_TIME;
+        shown = wave;
+    }
+    let show_banner = banner > 0.0;
+    if !playing { show_banner = false; }
+    world.set_hud_visible("WaveBanner", show_banner);
+    world.set_state("banner", clampf(banner, 0.0, 4.0));
+    world.set_state("shown", shown);
+
     // --- effects ------------------------------------------------------------
     let flash = world.state("flash", 0.0);
     if fired { flash = 9.0; }
@@ -794,69 +800,85 @@ fn step(world, step) {
     world.set_position("Eye", eye_x, eye_y, eye_z);
 
     // --- HUD ----------------------------------------------------------------
-    // Blank before the run starts: a title screen announcing SCORE 0 and
-    // WAVE 1/3 is reporting on a game nobody has begun.
+    // Hidden before the run starts: a title screen announcing SCORE 0 and
+    // WAVE 1/3 is reporting on a game nobody has begun. The scene authors all
+    // four hidden, so the file's own first frame *is* the title screen — and
+    // hiding is now `visible`, where it used to be an empty string for a text
+    // and a zero size for a rect, two spellings of one idea.
     let started = mode > 0;
-    let score_line = "";
-    if started { score_line = "SCORE " + score.to_string(); }
-    world.set_hud_text("ScoreText", score_line);
+    world.set_hud_visible("ScoreText", started);
+    world.set_hud_visible("WaveText", started);
+    world.set_hud_visible("HealthGroup", started);
+    world.set_hud_visible("AmmoText", started);
+
+    world.set_hud_text("ScoreText", "SCORE " + score.to_string());
 
     let wave_line = "WAVE " + wave.to_string();
     wave_line += "/" + WAVES.to_string();
     wave_line += "   LEFT " + live_count.to_string();
-    if !started { wave_line = ""; }
     world.set_hud_text("WaveText", wave_line);
 
-    let fill = clampf(218.0 * hp / 100.0, 1.0, 218.0);
-    if !started { fill = 0.0; }
+    // The gauge is a rect inside a panel whose padding is its bezel, so the
+    // only number here is the health itself. It fades green to red on the way
+    // down — three lines of `set_hud_color`, where a second bar behind it
+    // would have been a component and an offset to keep in agreement.
+    let fraction = clampf(hp / 100.0, 0.0, 1.0);
+    let fill = clampf(HEALTH_FILL * fraction, 1.0, HEALTH_FILL);
     world.set_hud_rect_size("HealthFill", fill, 14.0);
+    let tint = health_color(fraction);
+    world.set_hud_color("HealthFill", tint[0], tint[1], tint[2]);
 
     let ammo_line = "RELOADING";
     if reload <= 0.0 {
         ammo_line = "AMMO " + ammo.to_string();
         ammo_line += "/" + MAG_SIZE.to_string();
     }
-    if !started { ammo_line = ""; }
     world.set_hud_text("AmmoText", ammo_line);
+    // Amber while the magazine is being changed, red on the last three rounds:
+    // the number was already there, and what it costs to make it legible at a
+    // glance is one setter.
+    let ammo_r = 1.0;
+    let ammo_g = 0.95;
+    let ammo_b = 0.8;
+    if ammo <= 3 {
+        ammo_g = 0.35;
+        ammo_b = 0.25;
+    }
+    if reload > 0.0 {
+        ammo_g = 0.7;
+        ammo_b = 0.3;
+    }
+    world.set_hud_color("AmmoText", ammo_r, ammo_g, ammo_b);
 
     // --- the menu -----------------------------------------------------------
-    // Drawn last, over everything, which is also the order it is read in.
-    // `[ PLAY ]` versus `  PLAY  ` is the hover state: the button's brackets
-    // close around the label when the cursor is on it, so the feedback costs
-    // a string rather than a colour setter the API does not have.
-    let label = "  PLAY  ";
-    if on_button { label = "[ PLAY ]"; }
+    // Which words are on screen, and nothing else: the card's size, its
+    // position, the button's rectangle and the hover highlight all belong to
+    // the components now. The labels lost their brackets with them — hovering
+    // brightens the real button, which is what `HudInteract.hover_tint` is for.
     if mode == 0 {
         show_menu(
-            world, vw, vh, "ARENA SHOOTER",
+            world, "ARENA SHOOTER",
             "WASD MOVE   MOUSE AIM   CLICK FIRE   R RELOAD   ESC PAUSE",
-            label
+            "PLAY"
         );
     }
     if mode == 1 { hide_menu(world); }
     if mode == 2 {
-        let resume = "  RESUME  ";
-        if on_button { resume = "[ RESUME ]"; }
-        show_menu(world, vw, vh, "PAUSED", "ESC RESUMES TOO", resume);
+        show_menu(world, "PAUSED", "ESC RESUMES TOO", "RESUME");
     }
     if mode == 3 {
         let over_title = "ARENA CLEARED";
         if dead > 0.5 { over_title = "GAME OVER"; }
         // No button: the engine cannot spawn entities, so a cleared arena
-        // stays cleared and there is nothing honest to offer here.
-        show_menu(world, vw, vh, over_title, "SCORE " + score.to_string(), "");
+        // stays cleared and there is nothing honest to offer here. An empty
+        // label hides the panel, and the card closes up around the gap.
+        show_menu(world, over_title, "SCORE " + score.to_string(), "");
     }
 
-    // The crosshair rides the cursor while the game is running, and is put
-    // away for the menu — which has the window's own pointer.
-    let bar = 0.0;
-    let stem = 0.0;
-    if playing {
-        bar = 16.0;
-        stem = 2.0;
-    }
-    world.set_hud_rect_size("Crosshair", bar, stem);
-    world.set_hud_rect_size("CrosshairStem", stem, bar);
-    world.set_hud_offset("Crosshair", cur_x - bar * 0.5, cur_y - stem * 0.5);
-    world.set_hud_offset("CrosshairStem", cur_x - stem * 0.5, cur_y - bar * 0.5);
+    // The reticle rides the cursor while the game is running, and is put away
+    // for the menu — which has the window's own pointer. It is one `HudImage`
+    // (a ring with a dot) where it used to be two rects pretending to be a
+    // cross, and it hides with `visible` rather than by being sized to zero.
+    world.set_hud_visible("Crosshair", playing);
+    world.set_hud_offset("Crosshair", cur_x - CROSSHAIR * 0.5, cur_y - CROSSHAIR * 0.5);
 }

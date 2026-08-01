@@ -58,9 +58,9 @@ CHUNK = 6  # steps between decisions — a tenth of a second is 6 steps
 DRONES = 10
 DRONE_HOVER = 0.95  # the altitude they hold; the aim point's height
 
-# The menu the run has to get through first (M28). The button is centred, so
-# these fractions land on it at any frame size.
-PLAY_CURSOR = (0.5, 0.56)
+# The menu the run has to get through first (M28). Where the button *is* comes
+# from the engine — see `play_cursor` — because since M31 nothing in either
+# script knows: the menu is a `HudPanel` tree and the layout is the engine's.
 CLICK_AT = 30  # step the demo presses PLAY
 START_AT = 42  # first step the director drives
 
@@ -98,6 +98,32 @@ def run(steps, timeline, entities):
         entities = [name for name in entities if name not in missing]
 
 
+def play_cursor():
+    """The cursor that presses PLAY, asked of the engine rather than guessed.
+
+    This used to be a pair of hand-tuned fractions, and it had to be: the menu
+    was rectangles the game script computed at run time, so nothing outside
+    that script could say where the button was. M31 made the menu a component
+    tree, and `engine ui-layout` reports the same rectangle the hit test uses —
+    at the frame this timeline is authored for. So the demo aims at the button
+    the way it aims at a drone: it asks where the thing is and points at it.
+
+    The centre of the rect as a *fraction* is the one place the pixel report
+    and the fractional timeline have to agree, which is exactly the crossing
+    M31's own CLI test pins.
+    """
+    out = subprocess.run(
+        [ENGINE, "ui-layout", SCENE, "--width", str(WIDTH), "--height", str(HEIGHT),
+         "--entity", "MenuButton"],
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        raise SystemExit(f"ui-layout failed:\n{out.stderr}")
+    rect = json.loads(out.stdout)["elements"][0]["rect"]
+    return ((rect[0] + rect[2] / 2) / WIDTH, (rect[1] + rect[3] / 2) / HEIGHT)
+
+
 def to_cursor(target, eye):
     """Where `target` lands on the frame, as the cursor that points at it.
 
@@ -133,12 +159,16 @@ def keyframe(step, held, cursor):
 
 
 def main():
-    # Open on the title screen: move onto the button, press it, and let go.
+    # Open on the title screen: move onto the button, press it, and let go —
+    # the release on the button too, since M31's press capture wants a click to
+    # start and finish on the same element, and a release somewhere else is
+    # deliberately not a click.
+    play = play_cursor()
     timeline = [
         keyframe(0, [], (0.5, 0.5)),
-        keyframe(18, [], PLAY_CURSOR),
-        keyframe(CLICK_AT, ["MouseLeft"], PLAY_CURSOR),
-        keyframe(CLICK_AT + 6, [], PLAY_CURSOR),
+        keyframe(18, [], play),
+        keyframe(CLICK_AT, ["MouseLeft"], play),
+        keyframe(CLICK_AT + 6, [], play),
     ]
     watch = ["Player", "Eye"] + [f"Drone{n:02d}" for n in range(1, DRONES + 1)]
     last = None
