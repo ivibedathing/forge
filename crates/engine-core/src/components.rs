@@ -3076,6 +3076,126 @@ fn thirty() -> f32 {
     30.0
 }
 
+/// The most proxies one skinned entity may carry, and the ceiling on
+/// [`SkinnedCollider::parts`].
+///
+/// Bounded for `MAX_PLANTED_FEET`'s reason, at a number sized to the job: a
+/// humanoid hitbox set is head, torso, pelvis, two arms in two pieces each,
+/// two legs in two pieces each, hands and feet — fifteen. Thirty-two leaves
+/// room for a detailed rig and still refuses the runaway case, which here is a
+/// proxy per joint on a rig that has a hundred of them.
+pub const MAX_COLLIDER_PARTS: usize = 32;
+
+/// One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's
+/// frame (M33).
+///
+/// Flat and discriminated by `shape`, exactly as [`Collider`] is and for the
+/// same reasons — the schema-driven walk and the editor's generated inspector
+/// both read flat structs, and `jq` and an LLM both write them. `cuboid`,
+/// `sphere` and `capsule` only: `trimesh` and `convex_hull` describe a
+/// specific mesh, and a proxy exists precisely because that mesh lives on the
+/// GPU where physics cannot reach it (`collider_part_shape_unsupported`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ColliderPart {
+    /// The joint this proxy rides. Its posed world transform, times `offset`
+    /// and `rotation`, is where the shape is each step.
+    pub joint: String,
+
+    pub shape: ColliderShapeKind,
+
+    /// What reports call this part. Absent, the joint's name — which is right
+    /// for the ordinary one-proxy-per-joint set and wrong the moment a limb
+    /// takes two, hence the field. Unique within the component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// `cuboid` only. Each component `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<[f32; 3]>")]
+    pub half_extents: Option<Vec3>,
+
+    /// `sphere` and `capsule`. `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
+
+    /// `capsule` only: half the cylindrical section's height. `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub half_height: Option<f32>,
+
+    /// Metres from the joint's origin, **in the joint's own frame**, so a
+    /// proxy is authored against the bone rather than against the world.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub offset: Vec3,
+
+    /// Euler degrees in the joint's frame. A capsule's axis is local **+Y**
+    /// (rapier's, and `builtin:cylinder`'s), and this is what turns it onto a
+    /// bone that runs some other way.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub rotation: Vec3,
+
+    /// Sensors detect overlaps but exert no forces — `Collider.sensor`,
+    /// meaning the same thing. Per part rather than per component, because a
+    /// sword's blade and its guard want opposite answers.
+    #[serde(default)]
+    pub sensor: bool,
+}
+
+impl ColliderPart {
+    /// What reports call this part: its `name`, or the joint it rides.
+    pub fn part_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.joint)
+    }
+}
+
+/// Collision proxies that follow a skinned character's pose (M33).
+///
+/// M30 said a skinned mesh is visual and physics sees only the entity's own
+/// `Collider`; this is the one item of that reversed. Each part is re-posed
+/// every fixed step from the same joint globals the render and
+/// `engine list-joints` use, so a hitbox cannot disagree with the picture
+/// about where a head is.
+///
+/// **The pose drives the proxies and nothing reads them back** — they are
+/// kinematic, so they are hit, they push dynamic bodies, and they report
+/// contacts, but they never move a joint. That is what keeps M30's claim that
+/// the pose is a pure function of (files, time) true, and it is why a proxy
+/// holds a character up exactly as much as a moving wall holds up the hand
+/// pushing it: not at all. What a character stands on is still its own
+/// `Collider`.
+///
+/// Layers, friction and restitution sit here rather than on each part: "bullets
+/// hit hitboxes" is a statement about the character, and per-part copies would
+/// be four more strings to keep in agreement per part.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SkinnedCollider {
+    /// The proxies, at most [`MAX_COLLIDER_PARTS`].
+    pub parts: Vec<ColliderPart>,
+
+    /// Collision layers every part belongs to. Absent = every layer, exactly
+    /// as on `Collider`. Empty is an error — omit the field instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
+
+    /// Only interact with colliders belonging to these layers. Absent =
+    /// interact with everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collides_with: Option<Vec<String>>,
+
+    /// `>= 0`.
+    #[serde(default = "half")]
+    #[schemars(range(min = 0.0))]
+    pub friction: f32,
+
+    /// Bounciness, `[0, 1]`, max-combined like `Collider.restitution`.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub restitution: f32,
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -3156,6 +3276,7 @@ components!(
     Road,
     Meadow,
     FootPlant,
+    SkinnedCollider,
 );
 
 #[cfg(test)]
@@ -3257,7 +3378,8 @@ mod tests {
                 "Terrain",
                 "Road",
                 "Meadow",
-                "FootPlant"
+                "FootPlant",
+                "SkinnedCollider"
             ]
         );
     }

@@ -201,6 +201,9 @@ pub(super) fn walk<'a>(
         // A `FootPlant`'s JSON path (M32), for the checks that need to know
         // what else is on this entity.
         let mut foot_plant: Option<String> = None;
+        // A `SkinnedCollider` (M33): its proxies ride the entity's rig, so the
+        // checks need the entity's `Mesh` and its scale.
+        let mut skinned_collider: Option<(crate::components::SkinnedCollider, String)> = None;
         let mut tree_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
@@ -326,6 +329,9 @@ pub(super) fn walk<'a>(
                 Some(ComponentData::FootPlant(p)) => {
                     foot_plant = Some(component_path.clone());
                     foot_plants.push((name.to_string(), p, component_path));
+                }
+                Some(ComponentData::SkinnedCollider(s)) => {
+                    skinned_collider = Some((s, component_path));
                 }
                 Some(ComponentData::HudPanel(p)) => {
                     has_hud_element = true;
@@ -604,6 +610,68 @@ pub(super) fn walk<'a>(
                 note_distinct(layer, path);
             }
             for layer in collider_data.collides_with.iter().flatten() {
+                layer_refs.push((layer.clone(), name.to_string(), path.clone()));
+                note_distinct(layer, path);
+            }
+        }
+
+        // ── Skinned collider proxies (M33) ────────────────────────────
+        //
+        // A proxy rides a joint, and the joints live in the mesh file — so a
+        // component on an entity with no `Mesh` describes a rig that will
+        // never exist. Whether the file it names carries a *skin* is
+        // engine-assets' half, the M30/M32 division.
+        if let Some((proxies, path)) = &skinned_collider {
+            if mesh_asset.is_none() {
+                errors.push(
+                    cx.err(
+                        codes::SKINNED_COLLIDER_WITHOUT_SKIN,
+                        format!(
+                            "entity {name:?} has a SkinnedCollider but no Mesh; its \
+                             proxies ride joints, and the joints live in a skinned \
+                             mesh file"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("SkinnedCollider"),
+                );
+            }
+            // `FootPlant`'s reason, arriving at the same refusal from the
+            // other side: a sphere through a non-uniform scale is not a
+            // sphere, and rapier has no shape for what it becomes.
+            let uniform = (scale.x - scale.y).abs() < 1e-4 && (scale.y - scale.z).abs() < 1e-4;
+            if !uniform {
+                errors.push(
+                    cx.err(
+                        codes::SKINNED_COLLIDER_NON_UNIFORM_SCALE,
+                        format!(
+                            "entity {name:?} has a SkinnedCollider and a non-uniform \
+                             Transform.scale [{}, {}, {}]; a proxy is scaled by it, and \
+                             a non-uniformly scaled sphere or capsule is not a shape \
+                             rapier has",
+                            scale.x, scale.y, scale.z
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("SkinnedCollider"),
+                );
+            }
+
+            // The layer budget and the reference check are M12's, and they
+            // count every collider in the scene — proxies included, or a
+            // character's own layer names would be invisible to both.
+            let mut note_distinct = |layer: &str, path: &str| {
+                if !distinct_layers.iter().any(|(l, _)| l == layer) {
+                    distinct_layers.push((layer.to_string(), path.to_string()));
+                }
+            };
+            for layer in proxies.layers.iter().flatten() {
+                layer_memberships.insert(layer.clone());
+                note_distinct(layer, path);
+            }
+            for layer in proxies.collides_with.iter().flatten() {
                 layer_refs.push((layer.clone(), name.to_string(), path.clone()));
                 note_distinct(layer, path);
             }

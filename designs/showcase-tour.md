@@ -323,6 +323,15 @@ than no showcase:
   stance foot had been sliding backwards at 0.76 m/s — a number nobody had
   because nothing could measure it.
 
+  **M33** adds the third thing it was missing, though nothing in the tour is
+  aimed at it: five `SkinnedCollider` proxies — head, chest, hips and two legs —
+  so the walker is something the physics world can see rather than a pose that
+  passes through everything. It walks a circle that meets nothing, and the
+  entry is here because the growth contract has no allowlist. The interesting
+  part was the cost: adding those five kinematic bodies moved 24 of the tour's
+  26 dynamic bodies and re-blessed all six baselines, because a rapier world's
+  results depend on its whole collider set and not only on what touches what.
+
   What is still faked: no blending and no state machine, which is M9's
   rejection standing. `Idle` is in the file and the tour never crossfades to
   it, because a crossfade is exactly the nondeterminism that made two clips on

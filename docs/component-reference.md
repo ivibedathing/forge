@@ -32,6 +32,7 @@ scene's components with the defaults filled in.
 | [`RigidBody`](#rigidbody) | A simulated rigid body (M8). Requires a `Transform`; a **dynamic** body |
 | [`Road`](#road) | A road: a circuit, a street, a mountain pass. |
 | [`Script`](#script) | Gameplay logic as data (M10): a Rhai script run once per fixed step. |
+| [`SkinnedCollider`](#skinnedcollider) | Collision proxies that follow a skinned character's pose (M33). |
 | [`Terrain`](#terrain) | A patch of ground: displaced terrain with a procedurally shaded surface |
 | [`Transform`](#transform) | Position, orientation, and scale. |
 | [`Tree`](#tree) | A procedurally generated tree (M19): trunk, recursive branches, and leaves, |
@@ -639,6 +640,36 @@ scene file.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `source` | `string` | — |  |
+
+## SkinnedCollider
+
+Collision proxies that follow a skinned character's pose (M33).
+
+M30 said a skinned mesh is visual and physics sees only the entity's own
+`Collider`; this is the one item of that reversed. Each part is re-posed
+every fixed step from the same joint globals the render and
+`engine list-joints` use, so a hitbox cannot disagree with the picture
+about where a head is.
+
+**The pose drives the proxies and nothing reads them back** — they are
+kinematic, so they are hit, they push dynamic bodies, and they report
+contacts, but they never move a joint. That is what keeps M30's claim that
+the pose is a pure function of (files, time) true, and it is why a proxy
+holds a character up exactly as much as a moving wall holds up the hand
+pushing it: not at all. What a character stands on is still its own
+`Collider`.
+
+Layers, friction and restitution sit here rather than on each part: "bullets
+hit hitboxes" is a statement about the character, and per-part copies would
+be four more strings to keep in agreement per part.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `collides_with` | `string[]` | — | Only interact with colliders belonging to these layers. Absent = interact with everything. |
+| `friction` | `number` | `0.5` | `>= 0`. (at least 0) |
+| `layers` | `string[]` | — | Collision layers every part belongs to. Absent = every layer, exactly as on `Collider`. Empty is an error — omit the field instead. |
+| `parts` | `object[]` | — | The proxies, at most [`MAX_COLLIDER_PARTS`]. |
+| `restitution` | `number` | `0` | Bounciness, `[0, 1]`, max-combined like `Collider.restitution`. (at least 0, at most 1) |
 
 ## Terrain
 

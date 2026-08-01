@@ -686,6 +686,13 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     // explicit and shows up in the trace.
     ("AnimationPlayer", "stride"),
     ("AnimationPlayer", "phase"),
+    // A fourth reason (M33): rapier reads a collider's material once, when the
+    // physics world is built, so a clip driving these would animate a number
+    // nothing reads again — a silent no-op, which is the failure this table
+    // exists to turn into an error. The same is true of every dimension inside
+    // `parts`, which the format cannot address at all.
+    ("SkinnedCollider", "friction"),
+    ("SkinnedCollider", "restitution"),
 ];
 
 /// Whether a field is vector-shaped in the published schema (3-element

@@ -21,6 +21,95 @@
           }
         ]
       },
+      "ColliderPart": {
+        "additionalProperties": false,
+        "description": "One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's\nframe (M33).\n\nFlat and discriminated by `shape`, exactly as [`Collider`] is and for the\nsame reasons — the schema-driven walk and the editor's generated inspector\nboth read flat structs, and `jq` and an LLM both write them. `cuboid`,\n`sphere` and `capsule` only: `trimesh` and `convex_hull` describe a\nspecific mesh, and a proxy exists precisely because that mesh lives on the\nGPU where physics cannot reach it (`collider_part_shape_unsupported`).",
+        "properties": {
+          "half_extents": {
+            "description": "`cuboid` only. Each component `> 0`.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "half_height": {
+            "description": "`capsule` only: half the cylindrical section's height. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "joint": {
+            "description": "The joint this proxy rides. Its posed world transform, times `offset`\nand `rotation`, is where the shape is each step.",
+            "type": "string"
+          },
+          "name": {
+            "description": "What reports call this part. Absent, the joint's name — which is right\nfor the ordinary one-proxy-per-joint set and wrong the moment a limb\ntakes two, hence the field. Unique within the component.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Metres from the joint's origin, **in the joint's own frame**, so a\nproxy is authored against the bone rather than against the world.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "radius": {
+            "description": "`sphere` and `capsule`. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Euler degrees in the joint's frame. A capsule's axis is local **+Y**\n(rapier's, and `builtin:cylinder`'s), and this is what turns it onto a\nbone that runs some other way.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sensor": {
+            "default": false,
+            "description": "Sensors detect overlaps but exert no forces — `Collider.sensor`,\nmeaning the same thing. Per part rather than per component, because a\nsword's blade and its guard want opposite answers.",
+            "type": "boolean"
+          },
+          "shape": {
+            "$ref": "#/$defs/ColliderShapeKind"
+          }
+        },
+        "required": [
+          "joint",
+          "shape"
+        ],
+        "type": "object"
+      },
       "ColliderShapeKind": {
         "description": "The collision shape kinds `Collider.shape` may name.",
         "enum": [
@@ -3186,6 +3275,63 @@
           "ground"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Collision proxies that follow a skinned character's pose (M33).\n\nM30 said a skinned mesh is visual and physics sees only the entity's own\n`Collider`; this is the one item of that reversed. Each part is re-posed\nevery fixed step from the same joint globals the render and\n`engine list-joints` use, so a hitbox cannot disagree with the picture\nabout where a head is.\n\n**The pose drives the proxies and nothing reads them back** — they are\nkinematic, so they are hit, they push dynamic bodies, and they report\ncontacts, but they never move a joint. That is what keeps M30's claim that\nthe pose is a pure function of (files, time) true, and it is why a proxy\nholds a character up exactly as much as a moving wall holds up the hand\npushing it: not at all. What a character stands on is still its own\n`Collider`.\n\nLayers, friction and restitution sit here rather than on each part: \"bullets\nhit hitboxes\" is a statement about the character, and per-part copies would\nbe four more strings to keep in agreement per part.",
+        "properties": {
+          "collides_with": {
+            "description": "Only interact with colliders belonging to these layers. Absent =\ninteract with everything.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "friction": {
+            "default": 0.5,
+            "description": "`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "layers": {
+            "description": "Collision layers every part belongs to. Absent = every layer, exactly\nas on `Collider`. Empty is an error — omit the field instead.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "parts": {
+            "description": "The proxies, at most [`MAX_COLLIDER_PARTS`].",
+            "items": {
+              "$ref": "#/$defs/ColliderPart"
+            },
+            "type": "array"
+          },
+          "restitution": {
+            "default": 0.0,
+            "description": "Bounciness, `[0, 1]`, max-combined like `Collider.restitution`.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": {
+            "const": "SkinnedCollider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "parts"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -3216,7 +3362,8 @@
     "Terrain",
     "Road",
     "Meadow",
-    "FootPlant"
+    "FootPlant",
+    "SkinnedCollider"
   ],
   "scene": {
     "$defs": {
@@ -3239,6 +3386,95 @@
             "type": "string"
           }
         ]
+      },
+      "ColliderPart": {
+        "additionalProperties": false,
+        "description": "One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's\nframe (M33).\n\nFlat and discriminated by `shape`, exactly as [`Collider`] is and for the\nsame reasons — the schema-driven walk and the editor's generated inspector\nboth read flat structs, and `jq` and an LLM both write them. `cuboid`,\n`sphere` and `capsule` only: `trimesh` and `convex_hull` describe a\nspecific mesh, and a proxy exists precisely because that mesh lives on the\nGPU where physics cannot reach it (`collider_part_shape_unsupported`).",
+        "properties": {
+          "half_extents": {
+            "description": "`cuboid` only. Each component `> 0`.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "half_height": {
+            "description": "`capsule` only: half the cylindrical section's height. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "joint": {
+            "description": "The joint this proxy rides. Its posed world transform, times `offset`\nand `rotation`, is where the shape is each step.",
+            "type": "string"
+          },
+          "name": {
+            "description": "What reports call this part. Absent, the joint's name — which is right\nfor the ordinary one-proxy-per-joint set and wrong the moment a limb\ntakes two, hence the field. Unique within the component.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Metres from the joint's origin, **in the joint's own frame**, so a\nproxy is authored against the bone rather than against the world.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "radius": {
+            "description": "`sphere` and `capsule`. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Euler degrees in the joint's frame. A capsule's axis is local **+Y**\n(rapier's, and `builtin:cylinder`'s), and this is what turns it onto a\nbone that runs some other way.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sensor": {
+            "default": false,
+            "description": "Sensors detect overlaps but exert no forces — `Collider.sensor`,\nmeaning the same thing. Per part rather than per component, because a\nsword's blade and its guard want opposite answers.",
+            "type": "boolean"
+          },
+          "shape": {
+            "$ref": "#/$defs/ColliderShapeKind"
+          }
+        },
+        "required": [
+          "joint",
+          "shape"
+        ],
+        "type": "object"
       },
       "ColliderShapeKind": {
         "description": "The collision shape kinds `Collider.shape` may name.",
@@ -5896,6 +6132,63 @@
               "type",
               "feet",
               "ground"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Collision proxies that follow a skinned character's pose (M33).\n\nM30 said a skinned mesh is visual and physics sees only the entity's own\n`Collider`; this is the one item of that reversed. Each part is re-posed\nevery fixed step from the same joint globals the render and\n`engine list-joints` use, so a hitbox cannot disagree with the picture\nabout where a head is.\n\n**The pose drives the proxies and nothing reads them back** — they are\nkinematic, so they are hit, they push dynamic bodies, and they report\ncontacts, but they never move a joint. That is what keeps M30's claim that\nthe pose is a pure function of (files, time) true, and it is why a proxy\nholds a character up exactly as much as a moving wall holds up the hand\npushing it: not at all. What a character stands on is still its own\n`Collider`.\n\nLayers, friction and restitution sit here rather than on each part: \"bullets\nhit hitboxes\" is a statement about the character, and per-part copies would\nbe four more strings to keep in agreement per part.",
+            "properties": {
+              "collides_with": {
+                "description": "Only interact with colliders belonging to these layers. Absent =\ninteract with everything.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "friction": {
+                "default": 0.5,
+                "description": "`>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "layers": {
+                "description": "Collision layers every part belongs to. Absent = every layer, exactly\nas on `Collider`. Empty is an error — omit the field instead.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "parts": {
+                "description": "The proxies, at most [`MAX_COLLIDER_PARTS`].",
+                "items": {
+                  "$ref": "#/$defs/ColliderPart"
+                },
+                "type": "array"
+              },
+              "restitution": {
+                "default": 0.0,
+                "description": "Bounciness, `[0, 1]`, max-combined like `Collider.restitution`.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "type": {
+                "const": "SkinnedCollider",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "parts"
             ],
             "type": "object"
           }

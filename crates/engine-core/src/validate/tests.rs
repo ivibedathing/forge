@@ -18,6 +18,163 @@ const VALID: &str = r#"{
   ]
 }"#;
 
+// ── Skinned collider proxies (M33) ────────────────────────────
+
+/// A proxy set as the design intends it: the rejections below all have to
+/// leave this alone.
+#[test]
+fn accepts_a_skinned_collider() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Walker", "components": [
+            { "type": "Transform" },
+            { "type": "Mesh", "asset": "builtin:cube" },
+            { "type": "SkinnedCollider", "layers": ["hitbox"], "parts": [
+                { "joint": "Head", "shape": "sphere", "radius": 0.14 },
+                { "joint": "Chest", "shape": "capsule", "radius": 0.2,
+                  "half_height": 0.15, "offset": [0.0, -0.05, 0.0] },
+                { "joint": "FootL", "shape": "cuboid",
+                  "half_extents": [0.05, 0.05, 0.12], "sensor": true }
+            ] } ] }
+      ]
+    }"#;
+    // Nothing here is engine-core's to complain about; that a `builtin:`
+    // mesh has no skin for these joints to be in is engine-assets' half,
+    // because saying so needs the file opened.
+    assert!(codes_of(source).is_empty(), "{:?}", codes_of(source));
+}
+
+#[test]
+fn a_proxy_set_has_a_budget() {
+    let parts = (0..crate::components::MAX_COLLIDER_PARTS + 1)
+        .map(|i| {
+            format!(r#"{{ "joint": "J{i}", "shape": "sphere", "radius": 0.1 }}"#)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let source = format!(
+        r#"{{
+      "name": "s",
+      "entities": [
+        {{ "name": "Walker", "components": [
+            {{ "type": "Transform" }},
+            {{ "type": "Mesh", "asset": "builtin:cube" }},
+            {{ "type": "SkinnedCollider", "parts": [{parts}] }} ] }}
+      ]
+    }}"#
+    );
+    assert!(codes_of(&source).contains(&codes::TOO_MANY_COLLIDER_PARTS));
+}
+
+#[test]
+fn an_empty_proxy_layer_list_is_refused_like_a_colliders() {
+    // M12's rule, and the trap is the same: an empty array reads as
+    // "nothing", and absence is how "everything" is spelled.
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Walker", "components": [
+            { "type": "Transform" },
+            { "type": "Mesh", "asset": "builtin:cube" },
+            { "type": "SkinnedCollider", "layers": [], "parts": [
+                { "joint": "Head", "shape": "sphere", "radius": 0.14 } ] } ] }
+      ]
+    }"#;
+    assert!(codes_of(source).contains(&codes::EMPTY_COLLISION_LAYERS));
+}
+
+#[test]
+fn a_proxy_needs_a_mesh_to_ride() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Ghost", "components": [
+            { "type": "Transform" },
+            { "type": "SkinnedCollider", "parts": [
+                { "joint": "Head", "shape": "sphere", "radius": 0.14 } ] } ] }
+      ]
+    }"#;
+    assert!(codes_of(source).contains(&codes::SKINNED_COLLIDER_WITHOUT_SKIN));
+}
+
+#[test]
+fn a_proxy_may_not_be_a_mesh_shape() {
+    // A proxy exists precisely because the skinned mesh is on the GPU.
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Walker", "components": [
+            { "type": "Transform" },
+            { "type": "Mesh", "asset": "builtin:cube" },
+            { "type": "SkinnedCollider", "parts": [
+                { "joint": "Head", "shape": "trimesh" } ] } ] }
+      ]
+    }"#;
+    assert!(codes_of(source).contains(&codes::COLLIDER_PART_SHAPE_UNSUPPORTED));
+}
+
+#[test]
+fn two_parts_may_not_report_under_one_name() {
+    // Both default their report name to the joint, so this is the mistake
+    // an author makes by putting two proxies on one bone.
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Walker", "components": [
+            { "type": "Transform" },
+            { "type": "Mesh", "asset": "builtin:cube" },
+            { "type": "SkinnedCollider", "parts": [
+                { "joint": "Chest", "shape": "sphere", "radius": 0.2 },
+                { "joint": "Chest", "shape": "sphere", "radius": 0.1 } ] } ] }
+      ]
+    }"#;
+    assert!(codes_of(source).contains(&codes::DUPLICATE_COLLIDER_PART));
+
+    // Naming one of them settles it.
+    let named = source.replace(
+        r#"{ "joint": "Chest", "shape": "sphere", "radius": 0.1 }"#,
+        r#"{ "joint": "Chest", "name": "Belly", "shape": "sphere", "radius": 0.1 }"#,
+    );
+    assert!(!codes_of(&named).contains(&codes::DUPLICATE_COLLIDER_PART));
+}
+
+#[test]
+fn a_proxy_shape_needs_the_fields_that_shape_has() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Walker", "components": [
+            { "type": "Transform" },
+            { "type": "Mesh", "asset": "builtin:cube" },
+            { "type": "SkinnedCollider", "parts": [
+                { "joint": "Head", "shape": "sphere",
+                  "half_extents": [0.1, 0.1, 0.1] },
+                { "joint": "Chest", "shape": "capsule", "radius": -1.0,
+                  "half_height": 0.2 } ] } ] }
+      ]
+    }"#;
+    let codes = codes_of(source);
+    assert!(codes.contains(&codes::MISSING_FIELD), "{codes:?}");
+    assert!(codes.contains(&codes::SHAPE_FIELD_MISMATCH), "{codes:?}");
+    assert!(codes.contains(&codes::INVALID_SHAPE_DIMENSION), "{codes:?}");
+}
+
+#[test]
+fn a_proxied_character_may_not_be_scaled_unevenly() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Walker", "components": [
+            { "type": "Transform", "scale": [1.0, 2.0, 1.0] },
+            { "type": "Mesh", "asset": "builtin:cube" },
+            { "type": "SkinnedCollider", "parts": [
+                { "joint": "Head", "shape": "sphere", "radius": 0.14 } ] } ] }
+      ]
+    }"#;
+    assert!(codes_of(source).contains(&codes::SKINNED_COLLIDER_NON_UNIFORM_SCALE));
+}
+
 #[test]
 fn accepts_a_valid_scene() {
     assert!(validate_source(VALID, "test.json").is_empty());

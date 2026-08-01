@@ -15,12 +15,12 @@ one of its decisions**; that is the case the longer prose was written for.
 
 ## Current state
 
-**M0–M32 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M33 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
-planting. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
+planting, M33 skinned collider proxies. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -51,6 +51,9 @@ engine list-joints <scene-or-mesh> [--entity Name] [--time T] [--steps N]
 #   the rig and where it is (M30); --steps for a pose the simulation reached, and a
 #   measured `stride` when the entity has a FootPlant (M32)
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
+engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
+#   every collider physics holds — shape, size, world placement — read back out of the
+#   built world, so a skinned hitbox nothing renders is still answerable (M33)
 engine ui-layout <scene.json> [--width W --height H] [--entity N]...  # where the UI landed (M31)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
 engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
@@ -1375,6 +1378,70 @@ usual reason engines reach for a blend tree — a gait change here is a differen
 is no third owner), planting on physics colliders, arm/hand IK and authored pole targets, and toe
 joints.
 
+## Skinned collider proxies (M33, `designs/skinned-collider-design.md`)
+
+M30 §1 said a skinned mesh is visual and physics sees only the entity's own `Collider`. **This
+reverses that one item and nothing else**: a `SkinnedCollider` lists simple shapes, each fixed in
+one joint's frame, and the physics world re-poses them from the rig every fixed step. They are hit
+by raycasts, they report contacts, and they push dynamic bodies.
+
+- **The pose drives the proxies and nothing reads them back.** That one sentence is the design.
+  A proxy is a **kinematic** body, posed from `locomotion::posed_globals_at` — the same seam the
+  render, `engine list-joints` and `world.joint_position` go through, so a hitbox cannot disagree
+  with the picture about where a head is, and a `FootPlant` character's ankle proxies are on the
+  ground for free. Physics reading the skeleton is what keeps M30's "the pose is a pure function of
+  (files, time)" true; physics *writing* it would be a ragdoll, which is a different milestone.
+  **A proxy therefore holds a character up exactly as much as a moving wall holds up the hand
+  pushing it** — what a character stands on is still its own `Collider`.
+- **One body per part** (colliders on one rapier body share its pose; joints do not), `sphere` /
+  `capsule` / `cuboid` only — `Collider`'s own vocabulary, and a mesh shape is refused
+  (`collider_part_shape_unsupported`) because a proxy exists precisely because the skinned mesh is
+  on the GPU. `offset`/`rotation` are in the **joint's** frame (capsule axis local +Y);
+  `Transform.scale` scales the parts and a non-uniform one is refused. Shapes never resize with the
+  pose: only the placement follows the rig.
+- **Self-collision is a contact-pair hook keyed on the owning entity**, and only proxy colliders set
+  `ActiveHooks`, so a scene without one reaches none of it. Proxies also opt into
+  `ActiveCollisionTypes::all()` — kinematic-vs-fixed and kinematic-vs-kinematic are both off by
+  default in rapier, and "did the sword touch the shield" is the second of those.
+- **An address is not an entity name.** `ContactEvent` keeps `a`/`b` as entity names and gains
+  `a_part`/`b_part`, so every pre-M33 script and both golden traces are untouched and a trace line
+  grows a `"parts"` key only when a proxy is involved. `engine raycast` reports `"part"` beside
+  `"entity"`, and scripts get `world.touching_parts` / `contacts_started_parts` returning
+  **addresses** (`Walker/Head`) — engine-produced, never accepted back, slash-separated because
+  entity names already contain dots (`Crate.frag0`). With no proxies in a scene those two calls
+  return exactly what `touching`/`contacts_started` do.
+- **`engine list-colliders`** is the milestone's legibility half and reports *every* collider,
+  component-authored and skinned alike, read back out of rapier rather than re-derived —
+  `road-centerline`'s argument applied to physics. `--steps N` for M32's reason.
+- **`PhysicsWorld::build` takes `&dyn PhysicsAssets`** (M30's `AssetSource` trick again: one
+  supertrait, every existing caller unchanged) and **`step` takes the scene time** — passed, not
+  counted internally, so no caller can drift from the clock the render uses. The pose is sampled at
+  the step's **end**, `steps · dt`, the time the render draws after those steps.
+
+**Two things measured, both worth knowing before debugging one of them.** First, **a physics scene
+is not stable under the addition of a collider anywhere in it**: the tour's `Walker` gained five
+proxies that touch nothing, and 24 of the tour's 26 dynamic bodies moved, two frames by ~1900
+pixels. Dropping *one 5 cm static sphere 200 m from anything* into the unchanged tour moves six
+bodies by up to 4.4 mm — the collider set is an input to the broad phase, its traversal fixes the
+order contacts reach the solver, and float addition is not associative. So the determinism promise
+is per *file*: a scene that gains a body re-blesses, and three runs of the edited tour are still
+byte-identical to each other. The A/B said **31 of 31** comparable artifacts byte-identical, the
+seven exclusions being the new fixture and the six tour frames this scene edit re-blessed.
+Second, **a stride-driven character's proxies lag its render by one step** (1.9 mm at the hips on
+the fixture): `phase` is advanced by ground *covered*, which physics cannot know until it has run,
+so the pose a proxy can be aimed at is the previous step's. M12's contact latency, in another
+place — causal, not a defect, and the CLI test that compares `list-colliders` with `list-joints`
+states the residue rather than hiding it.
+
+Fixture `verify/m33_proxies.json` at `--steps 150`: two copies of `rigged_walker.gltf` walking into
+two identical crates, one carrying an eleven-part proxy set. **The two walkers are the assertion**
+(M30's fixture logic for the third time) — one bulldozes its crate 1.3 m, the other walks straight
+through its own, which is visible in the render and readable out of `simulate` without one. Aimed
+at its subject with no terrain in frame per M22's rule, so it carries a hard bit-exact pin (four
+consecutive renders were one image), and a CLI test diff-renders it. Not here, deliberately:
+ragdolls, standing on a proxy, shapes solved from the posed bone, automatic proxy generation from
+vertex weights, and skinned *mesh* colliders.
+
 
 ## Showcase tour (`designs/showcase-tour.md`)
 
@@ -1466,7 +1533,10 @@ the six showcase baselines were re-blessed for it and `showcase_450` was **byte-
 03's camera is aimed the other way, which is the cheap confirmation that one added entity changed
 only the frames it is in. **M32 unfaked two of the three the tour doc names**: the stride is
 now driven by the ground the walker covers (`stride: 1.6408`, the number `list-joints` measures off
-the clip) and its feet are planted on the terrain by a `FootPlant`. Still faked: `Idle` is in the
+the clip) and its feet are planted on the terrain by a `FootPlant`. **M33 gave it five collision
+proxies**, which is the tour's use of `SkinnedCollider` — and re-blessed all six baselines for a
+reason worth reading in that section: the walker touches nothing, and adding bodies to a rapier
+world perturbs every other body in it anyway. Still faked: `Idle` is in the
 file but never crossfaded to, because a crossfade is the nondeterminism M9 refused.
 
 Station 04 fires all three `Breakable` triggers in one run (collision at ~585, `break_entity` at 601,
@@ -1553,8 +1623,8 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**31 of the 37 baselines are pinned by a test**, and the six that are not are the six `showcase_*`
-frames — deliberately. They are not byte-reproducible on this adapter (measured repeatedly at four
+**32 of the 38 baselines are pinned by a test** (M33's fixture arrived with its own), and the six
+that are not are the six `showcase_*` frames — deliberately. They are not byte-reproducible on this adapter (measured repeatedly at four
 to six distinct images from six renders of an *unchanged* scene, on any binary), so a test
 asserting them would fail at random, which is worse than no test. They keep their `diff_args`
 tolerance in the manifest and stay the sweep's job; `cli.rs` says so where someone would go to add
@@ -1751,8 +1821,11 @@ bark is authored from them. **Alpha-cut leaves are still a missing feature**, no
 and an `alpha_cutoff` mean new `Tree` fields, a schema regeneration, and a validation pass.) After M23: road junctions (two roads crossing wants a patch primitive, not a ribbon), banked
 cross-sections, per-point road width, roads that follow a `Terrain` instead of carrying their own
 heights, and textures for asphalt grain (analytic markings beat a texture for anything periodic, but
-grain is not periodic). After M30: skinned collider proxies and editor picking against the
-posed mesh (foot IK and stride-driven locomotion landed in M32). After M32: planting against
+grain is not periodic). After M30: editor picking against the posed mesh (foot IK and
+stride-driven locomotion landed in M32, skinned collider proxies in M33). After M33: ragdolls
+(physics writing the skeleton, which is the one-way rule reversed and wants its own answer to where
+the pose then comes from), proxies that resize with the posed bone, and generating a proxy set from
+the skin's vertex weights. After M32: planting against
 arbitrary colliders rather than only a `Terrain` (which wants an answer to the purity question M32
 declined to give), arm and hand IK with authored pole targets, toe joints, and a locomotion rule
 richer than one clip per gait. **Blending stays rejected**, not deferred — see the design's §1. After M31: a
