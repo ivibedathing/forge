@@ -1568,7 +1568,18 @@ goes on a scratch clone (`bvh_cold`).
   binary in `~/.local/bin`. Linux is built on the *oldest* supported Ubuntu deliberately — the
   artifact's glibc floor is whatever runner built it. `.github/workflows/ci.yml` runs fmt, clippy and
   the workspace tests; the render tests skip there for want of an adapter, so **CI proves the GPU-free
-  half only** and baselines stay a local, per-adapter check. **crates.io is closed to this workspace**:
+  half only** and baselines stay a local, per-adapter check. Two things had to be true for that skip to
+  be real, and neither was: the runner offers a **software GL adapter**, so "no adapter" was never the
+  case there — `Gpu::new` now checks the three formats every frame attaches
+  (`Rgba8UnormSrgb`, `Depth32Float`, `R32Float`) and refuses an adapter that cannot render one, naming
+  it and the capability, because before that check every render died deep inside
+  `create_render_pipeline` on `R32Float` and reported itself as `internal_panic` — *an engine bug* —
+  which is exactly the wrong diagnosis. And **the pinned car drive is a per-platform artifact** the way
+  a baseline is a per-adapter one: eleven thousand steps of a chaotic vehicle sim through glibc's trig
+  instead of Apple's park the car ~53 m off, so
+  `the_committed_lap_timeline_drives_the_car_around_the_track` skips off aarch64 macOS. Making that one
+  cross-platform means routing every trig call in the engine *and* in Rhai through one deterministic
+  libm — a milestone, not a fixup. **crates.io is closed to this workspace**:
   `engine-editor` pins egui to a git rev, cargo refuses to publish anything with a git dependency, and
   `engine-cli` depends on the editor — so `publish = false` is a *consequence*, and
   `cargo install --git` is the toolchain path until egui 0.36 lets that pin become a version.

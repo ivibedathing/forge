@@ -7,6 +7,19 @@
 # geometry generators, the formatter, the CLI contract — still holds. Renders
 # are verified locally against baselines, which are per-adapter artifacts and
 # cannot be pinned from here.
+#
+# "No usable adapter" is not the same as "no adapter": this runner offers a
+# software GL one, which cannot render `R32Float` and so cannot build the
+# depth copy every frame allocates. `Gpu::new` refuses it by name, which is
+# what makes the skip above real — before that check the adapter reported
+# itself available, every render died inside `create_render_pipeline`, and the
+# failure was reported as an engine bug.
+#
+# For a related reason the pinned car drive
+# (`the_committed_lap_timeline_drives_the_car_around_the_track`) does not run
+# here: eleven thousand steps of a chaotic vehicle sim through a different
+# libm park the car ~53 m away, so those numbers are a per-platform artifact
+# checked on the machine class that blessed them.
 name: ci
 
 on:
