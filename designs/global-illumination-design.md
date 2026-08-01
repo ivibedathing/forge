@@ -1,8 +1,14 @@
 # M33 — Global Illumination: Design
 
-*Status: draft. §12 lists the decisions that are the user's to make, and §13 is the
-build order. Milestone number is provisional — parallel sessions claim numbers at
-merge time, not at branch time.*
+*Status: design agreed, not yet built. §12 records what was settled with the user
+and what is still open; §13 is the build order. Milestone number is provisional —
+parallel sessions claim numbers at merge time, not at branch time.*
+
+`CLAUDE.md` lists "advanced rendering (GI, ray tracing)" as out of scope for v1.
+**This reverses the GI half of that one item and nothing else** — ray tracing
+stays out, and §2 rejects the ray-traced approach on its own merits. The
+precedent for reading a scope line as reversible when the user asks for the thing
+is M28, which reversed `input-design.md` §7's "no mouse".
 
 ---
 
@@ -37,14 +43,15 @@ In:
   byte-reproducible, verified against a hash of its inputs.
 - **Sky occlusion and one bounce** of sky light, evaluated against the *live*
   sky — so `daylight` moves the fill light through the day for free.
-- **One bounce of sunlight**, over a sun-direction basis the bake takes from the
-  scene's own `daylight` arc (§5.3), so colour bleeding survives the clock too.
 - Receivers: the mesh family (including `Terrain`, textured and skinned
   variants), `Road`, and `Meadow`.
+- A **volume in the showcase tour**, so the feature is visible in the demo and
+  not only in its fixture.
 
-Out, and each has a reason in §14: specular GI, `Water` and `Cloud` receivers,
-dynamic occluders, probe relighting from `PointLight`s, and anything that runs
-per frame on the GPU.
+Out, and each has a reason in §14: **bounced sunlight** (§5.3 — the decided
+scope is sky only, and it is the largest deferral), specular GI, `Water` and
+`Cloud` receivers, dynamic occluders, probe relighting from `PointLight`s, and
+anything that runs per frame on the GPU.
 
 **Everything defaults to off.** A scene with no volume component renders
 byte-identically to M32, and the mechanism that guarantees that is the shader
@@ -108,7 +115,11 @@ actually do. The engine hands us that set almost directly:
 | Sky zenith band | 1 | `EnvironmentSettings.sky_zenith` | yes, via `daylight` |
 | Sky horizon band | 1 | `sky_horizon` | yes |
 | Sky ground band | 1 | `sky_ground` | yes |
-| Sun, direction *k* | N | `ResolvedLights.sun_color`, weighted (§5.3) | yes |
+| ~~Sun, direction *k*~~ | ~~N~~ | ~~`ResolvedLights.sun_color`~~ | deferred, §5.3 |
+
+Three basis sources, then, and the file is three transfer vectors per probe. The
+sun is the one source whose *direction* moves, which is what makes it cost N
+vectors instead of one; §5.3 records the mechanism and §14 carries it forward.
 
 The three sky bands are not an approximation chosen for GI — they are M16's
 actual sky model, the same three colours `sky_gradient` interpolates and the same
@@ -138,8 +149,8 @@ where both can be checked.
 ## 4. The volume is one entity with one component
 
 Following `Water`, `Terrain` and `Meadow` exactly. The entity carries a
-`Transform` and an `IrradianceVolume` and **no `Mesh` and no `Material`**
-(`irradiance_volume_with_mesh`), and the `Transform` is the volume's bounds — a
+`Transform` and a `LightProbeVolume` and **no `Mesh` and no `Material`**
+(`light_probe_volume_with_mesh`), and the `Transform` is the volume's bounds — a
 unit box scaled and positioned, non-uniform scale being the normal case.
 
 ```json
@@ -147,7 +158,7 @@ unit box scaled and positioned, non-uniform scale being the normal case.
   "name": "Lighting",
   "components": [
     { "type": "Transform", "position": [0, 8, 0], "scale": [120, 16, 120] },
-    { "type": "IrradianceVolume",
+    { "type": "LightProbeVolume",
       "spacing": 4.0,
       "bake": "gi/showcase.gi.json",
       "bounces": 1,
@@ -210,7 +221,14 @@ compares. This is a stronger promise than any render in the repo makes, and it i
 available only because the bake never touches a GPU — the `daylight.rs` dividend
 again.
 
-### 5.3 The sun basis comes from the scene's own arc
+### 5.3 The sun is not a basis source in M33 — and how it will be
+
+**Decided scope: sky only.** The sun stays a direct light with a shadow map and
+contributes no bounce, which keeps the bake to three transfer vectors per probe,
+keeps it independent of the `daylight` arc, and still delivers contact darkening
+and sky-coloured fill — the majority of what §0 is about. What it does *not*
+deliver is the postcard case: a red wall reddening a white one. That is M34, and
+this section is its design so the decision does not have to be made twice.
 
 The sun is the one basis source whose *direction* moves, and a transfer vector
 per direction is what makes it expensive. Two candidates:
@@ -225,12 +243,16 @@ per direction is what makes it expensive. Two candidates:
   an authored `DirectionalLight` and no `daylight` block has **one** sun
   direction, so N = 1 and the sun basis costs one vector.
 
-Take the second. It is more accurate per byte, it degenerates correctly for the
-static case, and the coupling it introduces — the bake reads the `daylight`
-block — is honest: the bake is a function of the scene file, and the arc is in
-the scene file. The cost is written down: **changing `sun_elevation` or
-`sun_azimuth` invalidates the bake**, and §6's hash catches that rather than
-letting it render wrong.
+Take the second when it lands. It is more accurate per byte, it degenerates
+correctly for the static case, and the coupling it introduces — the bake reads
+the `daylight` block — is honest: the bake is a function of the scene file, and
+the arc is in the scene file. The cost is written down: **changing
+`sun_elevation` or `sun_azimuth` would invalidate the bake**, and §6's hash
+catches that rather than letting it render wrong.
+
+Nothing in M33's file format has to change to accept it: `basis` is already a
+named map in the header, and a reader that finds a `sun` entry beside `sky` adds
+terms to the same sum.
 
 ### 5.4 One bounce, optionally two
 
@@ -272,22 +294,22 @@ per line so a diff shows which probes moved:
 ```json
 {"format":"forge-gi/1","scene":"showcase_tour.json","entity":"Lighting",
  "inputs_hash":"…","grid":[30,4,30],"origin":[…],"spacing":4.0,
- "basis":{"sky":3,"sun":8},"samples":256,"bounces":1}
-{"p":[0,0,0],"sky":[[…12 numbers…],[…],[…]],"sun":[[…],…]}
+ "basis":{"sky":3},"samples":256,"bounces":1}
+{"p":[0,0,0],"sky":[[…12 numbers…],[…],[…]]}
 ```
 
 Each probe holds one **SH-L1 vector per basis source**: 4 coefficients × 3
-channels = 12 numbers, quantized to four decimals. That is the size problem
-stated honestly: 3 sky + 8 sun basis sources is 132 numbers per probe, so a
-30×4×30 volume is 3600 probes and roughly 2 MB of text. §12 asks whether that is
-acceptable or whether the sun basis should be smaller by default; the levers are
-`spacing`, the sun sample count, and (rejected so far) a PNG probe atlas, which
-would be smaller and would violate invariant 1.
+channels = 12 numbers, quantized to four decimals. At the decided scope that is
+36 numbers a probe, so a 30×4×30 volume is 3600 probes and roughly 600 KB of
+text — large for a repo file and small beside the PNGs already committed, and it
+is the size that made sky-only the cheap scope as well as the simple one. The
+levers if it needs to shrink are `spacing` and quantization; a PNG probe atlas
+would be several times smaller and is rejected on invariant 1.
 
 **A stale bake is an error, never a wrong render.** `inputs_hash` covers every
 input the bake read — the geometry-producing components of every entity, their
-transforms and albedos, the volume's own fields, the `daylight` arc, and the
-bake's own parameters — and `engine validate` recomputes it. Mismatch is
+transforms and albedos, the volume's own fields, and the bake's own parameters —
+and `engine validate` recomputes it. Mismatch is
 `gi_bake_stale`, exit 1, naming the command that fixes it. Absent file is
 `gi_bake_missing`. This is `scene_parse_desync`'s discipline: the failure mode
 that must not exist is the one where everything runs and the picture is quietly
@@ -356,7 +378,7 @@ none of the three is edited.
 
 | Code | When |
 |---|---|
-| `irradiance_volume_with_mesh` | the entity also carries a `Mesh` or a `Material` |
+| `light_probe_volume_with_mesh` | the entity also carries a `Mesh` or a `Material` |
 | `gi_bake_missing` | `bake` names a file that is not there |
 | `gi_bake_stale` | `inputs_hash` disagrees with the scene |
 | `gi_bake_malformed` | the file parses but its grid, basis or version disagree with the component |
@@ -387,7 +409,7 @@ badly placed.
 Scripts get **`world.irradiance(x, y, z, nx, ny, nz)`**, read-only, returning
 three numbers. Read-only for M21's reason: a script-settable light field is
 hidden state and the render must stay a function of files and a clock.
-`IrradianceVolume`'s geometry fields go in `NOT_ANIMATABLE` — a clip driving
+`LightProbeVolume`'s geometry fields go in `NOT_ANIMATABLE` — a clip driving
 `spacing` would invalidate the bake every frame — while `intensity` and `blend`
 animate freely, which is how a scene fades GI in.
 
@@ -425,27 +447,34 @@ per-adapter as always, and the fixture avoids terrain and ground cover so it can
 be pinned hard; whether it needs `samples: 1` is a measurement, not an
 assumption — render it four times and count distinct images before blessing.
 
-## 12. Decisions that are yours
+## 12. Decisions
 
-1. **Name.** `IrradianceVolume` (says what it holds), `LightProbeVolume` (says
-   what it is made of), or `GlobalIllumination` (says what it is for). The doc
-   uses the first throughout; it is a mechanical rename.
-2. **Sun bounce in M33, or M34?** Dropping it makes the bake file ~4× smaller,
-   removes the coupling to the `daylight` arc, and still delivers contact
-   darkening and sky-coloured fill — the majority of the visual change. Adding it
-   is what makes the red wall redden the white one under a moving sun.
-3. **Is a ~2 MB generated JSON acceptable in the repo**, or should the tour's
-   volume be coarser than its natural spacing to keep it small?
+Settled with the user before implementation began:
+
+1. **The component is `LightProbeVolume`** — it says what the thing is made of,
+   which is also what `bake-gi` and `gi-probe` talk about.
+2. **Sky basis only in M33.** §5.3 carries the sun's design forward to M34 rather
+   than deleting it, and the file format accepts it without a version bump.
+3. **The tour gets a real volume**, not a token one, which re-blesses all six
+   showcase baselines. They already carry M29's `--threshold 24
+   --max-diff-percent 0.02` tolerance, so the re-bless is routine; what is *not*
+   routine is that GI changes every frame substantially, so the six must be
+   looked at rather than blessed blind.
+
+Still open, and both are cheap to defer until the bake exists and can be
+measured:
+
 4. **Do `Cloud` and `Meadow` occlude?** A cloud casts no shadow today; making it
    occlude GI would be the first time it darkened anything. Grass occluding grass
-   is a real effect and a large ray-count multiplier.
-5. **Does the tour get a volume in this milestone** — which re-blesses all six
-   showcase baselines again — or does the fixture carry it and the tour follow?
-   The component contract test forces the component into the tour either way.
+   is a real effect and a large ray-count multiplier. Provisional answer: neither
+   occludes, both receive.
+5. **How coarse is the tour's volume?** `spacing` trades bake size and time
+   against how tight contact darkening looks. Pick it from a render, not from
+   arithmetic.
 
 ## 13. Build order
 
-- **G0** — `IrradianceVolume` component, schema, validation, budget, and the
+- **G0** — `LightProbeVolume` component, schema, validation, budget, and the
   bake-file format with its hash. No renderer change; `validate` and `inspect`
   work end to end and the errors are reachable before a pixel moves.
 - **G1** — the bake: BVH, sampling, sky basis only, `bake-gi` and `gi-probe`. GPU
@@ -453,14 +482,17 @@ assumption — render it four times and count distinct images before blessing.
 - **G2** — evaluation and upload: `gi::evaluate`, the four 3D textures, group 2,
   and the seam work — reassembling `AMBIENT`/`FILL` from contributions, which is
   the risky part and comes with its own A/B before anything else is added.
-- **G3** — the sun basis, `Road` and `Meadow` receivers, the fixture, the
-  baseline, the tour, `CLAUDE.md`.
+- **G3** — `Road` and `Meadow` receivers, the fixture and its baseline, the
+  tour's volume and its six re-blessed frames, `CLAUDE.md`.
 
 Each stage ends runnable, and G2 is the one to stop at if the A/B says the seam
 change is not free.
 
 ## 14. Not in this milestone
 
+- **Bounced sunlight**, §5.3 — the largest deferral and the one a viewer will
+  notice, since it is what makes a coloured wall tint its neighbour under a sun
+  rather than only under the sky. The design is written; M34 is the build.
 - **Specular GI.** The sky reflection stays M16's roughness-lerped gradient. A
   probe volume can hold a prefiltered radiance cube, and that is what IBL means
   here; it is a milestone of its own and the deferred-work list already names it.
