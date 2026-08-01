@@ -772,7 +772,7 @@ a frozen day is reproducible with no `--time` at all. `day_length: 24.0` makes a
   on `sky`); authoring either anyway is the `daylight_overrides_sky` warning, naming the fix.
 - **The horizon-sun shadow bug**, which day/night is the first thing to reach: a sun on the horizon
   casts shadows of unbounded length and one just below it casts them *upward*.
-  `clamp_shadow_elevation` in `scene_renderer.rs` floors the direction used for the **shadow matrix**
+  `clamp_shadow_elevation` in `scene_renderer/shadow.rs` floors the direction used for the **shadow matrix**
   at 5° while the lighting direction keeps going. Above 5° it returns its input unchanged, which is
   why it costs every pre-M21 baseline nothing.
 - **Scripts** get exactly two read-only getters, `world.time_of_day()` and `world.sun_altitude()`,
@@ -1496,6 +1496,21 @@ Cargo workspace (design doc §4), dependency order bottom-up:
 - `crates/engine-assets` — mesh/texture loading, asset schema
 - `crates/engine-cli` — the `engine` binary; the primary interface
 
+**`engine-render/src/scene_renderer/` is six modules**, split out of one 5,989-line file as **pure
+code motion** — not one expression changed, which is the only form that refactor is safe in on a
+path this file flags as ULP-sensitive in four places (the A/B: 34 of 36 artifacts byte-identical,
+the two exceptions being the tour frames this adapter cannot reproduce at all). `uniforms.rs` is
+every `#[repr(C)]` struct the GPU sees plus the functions that pack a component into one — **field
+order there is a wire format**, matching a WGSL declaration positionally. `shaders.rs` is the WGSL
+assembly seam (`with_surface`, the `Producer`s, the anchors, and the `seam_tests` that pin every
+substitution actually landing). `pipelines.rs` is `with_samples` and the per-pass constructors;
+`resources.rs` the caches and frame-scoped GPU resources; `shadow.rs` the shadow map and its
+matrix math. `mod.rs` keeps `SceneRenderer`, `ScenePass` and `draw`. **`draw` is deliberately still
+one function** — breaking it into passes re-scopes borrows in the hot path, which is the shape of
+edit that has moved pixels here before, so it wants its own change and its own A/B. Submodules are
+children and see the parent's private items; what they define is `pub(crate)` and glob-imported
+back, so call sites read as they did when it was one file.
+
 Plus `engine-physics`, `engine-script`, `engine-editor`. Supporting:
 `schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`, and
 `docs/` — which holds `cli-contract.md` and `error-codes.md` and **nothing else**. The design doc's
@@ -1595,11 +1610,9 @@ bar over an enemy's head is a *projection* question and wants `world.project(x, 
 
 **Housekeeping the M31 audit turned up and did not do**, in the order they are worth doing:
 
-- **`scene_renderer.rs` has outgrown its file** — 5,977 lines, of which `SceneRenderer::with_samples`
-  is ~880 (pipeline construction) and `SceneRenderer::draw` is ~1,150. `validate.rs` is 5,539 with
-  `validate_source` at ~1,400. Splitting them is the one real structural debt in the workspace, and
-  `draw` is exactly the ULP-sensitive path this file keeps warning about — so it wants its own
-  change with its own A/B between binaries, never a drive-by while doing something else.
+- **`validate.rs` has outgrown its file** — 5,539 lines with `validate_source` at ~1,400. It is now
+  the largest file in the workspace, and unlike the renderer it is GPU-free and fully covered by
+  the corpus tests, so splitting it is ordinary work rather than a ULP question.
 - **25 of the 36 baselines are pinned by no test** (see Verification). Each new fixture has been
   adding to that pile; a CLI test that diff-renders the fixture is cheap and is what makes a
   baseline survive someone who does not run the sweep.
@@ -1611,7 +1624,7 @@ not bugs to fix but the lint being wrong, and they carry a local `#[allow]` with
 **read it before deleting one**. Five are the `!(a > b)` comparisons in `validate.rs` and
 `engine-script`, written negated *precisely so NaN fails*; clippy's suggested `a <= b` is false for
 NaN, so "fixing" them would let a NaN far plane, collider dimension, meadow stage or explosion
-radius validate clean. The sixth is `drop(write_object)` in `scene_renderer.rs`, which releases the
+radius validate clean. The sixth is `drop(write_object)` in `scene_renderer/mod.rs`, which releases the
 closure's mutable borrow of `object_bytes` — deleting it does not compile. Four
 `too_many_arguments` allows carry their own rationale (a nine-field keyframe constructor, a
 recursive validation walk threading a JSON location, a collider builder naming four geometry
