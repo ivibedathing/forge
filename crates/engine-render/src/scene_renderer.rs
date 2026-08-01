@@ -3017,6 +3017,11 @@ impl SceneRenderer {
                 },
             );
         }
+        // Not a no-op, whatever clippy's `drop_non_drop` says: the closure
+        // holds a mutable borrow of `object_bytes`, and this is what releases
+        // it so the buffer can be read below. Deleting the line does not
+        // compile.
+        #[allow(clippy::drop_non_drop)]
         drop(write_object);
         if !object_bytes.is_empty() {
             let objects = Uniforms::ensure(
@@ -3469,11 +3474,11 @@ impl SceneRenderer {
                 // below it is most of what makes an elevated road read as
                 // elevated. The pipeline is unchanged: it reads only the model
                 // matrix, which is why roads share the object uniform array.
-                for index in 0..roads.len() {
+                for (index, road_key) in road_keys.iter().enumerate().take(roads.len()) {
                     cast(
                         &mut shadow_pass,
                         items.len() + index,
-                        &self.meshes[&road_keys[index]],
+                        &self.meshes[road_key],
                     );
                 }
             }
@@ -4092,6 +4097,13 @@ impl SceneRenderer {
         pass.draw_indexed(0..mesh.index_count, 0, 0..1);
     }
 
+    /// Eleven parameters, and clippy would rather they were a struct. They are
+    /// nine parallel slices indexed by the *same* `Blended` index, built once
+    /// per frame by `draw` and read here in one pass. A struct of borrows would
+    /// be built and destructured for a single call on the hot path, and the
+    /// index-alignment invariant — the one thing that can actually go wrong
+    /// here — would be no better expressed for it.
+    #[allow(clippy::too_many_arguments)]
     fn draw_blended(
         &self,
         pass: &mut wgpu::RenderPass<'_>,

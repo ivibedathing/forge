@@ -134,11 +134,11 @@ fn loads_a_glb_container() {
     // Minimal GLB: 12-byte header, JSON chunk (space-padded), BIN chunk.
     let json = bare_triangle_gltf("").replace(r#", "uri": "tri.bin""#, "");
     let mut json_bytes = json.into_bytes();
-    while json_bytes.len() % 4 != 0 {
+    while !json_bytes.len().is_multiple_of(4) {
         json_bytes.push(b' ');
     }
     let mut bin = triangle_bin();
-    while bin.len() % 4 != 0 {
+    while !bin.len().is_multiple_of(4) {
         bin.push(0);
     }
 

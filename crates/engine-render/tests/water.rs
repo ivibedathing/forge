@@ -218,25 +218,24 @@ fn a_surface_is_visible_from_underneath() {
     // Back-face culling is on globally, and a water grid is a single sheet: if
     // the pipeline culled, water would silently vanish for any camera below the
     // waterline. Look up at it from below and require *something* to be there.
-    let source = format!(
-        r#"{{
+    let source = r#"{
   "name": "under",
-  "environment": {{ "sky": true, "samples": 1 }},
+  "environment": { "sky": true, "samples": 1 },
   "entities": [
-    {{ "name": "Camera", "components": [
-      {{ "type": "Transform", "position": [0.0, -2.0, 0.0], "rotation": [80.0, 0.0, 0.0] }},
-      {{ "type": "Camera", "fov": 70.0, "near": 0.1, "far": 100.0, "active": true }} ] }},
-    {{ "name": "Sun", "components": [
-      {{ "type": "Transform", "rotation": [-70.0, 0.0, 0.0] }},
-      {{ "type": "DirectionalLight", "intensity": 1.0 }} ] }},
-    {{ "name": "Lake", "components": [
-      {{ "type": "Transform", "scale": [40.0, 1.0, 40.0] }},
-      {{ "type": "Water", "segments": 16, "detail": 0.0, "waves": [],
+    { "name": "Camera", "components": [
+      { "type": "Transform", "position": [0.0, -2.0, 0.0], "rotation": [80.0, 0.0, 0.0] },
+      { "type": "Camera", "fov": 70.0, "near": 0.1, "far": 100.0, "active": true } ] },
+    { "name": "Sun", "components": [
+      { "type": "Transform", "rotation": [-70.0, 0.0, 0.0] },
+      { "type": "DirectionalLight", "intensity": 1.0 } ] },
+    { "name": "Lake", "components": [
+      { "type": "Transform", "scale": [40.0, 1.0, 40.0] },
+      { "type": "Water", "segments": 16, "detail": 0.0, "waves": [],
          "shallow_color": [0.9, 0.1, 0.1], "deep_color": [0.9, 0.1, 0.1],
-         "depth_fade": 0.5, "opacity": 1.0 }} ] }}
+         "depth_fade": 0.5, "opacity": 1.0 } ] }
   ]
-}}"#
-    );
+}"#
+    .to_string();
     let image = render_at(&source, 0.0);
     let pixel = centre(&image);
     assert!(

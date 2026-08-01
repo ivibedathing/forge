@@ -25,45 +25,55 @@ use winit::{
 };
 
 /// What to render, decided before the window exists.
+///
+/// The scene payload is boxed because it is two orders of magnitude larger
+/// than `Triangle`, and an enum is as big as its widest variant — the M0
+/// triangle would otherwise carry five kilobytes of scene fields around with
+/// it. Boxing costs one allocation for the whole process: `Content` is built
+/// once, before the window exists.
 pub enum Content {
     /// The M0 proof-of-life triangle.
     Triangle,
     /// A loaded scene, flattened to a draw list.
-    Scene {
-        items: Vec<RenderItem>,
-        /// The scene's water surfaces (M18). Refreshed per frame when a
-        /// simulation runs — a script can move a surface — and static
-        /// otherwise, exactly like `items`.
-        water: Vec<engine_core::scene::WaterItem>,
-        /// The scene's clouds (M20), refreshed on the same terms. Their
-        /// drift runs on the simulated clock below, so a viewer session and
-        /// a screenshot at the same step show the same sky.
-        clouds: Vec<engine_core::scene::CloudItem>,
-        /// The scene's roads (M23). Refreshed with `water` for the same
-        /// reason: a script can move or repaint one.
-        roads: Vec<engine_core::scene::RoadItem>,
-        /// The scene's meadows (M29). Refreshed with `roads` for the same
-        /// reason: a script can change what a field is made of between steps.
-        meadows: Vec<engine_core::scene::MeadowItem>,
-        camera: Camera,
-        camera_model: Mat4,
-        lights: engine_core::scene::ResolvedLights,
-        /// The scene's sky, fog, shadow and MSAA settings. The viewer honors
-        /// them so that what you fly around in is what `engine screenshot`
-        /// pins — the frame rate differs, the picture must not.
-        environment: engine_core::scene::EnvironmentSettings,
-        /// The scene's day/night block, or `None`. Kept as *settings* rather
-        /// than as resolved values because the viewer re-folds it every frame
-        /// against the fixed-step clock — a cycling day has to actually move.
-        daylight: Option<engine_core::daylight::DaylightSettings>,
-        /// The scene's HUD components; refreshed per frame when a simulation
-        /// runs (clips and scripts can drive them), static otherwise.
-        hud_items: engine_core::ui::HudTree,
-        /// Present when the scene has physics components: the viewer drives
-        /// the same fixed step through a wall-clock accumulator (the
-        /// headless path stays canonical; frame pacing may vary here).
-        simulation: Option<Simulation>,
-    },
+    Scene(Box<SceneContent>),
+}
+
+/// The scene half of [`Content`]. Split out of the enum so the variant can be
+/// boxed; the fields and their meanings are unchanged.
+pub struct SceneContent {
+    pub items: Vec<RenderItem>,
+    /// The scene's water surfaces (M18). Refreshed per frame when a
+    /// simulation runs — a script can move a surface — and static
+    /// otherwise, exactly like `items`.
+    pub water: Vec<engine_core::scene::WaterItem>,
+    /// The scene's clouds (M20), refreshed on the same terms. Their
+    /// drift runs on the simulated clock below, so a viewer session and
+    /// a screenshot at the same step show the same sky.
+    pub clouds: Vec<engine_core::scene::CloudItem>,
+    /// The scene's roads (M23). Refreshed with `water` for the same
+    /// reason: a script can move or repaint one.
+    pub roads: Vec<engine_core::scene::RoadItem>,
+    /// The scene's meadows (M29). Refreshed with `roads` for the same
+    /// reason: a script can change what a field is made of between steps.
+    pub meadows: Vec<engine_core::scene::MeadowItem>,
+    pub camera: Camera,
+    pub camera_model: Mat4,
+    pub lights: engine_core::scene::ResolvedLights,
+    /// The scene's sky, fog, shadow and MSAA settings. The viewer honors
+    /// them so that what you fly around in is what `engine screenshot`
+    /// pins — the frame rate differs, the picture must not.
+    pub environment: engine_core::scene::EnvironmentSettings,
+    /// The scene's day/night block, or `None`. Kept as *settings* rather
+    /// than as resolved values because the viewer re-folds it every frame
+    /// against the fixed-step clock — a cycling day has to actually move.
+    pub daylight: Option<engine_core::daylight::DaylightSettings>,
+    /// The scene's HUD components; refreshed per frame when a simulation
+    /// runs (clips and scripts can drive them), static otherwise.
+    pub hud_items: engine_core::ui::HudTree,
+    /// Present when the scene has physics components: the viewer drives
+    /// the same fixed step through a wall-clock accumulator (the
+    /// headless path stays canonical; frame pacing may vary here).
+    pub simulation: Option<Simulation>,
 }
 
 /// Live playback for the windowed viewer: animation sampling and/or
@@ -211,7 +221,10 @@ fn with_fps_readout(hud: &engine_core::ui::HudTree, fps: &str) -> engine_core::u
 enum Paint {
     Triangle(Renderer),
     Scene {
-        renderer: SceneRenderer,
+        /// Boxed for the same reason `Content::Scene` is: a `SceneRenderer`
+        /// holds every pipeline the engine has, and `Triangle` should not be
+        /// two kilobytes wide because of it.
+        renderer: Box<SceneRenderer>,
         depth: wgpu::TextureView,
         /// The multisampled color attachment, when the scene asks for MSAA.
         /// Recreated with the depth buffer on every resize.
@@ -319,7 +332,7 @@ impl ViewerApp {
     fn redraw(&mut self) -> Result<()> {
         // Sampled before the borrows below, and only for scene content: the
         // triangle viewer is a stack proof, not a game frame.
-        let fps = matches!(self.content, Content::Scene { .. }).then(|| self.fps.tick());
+        let fps = matches!(self.content, Content::Scene(_)).then(|| self.fps.tick());
 
         let (Some(target), Some(paint)) = (self.target.as_mut(), self.paint.as_mut()) else {
             return Ok(());
@@ -343,7 +356,12 @@ impl ViewerApp {
                     depth,
                     msaa,
                 },
-                Content::Scene {
+                Content::Scene(scene),
+            ) => {
+                // Destructured back into the same names the body below has
+                // always used, so boxing the variant changed this function by
+                // exactly these two lines.
+                let SceneContent {
                     items,
                     water,
                     clouds,
@@ -356,8 +374,7 @@ impl ViewerApp {
                     daylight,
                     hud_items,
                     simulation,
-                },
-            ) => {
+                } = &mut **scene;
                 if let Some(sim) = simulation {
                     let now = Instant::now();
                     let dt = 1.0 / sim.scene.physics.timestep_hz.max(1) as f32;
@@ -621,15 +638,15 @@ impl ApplicationHandler for ViewerApp {
             Content::Triangle => {
                 Paint::Triangle(Renderer::new(&target.gpu.device, target.format()))
             }
-            Content::Scene { environment, .. } => {
+            Content::Scene(ref scene) => {
                 let (width, height) = target.size();
-                let samples = environment.samples.max(1);
+                let samples = scene.environment.samples.max(1);
                 Paint::Scene {
-                    renderer: SceneRenderer::with_samples(
+                    renderer: Box::new(SceneRenderer::with_samples(
                         &target.gpu.device,
                         target.format(),
                         samples,
-                    ),
+                    )),
                     depth: scene_renderer::depth_texture_multisampled(
                         &target.gpu.device,
                         width,
@@ -662,11 +679,10 @@ impl ApplicationHandler for ViewerApp {
             // fixed step samples. Keys outside the engine's allowlist are
             // dropped inside `press`.
             WindowEvent::KeyboardInput { event: key, .. } => {
-                if let Content::Scene {
-                    simulation: Some(sim),
-                    ..
-                } = &mut self.content
-                {
+                if let Some(sim) = match &mut self.content {
+                    Content::Scene(scene) => scene.simulation.as_mut(),
+                    Content::Triangle => None,
+                } {
                     if let PhysicalKey::Code(code) = key.physical_key {
                         let name = format!("{code:?}");
                         match key.state {
@@ -691,11 +707,10 @@ impl ApplicationHandler for ViewerApp {
                     .as_ref()
                     .map(|w| w.inner_size())
                     .unwrap_or_default();
-                if let Content::Scene {
-                    simulation: Some(sim),
-                    ..
-                } = &mut self.content
-                {
+                if let Some(sim) = match &mut self.content {
+                    Content::Scene(scene) => scene.simulation.as_mut(),
+                    Content::Triangle => None,
+                } {
                     sim.held.set_cursor(engine_core::math::Vec2::new(
                         position.x as f32 / size.width.max(1) as f32,
                         position.y as f32 / size.height.max(1) as f32,
@@ -704,11 +719,10 @@ impl ApplicationHandler for ViewerApp {
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
-                if let Content::Scene {
-                    simulation: Some(sim),
-                    ..
-                } = &mut self.content
-                {
+                if let Some(sim) = match &mut self.content {
+                    Content::Scene(scene) => scene.simulation.as_mut(),
+                    Content::Triangle => None,
+                } {
                     // Buttons outside the three named ones are dropped the
                     // way keys outside the allowlist already are.
                     let name = match button {

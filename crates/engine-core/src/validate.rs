@@ -286,7 +286,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 continue;
             };
 
-            if seen_types.iter().any(|t| *t == type_name) {
+            if seen_types.contains(&type_name) {
                 // An error, not a warning: hecs keeps only the last, so the
                 // file and the world would disagree — hidden state, which
                 // invariant 2 exists to prevent. Points at the surplus copy.
@@ -1024,7 +1024,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     if let Some(daylight) = object.get("daylight").and_then(Value::as_object) {
         let drives_sun = daylight
             .get("drives_sun")
-            .map_or(true, |v| v.as_bool().unwrap_or(true));
+            .is_none_or(|v| v.as_bool().unwrap_or(true));
 
         if drives_sun {
             for (name, path) in &directional_lights {
@@ -1046,7 +1046,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
 
         let drives_sky = daylight
             .get("drives_sky")
-            .map_or(true, |v| v.as_bool().unwrap_or(true));
+            .is_none_or(|v| v.as_bool().unwrap_or(true));
 
         // The other half of `daylight_overrides_sky`: ambient rides with the
         // sky, so an authored AmbientLight is unread for the same reason the
@@ -1786,6 +1786,9 @@ fn check_component(
         ComponentData::Camera(camera) => {
             // JSON Schema cannot express `far > near`, so this one check is
             // hand-written. Written as `!(far > near)` so NaN also fails.
+            // clippy wants `far <= near`, which is a different function: it
+            // is *false* for NaN, so a NaN far plane would validate clean.
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
             if !(camera.far > camera.near) {
                 errors.push(
                     cx.err(
@@ -2123,6 +2126,8 @@ fn check_component(
             }
 
             // Dimensions are strictly positive; NaN fails too via !(v > 0).
+            // The negated form is load-bearing — `v <= 0.0` lets NaN through.
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
             let mut dimension = |field: &str, label: String, v: f32| {
                 if !(v > 0.0) {
                     errors.push(
@@ -2292,6 +2297,9 @@ fn check_component(
                 );
             }
 
+            // Strictly increasing, and the negated form makes a NaN `at`
+            // fail rather than compare false and slip through.
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
             for pair in meadow.stages.windows(2) {
                 if !(pair[1].at > pair[0].at) {
                     errors.push(
@@ -2336,6 +2344,8 @@ fn check_component(
                     }
                     errors.push(error);
                 }
+                // `!(v > 0.0)` rather than `v <= 0.0`, so NaN fails too.
+                #[allow(clippy::neg_cmp_op_on_partial_ord)]
                 for (axis, v) in fragment.half_extents.to_array().into_iter().enumerate() {
                     if !(v > 0.0) {
                         errors.push(
@@ -2483,6 +2493,14 @@ fn check_component(
 /// missing required fields, JSON types, and numeric ranges. Returns whether
 /// the component's *shape* is clean — range violations report errors but do
 /// not make the shape unparseable, so they leave the return value true.
+///
+/// Eight parameters, and clippy would rather they were a struct. They are not:
+/// six of them are the *location* being reported (entity, component, JSON
+/// pointer) threaded down a recursive walk, and `Cx` is already the bundle for
+/// everything that does not change between nodes. A second bundle whose fields
+/// change at every level would only move the argument list somewhere less
+/// visible.
+#[allow(clippy::too_many_arguments)]
 fn walk_component(
     cx: &Cx<'_>,
     schemas: &ComponentSchemas,
@@ -3285,7 +3303,7 @@ fn check_daylight_block(
     // fix (`drives_sky: false`) goes in the message.
     let drives_sky = object
         .get("drives_sky")
-        .map_or(true, |v| v.as_bool().unwrap_or(true));
+        .is_none_or(|v| v.as_bool().unwrap_or(true));
     if drives_sky {
         let authored: Vec<&str> = environment
             .and_then(Value::as_object)
@@ -5215,7 +5233,7 @@ mod tests {
         );
 
         let one = r#"{"wavelength":2.0,"amplitude":0.1,"steepness":0.05}"#;
-        let waves = vec![one; crate::water::MAX_WAVES + 1].join(",");
+        let waves = [one; crate::water::MAX_WAVES + 1].join(",");
         let source = format!(
             r#"{{"name":"s","entities":[
                 {{"name":"Sea","components":[
