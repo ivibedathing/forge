@@ -103,8 +103,8 @@ def run(steps, timeline, entities):
         entities = [name for name in entities if name not in missing]
 
 
-def play_cursor():
-    """The cursor that presses PLAY, asked of the engine rather than guessed.
+def button_cursor(steps=0):
+    """The cursor that presses the menu's first button, asked of the engine.
 
     This used to be a pair of hand-tuned fractions, and it had to be: the menu
     was rectangles the game script computed at run time, so nothing outside
@@ -117,12 +117,18 @@ def play_cursor():
     and the fractional timeline have to agree, which is exactly the crossing
     M31's own CLI test pins.
     """
-    out = subprocess.run(
-        [ENGINE, "ui-layout", SCENE, "--width", str(WIDTH), "--height", str(HEIGHT),
-         "--entity", "MenuButton"],
-        capture_output=True,
-        text=True,
-    )
+    args = [ENGINE, "ui-layout", SCENE, "--width", str(WIDTH), "--height", str(HEIGHT),
+            "--entity", "MenuBtn1"]
+    # `--steps` (M36) is what makes this work for the *second* button too. The
+    # menu is seven slots the game script labels per screen, so the NEXT LEVEL
+    # card is a different height from the title card and its button is
+    # somewhere else — a fact that is not in the file, because which slots are
+    # on is what the script painted. At rest this reports the title screen,
+    # which the scene authors exactly; with `--steps` it reports whatever card
+    # the run has reached.
+    if steps:
+        args += ["--steps", str(steps), "--input", OUT]
+    out = subprocess.run(args, capture_output=True, text=True)
     if out.returncode != 0:
         raise SystemExit(f"ui-layout failed:\n{out.stderr}")
     rect = json.loads(out.stdout)["elements"][0]["rect"]
@@ -179,7 +185,7 @@ def main():
     # the release on the button too, since M31's press capture wants a click to
     # start and finish on the same element, and a release somewhere else is
     # deliberately not a click.
-    play = play_cursor()
+    play = button_cursor()
     timeline = [
         keyframe(0, [], (0.5, 0.5)),
         keyframe(18, [], play),
@@ -222,9 +228,15 @@ def main():
         # release on the button, since M31 captures a press — and start
         # watching the next level's ten.
         if not live and not parked and level < LEVELS and step >= resume_at:
-            timeline.append(keyframe(step, [], play))
-            timeline.append(keyframe(step + 8, ["MouseLeft"], play))
-            timeline.append(keyframe(step + 14, [], play))
+            # Ask where NEXT LEVEL is *on this card*, rather than reusing the
+            # title screen's rect: the cards hug their contents, so a
+            # one-button card puts its button somewhere a four-button one does
+            # not. `--steps` replays the timeline written so far, which is the
+            # same closed loop this whole file is.
+            press = button_cursor(step)
+            timeline.append(keyframe(step, [], press))
+            timeline.append(keyframe(step + 8, ["MouseLeft"], press))
+            timeline.append(keyframe(step + 14, [], press))
             level += 1
             watch = ["Player", "Eye"] + level_drones(level)
             last = None
@@ -268,7 +280,16 @@ def main():
 
     # Stop shooting at the end, so the last frame is a standing figure rather
     # than a muzzle flash.
-    timeline.append(keyframe(STEPS - 30, [], (0.5, 0.4)))
+    #
+    # Guarded on the last step already written, because a NEXT LEVEL press near
+    # the end of the run appends three keyframes up to `step + 14` and can
+    # overshoot this one — and a timeline whose steps are not strictly
+    # increasing is `unsorted_input_steps`, refused by the engine. The demo
+    # then simply ends on whatever the last press left held, which is a worse
+    # final frame and not a broken file.
+    last_step = json.loads(timeline[-1])["step"]
+    if STEPS - 30 > last_step:
+        timeline.append(keyframe(STEPS - 30, [], (0.5, 0.4)))
     with open(OUT, "w") as f:
         f.write("\n".join(timeline) + "\n")
 

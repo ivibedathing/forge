@@ -298,6 +298,12 @@ pub struct ViewerApp {
     /// Set when a frame fails unrecoverably; drained by `into_result` so the
     /// process can exit non-zero with structured JSON.
     error: Option<EngineError>,
+
+    /// Set when a script called `world.quit` (M36). Latched rather than acted
+    /// on where it is read, because `redraw` has no `ActiveEventLoop` — the
+    /// `RedrawRequested` arm that called it does, and closes the window there.
+    /// Quitting is success: `into_result` is untouched.
+    quit: bool,
 }
 
 impl ViewerApp {
@@ -312,6 +318,7 @@ impl ViewerApp {
             paint: None,
             fps: FpsMeter::new(),
             error: None,
+            quit: false,
         }
     }
 
@@ -509,6 +516,15 @@ impl ViewerApp {
                             sim.accumulator -= dt;
                         }
                     }
+                    // What scripts left the `environment` block as (M36), and
+                    // whether one asked to quit. Read once after the step
+                    // loop rather than inside it: several fixed steps can run
+                    // between two frames, and only the last one's answer can
+                    // reach this frame anyway.
+                    if let Some(scripts) = &sim.scripts {
+                        *environment = scripts.environment();
+                        self.quit |= scripts.quit_requested();
+                    }
                     // The same whole-fixed-step clock water and daylight run
                     // on, so a rig walks in the viewer at the pose a
                     // screenshot at this step number would show.
@@ -530,6 +546,39 @@ impl ViewerApp {
                         *camera_model = fresh_transform.matrix();
                     }
                 }
+                // MSAA is the one writable environment field that is not a
+                // per-frame uniform: `with_samples` bakes the count into every
+                // pipeline (M16), so changing it means a new renderer and new
+                // attachments. Gated on an actual change, so a scene that
+                // never calls `world.set_samples` rebuilds nothing — and the
+                // cost of the rebuild is what makes a settings screen's
+                // QUALITY row a deliberate action rather than a slider.
+                let wanted_samples = environment.samples.max(1);
+                if renderer.samples() != wanted_samples {
+                    let (width, height) = target.size();
+                    let format = renderer.format();
+                    // Into the existing box rather than a fresh one: the
+                    // allocation is already there and a `SceneRenderer` holds
+                    // every pipeline the engine has.
+                    **renderer =
+                        SceneRenderer::with_samples(&target.gpu.device, format, wanted_samples);
+                    *depth = scene_renderer::depth_texture_multisampled(
+                        &target.gpu.device,
+                        width,
+                        height,
+                        wanted_samples,
+                    );
+                    *msaa = (wanted_samples > 1).then(|| {
+                        scene_renderer::msaa_color_texture(
+                            &target.gpu.device,
+                            format,
+                            width,
+                            height,
+                            wanted_samples,
+                        )
+                    });
+                }
+
                 let particles = simulation
                     .as_ref()
                     .map(|sim| sim.particles.instances(&sim.scene.world))
@@ -780,6 +829,13 @@ impl ApplicationHandler for ViewerApp {
             WindowEvent::RedrawRequested => {
                 if let Err(e) = self.redraw() {
                     return self.fail(event_loop, e);
+                }
+                // `world.quit` (M36). Acted on after the frame that requested
+                // it has been presented, so the last thing the player asked
+                // for is on screen before the window goes — and it exits
+                // exactly as the close button does, with no error.
+                if self.quit {
+                    return event_loop.exit();
                 }
                 // Keep drawing; there is no simulation to pace yet.
                 if let Some(window) = self.window.as_ref() {

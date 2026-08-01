@@ -107,7 +107,8 @@ engine build [--check]                       # --check: type-check only, ~half t
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
                                              # every collider physics holds, and where
-engine ui-layout <scene.json> [--width W --height H] [--entity Name]...  # where the UI landed
+engine ui-layout <scene.json> [--width W --height H] [--entity Name]... [--steps N] [--input f]
+                                             # where the UI landed; --steps for what a script painted
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
 engine list-components [--component Name]    # scene + component JSON Schemas
@@ -207,6 +208,14 @@ enumerates — a fixed floor, a scripted kinematic platform, a camera a chase
 script drives. Unknown names are reported all at once (`entity_not_found` with
 `did_you_mean`), like every other diagnostic here. The trace and bake formats
 are untouched, and so are the committed golden traces.
+
+**`quit_at_step`** appears on the `simulate` report only when a script called
+`world.quit` (M36), so every pre-M36 report is byte-identical. A run that quit
+stopped there and is **not** a failure — a game that ended is not an error, and
+the frame the run reached is still the frame to render. `simulated_steps` stays
+what was *asked* for, so the two together say "you asked for 500 and it ended
+at 43". In `engine run-scene` the same call closes the window, at the end of
+the frame that requested it.
 
 ## Animation
 

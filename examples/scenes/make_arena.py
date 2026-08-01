@@ -110,7 +110,31 @@ DRONES = [
     (0.0, 25.0, 3),
 ]
 
-BULLETS = 14  # the pool the script recycles; see scripts/topdown_shooter.rhai
+# The bullet pool the script recycles; see scripts/topdown_shooter.rhai.
+# It grew from 14 to 24 in M36: a shotgun puts five bolts in the air on one
+# click and a rifle sustains twelve, so a pool sized for a pistol runs dry
+# mid-burst and the shot silently does not happen.
+BULLETS = 24
+
+# The player rig (M36). `rigged_soldier.gltf` stands 1.79 m; the physics proxy
+# is a capsule of radius 0.42 and half-height 0.3, so its bottom — and
+# therefore the model's feet — is this far below the proxy's origin.
+PLAYER_SOLE = 0.72
+
+# Metres of ground one cycle of `Run` covers, measured by
+# `engine list-joints --entity … ` rather than derived from the swing angle
+# (M32: the measurement is an algorithm, and a re-derivation is a second
+# implementation of it). Re-measure when the clip changes.
+PLAYER_STRIDE = 2.7664
+
+# The three weapons: (mesh stem, albedo, roughness, metallic). The stems match
+# `examples/meshes/weapon_<stem>.gltf`, and the *order* is the order the script
+# cycles them in with 1/2/3 — index 0 is the sidearm the run starts with.
+WEAPONS = [
+    ("pistol", [0.130, 0.135, 0.150], 0.40, 0.80),
+    ("rifle", [0.105, 0.110, 0.125], 0.45, 0.75),
+    ("shotgun", [0.200, 0.135, 0.090], 0.55, 0.35),
+]
 
 # Trees outside the walls, for something to see past the arena: (x, z, seed).
 TREES = [
@@ -174,7 +198,15 @@ CROSSHAIR = 16.0
 # The menu column's width, which is its widest unwrapped child: thirteen glyphs
 # of a 32-pixel title, the 8x8 font advancing one glyph height per character.
 MENU_WIDTH = 13 * 32.0
-CONTROLS = "WASD MOVE   MOUSE AIM   CLICK FIRE   R RELOAD   ESC PAUSE"
+# Button slots in the menu card (M36). Seven because the settings screen is the
+# widest — six rows and a BACK; every other screen hides the ones it does not
+# use, and a hidden element takes no space.
+MENU_SLOTS = 7
+# What the title card says before any script has run, keyed by slot. The script
+# paints exactly this on its first step when there is no save, so `--steps 0`,
+# `ui-layout` and the running game all agree about where a button is.
+MENU_AT_REST = {1: "PLAY", 2: "SETTINGS", 4: "QUIT"}
+CONTROLS = "WASD MOVE   MOUSE AIM   CLICK FIRE   1 2 3 WEAPON   R RELOAD   ESC PAUSE"
 
 
 # ---------------------------------------------------------------------------
@@ -629,40 +661,62 @@ def entities():
             ],
         }
     )
+    # The visible player: one skinned mesh where a cylinder and a sphere used
+    # to stand in for a person (M36). It is placed and turned from the proxy
+    # every step exactly as those two were — the pattern did not change, only
+    # what is on the end of it.
+    #
+    # `stride` is the number `engine list-joints` measured off `Run` (M32), not
+    # a guess: at 2.7664 m of ground per cycle the legs are driven by the
+    # distance covered, so the player does not moonwalk when strafing and does
+    # not scrabble when walking into a wall. Re-measure it if the clip changes —
+    # `make_rigged_soldier.py` prints the command.
+    #
+    # There is deliberately no `FootPlant`: M32 plants against a `Terrain` and
+    # this arena's floor is a box, for the two reasons the design doc gives
+    # (M23's internal-edge bug, and a shooter wanting a floor that never argues
+    # with movement). The floor is flat and level, so what `FootPlant` fixes
+    # does not arise here.
     out.append(
         {
-            "name": "PlayerBody",
+            "name": "PlayerModel",
             "components": [
-                t(position=(px, py - 0.12, pz), scale=(0.95, 1.15, 0.95)),
-                {"type": "Mesh", "asset": "builtin:cylinder"},
-                mat([0.09, 0.32, 0.62], 0.6, 0.1, maps=PANEL_MAPS, uv=[2.0, 1.0]),
+                t(position=(px, py - PLAYER_SOLE, pz)),
+                {"type": "Mesh", "asset": "../meshes/rigged_soldier.gltf"},
+                mat([0.26, 0.30, 0.24], 0.72, 0.05, maps=PANEL_MAPS, uv=[1.0, 1.0]),
+                {
+                    "type": "AnimationPlayer",
+                    "clip": "../meshes/rigged_soldier.gltf#Idle",
+                    "looping": True,
+                },
             ],
         }
     )
-    out.append(
-        {
-            "name": "PlayerHead",
-            "components": [
-                t(position=(px, py + 0.62, pz), scale=(0.32, 0.32, 0.32)),
-                {"type": "Mesh", "asset": "builtin:sphere"},
-                mat([0.62, 0.50, 0.38], 0.7),
-            ],
-        }
-    )
-    out.append(
-        {
-            "name": "PlayerGun",
-            "components": [
-                t(position=(px, py + 0.34, pz - 0.7), scale=(0.15, 0.15, 1.0)),
-                {"type": "Mesh", "asset": "builtin:cube"},
-                mat(
-                    [0.045, 0.048, 0.055], 0.35, 0.85,
-                    maps={"normal_map": "../textures/plate_normal.png"},
-                    uv=[1.0, 2.0],
-                ),
-            ],
-        }
-    )
+
+    # The three weapons. Only one is in the player's hand at a time; the other
+    # two are parked below the floor, which is where a spent bullet already
+    # goes — a `Mesh` has no visibility flag, and adding one would be a
+    # component change to solve a script's problem.
+    #
+    # Each is hung off `HandR` through `world.joint_position` every step, which
+    # is M30's sanctioned way to hold a prop and the first use of it in the
+    # repo. Barrels run down local -Z, so `world.look_at` aims them with the
+    # same call that aims a camera.
+    for name, albedo, roughness, metallic in WEAPONS:
+        out.append(
+            {
+                "name": f"Weapon{name.capitalize()}",
+                "components": [
+                    t(position=(0.0, -30.0, 0.0)),
+                    {"type": "Mesh", "asset": f"../meshes/weapon_{name}.gltf"},
+                    mat(
+                        albedo, roughness, metallic,
+                        maps={"normal_map": "../textures/plate_normal.png"},
+                        uv=[2.0, 2.0],
+                    ),
+                ],
+            }
+        )
 
     # --- drones -------------------------------------------------------------
     for i, (x, z, wave, level) in enumerate(drone_table()):
@@ -1151,8 +1205,21 @@ def entities():
                 {
                     "type": "HudPanel",
                     "layout": "column",
-                    "padding": 24.0,
-                    "gap": 16.0,
+                    # An explicit width, and a *hugging* height. M31's rule is
+                    # that a stretched child contributes nothing to a hugging
+                    # parent — and every child here stretches except the title,
+                    # so a hugging column is exactly as wide as its title. That
+                    # is fine for `ARENA SHOOTER` and wrong for `SETTINGS`,
+                    # whose eight glyphs left six rows of text hanging out over
+                    # both edges of their own buttons. Found by rendering it.
+                    #
+                    # The height still hugs, which is the property worth
+                    # keeping: each card is exactly as tall as the screen it is
+                    # showing, and the end card still closes up around its
+                    # missing buttons.
+                    "width": MENU_WIDTH,
+                    "padding": 16.0,
+                    "gap": 10.0,
                     "align": "center",
                     "parent": "MenuRoot",
                 }
@@ -1189,42 +1256,74 @@ def entities():
                 }
             ],
         },
-        # The button. `HudInteract` is the whole of what the script used to do
-        # by hand: the hit box is this panel's laid-out rectangle, and the
-        # tints are the hover and press feedback the old menu faked by putting
-        # brackets around the label.
-        {
-            "name": "MenuButton",
-            "components": [
-                {
-                    "type": "HudPanel",
-                    "layout": "column",
-                    "padding": 10.0,
-                    "align": "center",
-                    "color": [0.10, 0.13, 0.18],
-                    "opacity": 0.95,
-                    "parent": "MenuColumn",
-                    "stretch": [True, False],
-                },
-                {
-                    "type": "HudInteract",
-                    "hover_tint": [1.9, 1.9, 1.9],
-                    "press_tint": [0.5, 0.5, 0.5],
-                },
-            ],
-        },
-        {
-            "name": "MenuButtonText",
-            "components": [
-                {
-                    "type": "HudText",
-                    "text": "PLAY",
-                    "size": 24.0,
-                    "color": [0.9, 0.95, 1.0],
-                    "parent": "MenuButton",
-                }
-            ],
-        },
+    ]
+
+    # The buttons. `HudInteract` is the whole of what the script used to do by
+    # hand: the hit box is each panel's laid-out rectangle, and the tints are
+    # the hover and press feedback the pre-M31 menu faked by putting brackets
+    # around the label.
+    #
+    # A *column of slots* since M36, where there was one button. The script
+    # labels them per screen and hides the rest, and a hidden element leaves
+    # the flow entirely (M31) — so each card is exactly as tall as the screen
+    # it is showing, which is the same property that already made the end card
+    # close up around its missing button. Nothing here knows what a screen is.
+    #
+    # Seven, because the settings screen is the widest: six rows and a BACK.
+    # The title and pause cards use four and the level card one.
+    for slot in range(1, MENU_SLOTS + 1):
+        out += [
+            {
+                "name": f"MenuBtn{slot}",
+                "components": [
+                    {
+                        "type": "HudPanel",
+                        "layout": "column",
+                        "padding": 7.0,
+                        "align": "center",
+                        "color": [0.10, 0.13, 0.18],
+                        "opacity": 0.95,
+                        "parent": "MenuColumn",
+                        "stretch": [True, False],
+                        # The file's own first frame *is* the title screen,
+                        # so the slots the title screen uses are authored on
+                        # and the rest off — slot 3 included, because it is
+                        # LOAD GAME and a fresh checkout has no save.
+                        #
+                        # This is load-bearing rather than cosmetic. A card
+                        # that grows when the script first paints it moves
+                        # every button in it, and `engine ui-layout` reports
+                        # the *rest* layout — so a demo timeline aiming at the
+                        # rect the engine reports would click through empty
+                        # space one step later. Found exactly that way.
+                        "visible": slot in MENU_AT_REST,
+                    },
+                    {
+                        "type": "HudInteract",
+                        "hover_tint": [1.9, 1.9, 1.9],
+                        "press_tint": [0.5, 0.5, 0.5],
+                    },
+                ],
+            },
+            {
+                "name": f"MenuBtn{slot}Text",
+                "components": [
+                    {
+                        "type": "HudText",
+                        # Slot 1 carries PLAY at rest so `screenshot --steps 0`
+                        # is a title screen with a working button on it, which
+                        # is what `engine ui-layout` reports against and what
+                        # `make_arena_demo.py` clicks.
+                        "text": MENU_AT_REST.get(slot, ""),
+                        "size": 18.0,
+                        "color": [0.9, 0.95, 1.0],
+                        "parent": f"MenuBtn{slot}",
+                    }
+                ],
+            },
+        ]
+
+    out += [
         # The crosshair is `ui_icon.png` — a ring with a dot, which is what a
         # reticle is — parked on the cursor's pixel by the script and hidden
         # with the rest of the play HUD whenever a menu is up, since a menu has

@@ -1,0 +1,273 @@
+{
+  "name": "m36_shell",
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.81,
+      0.0
+    ],
+    "timestep_hz": 60
+  },
+  "environment": {
+    "sky": true,
+    "sky_zenith": [
+      0.17,
+      0.3,
+      0.55
+    ],
+    "sky_horizon": [
+      0.6,
+      0.68,
+      0.8
+    ],
+    "sky_ground": [
+      0.14,
+      0.14,
+      0.15
+    ],
+    "shadows": false,
+    "shadow_distance": 14.0,
+    "samples": 4
+  },
+  "entities": [
+    {
+      "name": "Eye",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            2.05,
+            4.6
+          ],
+          "rotation": [
+            -11.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "active": true,
+          "fov": 42.0,
+          "near": 0.1,
+          "far": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "rotation": [
+            -38.0,
+            34.0,
+            0.0
+          ]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [
+            1.0,
+            0.96,
+            0.88
+          ],
+          "intensity": 3.1
+        }
+      ]
+    },
+    {
+      "name": "Ambient",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [
+            0.44,
+            0.5,
+            0.6
+          ],
+          "intensity": 0.34
+        }
+      ]
+    },
+    {
+      "name": "Floor",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -0.05,
+            0.0
+          ],
+          "scale": [
+            16.0,
+            0.1,
+            16.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.3,
+            0.31,
+            0.34
+          ],
+          "roughness": 0.88
+        }
+      ]
+    },
+    {
+      "name": "Held",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -0.62,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            180.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/rigged_soldier.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.27,
+            0.31,
+            0.25
+          ],
+          "roughness": 0.72,
+          "metallic": 0.05
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../../meshes/rigged_soldier.gltf#Idle",
+          "looping": true
+        }
+      ]
+    },
+    {
+      "name": "Cut",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.62,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            180.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/rigged_soldier.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.27,
+            0.31,
+            0.25
+          ],
+          "roughness": 0.72,
+          "metallic": 0.05
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../../meshes/rigged_soldier.gltf#Idle",
+          "looping": true
+        }
+      ]
+    },
+    {
+      "name": "Rifle",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.74,
+            1.2,
+            0.33
+          ],
+          "rotation": [
+            0.0,
+            180.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/weapon_rifle.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.11,
+            0.11,
+            0.13
+          ],
+          "roughness": 0.45,
+          "metallic": 0.75
+        }
+      ]
+    },
+    {
+      "name": "Shotgun",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -0.5,
+            1.2,
+            0.33
+          ],
+          "rotation": [
+            0.0,
+            180.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/weapon_shotgun.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.14,
+            0.09
+          ],
+          "roughness": 0.55,
+          "metallic": 0.35
+        }
+      ]
+    },
+    {
+      "name": "Director",
+      "components": [
+        {
+          "type": "Script",
+          "source": "scripts/m36_shell.rhai"
+        }
+      ]
+    }
+  ]
+}

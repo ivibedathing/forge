@@ -299,9 +299,12 @@ enum Command {
     /// a caller re-deriving geometry the engine already computed, and the two
     /// drifting.
     ///
-    /// A pure function of (file, viewport) at rest, like `engine inspect`:
-    /// no `--steps`, no `--input`, no cursor. What a script has since done to
-    /// the layout is `simulate`'s question.
+    /// A pure function of (file, viewport) at rest by default, like `engine
+    /// inspect`. `--steps` runs the simulation first, which M36 added for
+    /// M32's reason: a menu a script *paints* — labelling seven slots per
+    /// screen and hiding the rest — has a layout that is not a property of the
+    /// file, and a system whose state no report can reach is what M30 §6 says
+    /// not to build. The cursor is still never part of the question.
     UiLayout {
         scene: PathBuf,
         /// The framebuffer to lay out against. A pixel-authored UI is
@@ -316,6 +319,12 @@ enum Command {
         /// all at once.
         #[arg(long)]
         entity: Vec<String>,
+        /// Report the layout the run *reached* rather than the authored one.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
+        /// The input timeline to replay while stepping, as on `simulate`.
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// Ask a terrain patch how high the ground is at a world XZ position.
@@ -553,7 +562,9 @@ fn main() {
             width,
             height,
             entity,
-        } => ui_layout(scene, width, height, entity),
+            steps,
+            input,
+        } => ui_layout(scene, width, height, entity, steps, input),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
         Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Import {
@@ -1020,11 +1031,35 @@ fn ui_layout(
     width: Option<u32>,
     height: Option<u32>,
     entities: Vec<String>,
+    steps: u32,
+    input_path: Option<PathBuf>,
 ) -> Result<()> {
-    let scene = load_scene(&scene_path)?;
+    let mut scene = load_scene(&scene_path)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let view = engine_core::input::Viewport::DEFAULT;
     let (width, height) = (width.unwrap_or(view.width), height.unwrap_or(view.height));
+
+    // Stepping first, when asked (M36) — the `list-joints --steps` shape, for
+    // the same reason. The run is stepped against *this* viewport rather than
+    // the documented default, because a mouse-driven script's clicks are a
+    // function of the frame (M28 §5) and reporting a layout the run could not
+    // have produced would be worse than not reporting one.
+    if steps > 0 {
+        let input = simulate::load_input(input_path.as_deref())?;
+        let stepping = engine_core::input::Viewport {
+            width,
+            height,
+            camera: view.camera.clone(),
+        };
+        simulate::run(
+            &mut scene,
+            &scene_path,
+            steps,
+            input.as_ref(),
+            &stepping,
+            None,
+        )?;
+    }
 
     let tree = scene.hud_tree(&assets);
     let layout = engine_core::ui::layout(&tree, width, height);
@@ -2312,6 +2347,7 @@ fn run_scene(
         &scene_path,
         scene.physics.timestep_hz,
         scene.daylight.clone(),
+        scene.environment,
         &assets,
     )?;
     let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
