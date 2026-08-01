@@ -5843,6 +5843,77 @@ fn the_shell_fixture_matches_its_baseline() {
     assert_eq!(report["pass"], true, "{report}");
 }
 
+// ── Shadow cascades (M38) ─────────────────────────────────────────────────
+
+fn cascade_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m38_shadow_cascades.json")
+}
+
+#[test]
+fn the_cascade_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(cascade_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The milestone's fixture: a fence receding to 168 m under three nested
+/// cascades, so one object spans all three and the sharpness gradient runs
+/// along it rather than between three separate props.
+///
+/// It aims at flat ground with no `Terrain` in frame and renders at
+/// `samples: 1`, per CLAUDE.md's reproducibility rule, so it carries a hard
+/// bit-exact pin — three consecutive renders came back as one image, measured
+/// rather than assumed.
+#[test]
+fn the_m38_cascade_fixture_matches_its_baseline() {
+    let scene = cascade_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m38_shadow_cascades.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// A cascade count outside 1–4 is refused at validate time, with the
+/// environment block's own code rather than a schema type error.
+#[test]
+fn a_scene_asking_for_too_many_cascades_is_refused() {
+    let scene = scene_file(
+        "too-many-cascades",
+        r#"{"name":"s","environment":{"shadows":true,"shadow_cascades":9},"entities":[]}"#,
+    );
+
+    let output = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr_lines(&output);
+    assert!(
+        errors
+            .iter()
+            .any(|line| line["error"] == "invalid_environment_value"
+                && line["field"] == "shadow_cascades"),
+        "{errors:?}"
+    );
+}
+
 // ── Ragdolls (M39) ─────────────────────────────────────────────────────────
 
 /// The milestone's fixture: two identical walkers, and the only difference

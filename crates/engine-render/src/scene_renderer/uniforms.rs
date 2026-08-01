@@ -113,6 +113,27 @@ pub(crate) struct FrameUniform {
     pub(crate) view_proj: [[f32; 4]; 4],
 }
 
+/// World → each cascade's light clip (M38), innermost first.
+///
+/// A binding of its own in the frame-textures group rather than a tail on
+/// [`FrameUniform`], because `water.wgsl`'s copy of that struct stops at
+/// `params`: a field appended after `point_lights` is only reachable by a
+/// shader that declares `point_lights` too, and water would have had to grow a
+/// `PointLightData` and a light array it does not use in order to read a
+/// matrix. Group 2's layout already differs between the two cascade modes, so
+/// an entry that exists only in the cascaded one costs the default path
+/// nothing.
+///
+/// Always [`MAX_SHADOW_CASCADES`] long whatever the scene asked for — the live
+/// count is a `const` in the spliced shader, since the pipelines know it at
+/// build time and a uniform lane would be a second place for it to be wrong.
+/// Slots past the count hold the identity and nothing indexes them.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct CascadeUniform {
+    pub(crate) view_proj: [[[f32; 4]; 4]; MAX_SHADOW_CASCADES as usize],
+}
+
 /// One skinned draw's joint palette, matching WGSL `JointPalette` (M30).
 ///
 /// Fixed-size at [`MAX_JOINTS`], the `MAX_POINT_LIGHTS` / `MAX_ROAD_KERBS`

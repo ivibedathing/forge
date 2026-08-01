@@ -585,14 +585,24 @@ impl ViewerApp {
                 // cost of the rebuild is what makes a settings screen's
                 // QUALITY row a deliberate action rather than a slider.
                 let wanted_samples = environment.samples.max(1);
-                if renderer.samples() != wanted_samples {
+                // Cascades are the second such field (M38): the count decides
+                // whether the shadow map binds as a 2D texture or an array, so
+                // it is pipeline state exactly as `samples` is.
+                let wanted_cascades = environment.shadow_cascades.clamp(1, 4);
+                if renderer.samples() != wanted_samples
+                    || renderer.cascades() != wanted_cascades
+                {
                     let (width, height) = target.size();
                     let format = renderer.format();
                     // Into the existing box rather than a fresh one: the
                     // allocation is already there and a `SceneRenderer` holds
                     // every pipeline the engine has.
-                    **renderer =
-                        SceneRenderer::with_samples(&target.gpu.device, format, wanted_samples);
+                    **renderer = SceneRenderer::configured(
+                        &target.gpu.device,
+                        format,
+                        wanted_samples,
+                        wanted_cascades,
+                    );
                     (*depth, *msaa) = frame_attachments(
                         &target.gpu.device,
                         format,
@@ -721,10 +731,11 @@ impl ApplicationHandler for ViewerApp {
                 let (depth, msaa) =
                     frame_attachments(&target.gpu.device, target.format(), width, height, samples);
                 Paint::Scene {
-                    renderer: Box::new(SceneRenderer::with_samples(
+                    renderer: Box::new(SceneRenderer::configured(
                         &target.gpu.device,
                         target.format(),
                         samples,
+                        scene.environment.shadow_cascades,
                     )),
                     depth,
                     msaa,

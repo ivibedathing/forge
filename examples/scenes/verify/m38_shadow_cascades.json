@@ -1,0 +1,602 @@
+{
+  "name": "m38_shadow_cascades",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.13, 0.28, 0.6],
+    "sky_horizon": [0.55, 0.66, 0.78],
+    "sky_ground": [0.14, 0.15, 0.13],
+    "shadows": true,
+    "shadow_distance": 240.0,
+    "shadow_cascades": 3,
+    "samples": 1
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [1.5, 4.4, 11.0],
+          "rotation": [-11.0, 0.0, 0.0]
+        },
+        {
+          "type": "Camera",
+          "active": true,
+          "fov": 60.0,
+          "far": 500.0
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "rotation": [-24.0, 52.0, 0.0]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [1.0, 0.95, 0.86],
+          "intensity": 1.35
+        }
+      ]
+    },
+    {
+      "name": "Fill",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [0.58, 0.68, 0.84],
+          "intensity": 0.16
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        {
+          "type": "Transform",
+          "scale": [600.0, 1.0, 600.0]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:plane"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.36, 0.38, 0.32],
+          "roughness": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Post00",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, 0.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post01",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -8.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post02",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -16.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post03",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -24.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post04",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -32.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post05",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -40.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post06",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -48.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post07",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -56.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post08",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -64.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post09",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -72.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post10",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -80.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post11",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -88.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post12",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -96.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post13",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -104.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post14",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -112.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post15",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -120.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post16",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -128.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post17",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -136.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post18",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -144.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post19",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -152.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post20",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -160.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Post21",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 1.5, -168.0],
+          "scale": [0.24, 3.0, 0.24]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Rail",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-3.0, 2.7, -84.0],
+          "scale": [0.16, 0.16, 176.0]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.72, 0.3, 0.22],
+          "roughness": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Block0",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [3.4, 0.7, -5.0],
+          "rotation": [0.0, 22.0, 0.0],
+          "scale": [1.4, 1.4, 1.4]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.68, 0.64, 0.56],
+          "roughness": 0.85
+        }
+      ]
+    },
+    {
+      "name": "Block1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [6.0, 1.4, -32.0],
+          "rotation": [0.0, 22.0, 0.0],
+          "scale": [2.8, 2.8, 2.8]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.68, 0.64, 0.56],
+          "roughness": 0.85
+        }
+      ]
+    },
+    {
+      "name": "Block2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [11.0, 2.75, -88.0],
+          "rotation": [0.0, 22.0, 0.0],
+          "scale": [5.5, 5.5, 5.5]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.68, 0.64, 0.56],
+          "roughness": 0.85
+        }
+      ]
+    },
+    {
+      "name": "FarTower",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-10.0, 8.0, -150.0],
+          "scale": [3.0, 16.0, 3.0]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.6, 0.56, 0.5],
+          "roughness": 0.9
+        }
+      ]
+    },
+    {
+      "name": "Title",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "M38 SHADOW CASCADES . 3 X 240M",
+          "anchor": "top_left",
+          "offset": [10, 8],
+          "size": 16,
+          "color": [0.95, 0.95, 1.0]
+        }
+      ]
+    }
+  ]
+}

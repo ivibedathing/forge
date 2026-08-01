@@ -6701,6 +6701,14 @@
             "minimum": 1,
             "type": "integer"
           },
+          "shadow_cascades": {
+            "default": 1,
+            "description": "How many nested shadow maps the sun renders (M38): `1`–`4`, default\n`1`. Each cascade covers a third the extent of the one outside it and\nis therefore three times sharper, so `3` at a `shadow_distance` of\n240 m gives 1.3 cm texels near the camera where 11.7 cm is all a single\nmap can offer. Costs one caster pass and 16 MB per cascade.",
+            "format": "uint32",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
           "shadow_distance": {
             "default": 60.0,
             "description": "How far from the camera the shadow map covers, in meters. The map is a\nfixed resolution, so this trades area against sharpness: a 40 m box is\ncrisp, a 200 m box is blocky. Strictly positive.",

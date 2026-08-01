@@ -46,7 +46,8 @@ actually says.
 | `Script` | Runs `fn step(world, step)` once per fixed step against the curated `world` API. | `m10-scripting.md` |
 | `AnimationPlayer` | Plays a property clip (`*.anim.json`) or a glTF skeletal clip (`mesh.glb#Walk`); `stride`/`phase` drive a gait by ground covered. | `m09-animation.md`, `m30-skeletal-animation.md`, `m32-locomotion.md` |
 | `FootPlant` | Plants a skinned character's feet on the `Terrain` under it, dropping the hips to reach. | `m32-locomotion.md` |
-| `SkinnedCollider` | Hangs simple collision proxies off named joints, re-posed from the rig every step. | `m33-skinned-colliders.md` |
+| `SkinnedCollider` | Hangs simple collision proxies off named joints, re-posed from the rig every step; a part may `fit` its bone. | `m33-skinned-colliders.md`, `m39-ragdolls.md` |
+| `Ragdoll` | Hands a skinned character's skeleton to physics — one-way, per entity — and carries the resulting `pose`. | `m39-ragdolls.md` |
 | `ParticleEmitter` | A seeded deterministic cone emitter around local **−Z**; M17's fields turn a smoke cone into flame. | `m13-particles-and-m17-fire.md` |
 | `Breakable` | Lists pre-authored fragments and the impulse that shatters the entity into them. | `m14-breaking.md` |
 | `Wheel` | One raycast-suspension wheel on its own *visual* entity, naming the chassis it drives. | `m11_5-vehicles-and-wheels.md` |
@@ -67,20 +68,22 @@ actually says.
 materials only: the entity's `Material` is its bark.
 
 **Scene-level blocks**, siblings of `entities`: `physics` (gravity, `timestep_hz`), `environment`
-(sky, fog, shadows, MSAA — `m16-environment.md`, **script-writable since M36**), and `daylight`
-(the clock-driven sun, moon and sky palette — `m21-daylight.md`).
+(sky, fog, shadows and their cascades, MSAA — `m16-environment.md`, `m38-shadow-cascades.md`,
+**script-writable since M36**), and `daylight` (the clock-driven sun, moon and sky palette —
+`m21-daylight.md`).
 
 **System order per fixed step**: animations → scripts → physics → particles → render.
 
 ## Current state
 
-**M0–M36 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M36, M38 and M39 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
-planting, M33 skinned collider proxies, M34 the metre, M36 the game shell. (M35 is a design doc
-only — global illumination, not built. M7 editor at scope E0–E2 + validation panel + `--watch`.)
+planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M38 shadow cascades, M39 ragdolls.
+(M35 is a design doc only — global illumination, not built. M7 editor at scope E0–E2 + validation
+panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -114,6 +117,9 @@ engine road-centerline <scene.json> [--entity Name]  # where a Road actually wen
 engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
 #   every collider physics holds — shape, size, world placement — read back out of the
 #   built world, so a skinned hitbox nothing renders is still answerable (M33)
+engine fit-colliders <scene.json> [--entity Name] [--shape S] [--write]
+#   solve a SkinnedCollider from the skin's vertex weights and print it as JSON;
+#   --write splices it into the scene. A command, never a runtime behaviour (M39)
 engine ui-layout <scene.json> [--width W --height H] [--entity N]... [--steps N] [--input f]
 #   where the UI landed (M31); --steps reports what a script *painted* (M36)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
@@ -159,9 +165,20 @@ The cross-cutting ones. Per-system traps are in each note.
   5 cm static sphere 200 m from anything moved six bodies by up to 4.4 mm — the collider set is an
   input to the broad phase and float addition is not associative. The determinism promise is per
   *file*: a scene that gains a body re-blesses.
+- **A kinematic body has no mass properties, so promoting one to dynamic needs an explicit
+  `recompute_mass_properties_from_colliders`.** `Collider::set_density` alone leaves the body at a
+  near-zero mass, because mass was meaningless to it until that moment and rapier never computed
+  one. The symptom is a ragdoll leaving the scene at 40 m/s from a 6 N·s kick, which sends you to
+  read the joints — and the joints are fine (M39).
 - **Grep the `.rhai` files for `set_scale` before believing a scale-space change is complete.** Two
   scripts drive scale every step from a hard-coded constant, so editing the scene file achieved
   nothing and the coals rendered at half size (M34).
+- **Four shaders sample the shadow map, and they do not declare the same frame uniform.**
+  `mesh.wgsl`, `water.wgsl`, `road.wgsl` and `meadow.wgsl` each carry their own near-copy of the
+  lookup, so anything that changes the map's *binding type* changes all four together or fails at
+  pipeline creation. And `water.wgsl`'s `FrameUniform` stops at `params`: uniform field offsets are
+  positional, so a field appended after `point_lights` is unreachable from water without giving it
+  an eight-light array it never reads. **Check all four before appending to a shared uniform** (M38).
 - **`builtin:cube`'s faces disagree on which way `u` runs, in pairs rather than in axes.** Anything
   strongly directional on a cube draws differently on all four sides. `builtin:plane`'s UVs are not
   the intuitive ones either — fixing both is deferred as its own change with its own A/B (M26).
@@ -194,20 +211,20 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**33 of the 39 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**35 of the 41 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02` in the manifest and stay the sweep's job; `cli.rs` says so
 where someone would go to add them. The pixel *allowance* is there rather than a wider threshold
 because the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held
-for eight consecutive full sweeps. **The other 30 entries carry no `diff_args` at all — they are
+for eight consecutive full sweeps. **The other 32 entries carry no `diff_args` at all — they are
 bit-exact, and a failure there is real.**
 
 **Which tour frames flake carries no information; whether one is stable under repetition does.**
-Four separate sweeps each picked a different subset of the six, M36's A/B included. Every time, the
-differing frame had a binary disagreeing with **itself** — which is why the `md5`-it-N-times step is
-not optional. Four measurements, four times the answer was the adapter.
+Five separate sweeps each picked a different subset of the six, M36's and M38's A/Bs included.
+Every time, the differing frame had a binary disagreeing with **itself** — which is why the
+`md5`-it-N-times step is not optional. Five measurements, five times the answer was the adapter.
 
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
@@ -286,6 +303,10 @@ made without reading its note first. Paths are under `designs/notes/`.
   impulse, by a script call, or by an explosion.
 - **Skinned collider proxies (M33)** → `m33-skinned-colliders.md`. Simple shapes hung off named
   joints and re-posed from the rig each step, so a skinned character can be hit and can push things.
+- **Ragdolls (M39)** → `m39-ragdolls.md`. M33's one-way rule reversed for one entity at a time:
+  physics takes the skeleton over and hands it back as `Ragdoll.pose`, a **component field** — which
+  is how invariant 2 survives and why a corpse baked mid-fall reloads into the same heap. Brings
+  `ColliderPart.fit` and `engine fit-colliders` with it.
 
 ### Geometry recipes
 
@@ -309,6 +330,9 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
 
 - **Environment (M16)** → `m16-environment.md`. Sky, fog, shadows, MSAA and transparency through one
   `environment` block. Every one of them defaults to off.
+- **Shadow cascades (M38)** → `m38-shadow-cascades.md`. `shadow_cascades` renders the sun's map
+  more than once, over **nested** slabs of the view, so the outermost cascade *is* M16's map and
+  the default of 1 is M16 unchanged. Four shaders sample that map and all four splice together.
 - **Point lights (M17)** → `m17-point-lights.md`. Local lamps with a hard `range` horizon, ≤8 per
   scene, no shadows.
 - **Day and night (M21)** → `m21-daylight.md`. A pure CPU function mapping the clock to sun, moon,
@@ -511,18 +535,23 @@ alpha-cut leaves, and a CPU wave evaluator — are pulled out into
 - **Editor**: E3 (structure edits), E4 (undo); picking against the *posed* mesh (CPU ray picking
   hits the rest pose).
 - **M5-era**: `--fix`, watch mode.
-- **Rendering**: planar reflections, shadow cascades (which is also what cloud shadows need),
-  shadows from point lights, spot lights, a light on the tour's explosion, a sky-dome cloud layer
-  for cirrus and overcast, tree LOD and wind. **Alpha-cut leaves are a missing feature**, not an
+- **Rendering**: planar reflections, cloud shadows (M38 was their prerequisite; a `Cloud` casting
+  wants M16's "transparent geometry does not cast" answered), per-cascade resolution, shadows from
+  point lights, spot lights, a light on the tour's explosion, a sky-dome cloud layer for cirrus and
+  overcast, tree LOD and wind. The showcase tour still renders at one cascade, deliberately —
+  see `m38-shadow-cascades.md`. **Alpha-cut leaves are a missing feature**, not an
   authoring job: `Tree::leaf_material` synthesizes a `Material` from `leaf_color`/`leaf_roughness`
   alone, so leaf maps mean new `Tree` fields, a schema regeneration, and a validation pass.
 - **Water**: a CPU wave evaluator and therefore buoyancy.
 - **Roads** (after M23): junctions (two roads crossing wants a patch primitive, not a ribbon),
   banked cross-sections, per-point road width, roads that follow a `Terrain`, and asphalt grain.
-- **Characters** (after M30/M32/M33): ragdolls (physics writing the skeleton, which is the one-way
-  rule reversed and wants its own answer to where the pose then comes from), proxies that resize
-  with the posed bone, generating a proxy set from vertex weights, planting against arbitrary
-  colliders, arm and hand IK with authored pole targets, toe joints.
+- **Characters** (after M30/M32/M33/M39): planting against arbitrary colliders rather than only a
+  `Terrain`, arm and hand IK with authored pole targets, and toe joints — the three M39 left for the
+  IK milestone. Also getting up from a ragdoll (a return path is a blend, still rejected, or a hard
+  snap), partial ragdolls (a per-joint *partition* of pose ownership, which needs a rule for the
+  boundary joint), motors and therefore active ragdolls, self-collision inside one ragdoll, and
+  proxies generated from vertex weights *for a `Ragdoll` specifically* — `engine fit-colliders` fits
+  hitboxes, not a mass distribution.
 - **UI** (after M31): a bitmap-font atlas (the sanctioned path to better text — a PNG plus an
   in-repo JSON of glyph cells, sampled nearest, no new dependency and no float, arriving as a `font`
   field whose absence is the 8×8 font), pointer lock and scroll, text input and focus, per-side
