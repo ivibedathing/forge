@@ -36,7 +36,7 @@ engine simulate <scene.json> --steps N [--entity Name]... [--bake out.json] [--t
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine road-centerline <scene.json> [--entity Name]
 engine list-colliders <scene.json> [--entity Name] [--steps N]  # every collider, and where
-engine ui-layout <scene.json> [--width W --height H] [--entity Name]  # where the UI landed
+engine ui-layout <scene.json> [--width W --height H] [--entity Name] [--steps N]  # where the UI landed
 engine terrain-height <scene.json> --at x,z [--entity Name]   # where the ground is
 engine inspect <scene.json> [--entity Name]       # every field, with the defaults filled in
 engine list-components [--component Name]         # the scene + component JSON Schemas
@@ -307,6 +307,21 @@ Reads and writes by entity name: `position` / `set_position`, `rotation` /
 `touching` / `contacts_started`, `terrain_height`, `light_intensity` /
 `set_light_intensity`, `particle_rate` / `set_particle_rate`, `hud`, and
 `state` / `set_state` for numeric memory between steps.
+
+A game also needs a shell, which is four more calls. `save(slot)` /
+`load(slot)` / `has_save(slot)` write and read the whole `state` map as sorted
+JSON in `saves/slot<N>.json` beside the scene — a save is that map and nothing
+else, so score, level and every setting persist without being enumerated
+anywhere; slots are `0..9`, and an empty one reads as `false` rather than
+failing, because "is there a save?" is a menu's first question. `quit()` closes
+the viewer's window, and headlessly stops the run and reports `quit_at_step`.
+The `environment` block is writable through `shadows` / `set_shadows`,
+`sky` / `set_sky`, `fog` / `set_fog` and `samples` / `set_samples`, which is
+what a graphics-settings screen drives; `set_samples` takes 1 or 4 and errors
+at the call on anything else. And `animation_clip` / `set_animation_clip`
+switches a skinned character between clips as a **hard cut** — blending is a
+standing non-goal, so a change of gait is a change of clip, and the cut resets
+`phase` because two clips do not share a cycle.
 
 The mouse is the same shape: `mouse("MouseLeft")` for the buttons,
 `cursor_x()` / `cursor_y()` for where the pointer is as a fraction of the

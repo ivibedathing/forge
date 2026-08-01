@@ -522,6 +522,18 @@
       "height": 360,
       "milestone": "M33",
       "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m36_shell.png",
+      "scene": "examples/scenes/verify/m36_shell.json",
+      "args": [
+        "--steps",
+        "90"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M36",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [

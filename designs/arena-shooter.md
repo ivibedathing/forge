@@ -8,6 +8,8 @@ has — no engine code was changed to make it. It is three files:
 | `examples/scenes/arena_shooter.json` | the scene: arena, cast, HUD, lighting |
 | `examples/scenes/scripts/topdown_shooter.rhai` | the game |
 | `examples/scenes/make_arena.py` | emits the scene from a table of positions |
+| `examples/meshes/make_rigged_soldier.py` | the player rig: 17 joints, `Idle` + `Run` |
+| `examples/meshes/make_weapons.py` | the three weapon meshes |
 
 Plus `examples/scenes/arena_shooter_demo.input.jsonl`, a canned 15-second run
 for headless rendering, and the M26 material set described under
@@ -23,12 +25,15 @@ bin/engine run-scene examples/scenes/arena_shooter.json
 WASD    move        world-relative, the way a top-down game moves
 Mouse   aim         the gun points at the ground under the cursor
 Click   fire
+1 2 3   pistol / rifle / shotgun
 R       reload
 Esc     pause
 ```
 
-The run opens on a title screen and pauses to a menu — a `HudPanel` tree the
-engine lays out and hit-tests, described under [The menu](#the-menu) below.
+The run opens on a main menu and pauses to one — a `HudPanel` tree the engine
+lays out and hit-tests, described under [The menu](#the-menu) below. It has
+four screens now: PLAY, SETTINGS, LOAD GAME and QUIT on the title card, and
+RESUME, SAVE GAME, SETTINGS and QUIT on the pause card.
 
 Three waves of hovering drones home in on you: four, then three, then three.
 Three bolts kill one, or shoot one of the four red barrels and the blast takes
@@ -65,12 +70,66 @@ LEVEL, and fights on into level 2. It is a choreography, not an AI — see
 ## How it is put together
 
 **`Player` is a physics proxy with no mesh.** A dynamic rigid body owns its own
-`Transform`, so a script cannot turn one to face the aim. `PlayerBody`,
-`PlayerHead` and `PlayerGun` are separate visual entities the script places from
-the proxy's position every step, and the gun is turned with `world.look_at` —
-which means the aim never needs an angle at all, only a point to look at. This
-is M12's wheel pattern, one milestone's worth of precedent applied to a person
-instead of a car.
+`Transform`, so a script cannot turn one to face the aim. `PlayerModel` is a
+separate visual entity the script places from the proxy's position every step
+and turns with `world.look_at` — which means the aim never needs an angle at
+all, only a point to look at. This is M12's wheel pattern, one milestone's
+worth of precedent applied to a person instead of a car.
+
+**The player is a rig** (M36), where a cylinder and a sphere used to stand in
+for a person: seventeen joints out of `examples/meshes/rigged_soldier.gltf`,
+with `Idle` and `Run`. Three things about it are worth knowing.
+
+- **Its arms do not swing**, unlike the tour walker's. `HandR` is forward of
+  the chest in the bind pose and stays there through `Run`, so the legs do the
+  running and the arms are a rigid brace. A gun on the end of a swinging arm
+  points somewhere new every frame, and the script's aim would stop describing
+  the picture.
+- **The clip is a hard cut**, `world.set_animation_clip` between `Idle` and
+  `Run`. Blending is a standing non-goal (M9 §8, restated by M30 and M32), so a
+  change of gait is a change of clip — and the two clips differ in *shape*
+  rather than in rate, which is what makes the cut worth having.
+- **`Run` carries a measured `stride` of 2.7664 m** (M32), so the legs are
+  paced by the ground the player actually covers and strafing into a wall does
+  not moonwalk. The number came out of `engine list-joints`, not out of the
+  swing angle; `make_rigged_soldier.py` prints the command that re-measures it.
+
+**The whole body turns to the aim, legs included.** A twin-stick game usually
+turns the legs to movement and the torso to the aim, and that is a per-joint
+override — which M30 does not have, deliberately (a script-settable joint is
+hidden state, M21's reason). A top-down shooter reads as aiming with the whole
+body anyway.
+
+**There is no `FootPlant` and no `SkinnedCollider` on the player**, and both
+omissions are decisions. `FootPlant` plants against a `Terrain` and this floor
+is a box for the two reasons above; the floor is flat and level, so what it
+fixes does not arise. Proxies would be eleven kinematic bodies shoving the
+drones around in a game tuned against a capsule, and M33 measured that adding a
+collider anywhere perturbs every body in the scene — the capsule is what stops
+a drone, and that is enough.
+
+**Three weapons, hung off the hand.** `world.joint_position("PlayerModel",
+"HandR")` places the held one every step and `look_at` aims it, which is M30's
+sanctioned way to hold a prop and the first use of it in the repo. The other
+two park at `y = -30`, where a spent bullet already goes: a `Mesh` has no
+visibility flag, and adding one would be a component change to solve a script's
+problem.
+
+| weapon | interval | damage | magazine | reload | pattern |
+| --- | --- | --- | --- | --- | --- |
+| pistol | 0.20 s | 34 | 12 | 1.1 s | one bolt, no spread |
+| rifle | 0.09 s | 24 | 30 | 1.6 s | one bolt, a walking cone |
+| shotgun | 0.62 s | 21 × 5 | 6 | 1.9 s | five pellets at ±10° |
+
+The pistol is the gun that shipped with one number moved — 0.13 s between shots
+became 0.20, so the rifle has somewhere to be faster — which keeps the opening
+fight the one that has always been here. **Spread is a fixed pattern, never a
+random one**: a script has no randomness at all (M10, and it is load-bearing —
+a recorded timeline has to replay to the same pixels), so a random cone was
+never available, and a fixed one is better for a demo because the same click
+kills the same drone every replay. Damage rides on the *bolt* rather than on
+the weapon, so switching guns does not retroactively re-arm rounds in flight.
+The bullet pool grew from 14 to 24 for the shotgun's five-at-once.
 
 **Bullets are not physics.** Fourteen mesh-only entities (no `RigidBody`, no
 `Collider`) are recycled by the script and flown at 46 m/s. Hit detection is a
@@ -210,21 +269,40 @@ drones and ten spent barrels back.
 
 ## The menu
 
-Three screens, and since M31 they are a component tree the engine lays out and
+Five screens, and since M31 they are a component tree the engine lays out and
 hit-tests rather than rectangles the script computed and tested itself.
 
-| screen | what it says | how it ends |
+| screen | buttons | how it ends |
 | --- | --- | --- |
-| title | `ARENA SHOOTER`, the controls, `PLAY` | clicking the button |
-| pause | `PAUSED`, `RESUME` | the button, or Esc again |
-| end | `GAME OVER` / `ARENA CLEARED` with the score | nothing — see below |
+| title | `PLAY` · `SETTINGS` · `LOAD GAME` · `QUIT` | a button |
+| pause | `RESUME` · `SAVE GAME` · `SETTINGS` · `QUIT` | a button, or Esc again |
+| settings | six rows that cycle their value, then `BACK` | `BACK` |
+| level cleared | `NEXT LEVEL` | the button |
+| end | none | nothing — see below |
 
 The card is a `HudPanel` anchored `center`, holding a nine-sliced `HudImage`
-stretched over it and a `column` panel of title, controls line and button. The
-panels **hug their contents**, which is why the three screens are three sizes:
-the pause card is as wide as the word `PAUSED`, the title card as wide as
-`ARENA SHOOTER` — thirteen glyphs of a 32-pixel title, which is also the width
-the controls line is told to wrap at — and neither card's size is written down.
+stretched over it and a `column` panel of title, line and **seven button
+slots** (M36). The script labels the slots a screen uses and blanks the rest;
+an empty label hides a slot, and a hidden element leaves the flow entirely, so
+each card is exactly as tall as the screen it is showing. Nothing in the scene
+knows what a screen is. Seven, because the settings screen is the widest.
+
+**The column takes an explicit width and hugs only its height**, and the reason
+is a bug that took a render to see. M31's rule is that a stretched child
+contributes nothing to a hugging parent — and every child here stretches except
+the title, so a hugging column is exactly as wide as its *title*. That is fine
+for `ARENA SHOOTER` and wrong for `SETTINGS`, whose eight glyphs left six rows
+of text hanging out over both edges of their own buttons. Fixing the width
+costs the cards their three different *widths* and keeps the property that
+actually mattered: the height still hugs, so the end card still closes up
+around its missing buttons.
+
+**The title card is authored to be exactly what the script paints on step 1**,
+which is load-bearing rather than tidy. A card that grows when the script first
+paints it moves every button in it, and `engine ui-layout` reports the *rest*
+layout — so a demo timeline aiming at the rect the engine reports would click
+through empty space one step later. Found exactly that way; there is now a CLI
+test asserting the two layouts agree.
 
 **What the script kept is which words are on screen.** What it lost is a
 `menu_rect` it both drew and hit-tested, an `inside` of four comparisons, and a
@@ -288,8 +366,62 @@ rather than the layout's, and the demo is authored at 960×540.
 
 **The layout is answerable without running the game**, which the hand-rolled
 version was not: `engine ui-layout examples/scenes/arena_shooter.json --width
-960 --height 540` reports every rectangle, and `--entity MenuButton` reports the
+960 --height 540` reports every rectangle, and `--entity MenuBtn1` reports the
 one the demo has to click. That is where `make_arena_demo.py` gets it.
+
+**And answerable *while* running it, since M36.** `ui-layout --steps N
+[--input f]` replays first and reports the layout the run reached — M32's
+`list-joints --steps` argument applied to a menu, for the same reason: which
+slots a screen uses is what the script painted, not what the file says, and the
+`NEXT LEVEL` card is a different height from the title card so its button is
+somewhere else. The demo director asks for it rather than reusing the title
+screen's rect.
+
+## Settings, saves and quitting
+
+The three things M36 added to the engine, and what the game does with them.
+
+**Settings are ordinary `world.state` keys**, which is what makes them saveable
+for free: a save is the whole map, so it carries them without knowing they
+exist. Every default is the value the scene file authors, so a run that never
+opens the settings screen is arithmetically the game that shipped.
+
+| row | values | reaches |
+| --- | --- | --- |
+| DIFFICULTY | NORMAL / HARD / BRUTAL | the three drone dials |
+| CROSSHAIR | ON / OFF | `set_hud_visible` |
+| HUD | FULL / MINIMAL / OFF | `set_hud_visible` on four groups |
+| LIGHTS | OFF / LOW / FULL | `set_light_intensity` on the four floodlights |
+| SHADOWS | ON / OFF | `world.set_shadows` |
+| QUALITY | LOW / HIGH | `world.set_samples` + `world.set_fog` |
+
+**Difficulty moves hull and contact damage hard and closing speed barely**, and
+that asymmetry is the one number here worth defending. At level 4 the drones
+already close at 6.3 m/s against the player's 7.2, so a difficulty that scaled
+speed like it scales hull would put them *ahead* of the player and the arena
+would stop being a place to move through. 6% a step keeps BRUTAL level 4 at
+7.05 — still, just, kiteable.
+
+**LIGHTS drives the floodlights and not the sun**, because the arena's sun is
+synthesized by its `daylight` block and M21 deliberately has no clock setter (a
+script-settable time of day is hidden state). Nothing here reverses that.
+
+**A save is the campaign, not the arena.** It restores level, score, health and
+the settings; it does not restore which drones were broken, because the engine
+cannot spawn an entity and a broken drone cannot be put back — the arena
+shooter's oldest constraint, and the reason its campaign is four levels rather
+than endless. So **LOAD GAME is offered on the title card only**, where every
+drone is still intact and "level 3" means level 3's ten flying down from park
+altitude. Loading mid-run is refused by the game rather than by the engine.
+
+One subtlety the first run of it found: a load replaces the whole state map,
+`mode` included — and the save was taken from a pause screen, so it says
+*paused*. The script forces the run to start playing on the level that came
+back, which is three lines and would otherwise load you into a menu you cannot
+see behind.
+
+**QUIT is `world.quit`** on both cards. Under the recorded demo timeline it is
+never pressed.
 
 **Two things the play HUD gained from the same components.** The health readout
 is a `column` of label over gauge, the gauge a panel whose `padding` *is* its
@@ -364,8 +496,10 @@ slab it was rolled onto, and a marking is a separate box: its joints could never
 line up with the floor's underneath. Relief at matching scale reads as one
 surface; a second copy of the grime would read as two.
 
-Deliberately still flat: the player's head, the bullets, and the drone
-fragments. They are stand-ins the way the tour's critters are.
+Deliberately still flat: the bullets and the drone fragments. They are
+stand-ins the way the tour's critters are. The player and its weapons take the
+tour's pressed-steel maps (`plate_normal` + `plate_orm`), which makes the player
+the repo's second **skinned × textured** draw after the tour's walker.
 
 ## Regenerating the demo
 
@@ -434,7 +568,9 @@ not a verification fixture, and it is not in `verify/baselines.json`. Also
 absent, in rough order of how much each would add: cover that stops bullets,
 enemies that shoot back, a restart or an endless mode (both want entities the
 file does not carry — the campaign is four levels because four levels' worth of
-drones are authored), drone variety, a walking enemy off M30's rig, and sound —
-of which the engine has none. The menu is deliberately still 8×8 text:
+drones are authored), drone variety, a walking enemy off M30's rig, weapon
+pickups (the campaign's "it is already there" trick would work for them and
+nothing asked), more than one save slot, and sound — of which the engine has
+none. The menu is deliberately still 8×8 text:
 a bitmap-font atlas is the sanctioned next step for that everywhere in the repo,
 not something to solve once here.
