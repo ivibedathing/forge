@@ -21,10 +21,28 @@
           }
         ]
       },
+      "ColliderFit": {
+        "description": "How a proxy's size is decided (M39). See [`ColliderPart::fit`].",
+        "enum": [
+          "bone"
+        ],
+        "type": "string"
+      },
       "ColliderPart": {
         "additionalProperties": false,
         "description": "One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's\nframe (M33).\n\nFlat and discriminated by `shape`, exactly as [`Collider`] is and for the\nsame reasons — the schema-driven walk and the editor's generated inspector\nboth read flat structs, and `jq` and an LLM both write them. `cuboid`,\n`sphere` and `capsule` only: `trimesh` and `convex_hull` describe a\nspecific mesh, and a proxy exists precisely because that mesh lives on the\nGPU where physics cannot reach it (`collider_part_shape_unsupported`).",
         "properties": {
+          "fit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ColliderFit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Solve this part's length from the posed bone instead of holding the\nauthored one (M39). Absent — the default, and every pre-M39 part — is\nM33's rule exactly: only the placement follows the rig, never the size.\n\n`\"bone\"` takes a `capsule`'s `half_height`, or a `cuboid`'s Y\nhalf-extent, from the posed distance between this part's joint and that\njoint's first child, so a proxy set fitted to a rest pose keeps fitting\na skeleton the solver is moving. A joint with no child keeps the\nauthored value, which is what a hand or a head has."
+          },
           "half_extents": {
             "description": "`cuboid` only. Each component `> 0`.",
             "items": {
@@ -310,6 +328,64 @@
         ],
         "type": "string"
       },
+      "JointPose": {
+        "additionalProperties": false,
+        "description": "One joint's local placement while a [`Ragdoll`] owns the skeleton (M39).\n\n**`rotation` is a quaternion, `w` last — the one rotation in this format\nthat is not XYZ Euler degrees.** `CLAUDE.md` names the reason under Traps:\nXYZ Euler clamps the middle angle to ±90°, so an orientation the solver\nintegrated past that comes back as the `(±180, θ, ±180)` twin, and a\nragdoll's joints go past it in the first second. M30 drew the same line for\nskeletal clips, and the distinction is *who wrote the numbers*: these are\nthe engine's, like a DCC tool's, not an agent's.",
+        "properties": {
+          "joint": {
+            "description": "The joint this places. Every joint of the rig appears exactly once.",
+            "type": "string"
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "description": "`[x, y, z, w]`, glTF's order and rapier's.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "scale": {
+            "description": "Carried only when it is not 1: a ragdoll does not scale bones, so this\nis whatever the clip had at the moment of handoff.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "translation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Metres, in the parent joint's frame.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        },
+        "required": [
+          "joint"
+        ],
+        "type": "object"
+      },
       "ParticleBlend": {
         "description": "How a particle's color combines with what is already on screen.\n\nNOTE: leave these variants undocumented. A doc comment on an enum *variant*\nmakes schemars emit oneOf/const instead of a flat `\"enum\": [...]`, which\nblinds the validation walk's closed-vocabulary check — the same trap\n[`ColliderShapeKind`] carries a note about.",
         "enum": [
@@ -344,6 +420,56 @@
         },
         "required": [
           "ankle"
+        ],
+        "type": "object"
+      },
+      "RagdollJoint": {
+        "additionalProperties": false,
+        "description": "A per-joint override of [`Ragdoll`]'s default cone (M39).\n\nA ragdoll whose every joint is a 45° cone reads as a bag. A knee that only\nbends one way, and only backwards, is what makes it read as a body — and\nboth numbers being in the file is what makes it tunable without touching\nRust.",
+        "properties": {
+          "hinge": {
+            "description": "Turn this joint into a hinge about this axis in the **child** part's\nlocal frame, instead of a cone. An elbow or a knee.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "joint": {
+            "description": "The joint to override. Some part of the `SkinnedCollider` must ride it,\nand it must not be the root — a root part has no joint to constrain.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Half-angle of the cone, in degrees. Ignored when `hinge` is set.",
+            "format": "float",
+            "maximum": 180.0,
+            "minimum": 0.0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "range": {
+            "description": "The hinge's travel in degrees, `[min, max]`. `hinge` only.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "joint"
         ],
         "type": "object"
       },
@@ -3344,6 +3470,71 @@
       },
       {
         "additionalProperties": false,
+        "description": "Physics driving a skinned character's skeleton (M39).\n\nM33 said the pose drives the proxies and nothing reads them back, and called\nthat its whole design. **This reverses that sentence for one entity, once,\npermanently.** When `active` turns true the entity's `SkinnedCollider`\nproxies stop being kinematic followers and become dynamic bodies wired\ntogether with rapier joints; from that step on the skeleton is a report of\nwhere they ended up.\n\n**The pose stays in the file, which is why invariant 2 survives the\nreversal.** `pose` is written back after every step, exactly as M32 writes\n`AnimationPlayer.phase` back, and `locomotion::posed_globals_at` reads it\nbefore it looks at a clip — so the render, `engine list-joints`,\n`engine list-colliders` and `world.joint_position` all see the ragdolled\nskeleton through the seam they already shared. M32's rule is what settled\nit: a ragdoll halfway to the floor, baked and reloaded, has to land in the\nsame heap, and a pose living in the physics world would reload standing up.\n\nThe bodies **are** the proxies, so the hitbox that was shot is the body that\nfalls, and the collider set does not change on handoff — which matters\nbecause that set is an input to rapier's broad phase.\n\nSee `designs/ragdoll-design.md`.",
+        "properties": {
+          "active": {
+            "default": false,
+            "description": "Whether physics owns the skeleton. A scene may ship this true and its\ncharacter is a corpse from step 0; `world.ragdoll(name)` sets it, and\nnothing clears it — the handoff is one-way (design §3).",
+            "type": "boolean"
+          },
+          "angular_damping": {
+            "default": 0.6000000238418579,
+            "description": "The same, for spin — and the one that stops a corpse pinwheeling.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "density": {
+            "default": 985.0,
+            "description": "kg/m³, `Collider.density`'s unit. Each part's mass is its shape's\nvolume times this. Defaults to a shade under water, which is roughly\nwhat a person is.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "joints": {
+            "description": "Joints that want something other than the default cone.",
+            "items": {
+              "$ref": "#/$defs/RagdollJoint"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "default": 45.0,
+            "description": "Half-angle in degrees of the cone every joint gets unless `joints`\noverrides it.",
+            "format": "float",
+            "maximum": 180.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "linear_damping": {
+            "default": 0.05000000074505806,
+            "description": "Velocity damping on every part. Deliberately above a physically honest\nvalue: a real body tumbles for longer than a game wants to watch, and\nthis is the dial that fixes it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "pose": {
+            "description": "The skeleton, once physics owns it: one entry per joint of the rig,\nwritten by the engine after every step. Absent until the handoff.\n\nIt is in the file rather than in the physics world because that is what\nmakes a baked ragdoll reload into the same heap — see the type's docs.",
+            "items": {
+              "$ref": "#/$defs/JointPose"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "Ragdoll",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
         "description": "Makes a dynamic body float on a named [`Water`] surface (M40).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M40 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
         "properties": {
           "angular_drag": {
@@ -3414,6 +3605,7 @@
     "Meadow",
     "FootPlant",
     "SkinnedCollider",
+    "Ragdoll",
     "Buoyancy"
   ],
   "scene": {
@@ -3438,10 +3630,28 @@
           }
         ]
       },
+      "ColliderFit": {
+        "description": "How a proxy's size is decided (M39). See [`ColliderPart::fit`].",
+        "enum": [
+          "bone"
+        ],
+        "type": "string"
+      },
       "ColliderPart": {
         "additionalProperties": false,
         "description": "One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's\nframe (M33).\n\nFlat and discriminated by `shape`, exactly as [`Collider`] is and for the\nsame reasons — the schema-driven walk and the editor's generated inspector\nboth read flat structs, and `jq` and an LLM both write them. `cuboid`,\n`sphere` and `capsule` only: `trimesh` and `convex_hull` describe a\nspecific mesh, and a proxy exists precisely because that mesh lives on the\nGPU where physics cannot reach it (`collider_part_shape_unsupported`).",
         "properties": {
+          "fit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ColliderFit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Solve this part's length from the posed bone instead of holding the\nauthored one (M39). Absent — the default, and every pre-M39 part — is\nM33's rule exactly: only the placement follows the rig, never the size.\n\n`\"bone\"` takes a `capsule`'s `half_height`, or a `cuboid`'s Y\nhalf-extent, from the posed distance between this part's joint and that\njoint's first child, so a proxy set fitted to a rest pose keeps fitting\na skeleton the solver is moving. A joint with no child keeps the\nauthored value, which is what a hand or a head has."
+          },
           "half_extents": {
             "description": "`cuboid` only. Each component `> 0`.",
             "items": {
@@ -6254,6 +6464,71 @@
           },
           {
             "additionalProperties": false,
+            "description": "Physics driving a skinned character's skeleton (M39).\n\nM33 said the pose drives the proxies and nothing reads them back, and called\nthat its whole design. **This reverses that sentence for one entity, once,\npermanently.** When `active` turns true the entity's `SkinnedCollider`\nproxies stop being kinematic followers and become dynamic bodies wired\ntogether with rapier joints; from that step on the skeleton is a report of\nwhere they ended up.\n\n**The pose stays in the file, which is why invariant 2 survives the\nreversal.** `pose` is written back after every step, exactly as M32 writes\n`AnimationPlayer.phase` back, and `locomotion::posed_globals_at` reads it\nbefore it looks at a clip — so the render, `engine list-joints`,\n`engine list-colliders` and `world.joint_position` all see the ragdolled\nskeleton through the seam they already shared. M32's rule is what settled\nit: a ragdoll halfway to the floor, baked and reloaded, has to land in the\nsame heap, and a pose living in the physics world would reload standing up.\n\nThe bodies **are** the proxies, so the hitbox that was shot is the body that\nfalls, and the collider set does not change on handoff — which matters\nbecause that set is an input to rapier's broad phase.\n\nSee `designs/ragdoll-design.md`.",
+            "properties": {
+              "active": {
+                "default": false,
+                "description": "Whether physics owns the skeleton. A scene may ship this true and its\ncharacter is a corpse from step 0; `world.ragdoll(name)` sets it, and\nnothing clears it — the handoff is one-way (design §3).",
+                "type": "boolean"
+              },
+              "angular_damping": {
+                "default": 0.6000000238418579,
+                "description": "The same, for spin — and the one that stops a corpse pinwheeling.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "density": {
+                "default": 985.0,
+                "description": "kg/m³, `Collider.density`'s unit. Each part's mass is its shape's\nvolume times this. Defaults to a shade under water, which is roughly\nwhat a person is.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "joints": {
+                "description": "Joints that want something other than the default cone.",
+                "items": {
+                  "$ref": "#/$defs/RagdollJoint"
+                },
+                "type": "array"
+              },
+              "limit": {
+                "default": 45.0,
+                "description": "Half-angle in degrees of the cone every joint gets unless `joints`\noverrides it.",
+                "format": "float",
+                "maximum": 180.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "linear_damping": {
+                "default": 0.05000000074505806,
+                "description": "Velocity damping on every part. Deliberately above a physically honest\nvalue: a real body tumbles for longer than a game wants to watch, and\nthis is the dial that fixes it.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "pose": {
+                "description": "The skeleton, once physics owns it: one entry per joint of the rig,\nwritten by the engine after every step. Absent until the handoff.\n\nIt is in the file rather than in the physics world because that is what\nmakes a baked ragdoll reload into the same heap — see the type's docs.",
+                "items": {
+                  "$ref": "#/$defs/JointPose"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "Ragdoll",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
             "description": "Makes a dynamic body float on a named [`Water`] surface (M40).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M40 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
             "properties": {
               "angular_drag": {
@@ -6788,6 +7063,64 @@
         ],
         "type": "string"
       },
+      "JointPose": {
+        "additionalProperties": false,
+        "description": "One joint's local placement while a [`Ragdoll`] owns the skeleton (M39).\n\n**`rotation` is a quaternion, `w` last — the one rotation in this format\nthat is not XYZ Euler degrees.** `CLAUDE.md` names the reason under Traps:\nXYZ Euler clamps the middle angle to ±90°, so an orientation the solver\nintegrated past that comes back as the `(±180, θ, ±180)` twin, and a\nragdoll's joints go past it in the first second. M30 drew the same line for\nskeletal clips, and the distinction is *who wrote the numbers*: these are\nthe engine's, like a DCC tool's, not an agent's.",
+        "properties": {
+          "joint": {
+            "description": "The joint this places. Every joint of the rig appears exactly once.",
+            "type": "string"
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "description": "`[x, y, z, w]`, glTF's order and rapier's.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "scale": {
+            "description": "Carried only when it is not 1: a ragdoll does not scale bones, so this\nis whatever the clip had at the moment of handoff.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "translation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Metres, in the parent joint's frame.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        },
+        "required": [
+          "joint"
+        ],
+        "type": "object"
+      },
       "ParticleBlend": {
         "description": "How a particle's color combines with what is already on screen.\n\nNOTE: leave these variants undocumented. A doc comment on an enum *variant*\nmakes schemars emit oneOf/const instead of a flat `\"enum\": [...]`, which\nblinds the validation walk's closed-vocabulary check — the same trap\n[`ColliderShapeKind`] carries a note about.",
         "enum": [
@@ -6850,6 +7183,56 @@
         },
         "required": [
           "ankle"
+        ],
+        "type": "object"
+      },
+      "RagdollJoint": {
+        "additionalProperties": false,
+        "description": "A per-joint override of [`Ragdoll`]'s default cone (M39).\n\nA ragdoll whose every joint is a 45° cone reads as a bag. A knee that only\nbends one way, and only backwards, is what makes it read as a body — and\nboth numbers being in the file is what makes it tunable without touching\nRust.",
+        "properties": {
+          "hinge": {
+            "description": "Turn this joint into a hinge about this axis in the **child** part's\nlocal frame, instead of a cone. An elbow or a knee.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "joint": {
+            "description": "The joint to override. Some part of the `SkinnedCollider` must ride it,\nand it must not be the root — a root part has no joint to constrain.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Half-angle of the cone, in degrees. Ignored when `hinge` is set.",
+            "format": "float",
+            "maximum": 180.0,
+            "minimum": 0.0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "range": {
+            "description": "The hinge's travel in degrees, `[min, max]`. `hinge` only.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "joint"
         ],
         "type": "object"
       },

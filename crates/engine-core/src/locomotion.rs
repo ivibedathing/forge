@@ -279,6 +279,24 @@ pub fn posed_globals(
     clip: Option<&skeleton::SkeletalClip>,
     local: f32,
 ) -> Vec<Mat4> {
+    // A ragdoll owns the skeleton (M39), and it owns it **here** — the
+    // innermost seam, ahead of planting and ahead of the clip, so every reader
+    // that already went through this function gets it with no edit: the
+    // render's palette, `engine list-joints`, `engine list-colliders`,
+    // `world.joint_position`. Putting it one layer out in `posed_globals_at`
+    // was measured to be wrong — `list-joints --steps` reached this function
+    // directly and cheerfully reported a corpse standing up.
+    //
+    // The pose is read out of the **component**, never out of the physics
+    // world. That is what keeps invariant 2 true through the reversal of M33's
+    // one-way rule, and what makes a baked ragdoll reload into the same heap.
+    if let Ok(ragdoll) = world.get::<&crate::components::Ragdoll>(entity) {
+        if let Some(field) = ragdoll.pose.as_deref() {
+            let pose = crate::ragdoll::pose_from_field(skin, field);
+            return skeleton::globals_from(skin, &pose);
+        }
+    }
+
     let Ok(component) = world.get::<&FootPlant>(entity) else {
         return skeleton::joint_globals(skin, clip, local);
     };
@@ -326,6 +344,7 @@ pub fn posed_globals_at(
     let Some(skin) = &rig.skin else {
         return Vec::new();
     };
+
     // `hecs::Ref` derefs to the component, so this clones the `AnimationPlayer`
     // rather than the guard — `.cloned()` does not apply and clippy's
     // `map_clone` suggestion does not compile here.

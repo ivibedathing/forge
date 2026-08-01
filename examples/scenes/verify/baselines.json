@@ -545,6 +545,18 @@
       "pinned_by": "hand"
     },
     {
+      "baseline": "examples/scenes/verify/baselines/m39_ragdoll.png",
+      "scene": "examples/scenes/verify/m39_ragdoll.json",
+      "args": [
+        "--steps",
+        "75"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M39",
+      "pinned_by": "cli.rs"
+    },
+    {
       "baseline": "examples/scenes/verify/baselines/m40_buoyancy.png",
       "scene": "examples/scenes/verify/m40_buoyancy.json",
       "args": [

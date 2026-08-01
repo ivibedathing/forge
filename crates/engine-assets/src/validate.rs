@@ -54,6 +54,13 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
             ComponentData::Mesh(mesh) => Some(mesh.asset.clone()),
             _ => None,
         });
+        // A `Ragdoll`'s bodies are its proxies (M39 §4), and whether they form
+        // one tree is a question about the *rig's* ancestry — so the check
+        // needs the proxy set from beside it and the file this crate opens.
+        let entity_proxies = entity.components.iter().find_map(|c| match c {
+            ComponentData::SkinnedCollider(proxies) => Some(proxies),
+            _ => None,
+        });
 
         for (component_index, component) in entity.components.iter().enumerate() {
             let component_path = format!("/entities/{entity_index}/components/{component_index}");
@@ -182,6 +189,26 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                         error = error.line(line);
                     }
                     errors.push(error.path(json_path));
+                }
+            }
+
+            // A Ragdoll (M39). One check, and it needs the rig: the parts are
+            // wired to each other through the skeleton's ancestry, so a part
+            // set that leaves two roots is a ragdoll in two pieces — which
+            // rapier would happily simulate as two, and which reads on screen
+            // as a character coming apart.
+            if let ComponentData::Ragdoll(_) = component {
+                for mut error in
+                    check_ragdoll_tree(entity_proxies, entity_mesh.as_deref(), base_dir)
+                {
+                    error = error
+                        .file(path)
+                        .entity(entity.name.clone())
+                        .component("Ragdoll");
+                    if let Some(line) = index.line_of_or_parent(&component_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(component_path.clone()));
                 }
             }
 
@@ -416,6 +443,59 @@ fn check_proxies(
         }
     }
     errors
+}
+
+/// Open a ragdoll's glTF and check that its parts form one tree (M39 §4).
+///
+/// The graph itself comes from `engine_core::ragdoll::parent_parts`, shared
+/// with the physics world rather than re-derived here — a validator that
+/// computed a different parent from the one rapier wires would pass a scene
+/// that comes apart at the first step, which is the exact failure
+/// `road-centerline` and `list-colliders` were both built to prevent, arriving
+/// in a third place.
+///
+/// No `SkinnedCollider` at all is engine-core's `ragdoll_without_proxies`, so
+/// this stays quiet about it: one cause, one error.
+fn check_ragdoll_tree(
+    proxies: Option<&engine_core::components::SkinnedCollider>,
+    mesh: Option<&str>,
+    base_dir: &Path,
+) -> Vec<EngineError> {
+    let (Some(proxies), Some(asset)) = (proxies, mesh) else {
+        return Vec::new();
+    };
+    let Ok(MeshAsset::File(path)) = MeshAsset::resolve(asset, base_dir) else {
+        return Vec::new();
+    };
+    let Ok(rig) = crate::gltf_skin::load_rig(&path) else {
+        return Vec::new();
+    };
+    let Some(skin) = &rig.skin else {
+        return Vec::new();
+    };
+
+    let parents = engine_core::ragdoll::parent_parts(skin, &proxies.parts);
+    let roots = engine_core::ragdoll::roots(&parents);
+    if roots.len() < 2 {
+        return Vec::new();
+    }
+
+    let named: Vec<&str> = roots
+        .iter()
+        .filter_map(|&i| proxies.parts.get(i).map(|p| p.part_name()))
+        .collect();
+    vec![EngineError::new(
+        engine_core::codes::RAGDOLL_DISCONNECTED_PARTS,
+        format!(
+            "this Ragdoll's parts hang from {} separate roots ({}), so it would \
+             simulate as {} bodies flying apart rather than one character. A part's \
+             parent is the part riding the nearest ancestor joint that also carries \
+             one, so adding a part on a joint above these connects them",
+            roots.len(),
+            named.join(", "),
+            roots.len()
+        ),
+    )]
 }
 
 /// Returns templates: location context is attached by the caller, the way

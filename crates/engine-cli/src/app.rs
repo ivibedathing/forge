@@ -499,6 +499,13 @@ impl ViewerApp {
                                             impulse: blast.impulse,
                                         });
                                     }
+                                    for kick in scripts.take_kicks() {
+                                        physics.queue_ragdoll_impulse(
+                                            &kick.entity,
+                                            &kick.part,
+                                            kick.impulse.into(),
+                                        );
+                                    }
                                 }
                             }
                             if let Some(physics) = &mut sim.physics {

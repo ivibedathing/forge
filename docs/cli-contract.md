@@ -107,6 +107,8 @@ engine build [--check]                       # --check: type-check only, ~half t
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
                                              # every collider physics holds, and where
+engine fit-colliders <scene.json> [--entity Name] [--shape S] [--write]
+                                             # solve a proxy set from vertex weights, as text
 engine ui-layout <scene.json> [--width W --height H] [--entity Name]... [--steps N] [--input f]
                                              # where the UI landed; --steps for what a script painted
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
@@ -353,6 +355,20 @@ matters most for a proxy, whose placement comes from a *pose* and which appears
 in no render at all. `--steps N` runs the simulation first, because a
 stride-driven pose is what the run reached rather than a function of the file —
 `list-joints` grew the same flag in M32 for the same reason.
+
+`engine fit-colliders` prints `scene`, the `shape` it fitted, whether it
+`written` anything, a `skipped` array of entities whose mesh carries no skin,
+and one `entities` row per fitted character: the entity's name and a complete
+`SkinnedCollider` component. Each vertex goes to the joint holding its largest
+weight and a shape is fitted to that bucket in the joint's own bind frame;
+joints with fewer than eight vertices are left out. `--write` splices the
+component into the scene file through the editor's own commit path, keeping any
+existing `layers`, `collides_with`, `friction` and `restitution` — those are
+decisions about the character, and only the shapes are what this solves.
+
+**Generation is a command, never a runtime behaviour** (M39 §8). Nothing at
+load time or step time consults a vertex weight; the file still says everything,
+and a regenerated set that differs from the committed one shows up as a diff.
 
 ## The render digest
 

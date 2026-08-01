@@ -32,6 +32,28 @@ pub(crate) struct Proxy {
     /// The part's placement inside the joint's frame, scale already folded in.
     pub(crate) local: Mat4,
     pub(crate) body: RigidBodyHandle,
+    /// Set when the part asked to fit its bone (M39 §7). `None` — every
+    /// pre-M39 part, and the default — is M33's rule exactly: the placement
+    /// follows the rig and the size never does.
+    pub(crate) fit: Option<Fit>,
+}
+
+/// A `fit: "bone"` part's live dimensions, at the entity's scale.
+///
+/// The last solved length is kept so the shape is rebuilt only when the bone
+/// actually moves past [`crate::ragdoll::FIT_EPSILON`]: a rig whose clips
+/// animate rotation only — every clip in this repo — crosses it once, on the
+/// first step, and never again.
+pub(crate) struct Fit {
+    pub(crate) radius: f32,
+    /// Half the cylindrical section for a capsule, the Y half-extent for a
+    /// cuboid. Seeded from the authored value, which is also what a joint with
+    /// no child keeps.
+    pub(crate) half_length: f32,
+    /// A cuboid's other two half-extents, which fitting leaves alone: a bone's
+    /// length is what the rig knows, and how thick a limb is remains the
+    /// author's answer.
+    pub(crate) half_extents: Option<Vec3>,
 }
 
 /// The shape a part describes, at a uniform `scale`.

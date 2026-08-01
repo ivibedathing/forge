@@ -215,6 +215,9 @@ pub(super) fn walk<'a>(
         // A `SkinnedCollider` (M33): its proxies ride the entity's rig, so the
         // checks need the entity's `Mesh` and its scale.
         let mut skinned_collider: Option<(crate::components::SkinnedCollider, String)> = None;
+        // A `Ragdoll` (M39): its bodies *are* the proxies, so every check it
+        // has needs the `SkinnedCollider` beside it.
+        let mut ragdoll: Option<(crate::components::Ragdoll, String)> = None;
         let mut tree_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
@@ -348,6 +351,9 @@ pub(super) fn walk<'a>(
                 }
                 Some(ComponentData::SkinnedCollider(s)) => {
                     skinned_collider = Some((s, component_path));
+                }
+                Some(ComponentData::Ragdoll(r)) => {
+                    ragdoll = Some((r, component_path));
                 }
                 Some(ComponentData::HudPanel(p)) => {
                     has_hud_element = true;
@@ -707,6 +713,61 @@ pub(super) fn walk<'a>(
             for layer in proxies.collides_with.iter().flatten() {
                 layer_refs.push((layer.clone(), name.to_string(), path.clone()));
                 note_distinct(layer, path);
+            }
+        }
+
+        // ── Ragdolls (M39) ────────────────────────────────────────────
+        //
+        // The bodies are the proxies (design §4), so a `Ragdoll` without a
+        // `SkinnedCollider` has nothing to fall. Whether the parts form one
+        // tree needs the rig's ancestry and is engine-assets' half, beside the
+        // joint-name checks — the M30/M32 division, for the third time.
+        if let Some((ragdoll, path)) = &ragdoll {
+            match skinned_collider.as_ref() {
+                None => {
+                    errors.push(
+                        cx.err(
+                            codes::RAGDOLL_WITHOUT_PROXIES,
+                            format!(
+                                "entity {name:?} has a Ragdoll but no SkinnedCollider; a \
+                                 ragdoll's bodies *are* its proxies, so the hitbox that \
+                                 was shot is the body that falls, and a character with no \
+                                 hitboxes has nothing to fall"
+                            ),
+                            path,
+                        )
+                        .entity(name)
+                        .component("Ragdoll"),
+                    );
+                }
+                Some((proxies, _)) => {
+                    // An override for a joint no part rides constrains nothing,
+                    // and reads in the file as a knee that bends when it does
+                    // not — the failure mode a typo deserves a name for.
+                    let ridden: Vec<&str> =
+                        proxies.parts.iter().map(|p| p.joint.as_str()).collect();
+                    for (i, joint) in ragdoll.joints.iter().enumerate() {
+                        if ridden.contains(&joint.joint.as_str()) {
+                            continue;
+                        }
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_UNKNOWN_JOINT,
+                                format!(
+                                    "the Ragdoll override for {:?} names a joint no part \
+                                     of this SkinnedCollider rides, so it would constrain \
+                                     nothing",
+                                    joint.joint
+                                ),
+                                &format!("{path}/joints/{i}/joint"),
+                            )
+                            .entity(name)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/joint"))
+                            .suggest_from(&joint.joint, ridden.iter().copied()),
+                        );
+                    }
+                }
             }
         }
 

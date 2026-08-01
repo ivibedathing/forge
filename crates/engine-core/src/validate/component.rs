@@ -730,6 +730,26 @@ pub(super) fn check_component(
                     continue;
                 }
 
+                // A sphere has one dimension and it is not a length along the
+                // bone, so there is nothing for `fit` to solve (M39 §7).
+                if part.fit.is_some() && part.shape == Sphere {
+                    errors.push(
+                        cx.err(
+                            codes::COLLIDER_PART_FIT_UNSUPPORTED,
+                            format!(
+                                "part {label:?} is a sphere asking to fit its bone, but a \
+                                 sphere has no length to solve; \"fit\" applies to \
+                                 \"capsule\" (its half_height) and \"cuboid\" (its Y \
+                                 half-extent)"
+                            ),
+                            &format!("{part_path}/fit"),
+                        )
+                        .entity(entity)
+                        .component("SkinnedCollider")
+                        .field(format!("parts/{i}/fit")),
+                    );
+                }
+
                 // `Collider`'s per-shape rule, applied per part.
                 let fields: [(&str, bool, bool); 3] = [
                     (
@@ -842,6 +862,92 @@ pub(super) fn check_component(
                         .component("SkinnedCollider")
                         .field(field),
                     );
+                }
+            }
+        }
+
+        // A ragdoll (M39). Answerable from the component alone: that no two
+        // overrides claim one joint, and that a hinge describes a real axis and
+        // a range that runs forwards. Whether the joints are ones some part
+        // rides, and whether the parts form one tree, need the
+        // `SkinnedCollider` beside it and live in `entity.rs`.
+        ComponentData::Ragdoll(ref ragdoll) => {
+            let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for (i, joint) in ragdoll.joints.iter().enumerate() {
+                let joint_path = format!("{component_path}/joints/{i}");
+                let name = joint.joint.as_str();
+
+                if !seen.insert(name) {
+                    errors.push(
+                        cx.err(
+                            codes::RAGDOLL_DUPLICATE_JOINT,
+                            format!(
+                                "two Ragdoll joint overrides name {name:?}; which one wins \
+                                 would be an ordering accident, so neither does"
+                            ),
+                            &joint_path,
+                        )
+                        .entity(entity)
+                        .component("Ragdoll")
+                        .field(format!("joints/{i}/joint")),
+                    );
+                }
+
+                match (joint.hinge, joint.range) {
+                    (Some(axis), _) if axis.length_squared() <= 0.0 => {
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_BAD_HINGE,
+                                format!(
+                                    "the hinge axis on {name:?} is {:?}, which names no \
+                                     direction; a hinge turns about an axis in the child \
+                                     part's frame, so [1, 0, 0] is a knee that bends about \
+                                     local X",
+                                    axis.to_array()
+                                ),
+                                &format!("{joint_path}/hinge"),
+                            )
+                            .entity(entity)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/hinge")),
+                        );
+                    }
+                    // Negated so a NaN fails — the repo's rule, and the reason
+                    // is written out at `Collider`'s dimension check.
+                    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                    (Some(_), Some(range)) if !(range[0] <= range[1]) => {
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_BAD_HINGE,
+                                format!(
+                                    "the hinge range on {name:?} is [{}, {}]; it is \
+                                     [min, max] in degrees and must run forwards",
+                                    range[0], range[1]
+                                ),
+                                &format!("{joint_path}/range"),
+                            )
+                            .entity(entity)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/range")),
+                        );
+                    }
+                    (None, Some(_)) => {
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_BAD_HINGE,
+                                format!(
+                                    "the override on {name:?} sets \"range\" without \
+                                     \"hinge\"; a range is a hinge's travel, and a cone's \
+                                     extent is \"limit\""
+                                ),
+                                &format!("{joint_path}/range"),
+                            )
+                            .entity(entity)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/range")),
+                        );
+                    }
+                    _ => {}
                 }
             }
         }

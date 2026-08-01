@@ -3253,6 +3253,28 @@ pub struct ColliderPart {
     /// sword's blade and its guard want opposite answers.
     #[serde(default)]
     pub sensor: bool,
+
+    /// Solve this part's length from the posed bone instead of holding the
+    /// authored one (M39). Absent — the default, and every pre-M39 part — is
+    /// M33's rule exactly: only the placement follows the rig, never the size.
+    ///
+    /// `"bone"` takes a `capsule`'s `half_height`, or a `cuboid`'s Y
+    /// half-extent, from the posed distance between this part's joint and that
+    /// joint's first child, so a proxy set fitted to a rest pose keeps fitting
+    /// a skeleton the solver is moving. A joint with no child keeps the
+    /// authored value, which is what a hand or a head has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit: Option<ColliderFit>,
+}
+
+/// How a proxy's size is decided (M39). See [`ColliderPart::fit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ColliderFit {
+    // NOTE: undocumented for `ColliderShapeKind`'s reason — a schemars doc
+    // comment on a variant turns a flat "enum" into oneOf/const and blinds the
+    // walk's closed-vocabulary check.
+    Bone,
 }
 
 impl ColliderPart {
@@ -3306,6 +3328,156 @@ pub struct SkinnedCollider {
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub restitution: f32,
+}
+
+/// One joint's local placement while a [`Ragdoll`] owns the skeleton (M39).
+///
+/// **`rotation` is a quaternion, `w` last — the one rotation in this format
+/// that is not XYZ Euler degrees.** `CLAUDE.md` names the reason under Traps:
+/// XYZ Euler clamps the middle angle to ±90°, so an orientation the solver
+/// integrated past that comes back as the `(±180, θ, ±180)` twin, and a
+/// ragdoll's joints go past it in the first second. M30 drew the same line for
+/// skeletal clips, and the distinction is *who wrote the numbers*: these are
+/// the engine's, like a DCC tool's, not an agent's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JointPose {
+    /// The joint this places. Every joint of the rig appears exactly once.
+    pub joint: String,
+
+    /// Metres, in the parent joint's frame.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub translation: Vec3,
+
+    /// `[x, y, z, w]`, glTF's order and rapier's.
+    #[serde(default = "identity_quat")]
+    pub rotation: [f32; 4],
+
+    /// Carried only when it is not 1: a ragdoll does not scale bones, so this
+    /// is whatever the clip had at the moment of handoff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<[f32; 3]>")]
+    pub scale: Option<Vec3>,
+}
+
+fn identity_quat() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+/// A per-joint override of [`Ragdoll`]'s default cone (M39).
+///
+/// A ragdoll whose every joint is a 45° cone reads as a bag. A knee that only
+/// bends one way, and only backwards, is what makes it read as a body — and
+/// both numbers being in the file is what makes it tunable without touching
+/// Rust.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RagdollJoint {
+    /// The joint to override. Some part of the `SkinnedCollider` must ride it,
+    /// and it must not be the root — a root part has no joint to constrain.
+    pub joint: String,
+
+    /// Half-angle of the cone, in degrees. Ignored when `hinge` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 180.0))]
+    pub limit: Option<f32>,
+
+    /// Turn this joint into a hinge about this axis in the **child** part's
+    /// local frame, instead of a cone. An elbow or a knee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<[f32; 3]>")]
+    pub hinge: Option<Vec3>,
+
+    /// The hinge's travel in degrees, `[min, max]`. `hinge` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<[f32; 2]>,
+}
+
+/// Physics driving a skinned character's skeleton (M39).
+///
+/// M33 said the pose drives the proxies and nothing reads them back, and called
+/// that its whole design. **This reverses that sentence for one entity, once,
+/// permanently.** When `active` turns true the entity's `SkinnedCollider`
+/// proxies stop being kinematic followers and become dynamic bodies wired
+/// together with rapier joints; from that step on the skeleton is a report of
+/// where they ended up.
+///
+/// **The pose stays in the file, which is why invariant 2 survives the
+/// reversal.** `pose` is written back after every step, exactly as M32 writes
+/// `AnimationPlayer.phase` back, and `locomotion::posed_globals_at` reads it
+/// before it looks at a clip — so the render, `engine list-joints`,
+/// `engine list-colliders` and `world.joint_position` all see the ragdolled
+/// skeleton through the seam they already shared. M32's rule is what settled
+/// it: a ragdoll halfway to the floor, baked and reloaded, has to land in the
+/// same heap, and a pose living in the physics world would reload standing up.
+///
+/// The bodies **are** the proxies, so the hitbox that was shot is the body that
+/// falls, and the collider set does not change on handoff — which matters
+/// because that set is an input to rapier's broad phase.
+///
+/// See `designs/ragdoll-design.md`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Ragdoll {
+    /// Whether physics owns the skeleton. A scene may ship this true and its
+    /// character is a corpse from step 0; `world.ragdoll(name)` sets it, and
+    /// nothing clears it — the handoff is one-way (design §3).
+    #[serde(default)]
+    pub active: bool,
+
+    /// kg/m³, `Collider.density`'s unit. Each part's mass is its shape's
+    /// volume times this. Defaults to a shade under water, which is roughly
+    /// what a person is.
+    #[serde(default = "default_ragdoll_density")]
+    #[schemars(range(min = 0.0))]
+    pub density: f32,
+
+    /// Half-angle in degrees of the cone every joint gets unless `joints`
+    /// overrides it.
+    #[serde(default = "default_ragdoll_limit")]
+    #[schemars(range(min = 0.0, max = 180.0))]
+    pub limit: f32,
+
+    /// Velocity damping on every part. Deliberately above a physically honest
+    /// value: a real body tumbles for longer than a game wants to watch, and
+    /// this is the dial that fixes it.
+    #[serde(default = "default_ragdoll_linear_damping")]
+    #[schemars(range(min = 0.0))]
+    pub linear_damping: f32,
+
+    /// The same, for spin — and the one that stops a corpse pinwheeling.
+    #[serde(default = "default_ragdoll_angular_damping")]
+    #[schemars(range(min = 0.0))]
+    pub angular_damping: f32,
+
+    /// Joints that want something other than the default cone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joints: Vec<RagdollJoint>,
+
+    /// The skeleton, once physics owns it: one entry per joint of the rig,
+    /// written by the engine after every step. Absent until the handoff.
+    ///
+    /// It is in the file rather than in the physics world because that is what
+    /// makes a baked ragdoll reload into the same heap — see the type's docs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pose: Option<Vec<JointPose>>,
+}
+
+fn default_ragdoll_density() -> f32 {
+    985.0
+}
+
+fn default_ragdoll_limit() -> f32 {
+    45.0
+}
+
+fn default_ragdoll_linear_damping() -> f32 {
+    0.05
+}
+
+fn default_ragdoll_angular_damping() -> f32 {
+    0.6
 }
 
 /// Defines the serialized component union alongside everything that must stay
@@ -3389,6 +3561,7 @@ components!(
     Meadow,
     FootPlant,
     SkinnedCollider,
+    Ragdoll,
     Buoyancy,
 );
 
@@ -3493,6 +3666,7 @@ mod tests {
                 "Meadow",
                 "FootPlant",
                 "SkinnedCollider",
+                "Ragdoll",
                 "Buoyancy"
             ]
         );

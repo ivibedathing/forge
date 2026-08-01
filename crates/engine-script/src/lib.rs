@@ -25,8 +25,8 @@ use std::sync::Arc;
 
 use engine_core::components::{
     AmbientLight, AnimationPlayer, Breakable, DirectionalLight, HudImage, HudPanel, HudRect,
-    HudText, Mesh, Name, ParticleEmitter, PointLight, RigidBody, Script, Terrain, Transform, Water,
-    Wheel,
+    HudText, Mesh, Name, ParticleEmitter, PointLight, Ragdoll as RagdollData, RigidBody, Script,
+    Terrain, Transform, Water, Wheel,
 };
 use engine_core::contact::ContactState;
 use engine_core::daylight::{Daylight, DaylightSettings};
@@ -144,6 +144,16 @@ pub struct QueuedExplosion {
     pub impulse: f32,
 }
 
+/// A kick queued by `world.ragdoll_impulse`, waiting for the next physics
+/// step. `QueuedExplosion`'s shape and its reason: plain data, so the
+/// scripting crate never depends on the crate that owns physics.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueuedKick {
+    pub entity: String,
+    pub part: String,
+    pub impulse: [f32; 3],
+}
+
 struct CompiledScript {
     /// The entity the `Script` component sits on — error context.
     owner: String,
@@ -167,6 +177,9 @@ pub struct ScriptHost {
     /// Blasts queued by `world.explode`, drained via
     /// [`ScriptHost::take_explosions`].
     explosions: Rc<RefCell<Vec<QueuedExplosion>>>,
+    /// Kicks queued by `world.ragdoll_impulse` (M39), drained via
+    /// [`ScriptHost::take_kicks`].
+    kicks: Rc<RefCell<Vec<QueuedKick>>>,
     /// The scene's day/night block (M21), or `None`. Held as *settings* and
     /// evaluated once per step from the step number, so scripts read the same
     /// clock the renderer does and a replay reads it identically.
@@ -227,6 +240,8 @@ struct WorldApi {
     breaks: Rc<RefCell<Vec<String>>>,
     /// `world.explode`: blasts queued for the next physics step.
     explosions: Rc<RefCell<Vec<QueuedExplosion>>>,
+    /// `world.ragdoll_impulse`: kicks queued for the next physics step (M39).
+    kicks: Rc<RefCell<Vec<QueuedKick>>>,
     /// The day evaluated at this step, or `None` when the scene has no
     /// `daylight` block — in which case asking for the time is a runtime
     /// error rather than a made-up noon.
@@ -1558,6 +1573,69 @@ fn curated_engine() -> rhai::Engine {
         },
     );
 
+    // Ragdolls (M39). `ragdoll` and `is_ragdoll` are an ordinary component
+    // read and write — `active` is a bool the file carries, so the handoff
+    // bakes and reloads like any other state. There is deliberately no setter
+    // for the pose: a script-written joint is hidden state (M30's rule, M21's
+    // before it), and `ragdoll_impulse` is the sanctioned way to move one,
+    // through the solver where the joint limits still apply.
+    engine.register_fn(
+        "ragdoll",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Idempotent: the state is a bool, not an event, so firing twice —
+            // or firing at something the file already shipped as a corpse —
+            // is a no-op rather than a second handoff.
+            w.with_component::<RagdollData, _>(name, "Ragdoll", |r| {
+                r.active = true;
+            })
+        },
+    );
+    engine.register_fn(
+        "is_ragdoll",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<bool, Box<EvalAltResult>> {
+            w.with_component::<RagdollData, _>(name, "Ragdoll", |r| r.active)
+        },
+    );
+    engine.register_fn(
+        "ragdoll_impulse",
+        |w: &mut WorldApi,
+         name: &str,
+         part: &str,
+         x: f64,
+         y: f64,
+         z: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            // Refused rather than ignored on a character still animating: a
+            // kinematic proxy absorbs an impulse without moving, so the silent
+            // version of this call is one that appears to work and does
+            // nothing — the failure a located error exists for.
+            let active = w.with_component::<RagdollData, _>(name, "Ragdoll", |r| r.active)?;
+            if !active {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!(
+                        "entity {name:?} is not a ragdoll yet; call world.ragdoll({name:?}) \
+                         first — an impulse to a kinematic hitbox does nothing"
+                    )
+                    .into(),
+                    Position::NONE,
+                )));
+            }
+            let impulse = [x as f32, y as f32, z as f32];
+            if !impulse.iter().all(|v| v.is_finite()) {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("ragdoll impulse must be finite, got [{x}, {y}, {z}]").into(),
+                    Position::NONE,
+                )));
+            }
+            w.kicks.borrow_mut().push(QueuedKick {
+                entity: name.to_string(),
+                part: part.to_string(),
+                impulse,
+            });
+            Ok(())
+        },
+    );
+
     // Locomotion (M32): where the clip has got to, and how much ground a
     // cycle of it covers. Unlike the joints above these *are* settable, and
     // the distinction is where the number lives — a joint is derived from the
@@ -1898,6 +1976,7 @@ impl ScriptHost {
             state: Rc::new(RefCell::new(HashMap::new())),
             breaks: Rc::new(RefCell::new(Vec::new())),
             explosions: Rc::new(RefCell::new(Vec::new())),
+            kicks: Rc::new(RefCell::new(Vec::new())),
             daylight,
             rigs: Rc::new(skins),
             quit: Rc::new(Cell::new(false)),
@@ -1942,6 +2021,11 @@ impl ScriptHost {
         self.explosions.borrow_mut().drain(..).collect()
     }
 
+    /// Drain the ragdoll kicks scripts queued this step, in call order (M39).
+    pub fn take_kicks(&self) -> Vec<QueuedKick> {
+        self.kicks.borrow_mut().drain(..).collect()
+    }
+
     /// Run every script's `step` for step index `step`, with `input` as the
     /// held-key set for the duration of the step, `pointer` as where the
     /// mouse pointed during it, and `contacts` as the touching-state left by
@@ -1982,6 +2066,7 @@ impl ScriptHost {
             hud: Rc::new(RefCell::new(Vec::new())),
             breaks: Rc::clone(&self.breaks),
             explosions: Rc::clone(&self.explosions),
+            kicks: Rc::clone(&self.kicks),
             quit: Rc::clone(&self.quit),
             environment: Rc::clone(&self.environment),
             save_dir: Rc::clone(&self.save_dir),
@@ -3345,6 +3430,89 @@ mod tests {
         std::fs::write(&scene_path, scene_json).unwrap();
         let scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
         (scene, scene_path)
+    }
+
+    /// M39's three calls. `ragdoll` and `is_ragdoll` are an ordinary component
+    /// write and read; `ragdoll_impulse` is queued like an explosion, and is a
+    /// **located error** on a character that has not ragdolled — an impulse to
+    /// a kinematic proxy is a call that appears to work and does nothing.
+    #[test]
+    fn ragdoll_fires_once_and_an_impulse_before_it_is_refused() {
+        let dir = temp_dir("ragdoll");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                if step == 0 {
+                    world.set_state("before", if world.is_ragdoll("Walker") { 1.0 } else { 0.0 });
+                    world.ragdoll("Walker");
+                    world.set_state("after", if world.is_ragdoll("Walker") { 1.0 } else { 0.0 });
+                    world.ragdoll("Walker");
+                    world.ragdoll_impulse("Walker", "Head", 0.0, 1.0, 0.0);
+                }
+                if step == 1 { world.ragdoll_impulse("Other", "Head", 0.0, 1.0, 0.0); }
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Walker","components":[
+                {"type":"Transform"},
+                {"type":"Ragdoll"},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"Other","components":[{"type":"Transform"},{"type":"Ragdoll"}]}
+        ]}"#;
+        let path = dir.join("scene.json");
+        std::fs::write(&path, scene_json).unwrap();
+        let mut scene = Scene::instantiate(serde_json::from_str(scene_json).unwrap());
+        let host = host_for(&scene, &path);
+
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+
+        // The flag is a plain component field, so the write is visible to the
+        // same step that made it — and firing twice is a no-op, because the
+        // state is a bool rather than an event.
+        let entity = scene.entity("Walker").unwrap();
+        assert!(
+            scene
+                .world
+                .get::<&engine_core::components::Ragdoll>(entity)
+                .unwrap()
+                .active,
+            "world.ragdoll must set Ragdoll.active"
+        );
+        let kicks = host.take_kicks();
+        assert_eq!(kicks.len(), 1, "{kicks:?}");
+        assert_eq!(kicks[0].entity, "Walker");
+        assert_eq!(kicks[0].part, "Head");
+        assert!(host.take_kicks().is_empty(), "draining drains");
+
+        // And an impulse to a character still animating is refused rather than
+        // silently absorbed by a kinematic body.
+        let error = host
+            .step(
+                &mut scene.world,
+                1,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("not a ragdoll yet"),
+            "{}",
+            error.message
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
