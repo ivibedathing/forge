@@ -8,24 +8,72 @@ use super::*;
 /// for 8192² and blame the engine for the memory.
 pub(crate) const SHADOW_MAP_SIZE: u32 = 2048;
 
-/// The shadow map.
+/// The most cascades a scene may ask for, and the length of the frame uniform's
+/// matrix array (M38).
+///
+/// Four rather than a larger number because a cascade is a whole 2048² depth
+/// layer *and* a whole pass over the scene's casters: the ceiling is 64 MB and
+/// four caster passes, and a scene that wants more wants a different feature.
+pub(crate) const MAX_SHADOW_CASCADES: u32 = 4;
+
+/// Each cascade covers a third the extent of the one outside it, so its texels
+/// are three times finer (M38 §2.2).
+///
+/// A fixed ratio rather than an authored lambda for [`SHADOW_MAP_SIZE`]'s
+/// reason: the knob that matters is `shadow_distance`, and a second one whose
+/// only honest description is "try values until it looks right" is not a scene
+/// field. Three is the number that makes the rule sayable — *each level is 3×
+/// sharper and covers 3× less*.
+const CASCADE_RATIO: f32 = 1.0 / 3.0;
+
+/// How far each cascade reaches, innermost first.
+///
+/// The cascades are **nested**, all of them starting at the camera, rather than
+/// slicing the view into disjoint depth ranges. Two things follow, and both are
+/// load-bearing:
+///
+/// - The last entry is exactly `shadow_distance`, so the outermost cascade is
+///   fitted with the matrix M16's single map has always used — which is why a
+///   scene at `shadow_cascades: 1` renders what it rendered before M38 rather
+///   than something equal to it.
+/// - Nested boxes are ordered by size, so the first cascade that *contains* a
+///   point is also the sharpest one that does. The receiver needs no split
+///   distances and no view-depth reconstruction to choose (§2.3).
+///
+/// The cost is overlap: every caster inside cascade 0 is drawn again in
+/// cascades 1 and 2. See §6.
+pub(crate) fn cascade_distances(cascades: u32, shadow_distance: f32) -> Vec<f32> {
+    let count = cascades.clamp(1, MAX_SHADOW_CASCADES);
+    (0..count)
+        .map(|i| shadow_distance * CASCADE_RATIO.powi((count - 1 - i) as i32))
+        .collect()
+}
+
+/// The shadow map: one 2048² depth layer per cascade.
 ///
 /// A 1×1 placeholder stands in when a scene does not cast shadows: WGSL binds
 /// the texture unconditionally, but the sampling is behind `params.y`, so
 /// nothing ever reads the placeholder's undefined contents. That keeps one
 /// mesh pipeline for both cases instead of two shader permutations.
 pub(crate) struct ShadowMap {
+    /// The map as the receivers sample it — a plain `D2` view at one cascade,
+    /// a `D2Array` beyond. The binding *type* differs between the two, which is
+    /// why the cascade count is baked into the pipelines (M38 §4).
     pub(crate) view: wgpu::TextureView,
+    /// One view per cascade, each the depth attachment of that cascade's caster
+    /// pass.
+    pub(crate) cascades: Vec<wgpu::TextureView>,
 }
 
 impl ShadowMap {
-    pub(crate) fn new(device: &wgpu::Device, size: u32) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, size: u32, cascades: u32) -> Self {
+        let cascades = cascades.clamp(1, MAX_SHADOW_CASCADES);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shadow-map"),
             size: wgpu::Extent3d {
                 width: size,
                 height: size,
-                depth_or_array_layers: 1,
+                depth_or_array_layers: cascades,
             },
             mip_level_count: 1,
             sample_count: 1,
@@ -34,8 +82,31 @@ impl ShadowMap {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Self { view }
+        // At one cascade both views are the default descriptor M16 used — the
+        // same view it always made, not an equivalent one. Beyond one the map
+        // is sampled as an array and rendered a layer at a time.
+        if cascades == 1 {
+            return Self {
+                view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                cascades: vec![texture.create_view(&wgpu::TextureViewDescriptor::default())],
+            };
+        }
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let cascades = (0..cascades)
+            .map(|layer| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("shadow-cascade"),
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: layer,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        Self { view, cascades }
     }
 }
 
@@ -153,4 +224,49 @@ pub(crate) fn light_view_projection(
     let projection =
         glam::camera::rh::proj::directx::orthographic(-radius, radius, -radius, radius, 0.1, depth);
     projection * view
+}
+
+#[cfg(test)]
+mod cascade_tests {
+    use super::*;
+
+    /// The property the whole design rests on (M38 §2.1): the outermost cascade
+    /// is fitted to `shadow_distance` itself, so a scene at one cascade calls
+    /// `light_view_projection` with exactly the argument M16 gave it.
+    #[test]
+    fn the_outermost_cascade_is_the_map_m16_rendered() {
+        for cascades in 1..=MAX_SHADOW_CASCADES {
+            let distances = cascade_distances(cascades, 240.0);
+            assert_eq!(distances.len(), cascades as usize);
+            assert_eq!(*distances.last().unwrap(), 240.0);
+        }
+        assert_eq!(cascade_distances(1, 60.0), vec![60.0]);
+    }
+
+    /// Nested and ascending, which is what makes "the first cascade that
+    /// contains the point is the sharpest that does" true rather than hopeful.
+    #[test]
+    fn cascades_nest_from_the_camera_outward() {
+        let distances = cascade_distances(4, 240.0);
+        for pair in distances.windows(2) {
+            assert!(pair[0] < pair[1], "{distances:?} is not ascending");
+        }
+        // Three times sharper per level, which is the sentence the field's
+        // documentation makes to a scene author.
+        for pair in distances.windows(2) {
+            assert!((pair[1] / pair[0] - 3.0).abs() < 1e-4, "{distances:?}");
+        }
+    }
+
+    /// A count outside the range is clamped rather than panicking: validation
+    /// refuses the file that could get here, and a renderer that indexed past
+    /// its texture's layers would fault instead of complaining.
+    #[test]
+    fn an_out_of_range_count_is_clamped() {
+        assert_eq!(cascade_distances(0, 90.0), vec![90.0]);
+        assert_eq!(
+            cascade_distances(99, 90.0).len(),
+            MAX_SHADOW_CASCADES as usize
+        );
+    }
 }

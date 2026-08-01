@@ -77,6 +77,19 @@ the section above already predicted when it said the whole tour is. Three sweeps
 picked a different subset of the six tour frames, so **which** of them differ carries no
 information — only whether the differing frame is stable under repetition does.
 
+**M38's A/B found exactly one** — `showcase_585` again, out of 39 comparable artifacts — and the
+probe settled it in the now-familiar way, over four renders per binary: **2 distinct of 4 on the
+new binary and 2 of 4 on `main`'s**, with the *same* hash appearing in both sets. The fifth
+measurement, the fifth time the answer was the adapter. Worth recording because M38 is the kind of
+change where a single differing frame would be most believable as a regression — it rewrites the
+shadow lookup in four shaders — and the honest reading is still that a binary disagreeing with
+itself carries no information about the binary it is being compared to.
+
+(M38's fortieth artifact, `m38_shadow_cascades.png`, is not comparable at all: the base binary
+refuses the fixture at validation, because `shadow_cascades` is the field the milestone added. That
+exclusion is expected and is what the `ab-check` skill means by "a fixture using a component the
+base binary does not have".)
+
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
 per artifact family and check the `checked` count in the summary line.
