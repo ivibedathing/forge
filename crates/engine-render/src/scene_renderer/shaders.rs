@@ -725,6 +725,95 @@ pub(crate) fn with_textures_and_refraction(gi: bool) -> std::borrow::Cow<'static
     with_gi(vec![texture_producer(), refraction_producer()], gi)
 }
 
+/// The two lines `Road` and `Meadow` decide their fill light on, and the frame
+/// tail they share with `mesh.wgsl` (M35).
+///
+/// Both files duplicate the mesh shader's lighting — the `water.wgsl` /
+/// `clouds.wgsl` precedent, for M16's reason — so neither goes through
+/// [`with_surface`], and each takes its own splice here. What they *do* share is
+/// the frame uniform, byte for byte down to the comment, so one anchor covers
+/// both and [`EXTENDED_FRAME_TAIL`] is the same replacement the mesh variants
+/// get. That is not a coincidence to be tidied away: the three shaders read one
+/// buffer, and the moment their declarations diverge, one of them is reading a
+/// field at the wrong offset.
+pub(crate) mod recipe_anchor {
+    /// The shared frame tail. Identical text in `road.wgsl` and `meadow.wgsl`,
+    /// and identical to [`anchor::FRAME_TAIL`](super::anchor::FRAME_TAIL).
+    pub const FRAME_TAIL: &str = "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
+    /// The no-sky fill, the same line in both files.
+    pub const FILL: &str = "    var fill = albedo * frame.ambient.rgb;\n";
+    /// The sky fill. The two files differ here — a road holds the hemispheric
+    /// term in a `let` because it also reflects it, and a meadow does not — so
+    /// each names its own.
+    pub const ROAD_SKY_FILL: &str = "        fill = albedo * hemisphere;\n";
+    pub const MEADOW_SKY_FILL: &str = "        fill = albedo * sky_ambient(n);\n";
+}
+
+/// Splice GI into a recipe shader that duplicates the mesh lighting.
+///
+/// Three substitutions: the frame tail grows the fields `gi.wgsl` reads, the
+/// prelude goes in behind it (so the struct it references is already declared),
+/// and the two fill lines route through `gi_fill` with their own pre-M35
+/// expression as the fallback. Every anchor is asserted to appear exactly once —
+/// `with_surface`'s discipline, for its reason: a splice that silently did
+/// nothing renders the feature as if it were absent, and a road that quietly
+/// ignored its probe volume while the meshes beside it did not is a difference
+/// nobody would attribute to a splice.
+fn with_recipe_gi(
+    source: &'static str,
+    what: &str,
+    sky_fill: (&'static str, &'static str),
+) -> std::borrow::Cow<'static, str> {
+    let prelude = format!(
+        "{EXTENDED_FRAME_TAIL}\n{}",
+        include_str!("../shaders/gi.wgsl")
+    );
+    let substitutions: [(&str, &str); 3] = [
+        (recipe_anchor::FRAME_TAIL, &prelude),
+        (
+            recipe_anchor::FILL,
+            "    var fill = albedo * gi_fill(in.world_position, n, frame.ambient.rgb);\n",
+        ),
+        sky_fill,
+    ];
+
+    let mut out = source.to_string();
+    for (anchor, replacement) in substitutions {
+        assert_eq!(
+            source.matches(anchor).count(),
+            1,
+            "{what} no longer contains this anchor exactly once, so its GI \
+             pipeline would compile as if the feature were absent:\n{anchor}"
+        );
+        out = out.replace(anchor, replacement);
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// `road.wgsl` with GI spliced in (M35).
+pub(crate) fn with_road_gi() -> std::borrow::Cow<'static, str> {
+    with_recipe_gi(
+        include_str!("../shaders/road.wgsl"),
+        "road.wgsl",
+        (
+            recipe_anchor::ROAD_SKY_FILL,
+            "        fill = albedo * gi_fill(in.world_position, n, hemisphere);\n",
+        ),
+    )
+}
+
+/// `meadow.wgsl` with GI spliced in (M35).
+pub(crate) fn with_meadow_gi() -> std::borrow::Cow<'static, str> {
+    with_recipe_gi(
+        include_str!("../shaders/meadow.wgsl"),
+        "meadow.wgsl",
+        (
+            recipe_anchor::MEADOW_SKY_FILL,
+            "        fill = albedo * gi_fill(in.world_position, n, sky_ambient(n));\n",
+        ),
+    )
+}
+
 /// The anchors `with_water_refraction` splices against — existing lines of
 /// `water.wgsl`, exactly as `anchor` holds existing lines of `mesh.wgsl`.
 ///
@@ -1028,6 +1117,74 @@ mod seam_tests {
         assert!(plain.contains(super::anchor::FRAME_TAIL));
         assert!(!plain.contains("gi_origin"));
         assert_eq!(plain, include_str!("../shaders/mesh.wgsl"));
+    }
+
+    /// The two recipe shaders take GI through their own splices, and both must
+    /// actually land (M35).
+    ///
+    /// `Road` and `Meadow` duplicate the mesh shader's lighting, so neither goes
+    /// through `with_surface` and neither is covered by the seam assertions
+    /// there. A splice that silently did nothing would render a road that
+    /// ignores its probe volume while the meshes standing on it do not — a
+    /// difference nobody would attribute to a splice.
+    #[test]
+    fn the_recipe_shaders_receive_gi_through_their_own_splices() {
+        let road = super::with_road_gi();
+        assert!(road.contains(
+            "    var fill = albedo * gi_fill(in.world_position, n, frame.ambient.rgb);\n"
+        ));
+        assert!(
+            road.contains("        fill = albedo * gi_fill(in.world_position, n, hemisphere);\n")
+        );
+
+        let meadow = super::with_meadow_gi();
+        assert!(meadow.contains(
+            "    var fill = albedo * gi_fill(in.world_position, n, frame.ambient.rgb);\n"
+        ));
+        assert!(meadow
+            .contains("        fill = albedo * gi_fill(in.world_position, n, sky_ambient(n));\n"));
+
+        for (what, variant) in [("road", &road), ("meadow", &meadow)] {
+            // The field, the sampler, and the uniform fields that place it.
+            assert!(
+                variant.contains("@group(2) @binding(5) var gi_sh0: texture_3d<f32>;")
+                    && variant.contains("gi_origin: vec4<f32>,")
+                    && variant.contains("gi_params: vec4<f32>,"),
+                "{what} did not receive the GI prelude"
+            );
+            // And `view_proj` with it, unread but declared: these three shaders
+            // read one buffer, and a tail that stopped short would put
+            // `gi_origin` at the offset `view_proj` occupies.
+            assert!(
+                variant.contains("view_proj: mat4x4<f32>,"),
+                "{what} must declare the whole frame tail, not only the fields it reads"
+            );
+        }
+    }
+
+    /// And the files on disk are untouched, which is what lets the non-GI
+    /// pipelines compile them byte-identically to every committed baseline.
+    #[test]
+    fn the_recipe_shaders_on_disk_still_carry_their_anchors() {
+        for (what, source) in [
+            ("road.wgsl", include_str!("../shaders/road.wgsl")),
+            ("meadow.wgsl", include_str!("../shaders/meadow.wgsl")),
+        ] {
+            assert_eq!(
+                source.matches(super::recipe_anchor::FRAME_TAIL).count(),
+                1,
+                "{what} must carry the shared frame tail exactly once"
+            );
+            assert_eq!(
+                source.matches(super::recipe_anchor::FILL).count(),
+                1,
+                "{what} must carry the no-sky fill line exactly once"
+            );
+            assert!(
+                !source.contains("gi_fill"),
+                "{what} on disk must stay the pre-M35 file"
+            );
+        }
     }
 
     /// The joint palette reaches the GPU as three *rows*, and glam matrices are

@@ -56,6 +56,7 @@ actually says.
 | `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. | `m19-trees.md` |
 | `Cloud` | A cluster of interpenetrating lobes that drifts; **owns its mesh**. | `m20-clouds.md` |
 | `Meadow` | Ground cover on a seed→grass→weeds→straw→collapse life cycle, animated entirely in the vertex stage. | `m29-meadows.md` |
+| `LightProbeVolume` | A box of baked irradiance probes; replaces the hemispheric fill with one that knows what is above a surface. Carries no geometry. | `m35-global-illumination.md` |
 | `HudText` | Screen-anchored text at an integer scale of the 8×8 font. | `m11_6-hud.md` |
 | `HudRect` | A screen-anchored coloured rectangle — bars, backdrops, gauges. | `m11_6-hud.md` |
 | `HudPanel` | Lays its children out in a row, column, or freely; hugs its contents unless sized. | `m31-ui-system.md` |
@@ -63,8 +64,9 @@ actually says.
 | `HudInteract` | Makes the HUD element on its own entity hoverable, pressable and clickable — polled, never dispatched. | `m31-ui-system.md` |
 
 **Recipes own their geometry**, so `Water`, `Terrain`, `Road`, `Cloud` and `Meadow` carry **no
-`Mesh` and no `Material`** — authoring one is a validation error. A `Tree` is the exception on
-materials only: the entity's `Material` is its bark.
+`Mesh` and no `Material`** — authoring one is a validation error. A `LightProbeVolume` carries
+neither for a different reason: it is a *region of space* that grows no geometry at all. A `Tree`
+is the exception on materials only: the entity's `Material` is its bark.
 
 **Scene-level blocks**, siblings of `entities`: `physics` (gravity, `timestep_hz`), `environment`
 (sky, fog, shadows, MSAA — `m16-environment.md`, **script-writable since M36**), and `daylight`
@@ -79,8 +81,8 @@ dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, 
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
-planting, M33 skinned collider proxies, M34 the metre, M36 the game shell. (M35 is a design doc
-only — global illumination, not built. M7 editor at scope E0–E2 + validation panel + `--watch`.)
+planting, M33 skinned collider proxies, M34 the metre, M35 global illumination, M36 the game shell.
+(M7 editor at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -117,6 +119,12 @@ engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
 engine ui-layout <scene.json> [--width W --height H] [--entity N]... [--steps N] [--input f]
 #   where the UI landed (M31); --steps reports what a script *painted* (M36)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
+engine bake-gi <scene.json> [--entity Name] [--out path] [--samples N]
+#   bakes a LightProbeVolume's transfer file; the only new command that *writes*
+#   into the project, and it reports probes, rays, timings and relocations (M35)
+engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
+#   the irradiance the renderer would use here, the pre-M35 fallback beside it,
+#   the blend weight and how open the sky is — a number, not a picture (M35)
 engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; keyboard AND mouse; FPS readout is viewer-only
 engine init [dir] [--force]              # scaffold a project: starter scene + AGENTS.md/CLAUDE.md
@@ -131,8 +139,9 @@ engine info                              # selected GPU adapter as JSON
 
 **The query commands exist because looking at a picture cannot answer where something is.** Reach
 for `inspect` (what did you author), `simulate --entity` (where did it end up), `terrain-height`,
-`road-centerline`, `list-joints`, `list-colliders` and `ui-layout` rather than re-deriving any of
-them — a generator that re-derives a curve is how two implementations start disagreeing.
+`road-centerline`, `gi-probe`, `list-joints`, `list-colliders` and `ui-layout` rather than
+re-deriving any of them — a generator that re-derives a curve is how two implementations start
+disagreeing.
 
 ## Traps that cost time
 
@@ -144,6 +153,19 @@ The cross-cutting ones. Per-system traps are in each note.
   (`with_surface`, anchored substitutions asserted to land exactly once), never inline branches.
   Restructuring them into arithmetic *equal on paper* moved one pixel by one ULP — measured three
   separate times. Compiler FMA contraction depends on surrounding code.
+- **An anchor with one claimant is a substitution; an anchor that could ever have two is an
+  assembly.** `with_surface` splices by sequential `str::replace`, so a second producer claiming an
+  anchor is **a silent no-op**, not a merge — the feature renders as if absent. M27 learned this on
+  `VERTEX_STAGE`; M35 found it twice more, on `AMBIENT`/`FILL` (texturing's occlusion map plus GI's
+  probe lookup) and on `FRAME_TAIL`, where it is worse: two producers appending to one *positional*
+  uniform struct make the field order depend on the producer list, so a variant reads the wrong
+  offset and renders a plausible wrong picture. Both are now assembled. **Adding the second claimant
+  later is not a refactor — it is a bug that already shipped.**
+- **A shader that duplicates `mesh.wgsl`'s lighting must declare the *whole* frame tail.**
+  `road.wgsl` and `meadow.wgsl` spell out `FrameUniform` themselves, byte-identically to
+  `mesh.wgsl`'s down to the comment, and all three read one buffer. A tail that stopped at the
+  fields a given shader happens to read puts every later field at the wrong offset. Four shaders now
+  share `EXTENDED_FRAME_TAIL`; check all of them before appending to it.
 - **The check that settles a bit-exactness question is an A/B between binaries**, not a diff against
   a baseline: build the CLI at `main` and in the worktree, render the same scenes with both, `cmp`
   the PNGs. The `ab-check` skill is this ritual.
@@ -194,20 +216,23 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**33 of the 39 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**34 of the 40 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02` in the manifest and stay the sweep's job; `cli.rs` says so
 where someone would go to add them. The pixel *allowance* is there rather than a wider threshold
 because the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held
-for eight consecutive full sweeps. **The other 30 entries carry no `diff_args` at all — they are
-bit-exact, and a failure there is real.**
+for eight consecutive full sweeps. **The other 34 entries carry no `diff_args` at all — they are
+bit-exact, and a failure there is real.** `m35_gi.png` joined them in M35: five renders of it gave
+one image, so it took a hard pin rather than a tolerance.
 
 **Which tour frames flake carries no information; whether one is stable under repetition does.**
-Four separate sweeps each picked a different subset of the six, M36's A/B included. Every time, the
-differing frame had a binary disagreeing with **itself** — which is why the `md5`-it-N-times step is
-not optional. Four measurements, four times the answer was the adapter.
+Six separate sweeps each picked a different subset of the six, M35's and M36's A/Bs included. Every
+time, the differing frame had a binary disagreeing with **itself** — which is why the `md5`-it-N-times
+step is not optional. Six measurements, six times the answer was the adapter. M35's is the sharpest:
+`showcase_585` gave **four distinct images from five renders on each binary**, and the two
+populations overlapped.
 
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
@@ -313,6 +338,11 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   scene, no shadows.
 - **Day and night (M21)** → `m21-daylight.md`. A pure CPU function mapping the clock to sun, moon,
   sky and fog — no shader changed to add it.
+- **Global illumination (M35)** → `m35-global-illumination.md`, design in
+  `designs/global-illumination-design.md`. `LightProbeVolume` bakes **transfer** rather than
+  radiance, so the bounce follows `daylight` without re-baking; an unoccluded probe reconstructs
+  `sky_ambient` exactly, which is why turning GI on cannot change an open scene's brightness. Two
+  sky bands, not the three the design assumed.
 - **Frame cost (M15)** → `m15-frame-cost.md`. The optimisation pass that took the viewer from ~34 ms
   a frame to ~0.9 ms, none of which moved a pixel.
 
@@ -517,6 +547,14 @@ alpha-cut leaves, and a CPU wave evaluator — are pulled out into
   authoring job: `Tree::leaf_material` synthesizes a `Material` from `leaf_color`/`leaf_roughness`
   alone, so leaf maps mean new `Tree` fields, a schema regeneration, and a validation pass.
 - **Water**: a CPU wave evaluator and therefore buoyancy.
+- **GI** (after M35): **bounced sunlight** — the largest deferral and the one a viewer notices,
+  since it is what makes a coloured wall tint its neighbour under a *sun* rather than only under the
+  sky; the design's §5.3 has the mechanism written. Also specular GI (a prefiltered radiance cube in
+  the same volume — that is what IBL means here), point-light and emissive bounce (transfer is
+  linear in intensity, so a per-light basis vector would be *exact* for a flickering campfire),
+  dynamic occluders, `Water`/`Cloud` receivers, more than one volume on the GPU, and
+  **geometry-level bake staleness** — `inputs_hash` is written but never read back, because
+  recomputing it needs the scene's whole triangle set and `validate` is the fast gate.
 - **Roads** (after M23): junctions (two roads crossing wants a patch primitive, not a ribbon),
   banked cross-sections, per-point road width, roads that follow a `Terrain`, and asphalt grain.
 - **Characters** (after M30/M32/M33): ragdolls (physics writing the skeleton, which is the one-way
@@ -548,5 +586,9 @@ happened once, and `continue-on-error` hid it for the length of a milestone.
 
 ## Out of scope for v1
 
-GUI editor, networking/multiplayer, advanced rendering (GI, ray tracing), mobile/console targets.
-Desktop only.
+GUI editor, networking/multiplayer, ray tracing, mobile/console targets. Desktop only.
+
+**GI came back in scope and was built (M35)** — the design doc reversed that half of this line and
+nothing else, on M28's precedent (which reversed M11's "no mouse"). Ray tracing stays out, and
+`designs/global-illumination-design.md` §2 rejects the ray-traced approach on its own merits rather
+than on this line's authority.

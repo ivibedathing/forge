@@ -1,7 +1,11 @@
 # M35 — Global Illumination: Design
 
-*Status: design agreed, not yet built. §12 records what was settled with the user
-and what is still open; §13 is the build order. Drafted as M33 and renumbered to
+*Status: **built** (M35). §12 records what was settled with the user before the
+build and what the build itself settled; §13 is the build order it followed.
+Where the code and this document disagree, the code is right and §12 says why —
+the three places that happened are the sky basis (§3, two bands not three),
+multi-volume rendering (§12.6), and the fixture's ceiling (§12.7).
+`designs/notes/m35-global-illumination.md` holds what building it taught. Drafted as M33 and renumbered to
 M35 at merge, since skinned collider proxies took M33 and a units pass took M34
 while this was open — numbers are claimed at merge time here, not at branch
 time.*
@@ -115,20 +119,32 @@ actually do. The engine hands us that set almost directly:
 | Basis source | Count | Live radiance comes from | Moves with the clock? |
 |---|---|---|---|
 | Sky zenith band | 1 | `EnvironmentSettings.sky_zenith` | yes, via `daylight` |
-| Sky horizon band | 1 | `sky_horizon` | yes |
 | Sky ground band | 1 | `sky_ground` | yes |
+| ~~Sky horizon band~~ | ~~1~~ | ~~`sky_horizon`~~ | **not a basis source — see below** |
 | ~~Sun, direction *k*~~ | ~~N~~ | ~~`ResolvedLights.sun_color`~~ | deferred, §5.3 |
 
-Three basis sources, then, and the file is three transfer vectors per probe. The
-sun is the one source whose *direction* moves, which is what makes it cost N
+**Two basis sources, not the three this section was drafted with**, and the
+correction matters enough to leave the third struck through rather than deleted.
+The distinction the draft missed: `sky_gradient` draws the sky *dome* and does
+interpolate three bands, but `sky_ambient` — **the fill term GI actually
+replaces** — mixes only `sky_ground` and `sky_zenith`, linearly in
+`n.y * 0.5 + 0.5`. `sky_horizon` never appears in it.
+
+Baking a third band would let GI produce fill light the pre-M35 engine cannot,
+so an open-sky probe would match `sky_ambient(n)` in total energy but not in
+shape — and §3.1 pins exactly that equality. The stated cost: a sunset's horizon
+colour does not tint GI. It does not tint the ambient fill today either, so
+nothing regresses, and widening `sky_ambient` to three bands would edit one of
+the four ULP-sensitive lighting lines. That is a different milestone.
+
+The sun is the one source whose *direction* moves, which is what makes it cost N
 vectors instead of one; §5.3 records the mechanism and §14 carries it forward.
 
-The three sky bands are not an approximation chosen for GI — they are M16's
-actual sky model, the same three colours `sky_gradient` interpolates and the same
-three `apply_daylight` writes every frame. **Baking against the palette means GI
-tracks day and night exactly, with no extra machinery**, in the same way M21 got
-fog recolouring for free because fog *is* `sky_horizon`. That is the single most
-load-bearing sentence in this document.
+The sky bands are not an approximation chosen for GI — they are M16's actual
+fill model, the same colours `apply_daylight` rewrites every frame. **Baking
+against the palette means GI tracks day and night exactly, with no extra
+machinery**, in the same way M21 got fog recolouring for free because fog *is*
+`sky_horizon`. That is the single most load-bearing sentence in this document.
 
 ### 3.1 The open-sky probe is exactly M16's hemispheric ambient
 
@@ -463,16 +479,38 @@ Settled with the user before implementation began:
    routine is that GI changes every frame substantially, so the six must be
    looked at rather than blessed blind.
 
-Still open, and both are cheap to defer until the bake exists and can be
-measured:
+Settled during the build, from measurements rather than from argument:
 
-4. **Do `Cloud` and `Meadow` occlude?** A cloud casts no shadow today; making it
-   occlude GI would be the first time it darkened anything. Grass occluding grass
-   is a real effect and a large ray-count multiplier. Provisional answer: neither
-   occludes, both receive.
-5. **How coarse is the tour's volume?** `spacing` trades bake size and time
-   against how tight contact darkening looks. Pick it from a render, not from
-   arithmetic.
+4. **Neither `Cloud` nor `Meadow` occludes; both receive.** The provisional
+   answer held. `collect_occluders` walks meshes, trees, terrain and roads and
+   stops there. A cloud casts no shadow today and making it darken GI would be
+   the first thing it ever darkened; grass occluding grass is real but multiplies
+   the ray count by the blade count, and the tour's meadow alone would have
+   dominated the bake.
+5. **The tour's volume is `spacing: 4.0`** over a 56 x 16 x 54 m box centred on
+   the action — 1050 probes, a 208 KB file, and a 37-second bake against 504,366
+   triangles. Picked from renders, as this section asked. What the renders said:
+   station 01, in the forest, changes **10.9%** of its pixels; the other five
+   stations change **under 1%** each. That is not a token volume failing to
+   matter — it is §3.1 working. An unoccluded probe reconstructs `sky_ambient`
+   exactly, so open ground *must* barely move, and the frame with a canopy over
+   it is the one that does.
+
+6. **One volume reaches the GPU** — added during G2, and the one place this
+   document was internally inconsistent. §4 allows several and specifies
+   smallest-spacing-wins; §7's own arithmetic ("group 2 goes from five bindings
+   to nine") assumes a single field, and a second volume costs either four more
+   bindings per volume or the hardware trilinear filtering that is the whole
+   reason the field is a texture rather than a buffer. So: `bake-gi` bakes every
+   volume, `gi-probe` answers from whichever contains the point, the renderer
+   draws the finest, and `multiple_gi_volumes` warns at `validate`. §4's rule is
+   therefore implemented everywhere except in the shader.
+
+7. **The fixture has no ceiling**, against §11's wording. The light source here
+   *is* the sky, and §3.1 pins GI to `sky_ambient`; a ceiling seals the sky out
+   and the box renders black, which is a fixture that demonstrates nothing. The
+   overhang over one sphere does the sheltering the ceiling was there for, and
+   the two spheres still differ only in what is above them.
 
 ## 13. Build order
 

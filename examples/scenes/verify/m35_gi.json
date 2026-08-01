@@ -1,0 +1,108 @@
+{
+  "name": "m35 global illumination",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.22, 0.42, 0.88],
+    "sky_horizon": [0.68, 0.78, 0.94],
+    "sky_ground": [0.22, 0.2, 0.17],
+    "shadows": true,
+    "shadow_distance": 30.0,
+    "samples": 1
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "components": [
+        { "type": "Transform", "position": [0.0, 2.1, 7.4], "rotation": [-9.0, 0.0, 0.0] },
+        { "type": "Camera", "active": true }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-58.0, 14.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.97, 0.91], "intensity": 0.85 }
+      ]
+    },
+    {
+      "name": "Fill",
+      "components": [
+        { "type": "AmbientLight", "color": [1.0, 1.0, 1.0], "intensity": 0.34 }
+      ]
+    },
+
+    {
+      "name": "Floor",
+      "components": [
+        { "type": "Transform", "position": [0.0, -0.15, 0.0], "scale": [7.0, 0.3, 11.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.72, 0.72, 0.72], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "RedWall",
+      "components": [
+        { "type": "Transform", "position": [-3.1, 1.5, -0.5], "scale": [0.25, 3.0, 8.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.85, 0.04, 0.03], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "GreenWall",
+      "components": [
+        { "type": "Transform", "position": [3.1, 1.5, -0.5], "scale": [0.25, 3.0, 8.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.04, 0.78, 0.05], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "BackWall",
+      "components": [
+        { "type": "Transform", "position": [0.0, 1.5, -4.4], "scale": [6.5, 3.0, 0.25] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.72, 0.72, 0.72], "roughness": 0.95 }
+      ]
+    },
+
+    {
+      "name": "Overhang",
+      "components": [
+        { "type": "Transform", "position": [-1.5, 2.0, -1.4], "scale": [3.2, 0.25, 3.4] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.72, 0.72, 0.72], "roughness": 0.95 }
+      ]
+    },
+
+    {
+      "name": "SheltredSphere",
+      "components": [
+        { "type": "Transform", "position": [-1.5, 0.7, -1.4], "scale": [1.4, 1.4, 1.4] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.85, 0.85, 0.85], "roughness": 0.55 }
+      ]
+    },
+    {
+      "name": "OpenSphere",
+      "components": [
+        { "type": "Transform", "position": [1.5, 0.7, -1.4], "scale": [1.4, 1.4, 1.4] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.85, 0.85, 0.85], "roughness": 0.55 }
+      ]
+    },
+
+    {
+      "name": "Lighting",
+      "components": [
+        { "type": "Transform", "position": [0.0, 1.8, -0.5], "scale": [7.6, 4.4, 10.0] },
+        {
+          "type": "LightProbeVolume",
+          "spacing": 1.0,
+          "bake": "gi/m35_gi.gi.json",
+          "bounces": 1,
+          "intensity": 1.0,
+          "blend": 0.4
+        }
+      ]
+    }
+  ]
+}

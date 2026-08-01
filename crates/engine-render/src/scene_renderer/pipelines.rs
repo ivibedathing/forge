@@ -683,6 +683,10 @@ impl super::SceneRenderer {
             "road-uniforms",
             Some(std::mem::size_of::<RoadUniform>() as u64),
         );
+        // A road and a meadow duplicate the mesh shader's lighting, so each
+        // receives GI through its own splice rather than through `with_surface`
+        // — and the `false` arm is `road.wgsl` and `meadow.wgsl` exactly as they
+        // sit on disk, which is what keeps every committed baseline untouched.
         let road_pipeline = Self::road_pipeline(
             device,
             &object_layout,
@@ -692,6 +696,11 @@ impl super::SceneRenderer {
             &vertex_layouts,
             format,
             multisample,
+            if gi {
+                with_road_gi()
+            } else {
+                std::borrow::Cow::Borrowed(include_str!("../shaders/road.wgsl"))
+            },
         );
 
         // Meadows (M29): its own uniform, the mesh pass's frame binding, and
@@ -707,6 +716,11 @@ impl super::SceneRenderer {
             &frame_textures_layout,
             format,
             multisample,
+            if gi {
+                with_meadow_gi()
+            } else {
+                std::borrow::Cow::Borrowed(include_str!("../shaders/meadow.wgsl"))
+            },
         );
 
         let (depth_resolve_pipeline, depth_source_layout) =
@@ -1645,10 +1659,13 @@ impl super::SceneRenderer {
         vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
         format: wgpu::TextureFormat,
         multisample: wgpu::MultisampleState,
+        // The water pipeline's shape (M27): the caller hands in the source, so
+        // this constructor never has to know which variant it is building.
+        source: std::borrow::Cow<'static, str>,
     ) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("road-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("../shaders/road.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&source)),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("road-pipeline-layout"),
@@ -1722,12 +1739,11 @@ impl super::SceneRenderer {
         frame_textures_layout: &wgpu::BindGroupLayout,
         format: wgpu::TextureFormat,
         multisample: wgpu::MultisampleState,
+        source: std::borrow::Cow<'static, str>,
     ) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("meadow-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!(
-                "../shaders/meadow.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&source)),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("meadow-pipeline-layout"),
