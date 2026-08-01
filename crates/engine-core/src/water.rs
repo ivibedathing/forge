@@ -1,12 +1,12 @@
 //! Water surfaces (M18): the tessellated grid a [`Water`] component draws on,
-//! the conventions its waves follow, and — since M38 — the CPU mirror of the
+//! the conventions its waves follow, and — since M40 — the CPU mirror of the
 //! wave sum the GPU draws.
 //!
 //! The surface is still **drawn** entirely in `water.wgsl`'s vertex stage, and
 //! that is not going to change: a 96×96 surface is 9409 vertices, and displacing
 //! them here would mint a new `Arc<MeshData>` every frame — a per-frame
 //! re-upload plus one entry per frame accumulating in the renderer's mesh cache
-//! (M15). What M38 adds is not a second way to *draw* water; it is the answer to
+//! (M15). What M40 adds is not a second way to *draw* water; it is the answer to
 //! "how high is the water at (x, z)", which the GPU cannot hand back and which
 //! buoyancy, `world.water_height` and `engine water-height` all need.
 //!
@@ -80,7 +80,7 @@ pub struct WaterSample {
 /// `k = 2π/λ`, `ω = speed·k`, and `Q = steepness/(k·A)`. That last one is what
 /// makes each wave's contribution to the horizontal Jacobian equal to its own
 /// `steepness`, which is what makes `Σ steepness ≤ 1` exactly the non-folding
-/// condition — and, since M38, exactly the condition under which
+/// condition — and, since M40, exactly the condition under which
 /// [`Surface::base_under`] converges.
 #[derive(Debug, Clone, Copy, Default)]
 struct PackedWave {
@@ -276,7 +276,7 @@ impl Surface {
 
 /// The surface of one water entity over a world XZ position, at `time` seconds
 /// — what `world.water_height`, [`Scene::water_sample`] and
-/// `engine water-height` all resolve through (M38).
+/// `engine water-height` all resolve through (M40).
 ///
 /// `None` when the column is outside the patch. The terrain twin
 /// ([`crate::terrain::world_height_at`]) cannot fail because a height field is

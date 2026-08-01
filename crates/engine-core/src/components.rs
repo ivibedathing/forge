@@ -2008,7 +2008,7 @@ pub struct Water {
     pub density: f32,
 }
 
-/// Makes a dynamic body float on a named [`Water`] surface (M38).
+/// Makes a dynamic body float on a named [`Water`] surface (M40).
 ///
 /// Archimedes, sampled: the body's collider is divided into columns, each column
 /// is asked how deep it sits under the wave above it, and each pushes up with
@@ -2017,7 +2017,7 @@ pub struct Water {
 /// itself submerged on the low side and rights itself — the pitch and roll come
 /// out of the same sum as the lift, with nothing modelling them separately.
 ///
-/// **Absent, nothing floats**, which is the pre-M38 engine exactly. The
+/// **Absent, nothing floats**, which is the pre-M40 engine exactly. The
 /// component needs a `RigidBody` that is dynamic and a `Collider` to have a
 /// shape at all, and validation says so rather than letting a scene author a
 /// component that silently does nothing.
@@ -2114,7 +2114,7 @@ impl Default for Water {
             foam_color: Vec3::new(0.86, 0.90, 0.92),
             ior: 1.0,
             // Fresh water. Nothing reads this unless something floats, so it
-            // costs a pre-M38 scene nothing to have gained it.
+            // costs a pre-M40 scene nothing to have gained it.
             density: 1000.0,
         }
     }

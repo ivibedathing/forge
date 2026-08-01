@@ -345,7 +345,7 @@ pub(super) fn meadow(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Engin
     }
 }
 
-/// Buoyancy (M38): the water a body floats on, and the body itself.
+/// Buoyancy (M40): the water a body floats on, and the body itself.
 pub(super) fn buoyancy(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
     let SceneFacts {
         buoyancies,
@@ -356,7 +356,7 @@ pub(super) fn buoyancy(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Eng
         ..
     } = facts;
 
-    // ── Buoyancy pass (M38) ────────────────────────────────────────────
+    // ── Buoyancy pass (M40) ────────────────────────────────────────────
     //
     // Two halves. The meadow pass's name check, because the same silent failure
     // is available — a `water` that resolves to nothing would leave a boat

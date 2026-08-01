@@ -536,15 +536,15 @@
       "pinned_by": "cli.rs"
     },
     {
-      "baseline": "examples/scenes/verify/baselines/m38_buoyancy.png",
-      "scene": "examples/scenes/verify/m38_buoyancy.json",
+      "baseline": "examples/scenes/verify/baselines/m40_buoyancy.png",
+      "scene": "examples/scenes/verify/m40_buoyancy.json",
       "args": [
         "--steps",
         "480"
       ],
       "width": 640,
       "height": 360,
-      "milestone": "M38",
+      "milestone": "M40",
       "pinned_by": "cli.rs"
     }
   ],

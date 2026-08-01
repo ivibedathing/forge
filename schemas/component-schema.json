@@ -3344,7 +3344,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Makes a dynamic body float on a named [`Water`] surface (M38).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M38 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
+        "description": "Makes a dynamic body float on a named [`Water`] surface (M40).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M40 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
         "properties": {
           "angular_drag": {
             "default": 2.0,
@@ -6254,7 +6254,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Makes a dynamic body float on a named [`Water`] surface (M38).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M38 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
+            "description": "Makes a dynamic body float on a named [`Water`] surface (M40).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M40 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
             "properties": {
               "angular_drag": {
                 "default": 2.0,

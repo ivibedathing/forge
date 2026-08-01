@@ -1,5 +1,5 @@
 {
-  "name": "m38 buoyancy",
+  "name": "m40 buoyancy",
   "physics": { "gravity": [0.0, -9.81, 0.0], "timestep_hz": 60 },
   "environment": { "sky": true, "shadows": true, "samples": 1 },
   "entities": [

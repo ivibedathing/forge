@@ -436,7 +436,7 @@ impl WorldApi {
     }
 
     /// The height of a water surface at a world XZ position, in world metres
-    /// (M38) — the terrain twin, with two differences that are the whole
+    /// (M40) — the terrain twin, with two differences that are the whole
     /// character of water.
     ///
     /// It **moves**, so the answer is taken at this step's `time`, evaluated
@@ -1473,7 +1473,7 @@ fn curated_engine() -> rhai::Engine {
         },
     );
 
-    // Water (M18/M38): read-only for terrain's reason — a surface's shape is a
+    // Water (M18/M40): read-only for terrain's reason — a surface's shape is a
     // function of its authored fields and the clock, and a script-settable one
     // is hidden state (invariant 2). What a script needs is the answer terrain
     // already gives for the ground: where is the surface under this point, now.

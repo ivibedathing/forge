@@ -14,7 +14,7 @@ scene's components with the defaults filled in.
 | [`AmbientLight`](#ambientlight) | A flat, non-directional fill: `albedo * color * intensity`, added to the |
 | [`AnimationPlayer`](#animationplayer) | Plays an animation clip against scene time (M9), or against ground |
 | [`Breakable`](#breakable) | Breaks into pre-authored fragments (M14) — on a hard enough collision, |
-| [`Buoyancy`](#buoyancy) | Makes a dynamic body float on a named [`Water`] surface (M38). |
+| [`Buoyancy`](#buoyancy) | Makes a dynamic body float on a named [`Water`] surface (M40). |
 | [`Camera`](#camera) | A viewpoint. `engine screenshot --camera <name>` selects one by entity name. |
 | [`Cloud`](#cloud) | A cloud: a cumulus, a raft of stratocumulus, a storm anvil, a torn wisp. |
 | [`Collider`](#collider) | Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on |
@@ -95,7 +95,7 @@ else.
 
 ## Buoyancy
 
-Makes a dynamic body float on a named [`Water`] surface (M38).
+Makes a dynamic body float on a named [`Water`] surface (M40).
 
 Archimedes, sampled: the body's collider is divided into columns, each column
 is asked how deep it sits under the wave above it, and each pushes up with
@@ -104,7 +104,7 @@ columns rather than at the centre of mass, a hull that rolls has more of
 itself submerged on the low side and rights itself — the pitch and roll come
 out of the same sum as the lift, with nothing modelling them separately.
 
-**Absent, nothing floats**, which is the pre-M38 engine exactly. The
+**Absent, nothing floats**, which is the pre-M40 engine exactly. The
 component needs a `RigidBody` that is dynamic and a `Collider` to have a
 shape at all, and validation says so rather than letting a scene author a
 component that silently does nothing.

@@ -1,4 +1,4 @@
-# A CPU wave evaluator, and buoyancy (M38)
+# A CPU wave evaluator, and buoyancy (M40)
 
 *Design in `designs/buoyancy-design.md`, which holds the rejected alternatives. This note holds what
 building it taught.* Closes the fourth of `designs/structural-holes.md`'s four.
@@ -6,7 +6,7 @@ building it taught.* Closes the fourth of `designs/structural-holes.md`'s four.
 **Water was the only recipe nothing could ask a question about.** The Gerstner sum lived only in
 `water.wgsl`'s vertex stage, so no Rust code could answer *how high is the water at (x, z)* — which
 is why terrain has `FootPlant`, props that sit on it and `engine terrain-height`, and water had
-scenery. M38 writes the Rust mirror, holds it to the shader with a GPU agreement test, and spends it
+scenery. M40 writes the Rust mirror, holds it to the shader with a GPU agreement test, and spends it
 on `Buoyancy`.
 
 ## The inverse problem is the whole milestone
@@ -102,7 +102,7 @@ pond stops being dragged the moment it leaves, and a half-submerged one is dragg
 ## The trap this milestone exposed: the script clock is one step behind
 
 A script runs at the time its step **begins** at (`step_index · dt`, 0-based); physics and the render
-are handed the time it **ends** at (`step · dt`). That offset predates M38 — `simulate.rs` documents
+are handed the time it **ends** at (`step · dt`). That offset predates M40 — `simulate.rs` documents
 it where it passes the two — but **water is the first thing in the script API where it is visible**,
 because it is the first surface that moves. Terrain never had to care: a height field has no clock.
 
@@ -123,7 +123,7 @@ This cost a confusing 2.4 mm test failure that looked exactly like an evaluator 
 pond** — the new raft plus the broad-phase perturbation `CLAUDE.md` documents (a scene that gains a
 body re-blesses). The other two tour frames did not move at all and were left alone.
 
-`verify/m38_buoyancy.json` at `--steps 480` is **bit-exact** — five renders came back as one image —
+`verify/m40_buoyancy.json` at `--steps 480` is **bit-exact** — five renders came back as one image —
 because the camera holds no terrain and the scene renders at `samples: 1`, which is exactly the rule
 M22 and M29 arrived at.
 

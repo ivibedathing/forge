@@ -496,7 +496,7 @@ fn geometry_standing_in_the_water_does_not_smear_into_it() {
 }
 
 // ---------------------------------------------------------------------------
-// The M38 agreement test: the surface the GPU draws is the surface
+// The M40 agreement test: the surface the GPU draws is the surface
 // `engine_core::water::sample_at` reports.
 // ---------------------------------------------------------------------------
 

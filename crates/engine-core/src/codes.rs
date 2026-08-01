@@ -262,7 +262,7 @@ registry! {
     TOO_MANY_GROWTH_STAGES = "too_many_growth_stages", Input,
         "a Meadow has more life-cycle stages than the shader's table holds";
 
-    // ── Buoyancy (M38) ─────────────────────────────────────────────────
+    // ── Buoyancy (M40) ─────────────────────────────────────────────────
     BUOYANCY_WATER_MISSING = "buoyancy_water_missing", Input,
         "a Buoyancy must name the Water entity it floats on";
     BUOYANCY_WATER_NOT_FOUND = "buoyancy_water_not_found", Input,
