@@ -14,6 +14,7 @@ scene's components with the defaults filled in.
 | [`AmbientLight`](#ambientlight) | A flat, non-directional fill: `albedo * color * intensity`, added to the |
 | [`AnimationPlayer`](#animationplayer) | Plays an animation clip against scene time (M9), or against ground |
 | [`Breakable`](#breakable) | Breaks into pre-authored fragments (M14) — on a hard enough collision, |
+| [`Buoyancy`](#buoyancy) | Makes a dynamic body float on a named [`Water`] surface (M41). |
 | [`Camera`](#camera) | A viewpoint. `engine screenshot --camera <name>` selects one by entity name. |
 | [`Cloud`](#cloud) | A cloud: a cumulus, a raft of stratocumulus, a storm anvil, a torn wisp. |
 | [`Collider`](#collider) | Collision geometry (M8). Requires a `Transform`. With no `RigidBody` on |
@@ -93,6 +94,29 @@ else.
 |---|---|---|---|
 | `fragments` | `object[]` | — | What the entity becomes. At least one. |
 | `impulse_threshold` | `number` | — | Contact impulse, in kg·m/s (≈ mass x closing speed), at or above which a collision breaks this entity. **Absent means collisions never break it** — only scripts and explosions do. Impulse rather than force so the number survives a `timestep_hz` change. `> 0`. (greater than 0) |
+
+## Buoyancy
+
+Makes a dynamic body float on a named [`Water`] surface (M41).
+
+Archimedes, sampled: the body's collider is divided into columns, each column
+is asked how deep it sits under the wave above it, and each pushes up with
+the weight of the water it displaces. Because the pushes land at their own
+columns rather than at the centre of mass, a hull that rolls has more of
+itself submerged on the low side and rights itself — the pitch and roll come
+out of the same sum as the lift, with nothing modelling them separately.
+
+**Absent, nothing floats**, which is the pre-M41 engine exactly. The
+component needs a `RigidBody` that is dynamic and a `Collider` to have a
+shape at all, and validation says so rather than letting a scene author a
+component that silently does nothing.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `angular_drag` | `number` | `2` | Angular damping in 1/s, scaled by submersion exactly as [`drag`] is. `>= 0`.  Usually wants to be the larger of the two: water stops a hull from spinning far more effectively than it stops it from drifting, and a boat that rolls for twenty seconds after a wave reads as weightless.  [`drag`]: Buoyancy::drag (at least 0) |
+| `drag` | `number` | `1` | Linear damping in 1/s applied **in proportion to how submerged the body is**, `>= 0`.  Added on top of [`RigidBody::linear_damping`], not replacing it: that field is the body's drag in air, and this is the water's. Water drag is not a property of the boat, which is exactly why it cannot be authored on the `RigidBody` — a hull thrown clear of the pond has to stop being damped the moment it leaves, and a half-submerged one is dragged half as hard. (at least 0) |
+| `samples` | `integer` | `2` | Columns per axis across the body's footprint, `[1, 4]`. Default 2, so a hull is sampled at four points.  The fidelity knob, and it decides whether the body can **turn**: at 1 there is a single upward push through the middle and a raft cannot right itself or ride a slope, because a force through the centre of mass makes no torque. At 2 each quarter of the hull feels its own wave, which is what makes a boat pitch into a swell instead of hovering over it. Past that the returns fall off quickly — 3 and 4 are for a long hull spanning several wavelengths. (at least 1, at most 4) |
+| `water` | `string` | `""` | The [`Water`] entity this body floats on, by name. Required.  Named rather than found by overlap, for [`Meadow::terrain`]'s reason: one implementation of "where is the surface", pointed at explicitly. A scene with two ponds has to say which one, and a scene with one still says it, so the file records what the physics did. |
 
 ## Camera
 
@@ -911,6 +935,7 @@ a pond is not displaced by the ripples above it.
 |---|---|---|---|
 | `crest_foam` | `number` | `0` | Foam on the crests, `[0, 1]`; 0 (the default) is off.  Driven by the Gerstner Jacobian — where the surface pinches toward folding, which is exactly where a real wave breaks — so it appears only on steep waves and needs no second noise field to place it. (at least 0, at most 1) |
 | `deep_color` | `[number; 3]` | `[0.01, 0.05, 0.08]` | Linear RGB of water far deeper than `depth_fade`. Each component `[0, 1]`. |
+| `density` | `number` | `1000` | Density of the fluid in kg/m³, `> 0`. Fresh water is 1000 (the default), sea water about 1025.  The **only** field here that nothing renders. It is what a [`Buoyancy`] body weighs the water it displaces against, and it lives on the lake rather than on the boat because it is a property of the fluid: two hulls in one pond disagreeing about how dense the water is would not be a knob, it would be a bug. The authoring knob for "this floats higher" already exists and is [`Collider::density`], in the same unit. (greater than 0) |
 | `depth_fade` | `number` | `2.5` | Metres of water the view has to pass through to reach `deep_color` and full `opacity`. `> 0`.  Beer-Lambert absorption against the depth of whatever is behind the surface, so the same water is clear at the edge of a pond and opaque in the middle — which is most of how a surface reads as *deep* rather than as a coloured pane. A clear alpine lake is 6 or more; a silty pond is under 1. (greater than 0) |
 | `detail` | `number` | `0.5` | Strength of the per-pixel ripple normals, `[0, 1]`.  Small-scale roughness the grid is far too coarse to carry as geometry, perturbing the normal and nothing else. Per line of code this is the biggest single difference between "blue glass" and "water", because it is what breaks the sun and the sky into glitter between the vertices. Nothing physical may depend on it — no buoyancy, no collision. (at least 0, at most 1) |
 | `detail_scale` | `number` | `0.6` | Size of one ripple cell in metres. `> 0`. Around 0.5 reads as wind texture on a lake; 3 or more as a swell the grid did not resolve. (greater than 0) |

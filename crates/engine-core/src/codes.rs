@@ -294,6 +294,16 @@ registry! {
     TOO_MANY_GROWTH_STAGES = "too_many_growth_stages", Input,
         "a Meadow has more life-cycle stages than the shader's table holds";
 
+    // ── Buoyancy (M41) ─────────────────────────────────────────────────
+    BUOYANCY_WATER_MISSING = "buoyancy_water_missing", Input,
+        "a Buoyancy must name the Water entity it floats on";
+    BUOYANCY_WATER_NOT_FOUND = "buoyancy_water_not_found", Input,
+        "a Buoyancy's \"water\" names no entity in the scene";
+    BUOYANCY_WATER_INVALID = "buoyancy_water_invalid", Input,
+        "a Buoyancy's \"water\" must name an entity that has a Water component";
+    BUOYANCY_WITHOUT_BODY = "buoyancy_without_body", Input,
+        "a Buoyancy needs a dynamic RigidBody and a Collider on the same entity";
+
     // ── UI system (M31) ────────────────────────────────────────────────
     HUD_PARENT_NOT_FOUND = "hud_parent_not_found", Input,
         "a HUD element's \"parent\" names no entity in the scene";

@@ -537,6 +537,25 @@ pub fn set_field(
                 // nothing. It does switch pipelines the step it leaves 1.0,
                 // which is a pipeline lookup and not a rebuild.
                 "ior" => c.ior = scalar,
+                // The one field here nothing renders (M41). Animatable anyway,
+                // and for the same reason `ior` is: it is read fresh every step
+                // by whatever floats on this water, so a clip on it regenerates
+                // nothing. A tide going from fresh to salt is a clip on this.
+                "density" => c.density = scalar,
+                _ => return false,
+            }
+        }
+        // Buoyancy (M41). `water` is a name and `samples` an integer — the
+        // usual two exclusions. What is left is the drag pair, and a clip on it
+        // is how a hull that fills with water gets heavier to move without
+        // anything spawning or changing shape.
+        "Buoyancy" => {
+            let Ok(mut c) = world.get::<&mut Buoyancy>(entity) else {
+                return false;
+            };
+            match field {
+                "drag" => c.drag = scalar,
+                "angular_drag" => c.angular_drag = scalar,
                 _ => return false,
             }
         }
@@ -1234,7 +1253,8 @@ mod tests {
                 {"type":"Terrain"},
                 {"type":"Road"},
                 {"type":"Meadow"},
-                {"type":"FootPlant","feet":[{"ankle":"Foot.L"}],"ground":"Ground"}
+                {"type":"FootPlant","feet":[{"ankle":"Foot.L"}],"ground":"Ground"},
+                {"type":"Buoyancy","water":"Lake"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

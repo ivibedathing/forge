@@ -38,6 +38,8 @@ pub use breaking::{apply_breaks, BreakEvent};
 mod ragdoll;
 mod skinned;
 
+mod buoyancy;
+
 /// One contact begin/end between two named entities — what traces record.
 /// Shared vocabulary from `engine-core` so scripting can consume contacts
 /// without depending on this crate.
@@ -209,6 +211,9 @@ pub struct PhysicsWorld {
     /// beside the explosions and for the same reason: an impulse applied
     /// before integration moves the body on the step it fires.
     queued_kicks: Vec<(String, String, Vec3)>,
+    /// Floating bodies (M41), in entity-name order. Empty for every scene with
+    /// no `Buoyancy`, which is what keeps the step it costs at zero.
+    buoyant: Vec<buoyancy::Buoyant>,
 }
 
 /// One wheel awaiting assembly into a `Vehicle`, as `build` collects them:
@@ -283,6 +288,7 @@ impl PhysicsWorld {
             part_of_collider: HashMap::new(),
             ragdolls: Vec::new(),
             queued_kicks: Vec::new(),
+            buoyant: Vec::new(),
         };
 
         // Collision layers (M12): map each distinct name to one bit of
@@ -702,6 +708,14 @@ impl PhysicsWorld {
             }
         }
 
+        // Floating bodies (M41), last: it reads the bodies and colliders every
+        // branch above inserted, and a body's exact volume is only knowable
+        // once its collider exists. A break's fragments cannot be buoyant —
+        // fragments are pre-authored and carry no `Buoyancy` — so this list is
+        // fixed for the run, and a body that is later removed falls out through
+        // the handle lookup rather than needing the list rebuilt.
+        physics.collect_buoyant(world);
+
         Ok(physics)
     }
 
@@ -994,6 +1008,16 @@ impl PhysicsWorld {
                     body.apply_impulse(impulse, true);
                 }
             }
+        }
+
+        // 1.75. Buoyancy (M41): the weight of the water each floating body
+        //       displaces, pushed up at the columns that displace it. Before
+        //       the solver integrates, so a hull rises the same step the wave
+        //       under it does — and before vehicles, since an amphibious
+        //       chassis should feel the water its suspension is casting into.
+        //       Costs nothing at all when no entity has a `Buoyancy`.
+        if !self.buoyant.is_empty() {
+            self.apply_buoyancy(world, time);
         }
 
         // 2. Vehicles (M12): push script-written controls into each

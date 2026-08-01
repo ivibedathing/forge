@@ -137,6 +137,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     passes::road_ground(&cx, &facts, &mut errors);
     passes::junction(&cx, &facts, &mut errors);
     passes::foot_planting(&cx, &facts, &mut errors);
+    passes::buoyancy(&cx, &facts, &mut errors);
     passes::hud_parent(&cx, &facts, &mut errors);
     passes::animation(&cx, &facts, &mut errors);
 

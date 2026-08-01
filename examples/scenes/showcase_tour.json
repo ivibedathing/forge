@@ -1635,6 +1635,63 @@
       ]
     },
     {
+      "name": "PondRaft",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            14.1,
+            0.35,
+            5.2
+          ],
+          "rotation": [
+            0.0,
+            22.0,
+            0.0
+          ],
+          "scale": [
+            1.5,
+            0.2,
+            1.1
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.46,
+            0.31,
+            0.17
+          ],
+          "roughness": 0.85
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 620.0
+        },
+        {
+          "type": "Buoyancy",
+          "water": "Pond",
+          "samples": 2,
+          "drag": 1.6,
+          "angular_drag": 3.0
+        }
+      ]
+    },
+    {
       "name": "IceShelf",
       "components": [
         {

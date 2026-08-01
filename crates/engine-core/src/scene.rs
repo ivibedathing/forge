@@ -1053,6 +1053,32 @@ impl Scene {
         Some(crate::terrain::world_height_at(&terrain, &transform, x, z))
     }
 
+    /// The surface of a water patch over a world XZ position at `time` seconds
+    /// (M41) — what `world.water_height` and `engine water-height` resolve
+    /// through.
+    ///
+    /// `None` when the entity does not exist, has no `Water`, or when that
+    /// column is **outside the patch**. That last case is the difference from
+    /// [`terrain_height`](Self::terrain_height), which cannot fail: a height
+    /// field is defined wherever its formula is, while a body of water has
+    /// edges, and answering "0.0" past them is how a boat floats on dry land.
+    ///
+    /// Takes a clock, which no other query in the engine does, because water is
+    /// the first queryable surface that **moves**. Passing the same `time` the
+    /// render used gives the surface the render drew.
+    pub fn water_sample(
+        &self,
+        name: &str,
+        x: f32,
+        z: f32,
+        time: f32,
+    ) -> Option<crate::water::WaterSample> {
+        let entity = self.entity(name)?;
+        let water = self.world.get::<&crate::components::Water>(entity).ok()?;
+        let transform = self.transform_of(entity);
+        crate::water::sample_at(&water, &transform, x, z, time)
+    }
+
     /// Flatten the world's water surfaces into a draw list (M18).
     ///
     /// Takes no [`MeshSource`](crate::mesh::MeshSource): a water entity's

@@ -48,6 +48,9 @@ pub(super) struct SceneFacts<'a> {
     pub(super) closed_road_names: std::collections::BTreeSet<String>,
     pub(super) terrain_names: std::collections::BTreeSet<String>,
     pub(super) foot_plants: Vec<(String, crate::components::FootPlant, String)>,
+    pub(super) buoyancies: Vec<(String, crate::components::Buoyancy, String)>,
+    pub(super) water_names: std::collections::BTreeSet<String>,
+    pub(super) collider_names: std::collections::BTreeSet<String>,
     pub(super) hud_elements: Vec<HudRef>,
     pub(super) hud_panel_names: std::collections::BTreeSet<String>,
 }
@@ -96,6 +99,12 @@ pub(super) fn walk<'a>(
     // feet stand on, so it waits for every name too — the meadow pass's shape,
     // for the meadow pass's reason.
     let mut foot_plants: Vec<(String, crate::components::FootPlant, String)> = Vec::new();
+    // Buoyancy pass inputs (M41): a `Buoyancy` names the Water it floats on
+    // and needs a body and a shape on its own entity, so it waits for every
+    // name too — the meadow pass's shape a third time.
+    let mut buoyancies: Vec<(String, crate::components::Buoyancy, String)> = Vec::new();
+    let mut water_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut collider_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // One HUD element awaiting the cross-entity pass (M31): its owner, the
     // component that owns the `parent` reference, the reference itself, and
     // the component-s JSON path. Collected across all four kinds because
@@ -321,6 +330,7 @@ pub(super) fn walk<'a>(
                     mesh_asset = Some(mesh.asset.clone());
                 }
                 Some(ComponentData::Collider(c)) => {
+                    collider_names.insert(name.to_string());
                     collider = Some((c, component_path));
                 }
                 Some(ComponentData::Wheel(w)) => {
@@ -333,6 +343,7 @@ pub(super) fn walk<'a>(
                     }
                 }
                 Some(ComponentData::Water(w)) => {
+                    water_names.insert(name.to_string());
                     water = Some((w, component_path));
                 }
                 Some(ComponentData::Cloud(_)) => {
@@ -361,6 +372,9 @@ pub(super) fn walk<'a>(
                 Some(ComponentData::FootPlant(p)) => {
                     foot_plant = Some(component_path.clone());
                     foot_plants.push((name.to_string(), p, component_path));
+                }
+                Some(ComponentData::Buoyancy(b)) => {
+                    buoyancies.push((name.to_string(), b, component_path));
                 }
                 Some(ComponentData::SkinnedCollider(s)) => {
                     skinned_collider = Some((s, component_path));
@@ -1236,6 +1250,9 @@ pub(super) fn walk<'a>(
         meadows,
         terrain_names,
         foot_plants,
+        buoyancies,
+        water_names,
+        collider_names,
         hud_elements,
         hud_panel_names,
     }

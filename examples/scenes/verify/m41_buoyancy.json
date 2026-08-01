@@ -1,0 +1,49 @@
+{
+  "name": "m41 buoyancy",
+  "physics": { "gravity": [0.0, -9.81, 0.0], "timestep_hz": 60 },
+  "environment": { "sky": true, "shadows": true, "samples": 1 },
+  "entities": [
+    { "name": "Camera", "components": [
+      { "type": "Transform", "position": [0.0, 2.4, 7.2], "rotation": [-13.0, 0.0, 0.0] },
+      { "type": "Camera", "fov": 50.0, "near": 0.1, "far": 200.0, "active": true } ] },
+    { "name": "Sun", "components": [
+      { "type": "Transform", "rotation": [-40.0, 30.0, 0.0] },
+      { "type": "DirectionalLight", "color": [1.0, 0.96, 0.9], "intensity": 2.6 } ] },
+    { "name": "Fill", "components": [
+      { "type": "AmbientLight", "color": [0.55, 0.65, 0.8], "intensity": 0.35 } ] },
+    { "name": "Bed", "components": [
+      { "type": "Transform", "position": [0.0, -3.0, 0.0], "scale": [60.0, 1.0, 60.0] },
+      { "type": "Mesh", "asset": "builtin:plane" },
+      { "type": "Material", "albedo": [0.32, 0.27, 0.2], "roughness": 0.95 },
+      { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.05, 0.5] } ] },
+    { "name": "Lake", "components": [
+      { "type": "Transform", "position": [0.0, 0.0, 0.0], "scale": [40.0, 1.0, 40.0] },
+      { "type": "Water", "segments": 160, "detail": 0.7, "detail_scale": 0.5,
+        "shore_foam": 0.6, "crest_foam": 0.3, "depth_fade": 2.2, "opacity": 0.9,
+        "waves": [
+          { "direction": 20.0, "wavelength": 7.0, "amplitude": 0.15, "steepness": 0.4, "speed": 1.6 },
+          { "direction": 115.0, "wavelength": 2.6, "amplitude": 0.05, "steepness": 0.25, "speed": 1.0 }
+        ] } ] },
+    { "name": "Raft", "components": [
+      { "type": "Transform", "position": [-2.6, 0.8, 1.2], "rotation": [0.0, 28.0, 0.0], "scale": [2.4, 0.32, 1.6] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Material", "albedo": [0.5, 0.32, 0.16], "roughness": 0.8 },
+      { "type": "RigidBody", "body": "dynamic" },
+      { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5], "density": 620.0 },
+      { "type": "Buoyancy", "water": "Lake", "samples": 2, "drag": 1.4, "angular_drag": 3.0 } ] },
+    { "name": "Buoy", "components": [
+      { "type": "Transform", "position": [2.6, 0.9, -0.6], "scale": [0.7, 0.7, 0.7] },
+      { "type": "Mesh", "asset": "builtin:sphere" },
+      { "type": "Material", "albedo": [0.8, 0.15, 0.1], "roughness": 0.5 },
+      { "type": "RigidBody", "body": "dynamic" },
+      { "type": "Collider", "shape": "sphere", "radius": 0.5, "density": 300.0 },
+      { "type": "Buoyancy", "water": "Lake", "samples": 1, "drag": 2.4, "angular_drag": 1.5 } ] },
+    { "name": "Stone", "components": [
+      { "type": "Transform", "position": [0.4, 0.9, 3.0], "scale": [0.6, 0.6, 0.6] },
+      { "type": "Mesh", "asset": "builtin:sphere" },
+      { "type": "Material", "albedo": [0.2, 0.2, 0.22], "roughness": 0.9 },
+      { "type": "RigidBody", "body": "dynamic" },
+      { "type": "Collider", "shape": "sphere", "radius": 0.5, "density": 2600.0 },
+      { "type": "Buoyancy", "water": "Lake", "samples": 1 } ] }
+  ]
+}

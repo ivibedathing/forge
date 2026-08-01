@@ -26,7 +26,7 @@ use std::sync::Arc;
 use engine_core::components::{
     AmbientLight, AnimationPlayer, Breakable, DirectionalLight, HudImage, HudPanel, HudRect,
     HudText, Mesh, Name, ParticleEmitter, PointLight, Ragdoll as RagdollData, RigidBody, Script,
-    Terrain, Transform, Wheel,
+    Terrain, Transform, Water, Wheel,
 };
 use engine_core::contact::ContactState;
 use engine_core::daylight::{Daylight, DaylightSettings};
@@ -448,6 +448,56 @@ impl WorldApi {
         Ok(engine_core::terrain::world_height_at(
             &terrain, &transform, x, z,
         ))
+    }
+
+    /// The height of a water surface at a world XZ position, in world metres
+    /// (M41) — the terrain twin, with two differences that are the whole
+    /// character of water.
+    ///
+    /// It **moves**, so the answer is taken at this step's `time`, evaluated
+    /// once per step, so two calls in one step cannot disagree about where the
+    /// wave is.
+    ///
+    /// That clock is the time the step **begins** at (`step_index · dt`), while
+    /// physics and the render are handed the time it *ends* at. The offset is
+    /// one step and it predates this call — but water is the first thing in the
+    /// script API where it is *visible*, because it is the first surface that
+    /// moves. A script comparing its own reading against `engine water-height`
+    /// wants `--steps N-1` after `--steps N`, and a script placing a prop on
+    /// the water is one step behind the buoyancy in the same frame. At 60 Hz
+    /// on a lake that is under a millimetre; on a fast swell it is not.
+    ///
+    /// And it **ends**: a column outside the patch is a runtime error rather
+    /// than a number, because the alternative is a script that cheerfully sails
+    /// a boat across a lawn. A script that expects to reach the edge tests the
+    /// XZ itself; there is nothing water can return that means "no water here"
+    /// and is also a height.
+    fn water_height_at(
+        &mut self,
+        name: &str,
+        x: f32,
+        z: f32,
+    ) -> std::result::Result<f32, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow();
+        let water = world.get::<&Water>(entity).map_err(|_| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                format!("entity {name:?} has no Water").into(),
+                Position::NONE,
+            ))
+        })?;
+        let transform = world
+            .get::<&Transform>(entity)
+            .map(|t| *t)
+            .unwrap_or_default();
+        engine_core::water::sample_at(&water, &transform, x, z, self.time)
+            .map(|sample| sample.height)
+            .ok_or_else(|| {
+                Box::new(EvalAltResult::ErrorRuntime(
+                    format!("({x}, {z}) is outside the water surface {name:?}").into(),
+                    Position::NONE,
+                ))
+            })
     }
 
     /// Where one joint of a skinned entity is right now, as a **world**
@@ -1453,6 +1503,21 @@ fn curated_engine() -> rhai::Engine {
          z: f64|
          -> std::result::Result<f64, Box<EvalAltResult>> {
             w.terrain_height_at(name, x as f32, z as f32).map(f64::from)
+        },
+    );
+
+    // Water (M18/M41): read-only for terrain's reason — a surface's shape is a
+    // function of its authored fields and the clock, and a script-settable one
+    // is hidden state (invariant 2). What a script needs is the answer terrain
+    // already gives for the ground: where is the surface under this point, now.
+    engine.register_fn(
+        "water_height",
+        |w: &mut WorldApi,
+         name: &str,
+         x: f64,
+         z: f64|
+         -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.water_height_at(name, x as f32, z as f32).map(f64::from)
         },
     );
 

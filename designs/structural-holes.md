@@ -1,6 +1,9 @@
 # Structural holes
 
-**Four gaps in the pre-M35 engine that block a capability rather than polish one.**
+**Gaps in the pre-M35 engine that block a capability rather than polish one.**
+Three of the original four remain; **§4, the CPU wave evaluator, was built as M41** — see
+`designs/notes/m41-buoyancy.md` and `designs/buoyancy-design.md`. It is kept below, struck through
+in prose rather than deleted, because what it *predicted* is worth checking against what it cost.
 `CLAUDE.md`'s "Deferred follow-ups, by area" is the full backlog — three dozen items, most of them
 a nicer version of something that already works. This document is the short list underneath it:
 the places where a scene *cannot express* something, and where the workaround is a demo bending
@@ -106,23 +109,19 @@ rendering backlog it otherwise belongs in.
 
 ---
 
-## 4. A CPU wave evaluator, and therefore buoyancy
+## 4. A CPU wave evaluator, and therefore buoyancy — **BUILT (M41)**
 
-**Nothing can float.** Gerstner waves are displaced in the vertex stage (`shaders/water.wgsl`),
-with normals from the analytic derivatives of the same sum. CPU displacement "was never close" —
-a 192² grid is 37k vertices a step — so the surface exists only on the GPU, and no Rust code can
-answer *where is the water at (x, z)*.
+Everything below was written before the build and is left as it stood. What it got right: the
+remedy was exactly the one `m18-water.md` named — a Rust mirror in `water.rs` with an agreement
+test — and the query command really was the point, with buoyancy as the visible payoff.
 
-`m18-water.md` names both the absence and its remedy: `water.rs` is where the Rust mirror goes,
-**with an agreement test**, when a boat needs one. That test is the interesting constraint — two
-implementations of one curve is exactly the pattern `CLAUDE.md` warns about under the query
-commands ("a generator that re-derives a curve is how two implementations start disagreeing"),
-and here the duplication is unavoidable because one side must run on the GPU.
-
-**Why it is structural rather than deferred polish.** It is the same shape as `terrain-height`,
-which exists: the ground is queryable, so things stand on it, `FootPlant` works, and an agent can
-ask where the ground is without reading a picture. Water has no equivalent, so it is scenery.
-Buoyancy is the visible payoff, but the query command is the real one.
+What it did not anticipate: the hard part was not writing the sum twice, it was that the shader
+answers "where does this point *land*" while every caller asks "what is above this XZ", and
+inverting a Gerstner gather is a fixed-point solve. The redeeming find is that the solve converges
+exactly when `water_waves_self_intersect` passes — the same `Σ steepness ≤ 1` bound, for the same
+algebraic reason — so the duplication came with a proof that the query is well-posed on every scene
+that validates. The agreement test turned out to be cheap and strong: a straight-down probe over a
+shore-foam contour reads the drawn surface back as a number, and it agrees to 1.4 mm.
 
 ---
 
@@ -133,8 +132,10 @@ Buoyancy is the visible payoff, but the query command is the real one.
    runtime half is already proven by M14.
 2. **Hot reload**, as a *decision* first. It may cost a paragraph rather than a milestone.
 3. **Alpha-cut leaves.** Small, known shape, disproportionate visual return.
-4. **The wave evaluator.** Wants a real consumer — a boat, a buoy, something in the tour — before
-   the duplicated-curve cost is worth paying.
+4. ~~**The wave evaluator.**~~ Built as M41. The "wants a real consumer first" instinct was right
+   and was honoured: it shipped with a raft, a buoy and a stone in its fixture, and a floating raft
+   in the tour.
 
-Outside this list, the strongest rendering pick remains **shadow cascades**: one cascade is the
-current limit (`m16-environment.md`), and cloud shadows come free with it.
+Outside this list, the strongest rendering pick was **shadow cascades** — built as M38 by a
+parallel session, which is also why buoyancy landed as M41. Cloud shadows were the thing that came
+free with it.
