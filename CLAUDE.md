@@ -12,7 +12,7 @@ truth for layout, formats, and build order, and several choices in it are still 
 Four tiers, and knowing which one answers your question saves a search:
 
 1. **This file** — the component vocabulary, the CLI surface, the invariants, the settled
-   decisions, the cross-cutting traps, and a digest of every system with a pointer to its note.
+   decisions, the cross-cutting traps, and a sentence per system pointing at its note.
 2. **`designs/notes/*.md`** — the detail behind each digest: what the renders changed, which
    constants are load-bearing, what is deliberately absent. **For M4–M25 these notes are the only
    rationale in the working tree**, because those milestones' design docs were deleted once built.
@@ -253,217 +253,116 @@ Rhai `=1.25.1`; egui is **git-pinned to a master commit**, because released egui
 
 ## The systems
 
-The digest and the trap for each; the note has the rest. All paths are under `designs/notes/`.
+What each milestone was about, and where its detail is. **The traps live in the notes** — every one
+of these systems has at least one constant, convention or "simplification" that will bite a change
+made without reading its note first. Paths are under `designs/notes/`.
 
 ### Foundations
 
-- **Assets** → `assets.md`. `Mesh.asset` is a `builtin:` primitive or a `.gltf`/`.glb` path relative
-  to the scene file. **Every builtin but the triangle is one metre across at scale 1**, so
-  `Transform.scale` reads as a size in metres and a `Collider` matching one is always
-  `half_extents: [0.5, 0.5, 0.5]` or `radius: 0.5`. Reference checks live in
-  `engine-core/src/mesh.rs`; parsing lives in `engine-assets`, the only crate that opens asset files.
-- **Lighting (M4)** → `m04-lighting.md`. GGX Cook-Torrance in `mesh.wgsl`. Lights aim down local
-  **−Z** like the camera. A scene with *zero* light components gets a documented fallback rig; any
-  light component means "absent is off". Render targets are **sRGB**, so pixel tests compute
-  expectations through a `srgb_encode` helper — never eyeball byte values.
-- **Validation & the CLI contract (M5)** → `m05-validation.md`. stdout is one JSON object on success
-  and empty on failure; stderr is NDJSON; exit 1 is "your files" and 2 is "your invocation". **Error
-  codes are API** — never rename one casually. Per-field checking is schema-driven from the same
-  schema `engine list-components` publishes, with serde as a final gate. The ten cross-entity passes
-  exist because a name may be authored after its use. Regenerate
-  `schemas/component-schema.json` after touching any component.
-- **Diff-render (M6)** → `m06-diff-render.md`. Pure comparison in `engine-render/src/diff.rs`, no
-  GPU. Renders at the baseline's dimensions — re-bless to resize. Blessing is `engine screenshot`;
-  there is no bless flag, deliberately.
-- **Editor (M7)** → `m07-editor.md`. The scene file stays the single source of truth: the editor
-  polls it and every action commits through `formatter.rs` as a **splice**, so a one-field edit is
-  one hunk and untouched content is byte-identical by construction. Inspector widgets are generated
-  from the component schema, so a new component is editable the day it exists.
+- **Assets** → `assets.md`. What `Mesh.asset` may reference and how paths resolve.
+- **Lighting (M4)** → `m04-lighting.md`. `DirectionalLight` + `AmbientLight` and the GGX
+  Cook-Torrance shader; render targets are sRGB.
+- **Validation & the CLI contract (M5)** → `m05-validation.md`. Every error at once, schema-driven,
+  under a formalized wire contract. **Error codes are API.**
+- **Diff-render (M6)** → `m06-diff-render.md`. Pins a render against a committed baseline. Blessing
+  is `engine screenshot` — there is no bless flag.
+- **Editor (M7)** → `m07-editor.md`. A GUI that is a live writable *view* onto the scene file,
+  committing every edit as a splice.
 
 ### Simulation
 
-- **Physics (M8)** → `m08-physics.md`. rapier3d with `enhanced-determinism`; same file + steps →
-  byte-identical traces. `Transform.scale` scales collider shapes; angular velocity is degrees/sec
-  at the file boundary. `--steps 0` queries need `refresh_queries()`, which is **documented
-  destructive**. Bake round-trip is state-equal within ~1e-4, deliberately not byte-equal.
-- **Collision (M12)** → in `m08-physics.md`. Contact queries carry one step of latency by
-  construction (scripts run before physics). A trimesh on a **dynamic** body is an error — rapier
-  trimeshes are hollow, use `convex_hull`. Layers interact only if the filter passes **both ways**.
-- **Animation (M9)** → `m09-animation.md`. Property clips in JSON; pose is a pure function of
-  (files, time), so `--time` is reproducible to a byte. **Rotation interpolates component-wise on
-  Euler degrees** so a 0→360 clip actually spins — load-bearing, don't "fix" it to slerp. A clip on
-  a **dynamic** body's Transform is an error; kinematic is the supported case.
-- **Scripting (M10)** → `m10-scripting.md`. Rhai; `fn step(world, step)`. The curated `world` API is
-  the entire universe — no time, no I/O, no randomness, 1M ops per call, so traces stay
-  byte-identical with scripts running. Bake is **change-based**: any field differing from the file's
-  rest value is spliced.
+- **Physics (M8)** → `m08-physics.md`. rapier3d with deterministic traces: `RigidBody` + `Collider`
+  plus a scene-level `physics` block.
+- **Collision (M12)** → also `m08-physics.md`. Script contact queries, mesh colliders, and
+  free-form collision layers — all opt-in, so earlier traces are untouched.
+- **Animation (M9)** → `m09-animation.md`. Property clips in JSON, animating a component field by
+  entity name; the pose is a pure function of (files, time).
+- **Scripting (M10)** → `m10-scripting.md`. Rhai `fn step(world, step)` against a curated `world`
+  API deliberately small enough to keep runs byte-identical.
 - **Particles (M13) and fire (M17)** → `m13-particles-and-m17-fire.md`. Seeded deterministic
-  emitters, GPU-free simulation, xorshift written out in-repo so dependency upgrades cannot change
-  sequences. **The random draw order is a format contract**, and each step is *skipped*, not
-  defaulted, when its field is zero — a defaulted draw would move every particle baseline. Particle
-  state is simulation state: created only by `--steps`, never baked, never traced.
-- **Breaking (M14)** → `m14-breaking.md`. Pre-authored fragments, no runtime fracture. Breaks via
-  collision impulse, `world.break_entity`, or `world.explode`. Fragments are ordinary entities
-  everywhere downstream, and a baked post-break scene revalidates and re-renders bit-exactly.
-- **Skinned collider proxies (M33)** → `m33-skinned-colliders.md`. **The pose drives the proxies and
-  nothing reads them back** — that one sentence is the design. Kinematic bodies posed from the same
-  seam the render and `list-joints` use, so a hitbox cannot disagree with the picture about where a
-  head is. A proxy holds a character up as much as a moving wall holds up the hand pushing it. A
-  stride-driven character's proxies lag its render by one step, causally.
+  emitters; M17 adds the five fields that make a particle cone read as flame.
+- **Breaking (M14)** → `m14-breaking.md`. Pre-authored fragments — no runtime fracture — broken by
+  impulse, by a script call, or by an explosion.
+- **Skinned collider proxies (M33)** → `m33-skinned-colliders.md`. Simple shapes hung off named
+  joints and re-posed from the rig each step, so a skinned character can be hit and can push things.
 
 ### Geometry recipes
 
-Each owns its geometry, so the entity carries no `Mesh` and no `Material`.
+Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
 
-- **Water (M18)** → `m18-water.md`. Gerstner waves displaced in the **vertex stage** — CPU
-  displacement would mint a new `Arc<MeshData>` every frame and defeat M15's cache. Sum of steepness
-  ≤ 1 is exactly the non-folding condition. Waves evaluate in **world space**, so two water entities
-  at one height form one continuous surface. A water scene gains a depth-copy pass. No CPU wave
-  evaluator, so no buoyancy yet.
-- **Water refraction (M27)** → `m27-water-refraction.md`. One field, `ior`, defaulting to no
-  bending. **The exit point is solved to the bed's depth, not stepped along the refracted ray** —
-  stepping dices the bed into rectangular blocks. Refraction moves *where* the bed is read from, not
-  how much comes back, so it drops into a tuned scene without re-tuning it. It is only visible in
-  water you can see through, over a pattern laid *across* the view direction.
-- **Trees (M19)** → `m19-trees.md`. A recipe growing bark + leaf meshes, so one entity emits two
-  `RenderItem`s under one name. Branch rings are carried by **parallel transport**. Three model
-  rules came out of looking at renders: `whorl` is trunk-only, `tropism` is depth>0 only, and the
-  trunk gives back 30% of its lean per segment because a random walk with nothing pulling on it
-  drifts. There is no species enum — a species is a set of parameters.
-- **Clouds (M20)** → `m20-clouds.md`. Golden-angle spiral of interpenetrating lobes. Vertex normals
-  are bent 55% toward the cloud's centre, or every lobe draws its own terminator and the cluster
-  reads as a bag of marbles. Culling is **off** for this pipeline alone — a cloud has no inside and
-  would vanish the moment a camera entered one.
-- **Terrain (M22)** → `m22-terrain.md`. The height field is **CPU-side** — the opposite of water's
-  choice, because physics must stand on it and placement must query it, so there is exactly one
-  implementation and nothing to keep in agreement. **Mesh normals are written in patch-local
-  space**; a world-space normal arrives crushed flat and silently disables every slope-selected
-  layer. Ground draws **first**. Shape fields are `NOT_ANIMATABLE`.
-- **Roads (M23)** → `m23-roads.md`. Centerline is a **polygon with corner radii**, not a spline, so
-  position and heading close without solving anything. **One collider for the whole ribbon** — the
-  two-surface version builds a ledge that stops a car dead. Markings are computed per pixel from two
-  surface coordinates, so they follow every curve and grade for free and cannot z-fight.
-  `FIX_INTERNAL_EDGES` on a road's trimesh and only there.
-- **Meadows (M29)** → `m29-meadows.md`. The first recipe whose subject changes shape over time, and
-  the whole design is how that avoids minting a mesh per frame: two static buffers per meadow, and
-  everything visible happens in the vertex stage. **`generation = floor(progress)`** with a reseed
-  hash makes the cycle regrowth rather than a loop, with no state anywhere.
+- **Water (M18)** → `m18-water.md`. A body of water with Gerstner waves displaced in the vertex
+  stage, depth colouring and shore foam.
+- **Water refraction (M27)** → `m27-water-refraction.md`. One `ior` field bending what is seen
+  through the surface, defaulting to no bending.
+- **Trees (M19)** → `m19-trees.md`. A grown tree — bark plus leaves — from a parameter recipe rather
+  than a mesh file.
+- **Clouds (M20)** → `m20-clouds.md`. Drifting clusters of interpenetrating lobes.
+- **Terrain (M22)** → `m22-terrain.md`. A CPU height-field patch painted by height and slope layers;
+  the ground everything else stands on.
+- **Roads (M23)** → `m23-roads.md`. A drivable ribbon from a polygon centerline with corner radii,
+  its markings drawn per pixel.
+- **Meadows (M29)** → `m29-meadows.md`. Ground cover on a seed→grass→weeds→straw→collapse life
+  cycle, animated entirely in the vertex stage.
 
 ### Environment and time
 
 - **Environment (M16)** → `m16-environment.md`. Sky, fog, shadows, MSAA and transparency through one
-  `environment` block. **Every one defaults to off, and that is the design** — eleven baselines
-  predate it and none was re-blessed. The shadow box's centre is **snapped to whole texels** or
-  every edge crawls as the camera moves; casters are front-face culled as a peeling margin.
-  `sky_horizon` **is** the fog colour, one field, so the two cannot disagree.
-- **Point lights (M17)** → `m17-point-lights.md`. Local lights, ≤8, windowed inverse-square so past
-  `range` the contribution is byte-identical to no light at all — without a hard horizon a lantern
-  in one room lifts the black level of the next. Contributions are **added to the finished colour**,
-  so a lamp can never darken a pixel, and a test walks every pixel to prove it.
-- **Day and night (M21)** → `m21-daylight.md`. **A pure CPU function, and that is the whole design**
-  — no WGSL changed, no new uniform, no new pass, so everything downstream tracks for free. Sunrise
-  is 06:00 and sunset 18:00 at every elevation, deliberately. There is one directional light and it
-  **is** the dominant body, swapping where luminances are equal so brightness is continuous.
-  `day_length: 0` freezes the day, which is what most scenes want.
-- **Frame cost (M15)** → `m15-frame-cost.md`. The viewer was slow for reasons that had nothing to do
-  with particles: ~29 ms in HUD rasterization. The HUD now rasterizes only what it covers, GPU
-  resources persist across frames, and `load_mesh` returns `Arc<MeshData>` — **implementations must
-  return the same `Arc` for one asset**, which is both the end of a per-frame deep copy and the
-  cache key. Net ~34 ms → ~0.9 ms in release.
+  `environment` block. Every one of them defaults to off.
+- **Point lights (M17)** → `m17-point-lights.md`. Local lamps with a hard `range` horizon, ≤8 per
+  scene, no shadows.
+- **Day and night (M21)** → `m21-daylight.md`. A pure CPU function mapping the clock to sun, moon,
+  sky and fog — no shader changed to add it.
+- **Frame cost (M15)** → `m15-frame-cost.md`. The optimisation pass that took the viewer from ~34 ms
+  a frame to ~0.9 ms, none of which moved a pixel.
 
 ### Materials
 
-- **Materials (M26)** → `m26-materials.md`. Texture maps, a file form, refraction. **Every added
-  field defaults to the pre-M26 behaviour.** The bind-group budget decided the shape (4 groups,
-  three already spent). **Colour space is a property of the slot**, never the file — which also
-  decides how the mip chain was filtered. `Material.asset` is exclusive with every other field,
-  checked against raw JSON because serde defaults cannot tell an override from a spelled-out
-  default. `alpha_cutoff` cuts the shadow too, through a second caster pipeline. Tangent frames are
-  derived per pixel, so every recipe takes a normal map with no tangent generator.
+- **Materials (M26)** → `m26-materials.md`. Texture maps, shareable `materials/*.json` files, and
+  refraction. Every added field defaults to the pre-M26 behaviour.
 
 ### Characters
 
-- **Skeletal animation (M30)** → `m30-skeletal-animation.md`. **CPU skeleton, GPU skin, and both
-  halves are forced.** No new component — a skin is a property of the asset, so `AnimationPlayer.clip`
-  takes `meshes/robot.glb#Walk`, and the fragment is **required** even when the file has one clip.
-  Rotation is a **quaternion, slerped** here — the opposite of M9's rule, and the distinction is who
-  wrote the numbers. **A skinned primitive loads unbaked**: glTF says the referencing node's
-  transform is ignored, and this is the single most likely thing to be "simplified" back into a bug.
-  Joint order is the skin's own and must not be sorted.
-- **Locomotion and foot planting (M32)** → `m32-locomotion.md`. **The clip's phase is a field in the
-  file, not state in the process, and the bake is what settled that** — ask what the bake should
-  contain and the answer says whether something is state or data. Driving `speed` from a script does
-  not work: `local_time` is `t * speed`, so every acceleration is a pop; phase continuity under a
-  changing rate is an integral. `FootPlant` plants against a `Terrain`, not the physics world, to
-  keep the pose a pure function of (files, time) — the stated cost is that a character cannot stand
-  on a crate.
+- **Skeletal animation (M30)** → `m30-skeletal-animation.md`. CPU skeleton, GPU skin, glTF clips
+  named by fragment (`meshes/robot.glb#Walk`). No new component — a skin is a property of the asset.
+- **Locomotion and foot planting (M32)** → `m32-locomotion.md`. A walk cycle driven by ground
+  covered rather than by the clock, with the feet planted on the terrain under them.
 
 ### Input and UI
 
-- **Input (M11)** → `m11-input.md`. Keyboard sampled per fixed step on the shared integer clock.
-  Headlessly, input is an `*.input.jsonl` timeline of sparse keyframes; no `--input` means no keys
-  held, so every pre-M11 artifact is untouched. `run-scene --record-input` turns one play session
-  into a permanent regression test.
-- **The mouse (M28)** → `m28-mouse.md`. Buttons ride the same `held` set the keys do; the cursor is
-  a **fraction of the frame**, because a timeline outlives the window it was recorded in. The engine
-  computes the *ray* — `Pointer::resolve` is called by whoever already knows the camera, so the
-  viewer and the headless path provably agree. A mouse-driven run is a function of frame size, which
-  no earlier input was.
-- **HUD (M11.6 + M12)** → `m11_6-hud.md`. Two layers, one CPU rasterizer, unit-tested without a GPU.
-  `world.hud(text)` lines are cleared every step, so the line HUD is a pure function of the step that
-  drew it; `HudText`/`HudRect` components are screen-anchored and bake change-based. An empty HUD
-  draws nothing, keeping every pre-HUD baseline byte-identical. `simulate` reports the final step's
-  lines, so the HUD is readable without pixels.
-- **The UI system (M31)** → `m31-ui-system.md`. `HudPanel` removes hand-computed offsets; absent
-  width/height means **hug contents**; `opacity` defaults to 0 so a bare panel is an invisible
-  layout group *and* a dialog backdrop. **Flow order is file order; draw order is `(class, file
-  order)`** — conflating them stacks every button above every label. Interaction is **polled, never
-  dispatched**, because a button that runs code is a binding and bindings are game logic. Hit
-  testing runs before scripts and is not gated on a scene having one.
+- **Input (M11)** → `m11-input.md`. Keyboard sampled per fixed step, replayable headlessly as an
+  `*.input.jsonl` timeline.
+- **The mouse (M28)** → `m28-mouse.md`. Buttons on the same `held` set as keys, plus a cursor
+  expressed as a **fraction of the frame**; the engine resolves the pointer ray.
+- **HUD (M11.6 + M12)** → `m11_6-hud.md`. Per-step debug lines and screen-anchored `HudText` /
+  `HudRect` components, sharing one CPU rasterizer.
+- **The UI system (M31)** → `m31-ui-system.md`. Layout, nine-sliced images, and widgets a pointer
+  lands on — the three things needed to build a *screen* rather than read state off one.
 
 ### Vehicles
 
-- **Vehicle dynamics (M11.5) and wheels (M12)** → `m11_5-vehicles-and-wheels.md`. A `Wheel` is
-  raycast suspension on its own *visual* entity naming a chassis — no `RigidBody` of its own.
-  Positive `engine_force` is forward, positive `steering` is left, suspension stiffness is **per kg
-  of chassis mass**. Tire caveat: lateral grip is a velocity damper, so the sum of
-  `0.2·side_friction_stiffness` over the wheels above 1 over-corrects and glues the car to its line.
-- **The car demo and its generated circuit** → `car-demo.md`. The circuit is *generated* from a
-  closed polygon of 14 corners, which is what makes closure free — a closed polygon's exterior
-  angles sum to one turn, so position, heading and elevation all shut without a solver. Three
-  geometry lessons are baked in and easy to reintroduce by "simplifying": one collider not two, a
-  continuous guardrail, and radii sized for the car rather than the map.
+- **Vehicle dynamics (M11.5) and wheels (M12)** → `m11_5-vehicles-and-wheels.md`. Raycast-suspension
+  wheels on a dynamic chassis, with the pedals and steering driven by scripts.
+- **The car demo and its circuit** → `car-demo.md`. A generated Spa-in-miniature circuit and the
+  committed lap recording that regression-tests it.
 
 ### Agent ergonomics and units
 
-- **Agent ergonomics (M24/M25)** → `m24-m25-agent-ergonomics.md`. Negative coordinates parse;
-  `terrain-height`, `inspect`, per-entity `simulate` reporting, and the frame `digest`. **The digest
-  is quantized to three decimals**, or an adapter that renders terrain ~24 pixels differently run to
-  run turns a diagnostic into phantom diffs. Nothing may pin the digest — `diff-render` pins renders.
-  Output-shape rule this settled: **schemas pretty-print, reports do not.**
-- **One unit is one metre (M34)** → `m34-one-unit-is-one-metre.md`. The convention was already true
-  everywhere except `builtin:sphere`, which was radius 1. The damage was in **collider pairing** —
-  five of six sphere-plus-collider pairs in the repo were wrong, the scaffolded starter scene
-  included, which shipped the defect to every new project. `collider_mesh_size_mismatch` is the
-  warning that would have caught all six, and it is a warning because a proxy collider is ordinary
-  authoring. **`Collider.density` is kg/m³ and its `1.0` default is not a plausible material.**
+- **Agent ergonomics (M24/M25)** → `m24-m25-agent-ergonomics.md`. The query commands (`inspect`,
+  `terrain-height`, per-entity `simulate`) and the frame `digest`, so a render can be diagnosed
+  without reading the image.
+- **One unit is one metre (M34)** → `m34-one-unit-is-one-metre.md`. Made `builtin:sphere` fit the
+  unit extent like the other primitives, and added the warning that catches a collider disagreeing
+  with the mesh it stands in for.
 
 ### The demos and shipping
 
 - **Showcase tour** → `showcase-tour-notes.md`, design in `designs/showcase-tour.md`. A 900-step
-  camera move through five stations with every system running at once. **Its growth contract is a
-  test**: `showcase_tour_uses_every_component_the_engine_has` fails on any schema component the tour
-  does not use, so a new component's commit adds an entity here — there is no allowlist,
-  deliberately. The camera path is a closed cycle, not a timeline that ends.
+  camera move with every system running at once. **A test fails on any component the tour does not
+  use**, so a new component's commit adds an entity here.
 - **Arena shooter** → `designs/arena-shooter.md`. The other live demo, and the worked example of the
-  M31 UI system. **A full-frame `HudRect` defeats M15's scissored rasterizer** — 13.1 s vs 5.7 s for
-  six frames at 1920×1080, which in a debug viewer reads as a game that has stopped responding.
+  M31 UI system.
 - **Distribution** → `distribution-notes.md`, design in `designs/distribution-design.md`. Prebuilt
-  binaries on a `v*` tag; `install.sh` verifies checksums; Linux builds on the *oldest* supported
-  Ubuntu because the artifact's glibc floor is whatever built it. **CI proves the GPU-free half
-  only** — baselines are a local, per-adapter check. The pinned car drive is a per-platform artifact
-  and skips off aarch64 macOS. `engine init` scaffolds a project; **its scene sits at the project
-  root**, because asset paths resolve relative to the scene file.
+  binaries on a `v*` tag, `install.sh`, and `engine init` scaffolding a project.
 
 ## What this project is
 
