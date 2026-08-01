@@ -1,6 +1,6 @@
 # Water refraction design (M27)
 
-`water-design.md` §6 opens its list of what is not there with refraction: "What is behind the
+M18's design opened its list of what water does not do with refraction: "What is behind the
 surface is absorbed and tinted, never bent. This is the upgrade M16 already named for transmissive
 materials, and water is now its loudest customer." M26 built that upgrade — for `Material`. It could
 not reach water, because a `Water` entity carries no `Material` and there is nowhere to put an `ior`.
@@ -183,7 +183,7 @@ is correct — you cannot see through foam.
   station 03 floating in a pond does not appear in what the pond bends. M18's depth copy has had
   exactly this limitation since it shipped.
 - **Chromatic dispersion.** One offset for all three channels.
-- **Planar reflections**, which `water-design.md` §6 still names and this milestone does not touch.
+- **Planar reflections**, which M18 named as missing and this milestone does not touch.
   Refraction and reflection are the two halves of a water surface and only one of them is here.
 - **A CPU mirror of any of this.** Nothing physical depends on the refracted sample, exactly as
   nothing physical depends on the detail normals.

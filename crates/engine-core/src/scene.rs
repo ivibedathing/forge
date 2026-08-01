@@ -325,7 +325,7 @@ impl LightRig {
 
     /// Apply the no-lights fallback rule and return concrete values.
     ///
-    /// The rule is all-or-nothing (design `materials-lighting-design.md` §3):
+    /// The rule is all-or-nothing (M4's design, §3):
     /// zero light components → the documented fallback rig (white sun 1.0 +
     /// white ambient 0.15); at least one light component → exactly what the
     /// scene wrote, absent means off.

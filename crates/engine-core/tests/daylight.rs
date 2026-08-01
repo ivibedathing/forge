@@ -1,7 +1,7 @@
 //! Day and night (M21).
 //!
 //! Every test here is GPU-free and unconditional — there is no skip path,
-//! because the whole system is a pure CPU function by design (`daylight-design.md`
+//! because the whole system is a pure CPU function by design (M21's design,
 //! §1). That is most of the point of building it this way.
 
 use engine_core::daylight::{DaylightKeyframe, DaylightSettings};

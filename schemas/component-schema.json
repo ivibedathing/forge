@@ -893,7 +893,7 @@
           },
           "transmission": {
             "default": 0.0,
-            "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness — see `materials-lighting-design.md`.",
+            "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness.",
             "format": "float",
             "maximum": 1.0,
             "minimum": 0.0,
@@ -1267,7 +1267,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse. See `breaking-design.md`.",
+        "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse.",
         "properties": {
           "fragments": {
             "description": "What the entity becomes. At least one.",
@@ -1347,7 +1347,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Gameplay logic as data (M10): a Rhai script run once per fixed step.\n\n`source` is a relative `.rhai` path defining `fn step(world, step)`.\nScripts mutate the world through a small registered API and never invent\nstate of their own — baked output after a scripted run is an ordinary\nscene file. See `scripting-design.md`.",
+        "description": "Gameplay logic as data (M10): a Rhai script run once per fixed step.\n\n`source` is a relative `.rhai` path defining `fn step(world, step)`.\nScripts mutate the world through a small registered API and never invent\nstate of their own — baked output after a scripted run is an ordinary\nscene file.",
         "properties": {
           "source": {
             "type": "string"
@@ -2373,7 +2373,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
+        "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it.",
         "properties": {
           "crest_foam": {
             "default": 0.0,
@@ -3752,7 +3752,7 @@
               },
               "transmission": {
                 "default": 0.0,
-                "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness — see `materials-lighting-design.md`.",
+                "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness.",
                 "format": "float",
                 "maximum": 1.0,
                 "minimum": 0.0,
@@ -4126,7 +4126,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse. See `breaking-design.md`.",
+            "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse.",
             "properties": {
               "fragments": {
                 "description": "What the entity becomes. At least one.",
@@ -4206,7 +4206,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Gameplay logic as data (M10): a Rhai script run once per fixed step.\n\n`source` is a relative `.rhai` path defining `fn step(world, step)`.\nScripts mutate the world through a small registered API and never invent\nstate of their own — baked output after a scripted run is an ordinary\nscene file. See `scripting-design.md`.",
+            "description": "Gameplay logic as data (M10): a Rhai script run once per fixed step.\n\n`source` is a relative `.rhai` path defining `fn step(world, step)`.\nScripts mutate the world through a small registered API and never invent\nstate of their own — baked output after a scripted run is an ordinary\nscene file.",
             "properties": {
               "source": {
                 "type": "string"
@@ -5232,7 +5232,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
+            "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it.",
             "properties": {
               "crest_foam": {
                 "default": 0.0,

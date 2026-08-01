@@ -2,10 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Full rationale for each system lives in `designs/*.md`; this file is the index plus the list of
-things that cost time. Read `designs/agent-native-engine-design.md` before making structural
-decisions — it is the source of truth for layout, formats, and build order, and several choices in
-it are still open (§9).
+This file is the index plus the list of things that cost time. Read
+`designs/agent-native-engine-design.md` before making structural decisions — it is the source of
+truth for layout, formats, and build order, and several choices in it are still open (§9).
+
+**`designs/` no longer holds a doc per milestone.** M26 and later keep theirs; the eighteen for
+**M4–M25 were deleted once built**, because their conclusions are the sections below. So for those
+systems *this file is the rationale*, not an index to it — and the rejected alternatives, which the
+summaries do not keep in full, are in git history. `designs/README.md` lists what was removed and
+the two commands that get a deleted doc back. **Read the original out of history before reversing
+one of its decisions**; that is the case the longer prose was written for.
 
 ## Current state
 
@@ -56,6 +62,7 @@ engine init [dir] [--force]              # scaffold a project: starter scene + A
 engine agent-guide                       # the agent orientation as markdown (a stdout exception)
 engine import <model.glb> [--into scene.json] [--textures dir] [--materials dir]  # glTF materials (M26)
 engine list-components [--component Name]  # scene + component JSON Schemas (with range constraints)
+engine list-components --markdown          # the same vocabulary as prose; generates docs/component-reference.md
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
 engine run                               # M0 triangle (stack proof)
 engine info                              # selected GPU adapter as JSON
@@ -146,7 +153,24 @@ invocation/environment is"). Every error code is a const in `engine-core/src/cod
 class; `docs/error-codes.md` mirrors it and a repo-contract test keeps them in lockstep — **codes
 are API**, never rename one casually.
 
-Per-component field checking is **schema-driven**: the walk in `validate.rs` reads the same
+**`validate/` is seven modules**, split out of one 5,716-line file as pure code motion (28 lines
+left it: ten `fn` → `pub(super) fn`, nine redundant borrows, one call site, and five rustfmt
+re-wraps). `mod.rs` is `validate_source` — now the preamble plus ten named pass calls —
+`Cx`/`Checked`/`ComponentSchemas`, and `validate_material_source`. `entity.rs` is the per-entity
+walk, `passes.rs` the ten **cross-entity** passes (camera, lights, daylight, point-light budget,
+collision layers, wheel, meadow, foot planting, HUD parent, animation), `component.rs`
+`check_component`, `walk.rs` the schema walk, `blocks.rs` the `physics`/`environment`/`daylight`
+blocks, and `tests.rs` the 2,000-line corpus that lives with the code.
+
+**The passes exist because a name may be authored after its use** — a wheel's chassis, a HUD
+element's parent — so anything naming another entity has to wait for every name to exist. The walk
+hands them a `SceneFacts` struct rather than sixteen positional values, and that is not tidiness:
+four of its fields are `Vec<(String, String)>` and three are `BTreeSet<String>`, so a swapped pair
+would type-check and validate the wrong thing. Field-init shorthand in and destructuring by name
+out makes the mapping name-identity end to end. (The `point_lights` pass is `point_light_budget`
+for the same reason — a function named for its field would shadow it.)
+
+Per-component field checking is **schema-driven**: the walk in `validate/walk.rs` reads the same
 schemars-generated schema `engine list-components` publishes (unknown/missing fields, JSON types,
 `minimum`/`exclusiveMinimum`-style ranges authored as `#[schemars(...)]` attributes), then serde
 parses the clean component as a final gate — `scene_parse_desync` firing means the walk and the
@@ -221,7 +245,7 @@ directly (structural checks only).
 
 ## Scripting (M10, `crates/engine-script`)
 
-**Rhai pinned =1.25.1** — settled (see `designs/scripting-design.md` §1; Lua lost on the C dependency
+**Rhai pinned =1.25.1** — settled (Lua lost on the C dependency
 and determinism friction, compiled-Rust-only lost on rebuild-per-iteration). Scripts define
 `fn step(world, step)`; the curated `world` API is the entire universe — no time, no I/O, no
 randomness, 1M-operation budget per call, so traces stay byte-identical with scripts running. Script
@@ -271,7 +295,7 @@ Fixture `verify/m28_pointer.json` + timeline, **two baselines from one file** (`
 first-person mouselook needs, and it wants its own milestone), click edges (`world.state`, two
 lines), and cursor visibility control.
 
-## Input (M11, `designs/input-design.md`)
+## Input (M11)
 
 Keyboard input sampled per fixed step on the shared integer clock — scripts ask
 `world.key("ArrowUp")` (unknown names are runtime errors with `did_you_mean`; key names are the
@@ -372,7 +396,7 @@ looks like a renderer bug. This is also a data point on M22's MSAA caveat — 58
 against a *flat* ground plane rendered byte-identically 6 runs running, so it is relief, not fine
 geometry alone, that costs this adapter its determinism.
 
-## HUD (M11.6 lines + M12 components, `designs/hud-design.md`)
+## HUD (M11.6 lines + M12 components)
 
 Two layers, one render path. `world.hud(text)` pushes printable-ASCII debug lines, cleared every step
 — the line HUD is a pure function of the step that drew it — and `world.state(key, default)` /
@@ -426,7 +450,7 @@ tailpipe each step (particles are world-space once spawned, so a moving car leav
 rather than dragging a plume along). All three follow the car's *height* — a contact patch pinned to
 a fixed altitude smokes from inside the hill on a circuit that climbs.
 
-**M17's five fire fields** (`designs/fire-and-lights-design.md`), each fixing one reason a particle
+**M17's five fire fields**, each fixing one reason a particle
 cone does not read as flame: `blend: "additive"` (overlapping flame *brightens*; alpha blending can
 only render orange smoke), `radius` (a disc of coals instead of a single apex),
 `speed_jitter`/`size_jitter`/`lifetime_jitter` (a population born identical dies at one height,
@@ -446,7 +470,7 @@ Additive sprites draw after *all* alpha ones regardless of depth, which is what 
 in smoke looks like. `stretch` is in **seconds** of travel and elongates along the velocity's
 *screen-space* projection, so a particle flying at the camera stays round.
 
-## Breaking (M14, `designs/breaking-design.md`)
+## Breaking (M14)
 
 `Breakable` lists **pre-authored fragments** (mesh ref + local placement + cuboid `half_extents` +
 `density` — no runtime fracture, the settled decision) and breaks three ways: collision
@@ -568,7 +592,7 @@ to `[0, 1]`, and both bake change-based.
 `particles.wgsl` writes the un-stretched quad expansion out twice rather than lerping. Both guard the
 M16 ULP sensitivity — factoring them would rewrite the four untouchable lines.
 
-## Water (M18, `designs/water-design.md`)
+## Water (M18)
 
 **A body of water is one entity with one component.** `Water` owns its surface geometry — a
 tessellated unit grid (`segments`, 1..512, identical to `builtin:plane` at `segments: 1`, generated
@@ -664,7 +688,7 @@ Not here: refracting another transparent surface (the copy is the *opaque* frame
 floating in a pond is not in what the pond bends), chromatic dispersion, and planar reflections —
 still the other half of a water surface, and still missing.
 
-## Trees (M19, `designs/tree-design.md`)
+## Trees (M19)
 
 The `Tree` component is a **recipe, not a mesh reference**: `engine-core/src/tree.rs` grows it into
 two meshes — bark (drawn with the entity's own `Material`) and leaves (drawn with
@@ -701,7 +725,7 @@ routines move 3 pixels of `m19_trees.png` by one channel step (measured; Rust do
 floats, so this is libm, not FMA), so bless from the debug binary `cargo test` runs. Every pre-tree
 fixture is profile-insensitive; the constraint arrives with CPU-generated geometry.
 
-## Clouds (M20, `designs/cloud-design.md`)
+## Clouds (M20)
 
 M19's premise applied to the sky. `engine-core/src/cloud.rs` grows one mesh — a golden-angle spiral
 of icosphere lobes over the footprint, each growing `children` smaller lobes biased upward by `rise`,
@@ -736,7 +760,7 @@ a `THROUGH_SCATTER` fraction (0.3) with the diffuse curve left **linear**, becau
 full saturates a white cloud everywhere and sharpening the curve instead turns a storm cloud into
 grey rock.
 
-## Day and night (M21, `designs/daylight-design.md`)
+## Day and night (M21)
 
 **It is a pure CPU function, and that is the whole design.** `engine-core/src/daylight.rs` maps
 `(DaylightSettings, time) -> Daylight`, and `scene::apply_daylight` folds that onto the
@@ -793,7 +817,7 @@ or a directional horizon glow (the natural next commit, in `sky_common.wgsl` on 
 the untouchable lines), stars, clouds, real astronomy, moon shadows, and script-driven
 `Material.emissive`.
 
-## Terrain (M22, `designs/terrain-design.md`)
+## Terrain (M22)
 
 **There is no flat ground in the repo's scenes any more.** Following `Water` exactly, `Terrain` owns
 a tessellated unit grid (`segments`, 1..512) sized by `Transform.scale`, so the entity carries **no**
@@ -873,7 +897,7 @@ hard pin should aim its camera at its subject rather than across a landscape.** 
 `engine-render/tests/terrain.rs` (including `a_flat_single_layer_patch_is_exactly_a_painted_plane`,
 which pins the shading path against `builtin:plane` at `segments: 1`) and `verify/m22_terrain.json`.
 
-## Roads (M23, `designs/road-design.md`)
+## Roads (M23)
 
 The car demo's circuit was **207 `builtin:cube` plates** whose overlapping slabs and constants existed
 only to hide the fact that the road was not a surface. `Road` replaces all of it with one entity, and
@@ -934,7 +958,7 @@ overshoots, so a road authored to reach 6 m crests at 6.4 and the file stops pre
 Fixture `verify/m23_road.json` at `--steps 180`, pinned by a CLI test that also drops a ball on the
 road and requires it to *stay where it lands*.
 
-## Agent ergonomics (M24/M25, `designs/agent-ergonomics-design.md`)
+## Agent ergonomics (M24/M25)
 
 The README claims *discover by looking, verify by querying*; this is the querying half catching up.
 No component, renderer or physics code was touched, and `bin/verify-baselines` reported 30 of 30
@@ -1133,7 +1157,7 @@ milestone its point — a joint palette is a few dozen matrices, and *because* t
 and the whole sampling path is GPU-free and unconditionally testable the way `daylight.rs` is.
 
 - **No new component.** `AnimationPlayer.clip` gains the fragment form `meshes/robot.glb#Walk` that
-  `animation-system-design.md` §4 specified and nothing had used. A skin is a property of the
+  M9's design specified and nothing had used. A skin is a property of the
   *asset*, and `Mesh.asset` already names it; a `Skeleton` component would be a second source of
   truth for what the file contains. The fragment is **required** even when the file has one clip —
   defaulting is friendly right up until someone exports a second one and which clip plays changes
@@ -1480,7 +1504,16 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
   reticle is four reticles. Its demo timeline is authored by a closed-loop director,
   `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a drone at step 431, and
   M31's **press capture** means that director now writes the release on the button too. Four
-  `Meadow` strips ring the plateau since the same pass).
+  `Meadow` strips ring the plateau since the same pass, and it now runs a **four-level campaign**
+  whose shape is dictated by two engine rules — a scene cannot spawn entities, and a script cannot
+  move a *dynamic* body by writing its Transform — so every level's drones and barrels are authored
+  parked above the arena and fly or drop in when their level starts, each level four metres above
+  the last because they reuse each other's positions and a shared park altitude has physics shoving
+  two bodies apart all run. **The performance bug it fixed is worth knowing outside the arena: a
+  full-frame `HudRect` defeats M15's scissored HUD rasterizer** and puts the frame back to filling a
+  window-sized CPU canvas — measured at 1920×1080, six frames went 13.1 s with a full-screen menu
+  veil against 5.7 s with a card-sized backdrop, which in a debug viewer stepping physics through a
+  wall-clock accumulator reads as a game that has stopped responding).
   The crate texture is a *framed* panel with a centre batten for that reason: a border is invariant
   under it. `Tree` tubes are the well-behaved case (`u` around the ring, `v` along the branch), which
   is also why bark fissures must vary in `u` — transposed, a trunk wears tyre tread.
@@ -1590,18 +1623,22 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**25 of the 38 baselines are pinned by no test at all** — the sweep is their only check. The thirteen a
-test actually diff-renders and asserts *matching* are `m12_hud`, `m16_environment`, `m17_fire`,
-`m18_water`, `m19_trees`, `m20_clouds`, `m21_daylight_1200`, `m22_terrain`, `m23_road`,
-`m30_skeletal`, `m31_ui`, `m32_locomotion` and `m33_proxies`; everything else — `m4_lighting`, both `m8_drop`, `m9_t025`, both `m10`,
-`m11_lap`, `m13_smoke`, `m14_break`, the other four `m21_daylight_*`, `m26_materials`, both `m27_*`,
-both `m28_pointer_*`, `m29_meadow`, and all six `showcase_*` — rides on `bin/verify-baselines` alone.
-**This ratio has been getting worse, not better**: it was 16 of 35 when last counted, and M26/M28
-each added fixtures whose baselines no test asserts. Two entries mislead if skimmed.
-`m27_water_refraction.png` *is* named by a CLI test, but only in the **negative** direction (with
-`ior` back at 1.0 the baseline must *not* match), which pins that refraction is load-bearing and
-does not pin the render. And `m11_lap.png`: the lap CLI test pins the *drive* (positions, elevation,
-parked HUD strings) and names the PNG in a comment, but nothing diff-renders it. A sweep failure that will not reproduce twice in a row is worth suspecting before it
+**32 of the 38 baselines are pinned by a test** (M33's fixture arrived with its own), and the six
+that are not are the six `showcase_*` frames — deliberately. They are not byte-reproducible on this adapter (measured repeatedly at four
+to six distinct images from six renders of an *unchanged* scene, on any binary), so a test
+asserting them would fail at random, which is worse than no test. They keep their `diff_args`
+tolerance in the manifest and stay the sweep's job; `cli.rs` says so where someone would go to add
+them.
+
+This was 25-of-37 unpinned until the pins landed, and getting worse rather than better — 16 of 35
+when first counted, with M26 and M28 each adding fixtures nothing asserted. The nineteen that were
+missing now cost **3.6 s** in the CLI suite for the lot, `m11_lap`'s eleven thousand steps of
+vehicle physics included, which is the answer to why it had not been done. Two of them looked
+pinned and were not: `m27_water_refraction.png` was named by a test only in the **negative**
+direction (with `ior` back at 1.0 the baseline must *not* match), which pins refraction as
+load-bearing and says nothing about the render; and `m11_lap.png` was named only in a comment, by
+a test that pins the *drive* — positions, elevation, the parked HUD strings — and never rendered
+it. Both now have the positive half too. A sweep failure that will not reproduce twice in a row is worth suspecting before it
 is worth debugging: since M29 **all six `showcase_*` frames** carry a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02`, because a meadow at `samples: 4` is not byte-reproducible
 on this adapter and the tour has one in every frame (M22 had already given `showcase_646` a
@@ -1692,10 +1729,16 @@ one is compiler-checked.
 
 Plus `engine-physics`, `engine-script`, `engine-editor`. Supporting:
 `schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`, and
-`docs/` — which holds `cli-contract.md` and `error-codes.md` and **nothing else**. The design doc's
-§4 sketch also lists `docs/component-reference.md` and `docs/scene-format.md`; neither was ever
-built, and the component reference today is `engine list-components` plus the doc comments it
-carries into the schema. Don't cite either file as if it exists.
+`docs/`, which holds four documents. `cli-contract.md` is the wire contract and `error-codes.md`
+mirrors `codes.rs`, both pinned by repo-contract tests. **`component-reference.md` is generated** —
+`engine list-components --markdown` renders the same schema the flagless form publishes, and
+`checked_in_component_reference_matches_the_code` fails when the committed file is stale, so it can
+never become a second source of truth (invariant 7). **`scene-format.md` is prose**, covering what
+the schema cannot say: internal tagging, entity names as addresses, asset paths relative to the
+*scene file*, which components own their own geometry, and the cost of JSON having no comments. Its
+worked example is fenced with `<!-- validated -->` and checked by a test rather than trusted — the
+example in a format document is the first thing anyone copies, and the test caught two invented
+`RigidBody` fields the hour it was written.
 
 Stack: Rust + wgpu 30 (Vulkan/Metal/DX12) + winit 0.30 + glam + serde/JSON + hecs + `image` for PNG
 export.
@@ -1753,7 +1796,7 @@ API at MSRV 1.65 with 6 transitive deps and a ~1.2s cold build, against 128 deps
 gives up: `bevy_ecs` change detection would have helped with hot reload — the one argument that could
 reverse this.
 
-**Runtime scripting: Rhai** (M10, `designs/scripting-design.md`).
+**Runtime scripting: Rhai** (M10).
 
 ## Open decisions — ask, don't assume
 
@@ -1791,21 +1834,16 @@ sampled nearest, no new dependency and no float, arriving as a `font` field whos
 font), pointer lock and scroll, text input and focus, per-side padding, and world-space UI (a health
 bar over an enemy's head is a *projection* question and wants `world.project(x, y, z)`).
 
-**Housekeeping the M31 audit turned up and did not do**, in the order they are worth doing:
-
-- **`validate.rs` has outgrown its file** — 5,539 lines with `validate_source` at ~1,400. It is now
-  the largest file in the workspace, and unlike the renderer it is GPU-free and fully covered by
-  the corpus tests, so splitting it is ordinary work rather than a ULP question.
-- **25 of the 37 baselines are pinned by no test** (see Verification). The pile stopped growing at
-  M32, whose fixture arrived with a CLI test that diff-renders it — which is the cheap thing that
-  makes a baseline survive someone who does not run the sweep, and the thing every earlier fixture
-  should be given.
-- **`docs/scene-format.md` and `docs/component-reference.md`** are sketched in the design doc §4 and
-  were never written. If either lands it must be generated and pinned like `error-codes.md`.
+**The M31 audit's housekeeping is done**: `scene_renderer.rs` and `validate.rs` are split, the
+clippy warnings are cleared and their CI step is blocking, every reproducible baseline has a test,
+and both `docs/` files the design doc sketched now exist. What is left of that list is one standing
+rule rather than a task: **a new fixture arrives with the CLI test that diff-renders it**, in the
+same commit, unless it is in the tour's nondeterministic class — in which case say so where the
+test would have gone.
 
 **The clippy warnings are cleared and CI's clippy step is blocking.** Six of the twenty-eight were
 not bugs to fix but the lint being wrong, and they carry a local `#[allow]` with the reason —
-**read it before deleting one**. Five are the `!(a > b)` comparisons in `validate.rs` and
+**read it before deleting one**. Five are the `!(a > b)` comparisons in `validate/component.rs` and
 `engine-script`, written negated *precisely so NaN fails*; clippy's suggested `a <= b` is false for
 NaN, so "fixing" them would let a NaN far plane, collider dimension, meadow stage or explosion
 radius validate clean. The sixth is `drop(write_object)` in `scene_renderer/mod.rs`, which releases the

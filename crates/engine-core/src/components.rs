@@ -181,7 +181,7 @@ pub struct Material {
     /// with the diffuse term scaled by `1 - transmission` (light that went
     /// through did not come back). There is no refraction and no
     /// scene-color sampling, so what is behind the surface is not bent or
-    /// tinted by its thickness — see `materials-lighting-design.md`.
+    /// tinted by its thickness.
     #[schemars(range(min = 0.0, max = 1.0))]
     pub transmission: f32,
 
@@ -1175,7 +1175,7 @@ fn half_cube() -> Vec3 {
 /// dynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),
 /// each inheriting the parent's `Material` and motion. Fragments are
 /// ordinary entities afterwards: they render, trace, and bake like anything
-/// else. See `breaking-design.md`.
+/// else.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Breakable {
@@ -1197,7 +1197,7 @@ pub struct Breakable {
 /// `source` is a relative `.rhai` path defining `fn step(world, step)`.
 /// Scripts mutate the world through a small registered API and never invent
 /// state of their own — baked output after a scripted run is an ordinary
-/// scene file. See `scripting-design.md`.
+/// scene file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Script {
@@ -1866,7 +1866,7 @@ impl Tree {
 /// Fresnel-weighted view term, absorption of what is behind the surface with
 /// depth (`shallow_color` → `deep_color`), and foam where the water meets
 /// geometry or folds at a crest. What it does *not* do is refract — the bed of
-/// a pond is not displaced by the ripples above it (`water-design.md` §8).
+/// a pond is not displaced by the ripples above it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Water {

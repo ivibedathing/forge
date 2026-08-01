@@ -1,8 +1,7 @@
 # M30 — Skeletal Animation: Design
 
-Companion to `agent-native-engine-design.md` and to `animation-system-design.md`, which deferred
-this as **A2** in its §7 build order. Where any two conflict, the engine doc wins, then the
-animation doc, then this one.
+Companion to `agent-native-engine-design.md` and to M9's animation design, which deferred
+this as **A2** in its build order. Where the two conflict, the engine doc wins.
 
 M9 gave the engine a time axis an agent can author as text: property clips, `--time`, `filmstrip`,
 `list-animations`. What it deliberately left out was the kind of motion nobody authors as text — a
@@ -13,7 +12,7 @@ character walking. That is this milestone.
 A `.glb` carrying a skin, a joint hierarchy and animation clips loads, poses, and renders; the pose
 is a pure function of (files, time) like every other pose in this engine; and **the skeleton is
 legible without opening the binary**, because a rig an agent cannot enumerate might as well not
-exist (`animation-system-design.md` §2, principle 5).
+exist (M9's design, §2, principle 5).
 
 Not in scope, and each with a reason:
 
@@ -87,7 +86,7 @@ duration field to drift.
 
 ## 4. Scene integration: no new component
 
-`AnimationPlayer.clip` gains a fragment form, which `animation-system-design.md` §4 already
+`AnimationPlayer.clip` gains a fragment form, which M9's design already
 specified and which nothing has used until now:
 
 ```json

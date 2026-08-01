@@ -5038,6 +5038,250 @@ fn a_stride_driven_walk_does_not_slide_its_feet() {
     );
 }
 
+// ── The baselines the sweep used to be the only check on ──────────────────
+//
+// `bin/verify-baselines` walks every entry in `baselines.json`, but it is a
+// thing a person runs, not a thing `cargo test` runs. Twenty-five artifacts
+// had no test behind them at all, so a change could move any of them and stay
+// green until someone remembered to sweep. These pin the nineteen that render
+// reproducibly, at 3.6 s for the lot.
+//
+// The six `showcase_*` frames are deliberately **not** here. They are not
+// byte-reproducible on this adapter — measured repeatedly at four to six
+// distinct images from six renders of an unchanged scene, on any binary — so a
+// test asserting them would fail at random, which is worse than no test. They
+// keep their `diff_args` tolerance in the manifest and stay the sweep's job.
+// See CLAUDE.md §Verification before adding them here.
+
+/// Diff-render one committed baseline and require it bit-exact.
+///
+/// Skips cleanly when this machine has no GPU, the policy every render pin
+/// here follows: baselines are per-adapter artifacts, so a machine that cannot
+/// render them has nothing to say about them.
+fn pin_baseline(scene: &str, baseline: &str, args: &[&str]) {
+    let mut command = engine();
+    command
+        .arg("diff-render")
+        .arg(repo_path(scene))
+        .arg(repo_path(baseline));
+    for arg in args {
+        // Timeline paths are repo-relative in the manifest; the test process
+        // does not promise to run from the repo root.
+        if arg.ends_with(".input.jsonl") {
+            command.arg(repo_path(arg));
+        } else {
+            command.arg(arg);
+        }
+    }
+    let diff = command.output().unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin for {baseline}: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{baseline}: {report}");
+    assert_eq!(report["diff_pixels"], 0, "{baseline}: {report}");
+}
+
+/// M4's lighting rig: the GGX shader, the two light components, and the sRGB
+/// render target that M4 settled the colour space on.
+#[test]
+fn m4_lighting_baseline_pins_the_pbr_rig() {
+    pin_baseline(
+        "examples/scenes/verify/m4_lighting.json",
+        "examples/scenes/verify/baselines/m4_lighting.png",
+        &[],
+    );
+}
+
+/// Both ends of M8's fall. `--steps 0` is the scene at rest, which is also the
+/// only thing that catches a physics build changing where bodies *start*.
+#[test]
+fn m8_drop_baselines_pin_both_ends_of_the_fall() {
+    for (steps, baseline) in [
+        ("0", "examples/scenes/verify/baselines/m8_drop_t0.png"),
+        ("300", "examples/scenes/verify/baselines/m8_drop_t300.png"),
+    ] {
+        pin_baseline(
+            "examples/scenes/verify/m8_drop.json",
+            baseline,
+            &["--steps", steps],
+        );
+    }
+}
+
+/// M9 sampled by `--time`, not `--steps`: a property clip's pose is a pure
+/// function of the clock, and this is the artifact that says so in pixels.
+#[test]
+fn m9_spin_baseline_pins_the_sampled_pose() {
+    pin_baseline(
+        "examples/scenes/verify/m9_spin.json",
+        "examples/scenes/verify/baselines/m9_t025.png",
+        &["--time", "0.25"],
+    );
+}
+
+/// M10 before and after the script has run: `--steps 0` is the authored file,
+/// `--steps 120` is what `fn step` did to it.
+#[test]
+fn m10_script_baselines_pin_both_ends_of_the_script() {
+    for (steps, baseline) in [
+        ("0", "examples/scenes/verify/baselines/m10_t0.png"),
+        ("120", "examples/scenes/verify/baselines/m10_t120.png"),
+    ] {
+        pin_baseline(
+            "examples/scenes/verify/m10_script.json",
+            baseline,
+            &["--steps", steps],
+        );
+    }
+}
+
+/// The parked car at the end of three recorded laps.
+///
+/// The lap test above pins the *drive* — positions, elevation, the HUD strings
+/// — and has named this PNG in a comment since M11 without anyone rendering
+/// it. Eleven thousand steps of vehicle physics and a render, for 1.2 s.
+#[test]
+fn m11_lap_baseline_pins_the_parked_car() {
+    pin_baseline(
+        "examples/scenes/car_track.json",
+        "examples/scenes/verify/baselines/m11_lap.png",
+        &[
+            "--steps",
+            "11634",
+            "--input",
+            "examples/scenes/car_track_lap.input.jsonl",
+        ],
+    );
+}
+
+/// M13's smoke: the seeded emitter's whole point is that a particle field can
+/// sit under a bit-exact baseline at all.
+#[test]
+fn m13_smoke_baseline_pins_the_particle_field() {
+    pin_baseline(
+        "examples/scenes/verify/m13_smoke.json",
+        "examples/scenes/verify/baselines/m13_smoke.png",
+        &["--steps", "180"],
+    );
+}
+
+/// M14 after the break: fragments are ordinary entities by the time this
+/// renders, which is the milestone's claim as a picture.
+#[test]
+fn m14_break_baseline_pins_the_debris() {
+    pin_baseline(
+        "examples/scenes/verify/m14_break.json",
+        "examples/scenes/verify/baselines/m14_break.png",
+        &["--steps", "300"],
+    );
+}
+
+/// The four hours of M21 that no test covered — noon already had one.
+///
+/// Together they pin the sun/moon handoff from both sides: 02:00 and 22:00 are
+/// moonlit, 06:30 and 18:30 sit just past the swap.
+#[test]
+fn m21_daylight_baselines_pin_the_other_four_hours() {
+    for (steps, baseline) in [
+        (
+            "120",
+            "examples/scenes/verify/baselines/m21_daylight_0200.png",
+        ),
+        (
+            "390",
+            "examples/scenes/verify/baselines/m21_daylight_0630.png",
+        ),
+        (
+            "1110",
+            "examples/scenes/verify/baselines/m21_daylight_1830.png",
+        ),
+        (
+            "1320",
+            "examples/scenes/verify/baselines/m21_daylight_2200.png",
+        ),
+    ] {
+        pin_baseline(
+            "examples/scenes/verify/m21_daylight.json",
+            baseline,
+            &["--steps", steps],
+        );
+    }
+}
+
+/// M26's texture maps, aimed at their subject with no terrain in frame, which
+/// is what lets this one carry a hard pin at all.
+#[test]
+fn m26_materials_baseline_pins_the_texture_maps() {
+    pin_baseline(
+        "examples/scenes/verify/m26_materials.json",
+        "examples/scenes/verify/baselines/m26_materials.png",
+        &[],
+    );
+}
+
+/// M27's two cameras on one file: the overhead one pins the bend, the grazing
+/// one pins the waterline the depth-copy validation exists for.
+///
+/// A test already names the overhead baseline, but only to assert it must
+/// *not* match with `ior` back at 1.0 — that pins refraction as load-bearing
+/// and says nothing about the render. This is the positive half.
+#[test]
+fn m27_water_refraction_baselines_pin_both_cameras() {
+    pin_baseline(
+        "examples/scenes/verify/m27_water_refraction.json",
+        "examples/scenes/verify/baselines/m27_water_refraction.png",
+        &["--steps", "120"],
+    );
+    pin_baseline(
+        "examples/scenes/verify/m27_water_refraction.json",
+        "examples/scenes/verify/baselines/m27_water_grazing.png",
+        &["--steps", "120", "--camera", "CameraGrazing"],
+    );
+}
+
+/// M28's two baselines from one timeline: where the pointer aimed, and what it
+/// hit when the button went down.
+#[test]
+fn m28_pointer_baselines_pin_aim_and_click() {
+    for (steps, baseline) in [
+        ("40", "examples/scenes/verify/baselines/m28_pointer_aim.png"),
+        (
+            "80",
+            "examples/scenes/verify/baselines/m28_pointer_click.png",
+        ),
+    ] {
+        pin_baseline(
+            "examples/scenes/verify/m28_pointer.json",
+            baseline,
+            &[
+                "--steps",
+                steps,
+                "--input",
+                "examples/scenes/verify/m28_pointer.input.jsonl",
+            ],
+        );
+    }
+}
+
+/// M29's field, and the reason it renders at `samples: 1`: a meadow under MSAA
+/// is not byte-reproducible on this adapter, so the fixture gives up
+/// antialiasing to keep a hard pin. If this starts failing, check `samples`
+/// before blaming the vertex stage.
+#[test]
+fn m29_meadow_baseline_pins_the_field_at_samples_1() {
+    pin_baseline(
+        "examples/scenes/verify/m29_meadow.json",
+        "examples/scenes/verify/baselines/m29_meadow.png",
+        &["--time", "0.7"],
+    );
+}
 // ── Skinned collider proxies (M33) ────────────────────────────────────────
 
 /// The milestone's fixture: two identical walkers walk into two identical
