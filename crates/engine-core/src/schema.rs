@@ -140,6 +140,238 @@ fn to_value(schema: schemars::Schema) -> Value {
     schema.to_value()
 }
 
+/// The component reference, as markdown, generated from the same schema
+/// `engine list-components` publishes.
+///
+/// Invariant 7 says component schemas are derived from the Rust structs and
+/// never maintained by hand; a prose reference maintained beside them would be
+/// a second source of truth that drifts the first time someone adds a field.
+/// So this renders the schema — every doc comment here was written on the
+/// struct — and `repo_contracts.rs` fails when the committed file disagrees.
+/// Regenerate with `engine list-components --markdown > docs/component-reference.md`.
+pub fn component_reference() -> String {
+    let schema = component_schema();
+    let defs = schema["$defs"].clone();
+    let variants = schema["oneOf"].as_array().cloned().unwrap_or_default();
+
+    let mut out = String::new();
+    out.push_str("# Component reference\n\n");
+    out.push_str(
+        "**Generated from the component schema — do not edit by hand.**\n\
+         Regenerate with `engine list-components --markdown > docs/component-reference.md`;\n\
+         `cargo test -p engine-core --test repo_contracts` fails when this file is stale.\n\n",
+    );
+    out.push_str(
+        "Every component is a JSON object tagged with its `type`, and every field below\n\
+         is optional — an absent field *is* its documented default. `engine list-components`\n\
+         prints the same information as JSON Schema, and `engine inspect <scene>` prints a\n\
+         scene's components with the defaults filled in.\n\n",
+    );
+
+    let mut names: Vec<(String, &Value)> = variants
+        .iter()
+        .filter_map(|v| {
+            v["properties"]["type"]["const"]
+                .as_str()
+                .map(|n| (n.to_string(), v))
+        })
+        .collect();
+    names.sort_by(|a, b| a.0.cmp(&b.0));
+
+    out.push_str("| Component | Summary |\n|---|---|\n");
+    for (name, variant) in &names {
+        let summary = variant["description"]
+            .as_str()
+            .and_then(|d| d.lines().next())
+            .unwrap_or("");
+        out.push_str(&format!(
+            "| [`{name}`](#{}) | {summary} |\n",
+            name.to_lowercase()
+        ));
+    }
+    out.push('\n');
+
+    for (name, variant) in &names {
+        out.push_str(&format!("## {name}\n\n"));
+        if let Some(description) = variant["description"].as_str() {
+            out.push_str(description.trim_end());
+            out.push_str("\n\n");
+        }
+        let properties = variant["properties"].as_object();
+        let fields: Vec<(&String, &Value)> = properties
+            .map(|p| p.iter().filter(|(k, _)| k.as_str() != "type").collect())
+            .unwrap_or_default();
+        if fields.is_empty() {
+            out.push_str("No fields; the `type` tag is the whole component.\n\n");
+            continue;
+        }
+        out.push_str("| Field | Type | Default | Notes |\n|---|---|---|---|\n");
+        for (field, spec) in fields {
+            let spec = &resolve(spec, &defs);
+            let ty = type_label(spec, &defs);
+            let default = spec
+                .get("default")
+                .map(|d| format!("`{}`", compact_default(d)))
+                .unwrap_or_else(|| "—".to_string());
+            let mut notes = spec["description"]
+                .as_str()
+                .unwrap_or("")
+                .replace('\n', " ")
+                .replace('|', "\\|");
+            if let Some(range) = range_label(spec) {
+                if notes.is_empty() {
+                    notes = range;
+                } else {
+                    notes = format!("{notes} ({range})");
+                }
+            }
+            out.push_str(&format!("| `{field}` | {ty} | {default} | {notes} |\n"));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// A default as an author would type it.
+///
+/// Every float in the schema is an `f32` widened to `f64` by serialization, so
+/// `Camera.near`'s `0.1` arrives as `0.10000000149011612`. Printing that would
+/// invite someone to copy it into a scene, where it means the same thing and
+/// reads like a mistake.
+fn compact_default(value: &Value) -> String {
+    match value {
+        Value::Number(n) => match n.as_f64() {
+            Some(v) if v.fract() != 0.0 || v.abs() >= 1e16 => format!("{}", v as f32),
+            Some(v) => format!("{v}"),
+            None => n.to_string(),
+        },
+        Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(compact_default).collect();
+            let joined = format!("[{}]", inner.join(", "));
+            // A table cell is not the place for `Meadow.stages`' six fully
+            // spelled-out keyframes. Past a screen's width the count is the
+            // useful part; the prose beside it says what they are.
+            if joined.len() > DEFAULT_CELL_LIMIT {
+                let noun = if items.len() == 1 { "entry" } else { "entries" };
+                format!("{} {noun}", items.len())
+            } else {
+                joined
+            }
+        }
+        Value::Object(fields) => {
+            let inner: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("\"{k}\": {}", compact_default(v)))
+                .collect();
+            let joined = format!("{{{}}}", inner.join(", "));
+            if joined.len() > DEFAULT_CELL_LIMIT {
+                "{…}".to_string()
+            } else {
+                joined
+            }
+        }
+        other => other.to_string(),
+    }
+}
+
+/// How wide a rendered default may get before it is summarized instead.
+const DEFAULT_CELL_LIMIT: usize = 120;
+
+/// Follow a `$ref` into `$defs`, so a field typed as one of the shared enums
+/// (`Collider.shape`, `HudPanel.layout`, …) shows its actual vocabulary rather
+/// than the word "object". The referenced definition carries the doc comment
+/// too, which is why this replaces the spec rather than only its type.
+fn resolve(spec: &Value, defs: &Value) -> Value {
+    let Some(reference) = spec["$ref"].as_str() else {
+        return spec.clone();
+    };
+    let Some(name) = reference.strip_prefix("#/$defs/") else {
+        return spec.clone();
+    };
+    match defs.get(name) {
+        Some(target) => target.clone(),
+        None => spec.clone(),
+    }
+}
+
+/// A field's type as the reference shows it: the JSON type, or `[T; n]` for
+/// the fixed-length arrays this format uses for vectors and colours.
+fn type_label(spec: &Value, defs: &Value) -> String {
+    if let Some(items) = spec.get("items") {
+        let items = resolve(items, defs);
+        let inner = items["type"].as_str().unwrap_or("object");
+        return match spec.get("minItems").and_then(Value::as_u64) {
+            Some(n) if spec.get("maxItems").and_then(Value::as_u64) == Some(n) => {
+                format!("`[{inner}; {n}]`")
+            }
+            _ => format!("`{inner}[]`"),
+        };
+    }
+    if let Some(values) = spec.get("enum").and_then(Value::as_array) {
+        let names: Vec<String> = values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|v| format!("`\"{v}\"`"))
+            .collect();
+        if !names.is_empty() {
+            return names.join(" \\| ");
+        }
+    }
+    // A documented enum reaches the schema as oneOf/const rather than a flat
+    // `enum` — the schemars gotcha `ColliderShapeKind` is kept undocumented to
+    // avoid. Both forms mean the same closed vocabulary, so both render as one.
+    if let Some(variants) = spec.get("oneOf").and_then(Value::as_array) {
+        let names: Vec<String> = variants
+            .iter()
+            .filter_map(|v| v["const"].as_str())
+            .map(|v| format!("`\"{v}\"`"))
+            .collect();
+        if !names.is_empty() {
+            return names.join(" \\| ");
+        }
+    }
+    // An `Option<T>` field is typed `["T", "null"]`; the null is what "absent"
+    // already means everywhere in this format, so only `T` is worth printing.
+    if let Some(types) = spec["type"].as_array() {
+        let named: Vec<&str> = types
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|t| *t != "null")
+            .collect();
+        if named.len() == 1 {
+            return format!("`{}`", named[0]);
+        }
+        if !named.is_empty() {
+            return format!("`{}`", named.join(" | "));
+        }
+    }
+    match spec["type"].as_str() {
+        Some(t) => format!("`{t}`"),
+        None => "`object`".to_string(),
+    }
+}
+
+/// The range constraint a field carries, if any — the `#[schemars(...)]`
+/// attributes validation enforces, spelled out so the reference and the
+/// error message agree.
+fn range_label(spec: &Value) -> Option<String> {
+    let bound = |key: &str, text: &str| {
+        spec.get(key)
+            .and_then(Value::as_f64)
+            .map(|v| format!("{text} {v}"))
+    };
+    let parts: Vec<String> = [
+        bound("minimum", "at least"),
+        bound("exclusiveMinimum", "greater than"),
+        bound("maximum", "at most"),
+        bound("exclusiveMaximum", "less than"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

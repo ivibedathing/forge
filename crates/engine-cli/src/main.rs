@@ -377,6 +377,12 @@ enum Command {
         /// its own.
         #[arg(long)]
         component: Option<String>,
+        /// Print the component reference as markdown instead of JSON Schema —
+        /// the human-readable half of the same vocabulary, and how
+        /// `docs/component-reference.md` is generated. A documented stdout
+        /// exception, beside `agent-guide`.
+        #[arg(long, conflicts_with = "component")]
+        markdown: bool,
     },
 
     /// Compile the workspace, re-emitting rustc diagnostics as engine errors.
@@ -529,7 +535,10 @@ fn main() {
             print!("{}", scaffold::AGENT_GUIDE);
             Ok(())
         }
-        Command::ListComponents { component } => list_components(component),
+        Command::ListComponents {
+            component,
+            markdown,
+        } => list_components(component, markdown),
         Command::Build { check } => build::build(check),
         Command::Info => info(),
         #[cfg(debug_assertions)]
@@ -989,7 +998,12 @@ fn ui_layout(
 /// checked-in `schemas/component-schema.json` is that output, a repo-contract
 /// test enforces it, and the validation walk and the editor's widget generator
 /// both read the same document.
-fn list_components(component: Option<String>) -> Result<()> {
+fn list_components(component: Option<String>, markdown: bool) -> Result<()> {
+    if markdown {
+        print!("{}", engine_core::schema::component_reference());
+        return Ok(());
+    }
+
     let Some(name) = component else {
         print!("{}", engine_core::schema::canonical_json());
         return Ok(());
