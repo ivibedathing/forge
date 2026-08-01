@@ -65,17 +65,18 @@ engine/
     scenes/
       demo_scene.json
   docs/
-    scene-format.md             # NOT BUILT — see below
-    component-reference.md      # NOT BUILT — see below
+    scene-format.md             # the rules the schema cannot express
+    component-reference.md      # generated from doc comments
 ```
 
-Both `docs/` entries above are **unbuilt as of M31** and are kept here as intent, not as a
-description of the tree. What actually shipped in `docs/` is `cli-contract.md` (the wire contract)
-and `error-codes.md` (mirrored from `codes.rs` and pinned by a repo-contract test). The component
-reference an agent uses today is `engine list-components`, which publishes the schemars-generated
-schema with the doc comments carried into it as descriptions. If the markdown reference is ever
-written, it has to be generated and pinned the way `error-codes.md` is — a hand-maintained copy of
-the schema would violate invariant #7.
+Both `docs/` entries above were unbuilt from M0 to M31 and are now real, on the terms this section
+already set: `component-reference.md` is **generated** by `engine list-components --markdown` from
+the same schema the flagless form publishes, and pinned by `repo_contracts.rs` — a hand-maintained
+copy of the schema would violate invariant #7. `scene-format.md` is prose, because what it covers
+is what the schema *cannot* say: internal tagging, entity names as addresses, asset paths relative
+to the scene file, which components own their own geometry, and the cost of JSON having no
+comments. Its worked example is checked by a repo-contract test rather than trusted, since the
+example in a format document is the first thing anyone copies.
 
 ## 5. Scene File Format (JSON)
 

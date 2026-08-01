@@ -609,3 +609,67 @@ fn every_asset_a_committed_scene_references_is_committed() {
         missing.join("\n  ")
     );
 }
+
+/// `docs/component-reference.md` is generated, and this is what keeps it so.
+///
+/// Invariant 7: component schemas are derived from the Rust structs, never
+/// maintained by hand. A prose reference maintained beside them would be a
+/// second source of truth, drifting the first time someone adds a field — so
+/// the reference is rendered from the same schema `engine list-components`
+/// publishes, and this test fails when the committed file falls behind.
+#[test]
+fn checked_in_component_reference_matches_the_code() {
+    let committed = repo_file("docs/component-reference.md");
+    let generated = engine_core::schema::component_reference();
+    assert_eq!(
+        committed, generated,
+        "docs/component-reference.md is stale — regenerate it with \
+         `engine list-components --markdown > docs/component-reference.md`"
+    );
+}
+
+/// Every component the engine has appears in the reference.
+///
+/// The equality test above would also catch this, but it fails with a diff of
+/// two 800-line strings. This one names the missing component.
+#[test]
+fn component_reference_documents_every_component() {
+    let reference = repo_file("docs/component-reference.md");
+    for name in engine_core::components::ComponentData::NAMES {
+        assert!(
+            reference.contains(&format!("\n## {name}\n")),
+            "docs/component-reference.md has no section for {name}"
+        );
+    }
+}
+
+/// The worked example in `docs/scene-format.md` is a real scene.
+///
+/// A format document whose example does not load is worse than none: it is the
+/// first thing anyone copies. The example is fenced with ```json and marked
+/// with the `<!-- validated -->` comment, so this can find it without the doc
+/// having to keep a duplicate copy on disk.
+#[test]
+fn the_scene_format_doc_example_validates() {
+    let doc = repo_file("docs/scene-format.md");
+    let marker = "<!-- validated -->";
+    let count = doc.matches(marker).count();
+    assert!(
+        count > 0,
+        "docs/scene-format.md has no {marker} example for this test to check"
+    );
+
+    for (index, section) in doc.split(marker).skip(1).enumerate() {
+        let body = section
+            .split_once("```json")
+            .and_then(|(_, rest)| rest.split_once("```"))
+            .map(|(body, _)| body)
+            .unwrap_or_else(|| panic!("{marker} #{index} is not followed by a ```json block"));
+        let errors = engine_core::validate::validate_source(body, "docs/scene-format.md");
+        let fatal: Vec<_> = errors.iter().filter(|e| !e.is_warning()).collect();
+        assert!(
+            fatal.is_empty(),
+            "the example after {marker} #{index} does not validate: {fatal:?}"
+        );
+    }
+}

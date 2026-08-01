@@ -24,11 +24,15 @@ that breaks a rule here fails the build before it ships.
   nothing else, ever. Even an internal panic speaks this protocol (the panic
   hook re-renders it as `internal_panic`, backtrace escaped inside the JSON
   string when `RUST_BACKTRACE` is set).
-- `--help`, `--version`, and `engine agent-guide` are documentation, not
-  results, and are exempt: human-readable prose, exit 0. `agent-guide` prints
-  the markdown orientation an agent needs to work here, which is the one thing
-  a caller wants unwrapped — a JSON string holding a 200-line document with
-  every newline escaped serves nobody.
+- `--help`, `--version`, `engine agent-guide`, and
+  `engine list-components --markdown` are documentation, not results, and are
+  exempt: human-readable prose, exit 0. `agent-guide` prints the markdown
+  orientation an agent needs to work here, which is the one thing a caller
+  wants unwrapped — a JSON string holding a 200-line document with every
+  newline escaped serves nobody. `list-components --markdown` is the same
+  vocabulary the flagless form emits as JSON Schema, rendered for reading;
+  it is how `docs/component-reference.md` is generated, and a repo contract
+  test fails when that file falls behind.
 
 ## Exit codes
 
@@ -105,6 +109,7 @@ engine ui-layout <scene.json> [--width W --height H] [--entity Name]...  # where
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
 engine list-components [--component Name]    # scene + component JSON Schemas
+engine list-components --markdown            # the same vocabulary, as prose
 engine info                                  # selected GPU adapter
 engine init [dir] [--force]                  # scaffold a project; refuses a non-empty dir
 engine agent-guide                           # the agent orientation, as markdown
