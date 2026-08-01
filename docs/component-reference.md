@@ -84,7 +84,7 @@ On break the entity is replaced, after that step's physics, by one
 dynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),
 each inheriting the parent's `Material` and motion. Fragments are
 ordinary entities afterwards: they render, trace, and bake like anything
-else. See `breaking-design.md`.
+else.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -408,7 +408,7 @@ resolve to something the file does not say. A variant is a second file.
 | `orm_map` | `string` | — | Occlusion in R, roughness in G, metallic in B — glTF's packing, so an import is a file copy rather than a channel re-pack. Linear data, never colour. R multiplies the ambient and sky terms only, never the direct sun: that is what makes it *ambient* occlusion rather than a second shadow. G and B multiply `roughness` and `metallic`. |
 | `roughness` | `number` | `0.9` | Perceptual roughness: `0` = mirror-tight highlight, `1` = matte. Range `[0, 1]`. (at least 0, at most 1) |
 | `thickness` | `number` | `0` | How far light travels inside the surface, in metres. Both the scale of the refraction offset and the Beer–Lambert path length, so a thick block of ice is finally greener than a thin one. `0` is the pre-M26 behaviour. (at least 0) |
-| `transmission` | `number` | `0` | How much light passes *through* the surface instead of scattering off it: `0` = opaque, `1` = clear glass. Range `[0, 1]`.  Unlike [`Material::alpha`] this is view-dependent and keeps the specular lobe, which is the whole difference between a transparent object and a faded one: a water surface seen edge-on reflects the sky and hides its bottom, and seen from overhead it does neither. The approximation is a Fresnel lerp back toward opaque at grazing angles, with the diffuse term scaled by `1 - transmission` (light that went through did not come back). There is no refraction and no scene-color sampling, so what is behind the surface is not bent or tinted by its thickness — see `materials-lighting-design.md`. (at least 0, at most 1) |
+| `transmission` | `number` | `0` | How much light passes *through* the surface instead of scattering off it: `0` = opaque, `1` = clear glass. Range `[0, 1]`.  Unlike [`Material::alpha`] this is view-dependent and keeps the specular lobe, which is the whole difference between a transparent object and a faded one: a water surface seen edge-on reflects the sky and hides its bottom, and seen from overhead it does neither. The approximation is a Fresnel lerp back toward opaque at grazing angles, with the diffuse term scaled by `1 - transmission` (light that went through did not come back). There is no refraction and no scene-color sampling, so what is behind the surface is not bent or tinted by its thickness. (at least 0, at most 1) |
 | `uv_offset` | `[number; 2]` | `[0, 0]` |  |
 | `uv_scale` | `[number; 2]` | `[1, 1]` | Tiling for every map on this material: UV × `uv_scale` + `uv_offset`. Sampling repeats on both axes, so `[20, 20]` is twenty tiles. |
 
@@ -634,7 +634,7 @@ Gameplay logic as data (M10): a Rhai script run once per fixed step.
 `source` is a relative `.rhai` path defining `fn step(world, step)`.
 Scripts mutate the world through a small registered API and never invent
 state of their own — baked output after a scripted run is an ordinary
-scene file. See `scripting-design.md`.
+scene file.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -778,7 +778,7 @@ Shading is water-specific rather than a `Material`: sky reflection with a
 Fresnel-weighted view term, absorption of what is behind the surface with
 depth (`shallow_color` → `deep_color`), and foam where the water meets
 geometry or folds at a crest. What it does *not* do is refract — the bed of
-a pond is not displaced by the ripples above it (`water-design.md` §8).
+a pond is not displaced by the ripples above it.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|

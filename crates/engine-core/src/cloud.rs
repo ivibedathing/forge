@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn flattening_puts_a_floor_under_the_cloud() {
-        // The flat base is one of the four cues in `cloud-design.md` §1, and it
+        // The flat base is one of M20's four shape cues, and it
         // is the one a unit test can actually check.
         let flat = generate(&Cloud {
             flatten: 1.0,

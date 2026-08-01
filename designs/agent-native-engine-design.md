@@ -170,22 +170,18 @@ can run in CI.
    Transform + Mesh + Camera components, schema export.
 4. **M3 — Asset pipeline.** glTF mesh loading, basic texture loading.
 5. **M4 — Materials + lighting.** PBR-ish material component, one directional
-   light, basic Phong or simplified PBR shader. Full design in
-   `materials-lighting-design.md`.
+   light, basic Phong or simplified PBR shader.
 6. **M5 — Validation + structured errors everywhere.** Make `engine validate`
    and `engine build` genuinely agent-friendly (this is as important as
-   rendering features — don't leave it to the end). Full design in
-   `validation-design.md`.
-7. **M6 — Diff-render / visual regression tooling.** Full design in
-   `diff-render-design.md`.
+   rendering features — don't leave it to the end).
+7. **M6 — Diff-render / visual regression tooling.**
 8. **M7 — GUI editor.** A visual editor as a *view* onto the same text files
    (per §2.3) — never a second source of truth. Edits made in the GUI are
    writes to the scene JSON, so agent and human workflows stay interchangeable.
-   Full design in `gui-editor-design.md`.
 9. **M8 — Physics.** Rigid bodies and colliders as plain-data components,
-   simulated by systems. Full design in `physics-design.md`.
+   simulated by systems.
 10. **M9 — Animation.** Skeletal/keyframe animation, building on the glTF
-    asset pipeline from M3. Full design in `animation-system-design.md`.
+    asset pipeline from M3.
 11. **M10 — Scripting.** Runtime scripting layer — depends on resolving the
     Lua/Rhai vs. compiled-Rust-systems question in §9.
 

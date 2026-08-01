@@ -1,7 +1,7 @@
 # UI system — Design Document (M31)
 
-Companion to `agent-native-engine-design.md`, and the successor to
-`hud-design.md`. M12 gave the engine two screen-space primitives — a solid
+Companion to `agent-native-engine-design.md`, and the successor to M12's
+HUD design. M12 gave the engine two screen-space primitives — a solid
 rectangle and a line of pixel-font text — placed by an anchor and a pixel
 offset. That was enough to read state out of a running scene. It is not enough
 to build a *screen*: a menu, a dialog, an inventory, a title card, anything a

@@ -15,8 +15,8 @@ Scene files land in `examples/scenes/verify/` (clips in `examples/scenes/verify/
 are committed, and are never edited casually afterward — they are regression fixtures. The JSON
 in this document is the canonical content; copy it verbatim when the milestone lands.
 
-Component shapes below follow the settled companion designs (`materials-lighting-design.md`,
-`physics-design.md`, `animation-system-design.md`, `gui-editor-design.md`). If implementation
+Component shapes below follow the settled companion designs for M4, M7, M8 and
+M9, pruned once built (see `designs/README.md`). If implementation
 forces a shape change, update this document in the same commit.
 
 ## The standard check, run after every milestone
@@ -59,7 +59,7 @@ standard check regresses the asset pipeline too, and M9's skeletal phase (A2) is
 
 Two identical spheres differing only in roughness (specular response is only visible on curved
 geometry — the reason `builtin:sphere` exists), an emissive beacon, the recommended sun+ambient
-rig from `materials-lighting-design.md` §3, and the M2-era ground/camera setup so the whole
+rig from M4's design §3, and the M2-era ground/camera setup so the whole
 pre-M4 stack is still in the frame.
 
 ```json
@@ -156,7 +156,7 @@ engine validate /tmp/m4_typo.json
 # Expect exit != 0 and stderr JSON containing "did_you_mean": "DirectionalLight" with file/line.
 ```
 
-Then the standard check. New headless tests from `materials-lighting-design.md` §11 (lit-face
+Then the standard check. New headless tests from M4's design §11 (lit-face
 ordering, sun flip, ambient-only, emissive ≈ `srgb_encode(emissive)`, roughness highlight
 comparison) must be in `cargo test --workspace` by the time this scene is committed.
 
@@ -310,7 +310,7 @@ test mutates it) plus `verify/m5_broken.json` for the validation panel.
 M7 is the one milestone that needs a human at the keyboard for parts of its check (gizmo
 drags); everything else stays scriptable.
 
-**Run after implementing M7 (per editor milestone E0–E2, `gui-editor-design.md` §8):**
+**Run after implementing M7 (per editor milestone E0–E2, M7's design §8):**
 
 ```bash
 git switch -c m7-editor-check
@@ -418,7 +418,7 @@ baked-scene screenshot also regresses rendering.
 }
 ```
 
-**Run after implementing M8 (per phase, `physics-design.md` §11):**
+**Run after implementing M8 (per phase, M8's design §11):**
 
 ```bash
 # M8.0 — data only (no rapier yet): scene validates, schema regenerated.
@@ -475,7 +475,7 @@ rendering (`--steps` screenshots), and Euler-degree transform conventions (write
 `examples/scenes/verify/animations/spin.anim.json`.
 
 The clip (the canonical 0°→360° spin that quaternion slerp would silently no-op — the exact
-failure this design avoids, per `animation-system-design.md` §3):
+failure this design avoids, per M9's design §3):
 
 ```json
 {
@@ -548,7 +548,7 @@ against a fixed anchor), M4 lighting rig, standard camera:
 }
 ```
 
-**Run after implementing M9 (per phase A0–A2, `animation-system-design.md` §7):**
+**Run after implementing M9 (per phase A0–A2, M9's design §7):**
 
 ```bash
 # A0 — sampling is pure and validated (no rendering involved yet):
@@ -588,7 +588,7 @@ engine diff-render examples/scenes/verify/m9_spin.json \
 
 Then the standard check. If M8 is already in, also run one combined scene check: an
 `AnimationPlayer` targeting a `dynamic` rigid body must fail validation (or whatever rule the
-open ownership question in `animation-system-design.md` §9 settled to — settle it before this
+open ownership question in M9's design §9 settled to — settle it before this
 milestone closes, and encode the answer as a test here).
 
 **What this regresses:** validation across file references (scene → clip), the screenshot
@@ -599,7 +599,7 @@ and determinism end to end — `cmp` on PNGs is the strictest check in this whol
 
 ## M10 — Scripting
 
-> **Resolved 2026-07-27: Rhai** (settled with the user; see `scripting-design.md`). Scripts
+> **Resolved 2026-07-27: Rhai** (settled with the user). Scripts
 > are `.rhai` files defining `fn step(world, step)`, run once per fixed step, before physics.
 
 **Files:** `examples/scenes/verify/m10_script.json`,
@@ -763,7 +763,7 @@ render), `world.look_at`, and the determinism promise extended over recorded inp
 
 ## M12 — HUD components: `verify/m12_hud.json`
 
-Screen-anchored `HudText` + `HudRect` components (hud-design.md), rendered by the same
+Screen-anchored `HudText` + `HudRect` components, rendered by the same
 rasterizer/overlay pass as the M11.6 `world.hud` lines. The fixture covers every anchor, a
 glyph-coverage line, rect-under-text draw order, a fractional-opacity panel, and a script
 (`verify/scripts/m12_hud.rhai`) that writes the step counter into a `HudText` and stretches a
@@ -1100,7 +1100,7 @@ schema-driven validation of 24 new fields. The GPU-free half is 12 tests in
 **Bless from a debug build.** Unlike every earlier fixture, this one is sensitive to the build
 profile: procedural geometry does enough `sin_cos` work that a release build's libm routines move
 three pixels of `m19_trees.png` and one of `showcase_90.png` by one channel step (see
-`tree-design.md` §4 — it is measured, and it is not FMA). The committed baselines are blessed with
+M19's design §4 — it is measured, and it is not FMA). The committed baselines are blessed with
 the binary `cargo test` runs, so the pinned test is exact; a release build checking them by hand
 sees those pixels.
 
