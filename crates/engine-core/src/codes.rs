@@ -284,6 +284,8 @@ registry! {
         "warning: collides_with names a layer no collider is a member of";
     DAYLIGHT_OVERRIDES_SKY = "daylight_overrides_sky", Input,
         "warning: daylight computes the sky and ambient, so the authored ones are never read";
+    COLLIDER_MESH_SIZE_MISMATCH = "collider_mesh_size_mismatch", Input,
+        "warning: a Collider is a very different size from the builtin mesh it sits on";
 
     // ── Scene semantics at command time ───────────────────────────────
     SCENE_UNREADABLE = "scene_unreadable", Input,

@@ -87,7 +87,7 @@
     {
       "name": "Boulder",
       "components": [
-        { "type": "Transform", "position": [3.9, -0.15, 4.2], "scale": [1.9, 1.3, 1.7] },
+        { "type": "Transform", "position": [3.9, -0.15, 4.2], "scale": [3.8, 2.6, 3.4] },
         { "type": "Mesh", "asset": "builtin:sphere" },
         { "type": "Material", "albedo": [0.31, 0.30, 0.28], "roughness": 0.8 }
       ]

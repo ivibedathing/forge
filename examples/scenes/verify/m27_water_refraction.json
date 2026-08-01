@@ -125,7 +125,7 @@
     {
       "name": "Boulder",
       "components": [
-        { "type": "Transform", "position": [1.2, -1.1, 4.4], "scale": [1.5, 1.1, 1.4] },
+        { "type": "Transform", "position": [1.2, -1.1, 4.4], "scale": [3.0, 2.2, 2.8] },
         { "type": "Mesh", "asset": "builtin:sphere" },
         { "type": "Material", "albedo": [0.33, 0.32, 0.29], "roughness": 0.82 }
       ]

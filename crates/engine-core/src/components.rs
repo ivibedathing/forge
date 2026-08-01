@@ -27,9 +27,19 @@ pub struct Name(pub String);
 /// All three fields are optional in JSON; omitting one gives the identity
 /// value, so a scene can say `{"type": "Transform", "position": [0, 3, 0]}`
 /// without restating a rotation and scale it does not care about.
+///
+/// **One world unit is one metre**, and that is the convention every other
+/// number in the format is quoted against: gravity is `-9.81` because a body
+/// falls 9.81 m/s², `Tree.height: 6.0` is a six-metre tree, and a `Wheel`
+/// 0.35 m in radius belongs under a car 1.7 m wide. Time is seconds and mass
+/// is kilograms, so `Collider.density` is kg/m³ — note its default of `1.0`
+/// is *not* a plausible material, and a body meant to be pushed by forces
+/// wants a real one (the demo car's box chassis carries `350`, which is how
+/// 4.3 m³ becomes 1.5 t).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Transform {
+    /// World-space `[x, y, z]` **in metres**. +Y is up.
     #[schemars(with = "[f32; 3]")]
     pub position: Vec3,
 
@@ -43,6 +53,18 @@ pub struct Transform {
     #[schemars(with = "[f32; 3]")]
     pub rotation: Vec3,
 
+    /// Multiplier on the entity's own geometry, per axis. Identity is
+    /// `[1, 1, 1]`.
+    ///
+    /// **Every `builtin:` primitive is one metre across at scale 1**, so on
+    /// those this field reads directly as a size in metres: a
+    /// `builtin:cube` at `[1.7, 0.7, 3.6]` is a car-sized box, and a
+    /// `builtin:sphere` at `[0.9, 0.9, 0.9]` is 0.9 m across — *not* 1.8.
+    /// The recipes size the same way (`Terrain`, `Water` and `Meadow` take
+    /// their footprint from `scale` in XZ), and it also multiplies
+    /// `Collider` dimensions, which is why a cuboid collider matching a
+    /// builtin cube is authored as `half_extents: [0.5, 0.5, 0.5]` in
+    /// *local* units rather than in metres.
     #[schemars(with = "[f32; 3]")]
     pub scale: Vec3,
 }

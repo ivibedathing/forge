@@ -115,6 +115,39 @@ impl BuiltinMesh {
             Self::Triangle => triangle(),
         }
     }
+
+    /// The `builtin:` reference that names this primitive — the inverse of
+    /// [`BuiltinMesh::parse`], so an error can quote what the file said.
+    pub fn asset(self) -> &'static str {
+        match self {
+            Self::Cube => "builtin:cube",
+            Self::Cylinder => "builtin:cylinder",
+            Self::Plane => "builtin:plane",
+            Self::Sphere => "builtin:sphere",
+            Self::Triangle => "builtin:triangle",
+        }
+    }
+
+    /// How far the primitive reaches from the origin on each axis, before
+    /// `Transform.scale`.
+    ///
+    /// **Every modelling primitive is one metre across**, so this is `0.5` on
+    /// every axis it occupies and `0.0` on the ones it is flat in — which is
+    /// what makes `Transform.scale` read as a size in metres, and what lets
+    /// validation compare a `Collider` against the thing it is supposed to be
+    /// the shape of. Pinned by `every_modelling_primitive_fits_the_unit_extent`.
+    ///
+    /// It is the reach from the origin rather than half the span, because the
+    /// M0 triangle is not centred on it — the one primitive that answers
+    /// something other than the unit rule, and the conservative reading is the
+    /// one a collider comparison wants.
+    pub fn half_extents(self) -> Vec3 {
+        match self {
+            Self::Cube | Self::Sphere | Self::Cylinder => Vec3::splat(0.5),
+            Self::Plane => Vec3::new(0.5, 0.0, 0.5),
+            Self::Triangle => Vec3::new(0.8, 0.8, 0.0),
+        }
+    }
 }
 
 /// File extensions the mesh loader reads, lowercase.
@@ -362,15 +395,27 @@ fn plane() -> MeshData {
     mesh
 }
 
-/// UV sphere, unit radius, centered on the origin: the lighting probe.
+/// UV sphere of radius 0.5 — one metre across — centered on the origin: the
+/// lighting probe.
+///
+/// Like the cube and the cylinder it fits the unit extent, so
+/// `Transform.scale` means the same thing on all four and reads as a size in
+/// metres. **It was radius 1 until M35**, alone among the primitives, and that
+/// cost five of the six sphere-plus-collider pairs in this repo their agreement
+/// between what was drawn and what was simulated — a `Collider` radius is
+/// scaled by the same `Transform.scale`, so authoring one to match the mesh
+/// meant writing a number twice the visible size and nothing said so.
 ///
 /// Smooth normals equal to the normalized positions — the property that makes
 /// a sphere ideal for judging specular response in a screenshot, and the
 /// reason this primitive exists (roughness and Fresnel are invisible on flat
-/// faces). 32 segments × 16 rings is plenty at screenshot resolutions.
+/// faces). Normals stay unit length while positions carry the radius, so the
+/// two are no longer the same array. 32 segments × 16 rings is plenty at
+/// screenshot resolutions.
 fn sphere() -> MeshData {
     const SEGMENTS: u32 = 32;
     const RINGS: u32 = 16;
+    const RADIUS: f32 = 0.5;
 
     let vertex_count = ((RINGS + 1) * (SEGMENTS + 1)) as usize;
     let mut mesh = MeshData {
@@ -388,13 +433,13 @@ fn sphere() -> MeshData {
         let theta = std::f32::consts::PI * ring as f32 / RINGS as f32;
         for segment in 0..=SEGMENTS {
             let phi = std::f32::consts::TAU * segment as f32 / SEGMENTS as f32;
-            let position = Vec3::new(
+            let normal = Vec3::new(
                 theta.sin() * phi.cos(),
                 theta.cos(),
                 theta.sin() * phi.sin(),
             );
-            mesh.positions.push(position.to_array());
-            mesh.normals.push(position.to_array());
+            mesh.positions.push((normal * RADIUS).to_array());
+            mesh.normals.push(normal.to_array());
             mesh.uvs
                 .push([segment as f32 / SEGMENTS as f32, ring as f32 / RINGS as f32]);
         }
@@ -568,6 +613,16 @@ mod tests {
     }
 
     #[test]
+    fn asset_round_trips_through_parse_for_every_primitive() {
+        for asset in BuiltinMesh::ASSETS {
+            let builtin = BuiltinMesh::parse(asset)
+                .expect("a builtin: reference")
+                .expect("a known primitive");
+            assert_eq!(builtin.asset(), *asset);
+        }
+    }
+
+    #[test]
     fn every_primitive_keeps_its_arrays_parallel() {
         for builtin in [
             BuiltinMesh::Cube,
@@ -583,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn sphere_is_unit_radius_with_normals_matching_positions() {
+    fn sphere_is_half_unit_radius_with_unit_normals() {
         let sphere = BuiltinMesh::Sphere.data();
         assert_eq!(sphere.vertex_count(), 17 * 33, "(rings+1) x (segments+1)");
         assert_eq!(
@@ -593,12 +648,85 @@ mod tests {
         );
 
         for (position, normal) in sphere.positions.iter().zip(&sphere.normals) {
-            let p = Vec3::from_array(*position);
+            let (p, n) = (Vec3::from_array(*position), Vec3::from_array(*normal));
             assert!(
-                (p.length() - 1.0).abs() < 1e-5,
-                "every vertex sits on the unit sphere, got {p:?}"
+                (p.length() - 0.5).abs() < 1e-5,
+                "every vertex sits 0.5 from the centre — one metre across, \
+                 like the cube — got {p:?}"
             );
-            assert_eq!(position, normal, "smooth normals = normalized positions");
+            assert!(
+                (n.length() - 1.0).abs() < 1e-5,
+                "normals stay unit length while positions carry the radius"
+            );
+            assert!(
+                (n * 0.5 - p).length() < 1e-6,
+                "smooth normals are still the normalized positions"
+            );
+        }
+    }
+
+    /// The unit-extent rule `Transform.scale` rests on: a builtin at scale 1
+    /// is one metre across, so `scale` reads directly as a size in metres and
+    /// a `Collider` authored to match it uses the same numbers on every
+    /// primitive.
+    ///
+    /// The M0 triangle is exempt — it is the original clip-space stack proof
+    /// kept reachable from a scene file, not something anyone models with.
+    #[test]
+    fn every_modelling_primitive_fits_the_unit_extent() {
+        for builtin in [
+            BuiltinMesh::Cube,
+            BuiltinMesh::Cylinder,
+            BuiltinMesh::Plane,
+            BuiltinMesh::Sphere,
+        ] {
+            let mesh = builtin.data();
+            let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for position in &mesh.positions {
+                let p = Vec3::from_array(*position);
+                min = min.min(p);
+                max = max.max(p);
+            }
+            // A plane has no thickness, so each axis is either the full unit
+            // extent or flat — never something in between.
+            for axis in 0..3 {
+                let extent = max[axis] - min[axis];
+                assert!(
+                    (extent - 1.0).abs() < 1e-5 || extent < 1e-5,
+                    "{builtin:?} spans {extent} on axis {axis}; a builtin is one \
+                     metre across at scale 1 or flat"
+                );
+                assert!(
+                    (min[axis] + max[axis]).abs() < 1e-5,
+                    "{builtin:?} is not centred on axis {axis}: {min:?}..{max:?}"
+                );
+            }
+        }
+    }
+
+    /// `half_extents` is what `engine validate` compares a `Collider`
+    /// against, and it is written out by hand rather than measured, so it can
+    /// drift from the geometry it claims to describe. Measure it here — every
+    /// primitive, the triangle included.
+    #[test]
+    fn declared_half_extents_match_the_geometry() {
+        for builtin in [
+            BuiltinMesh::Cube,
+            BuiltinMesh::Cylinder,
+            BuiltinMesh::Plane,
+            BuiltinMesh::Sphere,
+            BuiltinMesh::Triangle,
+        ] {
+            let mesh = builtin.data();
+            let mut measured = Vec3::ZERO;
+            for position in &mesh.positions {
+                measured = measured.max(Vec3::from_array(*position).abs());
+            }
+            assert!(
+                (measured - builtin.half_extents()).length() < 1e-5,
+                "{builtin:?} declares {:?} but measures {measured:?}",
+                builtin.half_extents()
+            );
         }
     }
 

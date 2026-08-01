@@ -544,7 +544,7 @@
     "oneOf": [
       {
         "additionalProperties": false,
-        "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.",
+        "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.\n\n**One world unit is one metre**, and that is the convention every other\nnumber in the format is quoted against: gravity is `-9.81` because a body\nfalls 9.81 m/s², `Tree.height: 6.0` is a six-metre tree, and a `Wheel`\n0.35 m in radius belongs under a car 1.7 m wide. Time is seconds and mass\nis kilograms, so `Collider.density` is kg/m³ — note its default of `1.0`\nis *not* a plausible material, and a body meant to be pushed by forces\nwants a real one (the demo car's box chassis carries `350`, which is how\n4.3 m³ becomes 1.5 t).",
         "properties": {
           "position": {
             "default": [
@@ -552,6 +552,7 @@
               0.0,
               0.0
             ],
+            "description": "World-space `[x, y, z]` **in metres**. +Y is up.",
             "items": {
               "format": "float",
               "type": "number"
@@ -581,6 +582,7 @@
               1.0,
               1.0
             ],
+            "description": "Multiplier on the entity's own geometry, per axis. Identity is\n`[1, 1, 1]`.\n\n**Every `builtin:` primitive is one metre across at scale 1**, so on\nthose this field reads directly as a size in metres: a\n`builtin:cube` at `[1.7, 0.7, 3.6]` is a car-sized box, and a\n`builtin:sphere` at `[0.9, 0.9, 0.9]` is 0.9 m across — *not* 1.8.\nThe recipes size the same way (`Terrain`, `Water` and `Meadow` take\ntheir footprint from `scale` in XZ), and it also multiplies\n`Collider` dimensions, which is why a cuboid collider matching a\nbuiltin cube is authored as `half_extents: [0.5, 0.5, 0.5]` in\n*local* units rather than in metres.",
             "items": {
               "format": "float",
               "type": "number"
@@ -3256,7 +3258,7 @@
         "oneOf": [
           {
             "additionalProperties": false,
-            "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.",
+            "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.\n\n**One world unit is one metre**, and that is the convention every other\nnumber in the format is quoted against: gravity is `-9.81` because a body\nfalls 9.81 m/s², `Tree.height: 6.0` is a six-metre tree, and a `Wheel`\n0.35 m in radius belongs under a car 1.7 m wide. Time is seconds and mass\nis kilograms, so `Collider.density` is kg/m³ — note its default of `1.0`\nis *not* a plausible material, and a body meant to be pushed by forces\nwants a real one (the demo car's box chassis carries `350`, which is how\n4.3 m³ becomes 1.5 t).",
             "properties": {
               "position": {
                 "default": [
@@ -3264,6 +3266,7 @@
                   0.0,
                   0.0
                 ],
+                "description": "World-space `[x, y, z]` **in metres**. +Y is up.",
                 "items": {
                   "format": "float",
                   "type": "number"
@@ -3293,6 +3296,7 @@
                   1.0,
                   1.0
                 ],
+                "description": "Multiplier on the entity's own geometry, per axis. Identity is\n`[1, 1, 1]`.\n\n**Every `builtin:` primitive is one metre across at scale 1**, so on\nthose this field reads directly as a size in metres: a\n`builtin:cube` at `[1.7, 0.7, 3.6]` is a car-sized box, and a\n`builtin:sphere` at `[0.9, 0.9, 0.9]` is 0.9 m across — *not* 1.8.\nThe recipes size the same way (`Terrain`, `Water` and `Meadow` take\ntheir footprint from `scale` in XZ), and it also multiplies\n`Collider` dimensions, which is why a cuboid collider matching a\nbuiltin cube is authored as `half_extents: [0.5, 0.5, 0.5]` in\n*local* units rather than in metres.",
                 "items": {
                   "format": "float",
                   "type": "number"

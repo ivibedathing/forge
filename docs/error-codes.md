@@ -112,6 +112,7 @@ build fails.
 | `zero_scale` | 1 | warning: a Transform.scale axis of 0 renders invisibly or degenerate |
 | `unknown_collision_layer` | 1 | warning: collides_with names a layer no collider is a member of |
 | `daylight_overrides_sky` | 1 | warning: daylight computes the sky and ambient, so the authored ones are never read |
+| `collider_mesh_size_mismatch` | 1 | warning: a Collider is a very different size from the builtin mesh it sits on |
 | `scene_unreadable` | 1 | the scene file could not be read |
 | `scene_parse_desync` | 2 | internal bug: the scene passed validation but failed to parse |
 | `entity_not_found` | 1 | no entity has the requested name |
