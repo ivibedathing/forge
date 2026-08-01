@@ -236,6 +236,76 @@ pub(crate) struct FrameTextureKey {
     pub(crate) color: Option<(u32, u32)>,
 }
 
+/// What a cascaded frame needs beyond what M16 allocated (M38).
+///
+/// Built once, at construction, and only beyond one cascade.
+///
+/// The caster half is the part worth explaining. `shadow.wgsl` and its three
+/// siblings read `frame.light_view_proj`, and cascade *i* needs a different
+/// one. Rather than teach four caster shaders about cascades — or make the
+/// frame bind group layout dynamic, which every pipeline in the engine shares —
+/// the frame uniform is written **once per cascade** into one buffer at aligned
+/// offsets, and each cascade's pass binds a group naming its own slice. The
+/// caster shaders and the layout are untouched; `record_shadows` gains a loop.
+pub(crate) struct CascadeResources {
+    /// The matrices the receivers sample through, at group 2 binding 5.
+    pub(crate) matrices: wgpu::Buffer,
+    /// The frame uniform, once per cascade.
+    pub(crate) caster_frames: wgpu::Buffer,
+    /// A group-1 binding per cascade, over that cascade's slice of it.
+    pub(crate) caster_groups: Vec<wgpu::BindGroup>,
+    /// The frame uniform's size rounded up to the device's uniform alignment.
+    pub(crate) caster_stride: u64,
+}
+
+impl CascadeResources {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        frame_layout: &wgpu::BindGroupLayout,
+        cascades: u32,
+    ) -> Self {
+        let matrices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cascade-matrices"),
+            size: std::mem::size_of::<CascadeUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let frame_size = std::mem::size_of::<FrameUniform>() as u64;
+        let caster_stride = frame_size.next_multiple_of(alignment);
+        let caster_frames = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cascade-caster-frames"),
+            size: caster_stride * u64::from(cascades),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let caster_groups = (0..cascades)
+            .map(|cascade| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("cascade-caster-frame"),
+                    layout: frame_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &caster_frames,
+                            offset: caster_stride * u64::from(cascade),
+                            size: std::num::NonZeroU64::new(frame_size),
+                        }),
+                    }],
+                })
+            })
+            .collect();
+
+        Self {
+            matrices,
+            caster_frames,
+            caster_groups,
+            caster_stride,
+        }
+    }
+}
+
 /// One uploaded texture with its mip chain, cached across frames.
 ///
 /// `_source` keeps the `TextureData` alive for exactly the reason `CachedMesh`

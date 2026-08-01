@@ -246,6 +246,14 @@ pub struct SceneRenderer {
     /// The real map, allocated the first time a scene casts shadows so that
     /// scenes which never do pay nothing for it.
     shadow_map: Option<ShadowMap>,
+    /// How many nested cascades the sun renders (M38). Baked in at
+    /// construction, because it decides the shadow map's binding type and
+    /// therefore every pipeline; changing it means a new `SceneRenderer`.
+    cascades: u32,
+    /// The cascade matrices as the receivers read them, and the frame uniform
+    /// once per cascade as the *casters* do. Both absent at one cascade, where
+    /// the caster binds the frame uniform itself exactly as M16 left it.
+    cascade_resources: Option<CascadeResources>,
     meshes: HashMap<usize, CachedMesh>,
     /// Uploaded meadows, keyed on the `Arc<MeadowPatch>` identity — the mesh
     /// cache's rule, for the same reason.
@@ -360,6 +368,14 @@ impl SceneRenderer {
         self.samples
     }
 
+    /// The shadow cascade count baked into this renderer's pipelines (M38), on
+    /// the same terms as [`Self::samples`] and for a stronger reason: it decides
+    /// the shadow map's *binding type*, so a scene that changes it needs a new
+    /// renderer rather than a new uniform.
+    pub fn cascades(&self) -> u32 {
+        self.cascades
+    }
+
     /// Upload a draw list and render it.
     ///
     /// Geometry uploads once and is reused: `items` carry shared
@@ -427,19 +443,28 @@ impl SceneRenderer {
 
         // Shadows need a real map; allocate it the first time any scene asks.
         if environment.shadows && self.shadow_map.is_none() {
-            self.shadow_map = Some(ShadowMap::new(device, SHADOW_MAP_SIZE));
+            self.shadow_map = Some(ShadowMap::new(device, SHADOW_MAP_SIZE, self.cascades));
         }
-        let light_view_proj = if environment.shadows {
-            light_view_projection(
-                lights.sun_direction,
-                camera_position,
-                view_projection,
-                environment.shadow_distance,
-                SHADOW_MAP_SIZE,
-            )
+        // One fit per cascade, over nested slabs of the view (M38). The last
+        // entry is fitted to `shadow_distance` itself, so at one cascade this is
+        // the single call M16 made — same function, same arguments, same matrix.
+        let cascade_view_proj: Vec<Mat4> = if environment.shadows {
+            cascade_distances(self.cascades, environment.shadow_distance)
+                .into_iter()
+                .map(|distance| {
+                    light_view_projection(
+                        lights.sun_direction,
+                        camera_position,
+                        view_projection,
+                        distance,
+                        SHADOW_MAP_SIZE,
+                    )
+                })
+                .collect()
         } else {
-            Mat4::IDENTITY
+            vec![Mat4::IDENTITY; self.cascades as usize]
         };
+        let light_view_proj = *cascade_view_proj.last().expect("at least one cascade");
 
         // Point lights pack into the fixed-size array in the order
         // `ResolvedLights` produced (entity-name order). Validation caps the
@@ -475,6 +500,32 @@ impl SceneRenderer {
             view_proj: view_projection.to_cols_array_2d(),
         };
         queue.write_buffer(&self.frame_uniform.buffer, 0, bytemuck::bytes_of(&frame));
+
+        // The cascaded halves (M38): the matrices the receivers sample through,
+        // and one copy of the frame uniform per cascade for the casters — each
+        // the same frame with its own cascade's matrix in `light_view_proj`, so
+        // the four caster shaders keep reading the field they always read.
+        if let Some(cascades) = &self.cascade_resources {
+            let mut matrices = CascadeUniform {
+                view_proj: [Mat4::IDENTITY.to_cols_array_2d(); MAX_SHADOW_CASCADES as usize],
+            };
+            for (slot, matrix) in matrices.view_proj.iter_mut().zip(&cascade_view_proj) {
+                *slot = matrix.to_cols_array_2d();
+            }
+            queue.write_buffer(&cascades.matrices, 0, bytemuck::bytes_of(&matrices));
+
+            for (index, matrix) in cascade_view_proj.iter().enumerate() {
+                let per_cascade = FrameUniform {
+                    light_view_proj: matrix.to_cols_array_2d(),
+                    ..frame
+                };
+                queue.write_buffer(
+                    &cascades.caster_frames,
+                    cascades.caster_stride * index as u64,
+                    bytemuck::bytes_of(&per_cascade),
+                );
+            }
+        }
 
         // Geometry first: anything new joins the cache, anything already there
         // is just touched. `keys` then addresses the cache during the pass
@@ -959,11 +1010,26 @@ impl SceneRenderer {
         // not shadow at all.
         if environment.shadows {
             let shadow_map = self.shadow_map.as_ref().expect("allocated above");
+            // One pass per cascade (M38), each into its own layer. Every opaque
+            // caster is drawn into every cascade: the engine has no spatial
+            // structure to cull the inner ones against, so a scene at four
+            // cascades pays four times M16's caster cost. At one cascade this
+            // loop runs once, over the map M16 allocated.
+            for cascade in 0..shadow_map.cascades.len() {
+            // Cascade `i`'s frame uniform is this frame's with `i`'s matrix in
+            // `light_view_proj` — which is how four caster shaders that know
+            // nothing about cascades each draw into the right one.
+            let frame_group = self
+                .cascade_resources
+                .as_ref()
+                .map_or(&self.frame_uniform.bind_group, |held| {
+                    &held.caster_groups[cascade]
+                });
             let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow-pass"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &shadow_map.view,
+                    view: &shadow_map.cascades[cascade],
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -977,7 +1043,7 @@ impl SceneRenderer {
 
             if let Some(objects) = &self.objects {
                 shadow_pass.set_pipeline(&self.shadow_pipeline);
-                shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                shadow_pass.set_bind_group(1, frame_group, &[]);
                 let cast = |pass: &mut wgpu::RenderPass<'_>, object: usize, mesh: &CachedMesh| {
                     pass.set_bind_group(
                         0,
@@ -1007,7 +1073,7 @@ impl SceneRenderer {
                     };
                     if !switched {
                         shadow_pass.set_pipeline(&self.shadow_cutout_pipeline);
-                        shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                        shadow_pass.set_bind_group(1, frame_group, &[]);
                         switched = true;
                     }
                     let mesh = &self.meshes[&keys[index]];
@@ -1038,7 +1104,7 @@ impl SceneRenderer {
                         }
                         if !solid {
                             shadow_pass.set_pipeline(&skinned.shadow);
-                            shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                            shadow_pass.set_bind_group(1, frame_group, &[]);
                             solid = true;
                         }
                         self.draw_skinned(
@@ -1063,7 +1129,7 @@ impl SceneRenderer {
                         };
                         if !cut {
                             shadow_pass.set_pipeline(&skinned.shadow_cutout);
-                            shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
+                            shadow_pass.set_bind_group(1, frame_group, &[]);
                             cut = true;
                         }
                         self.draw_skinned(
@@ -1091,6 +1157,7 @@ impl SceneRenderer {
                         &self.meshes[road_key],
                     );
                 }
+            }
             }
         }
     }
@@ -1700,31 +1767,41 @@ impl SceneRenderer {
             .map_or(&self.color_placeholder, |copy| &copy.view);
 
         let group = |label, colour: &wgpu::TextureView| {
+            let mut entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(colour),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
+                },
+            ];
+            // The cascade matrices (M38), present in the layout only beyond one
+            // cascade — so at one this list is the one M26 left, entry for
+            // entry.
+            if let Some(cascades) = &self.cascade_resources {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: cascades.matrices.as_entire_binding(),
+                });
+            }
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &self.frame_textures_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(shadow_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(depth_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(colour),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
-                    },
-                ],
+                entries: &entries,
             })
         };
         self.frame_textures = Some(FrameTextures {
