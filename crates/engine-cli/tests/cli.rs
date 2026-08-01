@@ -6776,3 +6776,91 @@ fn buoyancy_refuses_the_component_that_could_do_nothing() {
         .expect("the fixed body is reported");
     assert_eq!(inert["entity"], "Statue");
 }
+
+/// The M37 fixture: a launcher firing entities that did not exist when the
+/// scene loaded, pinned bit-exactly.
+///
+/// **The arc of five shots is the assertion.** Nothing in the file draws a
+/// sphere — `Shot` is a `templates` entry, declared and not instantiated — so
+/// every ball in the frame was spawned by a script, given a velocity through
+/// the ordinary API on the line after its spawn, simulated by rapier, and
+/// reaped by name. A spawn that silently did nothing, arrived a step late, or
+/// never reached physics all render as a frame with no spheres in it.
+#[test]
+fn the_spawn_fixture_matches_its_baseline() {
+    let scene = repo_path("examples/scenes/verify/m37_spawn.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m37_spawn.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("120")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+}
+
+/// The report, the trace and the bake all have to say a spawn happened — a
+/// picture cannot answer "did my gun fire", which is the whole reason the
+/// query commands exist (M24/M25).
+#[test]
+fn simulate_reports_traces_and_bakes_what_a_run_spawned() {
+    let scene = repo_path("examples/scenes/verify/m37_spawn.json");
+    let dir = std::env::temp_dir().join(format!("engine-m37-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let trace = dir.join("m37_spawn.jsonl");
+
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "120"])
+        .arg("--trace")
+        .arg(&trace)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+
+    // A total, not a live count: eleven were fired and five are still up.
+    assert_eq!(report["spawned"], 11, "{report}");
+    assert_eq!(report["hud"][0], "shots in flight 5/6", "{report}");
+
+    // Spawned bodies are ordinary entities from the moment they exist, so they
+    // are in the report's `entities` array like anything else.
+    let names: Vec<String> = report["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["entity"].as_str().unwrap().to_string())
+        .collect();
+    assert!(names.contains(&"Shot#11".to_string()), "{names:?}");
+    assert!(
+        !names.contains(&"Shot#1".to_string()),
+        "the first shot was reaped: {names:?}"
+    );
+
+    // The trace records both halves as events, so a run is greppable.
+    let lines = std::fs::read_to_string(&trace).unwrap();
+    assert!(lines.contains(r#""spawned":"Shot#1""#), "no spawn event");
+    assert!(lines.contains(r#""despawned":"Shot#1""#), "no despawn event");
+
+    // And the names are never reused: `Shot#1` is spawned once in the whole
+    // run, however many times its slot is freed.
+    let spawns = lines
+        .lines()
+        .filter(|l| l.contains(r#""spawned":"Shot#1""#) && !l.contains("Shot#1x"))
+        .count();
+    assert_eq!(spawns, 1, "a name was reused");
+}

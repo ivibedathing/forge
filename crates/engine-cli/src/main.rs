@@ -1961,16 +1961,40 @@ fn inspect(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
         })
         .collect();
 
+    // What the scene can spawn (M37), resolved the same way: absent fields are
+    // the documented defaults, and the point of `inspect` is that you see them
+    // rather than infer them. Reported only when the scene has templates, and
+    // suppressed entirely under `--entity`, which asks about one *entity* —
+    // a template is not one, and answering with both would make the report's
+    // shape depend on something the question did not mention.
+    let templates: Vec<serde_json::Value> = if entity.is_some() {
+        Vec::new()
+    } else {
+        let mut templates: Vec<&engine_core::scene::TemplateDef> = scene.templates.iter().collect();
+        templates.sort_by(|a, b| a.name.cmp(&b.name));
+        templates
+            .into_iter()
+            .map(|template| {
+                serde_json::json!({
+                    "name": template.name,
+                    "limit": template.limit,
+                    "components": template.components,
+                })
+            })
+            .collect()
+    };
+
     // Compact, like every other report — `raycast`, `road-centerline`,
     // `simulate`. Only the schema commands pretty-print, because a schema is
     // read and a report is piped through `jq`.
-    println!(
-        "{}",
-        serde_json::json!({
-            "scene": scene.name,
-            "entities": entities,
-        })
-    );
+    let mut report = serde_json::json!({
+        "scene": scene.name,
+        "entities": entities,
+    });
+    if !templates.is_empty() {
+        report["templates"] = serde_json::Value::Array(templates);
+    }
+    println!("{report}");
     Ok(())
 }
 
@@ -2795,8 +2819,10 @@ fn run_scene(
         scene.daylight.clone(),
         scene.environment,
         &assets,
+        &scene.templates,
     )?;
-    let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
+    let has_physics =
+        engine_physics::PhysicsWorld::scene_has_physics(&scene.world, &scene.templates);
     let has_emitters = engine_core::particles::ParticleSystem::scene_has_emitters(&scene.world);
     let simulation = if has_physics
         || has_emitters
@@ -2809,6 +2835,7 @@ fn run_scene(
                 &scene.world,
                 &scene.physics,
                 &assets,
+                &scene.templates,
             )?)
         } else {
             None

@@ -1,9 +1,10 @@
 # Structural holes
 
 **Gaps in the pre-M35 engine that block a capability rather than polish one.**
-Three of the original four remain; **§4, the CPU wave evaluator, was built as M41** — see
-`designs/notes/m41-buoyancy.md` and `designs/buoyancy-design.md`. It is kept below, struck through
-in prose rather than deleted, because what it *predicted* is worth checking against what it cost.
+**Two of the original four are now closed**: §1, entity spawning, was built as M37, and §4, the
+CPU wave evaluator, as M41 — see `designs/notes/m37-entity-spawning.md` and
+`designs/notes/m41-buoyancy.md`. Both are kept below, struck through in prose rather than deleted,
+because what they *predicted* is worth checking against what they cost.
 `CLAUDE.md`'s "Deferred follow-ups, by area" is the full backlog — three dozen items, most of them
 a nicer version of something that already works. This document is the short list underneath it:
 the places where a scene *cannot express* something, and where the workaround is a demo bending
@@ -23,7 +24,36 @@ are decided, not pending.
 
 ---
 
-## 1. Entity spawning
+## 1. Entity spawning — **closed by M37**
+
+**A script can create an entity now.** `designs/entity-spawning-design.md` is the milestone;
+`designs/notes/m37-entity-spawning.md` is what building it taught. The shape it took is the one
+sketched below — a `templates` block the scene file declares, and
+`world.spawn_entity("Bullet", x, y, z)` returning the new entity's name — chosen for the reason the
+sketch gave: arbitrary construction from a script would put geometry in a `.rhai` and break
+invariant 2.
+
+The original entry is kept below, because what it *predicted* is worth keeping next to what
+happened. Three of the four things it said this cost are now merely undone rather than impossible:
+
+- **Projectiles exist.** The arena's twenty-four bullets were entities parked at y = -30 and
+  recycled; they are a template now, and regenerating the scene deleted 864 lines of hidden props.
+- **`RETRY` and endless waves are now ordinary work, not blocked work.** Nothing has been built:
+  the campaign is still four levels and the end card still has no `RETRY`, because putting ten
+  broken drones back means a `Drone` template, a wave that spawns from it, and an answer for what a
+  mid-level save restores. That is a piece of work with a known shape. It used to be a wall.
+- **A save is still the campaign, not the arena**, for the same reason — the save records `level`,
+  `score`, `health` and settings, and nothing about which drones were broken.
+
+The four open sub-questions were answered as follows, and the design doc argues each: instance
+names are `Template#N` from a per-template counter that never reuses; a template lives **in the
+scene**, with prefab files deferred behind the `Material.asset` shape; `inspect` reports a
+`templates` array and `validate` runs the full per-entity walk on one; and determinism survives
+because every input to a spawn is already ordered — while the collider set moving the broad phase
+is exactly as predicted, and a scene that gains spawning re-blesses.
+
+<details>
+<summary>The entry as written before M37</summary>
 
 **A script cannot create an entity.** It can destroy one — destruction has exactly one owner and
 it is the script — so the asymmetry is the whole problem: a run can only ever shrink.
@@ -64,6 +94,8 @@ scheme), whether a template lives in the scene or its own file, what `inspect` a
 say about something that does not exist yet, and how the determinism promise survives — the
 collider set is an input to the broad phase (see `CLAUDE.md`'s Traps), so a spawn perturbs
 every body in the scene by construction.
+
+</details>
 
 ---
 
@@ -127,9 +159,8 @@ shore-foam contour reads the drawn surface back as a number, and it agrees to 1.
 
 ## Suggested order
 
-1. **Entity spawning.** Unblocks the most, is a <M35 system (M10 scripting), is the arena
-   shooter's oldest constraint, and — unlike hot reload — needs no settled decision reversed. The
-   runtime half is already proven by M14.
+1. ~~**Entity spawning.**~~ Built as M37, and the prediction held: the runtime half was already
+   proven by M14, and what the milestone actually spent its time on was the authoring question.
 2. **Hot reload**, as a *decision* first. It may cost a paragraph rather than a milestone.
 3. **Alpha-cut leaves.** Small, known shape, disproportionate visual return.
 4. ~~**The wave evaluator.**~~ Built as M41. The "wants a real consumer first" instinct was right

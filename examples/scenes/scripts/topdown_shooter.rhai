@@ -28,12 +28,21 @@
 //   which is M30's sanctioned way to hold a prop. Three exist; two are parked
 //   below the floor, because a `Mesh` has no visibility flag and parking is
 //   what the drones, the barrels and the bullet pool all already do.
-// * Bullets are not physics. Twenty-four mesh-only entities are recycled here,
-//   flown at BULLET_SPEED, and tested against drone centres as a swept
-//   *segment* — a 46 m/s round covers 0.77 m per step, so a point test would
-//   shoot straight through a drone between two frames. Nothing about them
-//   touches rapier, which is also why a hail of fire cannot disturb the arena.
-//   Known limit: they pass over cover. Cover stops bodies, not bolts.
+// * Bullets are **spawned** (M37) from the scene's `Bullet` template and
+//   despawned when spent. Until M37 they were twenty-four mesh-only entities
+//   parked at y = -30 and recycled, because a script could not create one —
+//   the pre-authored-and-hidden shape this whole demo used to be built out of.
+//   What did *not* change is that they are not physics: the script flies them
+//   at BULLET_SPEED and tests them against drone centres as a swept *segment*
+//   — a 46 m/s round covers 0.77 m per step, so a point test would shoot
+//   straight through a drone between two frames — and nothing about them
+//   touches rapier, which is why a hail of fire cannot disturb the arena.
+//   That part is a design decision, not a workaround, and M37 does not undo
+//   it. Known limit: they pass over cover. Cover stops bodies, not bolts.
+//   The pool of *state slots* below survives too: `world.state` holds numbers
+//   and not lists, so a fixed set of slots is still how a script keeps track
+//   of several bolts at once. What each slot now holds is the instance index
+//   of a bullet that exists, rather than the index of one that always did.
 // * All run state is `world.state` — numeric, per-run, replay-deterministic.
 //   Since M36 it is also what a *save* is: `world.save(slot)` writes this map
 //   to a file, so score, level, health and every setting persist without any
@@ -196,8 +205,10 @@ fn turn_z(ax, az, degrees) {
     ax * r.sin() + az * r.cos()
 }
 
-// The first free bullet slot, or -1. Scanning beats a round-robin index: it
-// never overwrites a bolt still in flight.
+// The first free state slot, or -1. Scanning beats a round-robin index: it
+// never overwrites a bolt still in flight. A slot is free when its bullet has
+// been despawned, and the template's `limit` is the same number as the pool,
+// so a free slot always has a spawn available behind it.
 fn free_slot(world, count) {
     for i in 0..count {
         if world.state("b" + i.to_string() + "t", 0.0) <= 0.0 { return i; }
@@ -227,7 +238,19 @@ fn spray(world, pellets, pool, mux, muy, muz, ax, az, speed, life, spread, walk,
         let dx = turn_x(ax, az, offset);
         let dz = turn_z(ax, az, offset);
         let key = "b" + slot.to_string();
-        world.set_position("Bullet" + pad2(slot), mux, muy, muz);
+        // The round comes into existence here, at the muzzle, rather than
+        // being teleported up from under the floor.
+        let shot = world.spawn_entity("Bullet", mux, muy, muz);
+        // The empty name is the template's cap. It should be unreachable —
+        // the cap and the slot count are the same number — but a silent
+        // mis-fire is exactly the bug that would hide a mismatch.
+        if shot == "" { continue; }
+        // The slot remembers *which* instance it holds. Parsed out of the
+        // returned name rather than mirrored from a counter of our own,
+        // because a second counter is a second source of truth about how many
+        // bullets have been fired.
+        let cut = shot.index_of("#");
+        world.set_state(key + "i", parse_int(shot.sub_string(cut + 1)));
         world.set_state(key + "t", life);
         world.set_state(key + "x", dx * speed);
         world.set_state(key + "z", dz * speed);
@@ -738,6 +761,14 @@ fn step(world, step) {
     // on the level that came back, with this level's ten drones still in the
     // sky waiting for their wave.
     if loading {
+        // A save is a snapshot of the state map, bullet slots included, and
+        // the bullets those slots named are gone — this is a fresh run. Left
+        // alone, the flight loop below would ask where `Bullet#7` is and get a
+        // runtime error. Clearing the slots is the M37 half of "a save is the
+        // campaign, not the arena".
+        for i in 0..BULLET_COUNT {
+            world.set_state("b" + i.to_string() + "t", 0.0);
+        }
         mode = 1;
         world.set_state("mode", 1);
         world.set_state("wave", 1);
@@ -1025,7 +1056,7 @@ fn step(world, step) {
         let life = world.state(key + "t", 0.0);
         if life <= 0.0 { continue; }
 
-        let name = "Bullet" + pad2(i);
+        let name = "Bullet#" + world.state(key + "i", 0).to_int();
         let b = world.position(name);
         let bx = b[0];
         let by = b[1];
@@ -1103,7 +1134,7 @@ fn step(world, step) {
         if left <= 0.0 { retire = true; }
         if retire {
             world.set_state(key + "t", 0.0);
-            world.set_position(name, 0.0, -30.0, 0.0);
+            world.despawn_entity(name);
         }
         if !retire {
             world.set_state(key + "t", left);

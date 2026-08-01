@@ -71,20 +71,21 @@ materials only: the entity's `Material` is its bark.
 
 **Scene-level blocks**, siblings of `entities`: `physics` (gravity, `timestep_hz`), `environment`
 (sky, fog, shadows and their cascades, MSAA — `m16-environment.md`, `m38-shadow-cascades.md`,
-**script-writable since M36**), and `daylight` (the clock-driven sun, moon and sky palette —
-`m21-daylight.md`).
+**script-writable since M36**), `daylight` (the clock-driven sun, moon and sky palette —
+`m21-daylight.md`), and `templates` (entity definitions declared but **not instantiated**, which a
+script spawns at runtime — `m37-entity-spawning.md`).
 
 **System order per fixed step**: animations → scripts → physics → particles → render.
 
 ## Current state
 
-**M0–M36 and M38–M41 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M41 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
-planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M38 shadow cascades,
-M39 ragdolls, M40 road authoring, M41 buoyancy.
+planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
+M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy.
 (M35 is a design doc only — global illumination, not built. M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
@@ -109,7 +110,8 @@ engine edit <scene.json> [--watch]       # GUI editor; --watch = read-only super
 engine simulate <scene.json> --steps N [--input f] [--bake out.json] [--trace t.jsonl] [--entity N]...
 #   the report says where every dynamic body ended up (M25); screenshot/filmstrip report a
 #   frame "digest" — mean_luminance, background, coverage — so a black frame is diagnosable
-#   without reading the image (M25)
+#   without reading the image (M25). A run that spawned anything reports `spawned` (a total,
+#   not a live count) and traces `spawned`/`despawned` event lines (M37)
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
 engine list-animations <scene-or-clip> [--schema]  # glTF clips too, with their channel targets (M30)
@@ -131,7 +133,8 @@ engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground 
 engine water-height <scene.json> --at x,z [--entity N] [--time T] [--steps N]
 #   where the water is, and which way it faces (M41); the first query that takes a
 #   clock, and the first that can answer "no water here" rather than a height
-engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
+engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24);
+#   also reports the scene's `templates` — what it can spawn — with defaults filled in (M37)
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; keyboard AND mouse; FPS readout is viewer-only
 engine init [dir] [--force]              # scaffold a project: starter scene + AGENTS.md/CLAUDE.md
 engine agent-guide                       # the agent orientation as markdown (a stdout exception)
@@ -172,12 +175,21 @@ The cross-cutting ones. Per-system traps are in each note.
 - **A physics scene is not stable under the addition of a collider anywhere in it.** Dropping one
   5 cm static sphere 200 m from anything moved six bodies by up to 4.4 mm — the collider set is an
   input to the broad phase and float addition is not associative. The determinism promise is per
-  *file*: a scene that gains a body re-blesses.
+  *file*: a scene that gains a body re-blesses. **M37 is the sharpest case**: the tour's embers
+  moved the *breaking crates* at the other end of the arena, and the diff image is entirely
+  somewhere the change is not.
 - **A kinematic body has no mass properties, so promoting one to dynamic needs an explicit
   `recompute_mass_properties_from_colliders`.** `Collider::set_density` alone leaves the body at a
   near-zero mass, because mass was meaningless to it until that moment and rapier never computed
   one. The symptom is a ragdoll leaving the scene at 40 m/s from a 6 N·s kick, which sends you to
   read the joints — and the joints are fine (M39).
+- **`spawn` is a reserved keyword in Rhai**, which is why the script call is `spawn_entity` (M37).
+  The curated engine also has an expression-complexity budget that rejects a six-term string
+  concatenation at *compile* time — split it into two statements.
+- **Anything a script throws wants `ccd: true`.** The tour's 7 cm embers tunnelled straight through
+  the terrain heightfield without it, and a body that leaves the world does so in silence. A
+  spawned projectile is the easiest way in this engine to author a body that moves further than its
+  own diameter in one step (M37).
 - **Grep the `.rhai` files for `set_scale` before believing a scale-space change is complete.** Two
   scripts drive scale every step from a hard-coded constant, so editing the scene file achieved
   nothing and the coals rendered at half size (M34).
@@ -238,14 +250,14 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**35 of the 41 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**38 of the 44 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02` in the manifest and stay the sweep's job; `cli.rs` says so
 where someone would go to add them. The pixel *allowance* is there rather than a wider threshold
 because the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held
-for eight consecutive full sweeps. **The other 32 entries carry no `diff_args` at all — they are
+for eight consecutive full sweeps. **The other 38 entries carry no `diff_args` at all — they are
 bit-exact, and a failure there is real.**
 
 **Which tour frames flake carries no information; whether one is stable under repetition does.**
@@ -338,6 +350,8 @@ made without reading its note first. Paths are under `designs/notes/`.
   physics takes the skeleton over and hands it back as `Ragdoll.pose`, a **component field** — which
   is how invariant 2 survives and why a corpse baked mid-fall reloads into the same heap. Brings
   `ColliderPart.fit` and `engine fit-colliders` with it.
+- **Entity spawning (M37)** → `m37-entity-spawning.md`, design in `designs/entity-spawning-design.md`.
+  A `templates` block the script spawns from, so a run can grow rather than only shrink.
 
 ### Geometry recipes
 
@@ -566,9 +580,9 @@ assets → M4 materials + lighting → M5 validation hardening → M6 diff-rende
 M8 physics → M9 animation (A0–A1) → M10 scripting — **the roadmap is complete.** Each milestone from
 M4 on ends by running its fixture from `designs/milestone-verification-scenes.md`.
 
-**The three that block a capability rather than polish one** — entity spawning, hot reload and
-alpha-cut leaves — are pulled out into `designs/structural-holes.md`, with what each one costs a live
-demo today. (The fourth, a CPU wave evaluator, was M41.) The rest, by area:
+**The two that block a capability rather than polish one** — hot reload and alpha-cut leaves — are
+pulled out into `designs/structural-holes.md`, with what each one costs a live demo today. (Of the
+original four, entity spawning was M37 and a CPU wave evaluator was M41.) The rest, by area:
 
 - **Editor**: E3 (structure edits), E4 (undo); picking against the *posed* mesh (CPU ray picking
   hits the rest pose).
@@ -604,10 +618,15 @@ demo today. (The fourth, a CPU wave evaluator, was M41.) The rest, by area:
   padding, and world-space UI (a health bar over an enemy's head is a *projection* question and
   wants `world.project(x, y, z)`).
 - **Game shell** (after M36): more than one save slot and a save browser (which wants a clock a
-  script does not have), autosave, restoring a mid-level arena (which wants entity spawning, the
-  arena shooter's oldest constraint), and a per-joint aim override so a twin-stick character can
-  turn its torso without its legs — the one item here that would **reverse** a settled decision
-  rather than extend one.
+  script does not have), autosave, and a per-joint aim override so a twin-stick character can turn
+  its torso without its legs — the one item here that would **reverse** a settled decision rather
+  than extend one.
+- **Spawning** (after M37): prefab files (`prefabs/*.json`, deferred behind an `asset` field on a
+  template, exactly as `Material` does it), `PointLight` inside a template (which wants a runtime
+  answer to the ≤8 budget), a `Script` inside one (runtime compilation, entangled with hot reload),
+  and spawning relative to another entity. Downstream of those, in the arena: endless waves, a
+  working `RETRY`, and a save that restores a mid-level arena — all now ordinary work rather than
+  blocked work, and none of them built.
 - **Deferred with an A/B attached**: fixing `builtin:plane`/`builtin:cube`'s UV layout, and changing
   `builtin:triangle`.
 

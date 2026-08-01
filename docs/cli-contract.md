@@ -220,6 +220,20 @@ what was *asked* for, so the two together say "you asked for 500 and it ended
 at 43". In `engine run-scene` the same call closes the window, at the end of
 the frame that requested it.
 
+**`spawned`** appears on the `simulate` report only when the run created at
+least one entity with `world.spawn_entity` (M37), so every pre-M37 report is
+byte-identical. It is a **total for the run**, not a live count: a gun that
+fired and expired forty rounds reports forty, which is the number that answers
+"did it fire at all" when the last frame shows nothing. What is alive at the
+end is the `entities` array, on the terms above.
+
+A `--trace` gains two event lines on the same terms — `{"step": N, "spawned":
+"Bullet#7"}` when an entity is created and `{"step": N, "despawned":
+"Bullet#7"}` when one is removed — so a run is greppable without re-deriving it
+from positions. Instance names are never reused within a run, which is what
+keeps a row name unambiguous. A trace of a scene that spawns nothing is
+unchanged, both golden ones included.
+
 ## Animation
 
 Pose is a pure function of (files, time): `--time T` on `screenshot` and

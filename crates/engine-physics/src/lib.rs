@@ -22,6 +22,7 @@ use engine_core::components::{
     Transform, Wheel as WheelData,
 };
 use engine_core::mesh::{MeshSource, PhysicsAssets};
+use engine_core::components::ComponentData;
 use engine_core::scene::PhysicsSettings;
 use engine_core::skeleton::Rig;
 use engine_core::{codes, EngineError, Result};
@@ -214,6 +215,38 @@ pub struct PhysicsWorld {
     /// Floating bodies (M41), in entity-name order. Empty for every scene with
     /// no `Buoyancy`, which is what keeps the step it costs at zero.
     buoyant: Vec<buoyancy::Buoyant>,
+    /// Collision-layer name → its bit in rapier's 32-bit interaction groups
+    /// (M12), kept rather than dropped at the end of `build` because a
+    /// runtime spawn (M37) has to land on the *same* bit assignment as the
+    /// scene it spawns into. A bullet whose `"bullet"` layer meant a
+    /// different bit than the wall's `collides_with` would pass through it.
+    layer_bits: HashMap<String, Group>,
+}
+
+/// Everything [`PhysicsWorld::insert_entity`] needs to give one entity a rapier
+/// presence.
+///
+/// A named struct rather than eight positional arguments, and for
+/// `SceneFacts`' reason (see `designs/notes/m05-validation.md`): four of these
+/// are `Option`s and two of those are `Option<&str>`-shaped, so passing them
+/// positionally would let a swapped pair type-check and simulate the wrong
+/// thing. Construction is field-init shorthand and the body destructures by
+/// name, which makes the mapping name-identity end to end.
+#[derive(Clone, Copy)]
+pub struct Presence<'a> {
+    /// The entity's stable name, as reports and contact events address it.
+    pub name: &'a str,
+    pub transform: &'a Transform,
+    pub body: Option<&'a RigidBodyData>,
+    pub collider: Option<&'a ColliderData>,
+    /// A thresholded `Breakable` opts the entity's collider into contact-force
+    /// events.
+    pub break_threshold: Option<f32>,
+    /// The entity's own `Mesh.asset`, for a `trimesh`/`convex_hull` collider.
+    pub entity_mesh: Option<&'a str>,
+    /// Where that mesh comes from. A caller with only builtin shapes passes
+    /// [`engine_core::mesh::BuiltinAssets`].
+    pub meshes: &'a dyn MeshSource,
 }
 
 /// One wheel awaiting assembly into a `Vehicle`, as `build` collects them:
@@ -235,7 +268,11 @@ impl PhysicsWorld {
     /// without physics never construct a physics world. A `Breakable`
     /// counts (M12): its fragments spawn as dynamic bodies, so a break
     /// needs a physics world even if nothing else does.
-    pub fn scene_has_physics(world: &World) -> bool {
+    /// A `templates` entry counts too (M37), for the `Breakable` reason: a
+    /// scene whose only bodies arrive by `world.spawn_entity` still needs somewhere
+    /// to put them, and without this the viewer would build no physics world
+    /// and every spawned bullet would hang in the air.
+    pub fn scene_has_physics(world: &World, templates: &[engine_core::scene::TemplateDef]) -> bool {
         world.query::<&RigidBodyData>().iter().next().is_some()
             || world.query::<&ColliderData>().iter().next().is_some()
             || world.query::<&Breakable>().iter().next().is_some()
@@ -243,6 +280,15 @@ impl PhysicsWorld {
             // no body of its own, so without this a scene whose only physics
             // is a hitbox set would build no world at all.
             || world.query::<&SkinnedCollider>().iter().next().is_some()
+            || templates.iter().flat_map(|t| t.components.iter()).any(|c| {
+                matches!(
+                    c,
+                    ComponentData::RigidBody(_)
+                        | ComponentData::Collider(_)
+                        | ComponentData::Breakable(_)
+                        | ComponentData::SkinnedCollider(_)
+                )
+            })
     }
 
     /// Build a fresh physics world from the (already validated) scene world.
@@ -253,10 +299,17 @@ impl PhysicsWorld {
     /// one source rather than two arguments, because the file a proxy's joints
     /// come out of is the entity's own `Mesh.asset`, the same file the mesh
     /// collider would have read.
+    ///
+    /// `templates` are the shapes the scene can spawn (M37). They are *not*
+    /// built into bodies — nothing is spawned until a script asks — but their
+    /// collision-layer names join the bit assignment, because a layer that
+    /// only a spawned collider mentions still has to mean the same bit as the
+    /// wall that filters on it.
     pub fn build(
         world: &World,
         settings: &PhysicsSettings,
         meshes: &dyn PhysicsAssets,
+        templates: &[engine_core::scene::TemplateDef],
     ) -> Result<Self> {
         let mut physics = Self {
             pipeline: PhysicsPipeline::new(),
@@ -289,6 +342,7 @@ impl PhysicsWorld {
             ragdolls: Vec::new(),
             queued_kicks: Vec::new(),
             buoyant: Vec::new(),
+            layer_bits: HashMap::new(),
         };
 
         // Collision layers (M12): map each distinct name to one bit of
@@ -307,12 +361,29 @@ impl PhysicsWorld {
                 names.extend(proxies.layers.iter().flatten().cloned());
                 names.extend(proxies.collides_with.iter().flatten().cloned());
             }
+            // Template layers (M37) join the same namespace and the same
+            // budget. A scene with no `templates` block adds nothing here, so
+            // the bit assignment it had before is the bit assignment it keeps.
+            for component in templates.iter().flat_map(|t| t.components.iter()) {
+                match component {
+                    ComponentData::Collider(collider) => {
+                        names.extend(collider.layers.iter().flatten().cloned());
+                        names.extend(collider.collides_with.iter().flatten().cloned());
+                    }
+                    ComponentData::SkinnedCollider(proxies) => {
+                        names.extend(proxies.layers.iter().flatten().cloned());
+                        names.extend(proxies.collides_with.iter().flatten().cloned());
+                    }
+                    _ => {}
+                }
+            }
             names
                 .into_iter()
                 .enumerate()
                 .map(|(bit, name)| (name, Group::from_bits_truncate(1 << (bit as u32 % 32))))
                 .collect()
         };
+        physics.layer_bits.clone_from(&layer_bits);
 
         // Every surface an entity *generates* — a Road's ribbon, a Junction's
         // patch — built once here, by entity name, through the same functions
@@ -719,19 +790,23 @@ impl PhysicsWorld {
         Ok(physics)
     }
 
-    /// Insert one entity's physics presence — shared by the initial build
-    /// and by fragment spawning (M12). Entities with neither a body nor a
-    /// collider have no presence and are skipped. A `break_threshold` opts
-    /// the entity's collider into contact-force events.
-    pub fn insert_entity(
-        &mut self,
-        entity: Entity,
-        name: &str,
-        transform: &Transform,
-        body: Option<&RigidBodyData>,
-        collider: Option<&ColliderData>,
-        break_threshold: Option<f32>,
-    ) -> Result<()> {
+    /// Insert one entity's physics presence — shared by the initial build,
+    /// by fragment spawning (M12), and by `world.spawn_entity` (M37). Entities
+    /// with neither a body nor a collider have no presence and are skipped.
+    ///
+    /// The **layer table is the scene's** rather than an empty one: a spawned
+    /// bullet's `"bullet"` layer has to mean the same bit as the wall that
+    /// filters on it, and an empty table would silently give it none.
+    pub fn insert_entity(&mut self, entity: Entity, presence: &Presence<'_>) -> Result<()> {
+        let Presence {
+            name,
+            transform,
+            body,
+            collider,
+            break_threshold,
+            entity_mesh,
+            meshes,
+        } = *presence;
         if body.is_none() && collider.is_none() {
             return Ok(());
         }
@@ -782,18 +857,19 @@ impl PhysicsWorld {
         });
 
         if let Some(collider) = collider {
-            // Spawned entities (fragments) carry cuboid colliders with no
-            // mesh shapes, no terrain, no roads and no layers, so builtin
-            // meshes and an empty layer table cover every caller.
+            // No terrain and no road: a `Terrain` or a `Road` owns its grid,
+            // is authored once, and is not something a break or a spawn
+            // produces — the mesh-shaped case that *is* reachable reads the
+            // entity's own `Mesh.asset`, which is why that one is a parameter.
             let built = build_collider(
                 collider,
                 transform,
                 name,
+                entity_mesh,
                 None,
                 None,
-                None,
-                &engine_core::mesh::BuiltinAssets,
-                &HashMap::new(),
+                meshes,
+                &self.layer_bits,
                 break_threshold.is_some(),
             )?;
             let handle = match body_handle {
@@ -2036,7 +2112,7 @@ mod tests {
     fn simulate(source: &str, steps: u32) -> (Scene, PhysicsWorld, Vec<ContactEvent>) {
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         let mut all_events = Vec::new();
         for _ in 0..steps {
             all_events.extend(physics.step(&mut scene.world, 0.0));
@@ -2094,7 +2170,7 @@ mod tests {
         let apex = |source: &str| -> f32 {
             let mut scene = Scene::from_source(source, "t.json").unwrap();
             let settings = PhysicsSettings::default();
-            let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+            let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
             let mut bounced = false;
             let mut apex: f32 = 0.0;
             let mut previous_y = 5.0f32;
@@ -2141,7 +2217,7 @@ mod tests {
         ]}"#;
         let mut scene = Scene::from_source(source, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
 
         // Move the transform externally; the body must follow, not fight.
         let entity = scene.entity("Mover").unwrap();
@@ -2227,7 +2303,7 @@ mod tests {
         }"#;
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         let entity = scene.entity("Car").unwrap();
 
         // Settle, then "throttle": write a forward velocity like a script.
@@ -2365,7 +2441,7 @@ mod tests {
     fn engine_force_drives_the_chassis_forward() {
         let mut scene = Scene::from_source(CAR, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
 
         // Settle onto the springs first, then floor it.
         for _ in 0..120 {
@@ -2416,7 +2492,7 @@ mod tests {
         );
         let mut scene = Scene::from_source(&source, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world, 0.0);
         }
@@ -2451,7 +2527,7 @@ mod tests {
     fn brakes_stop_a_rolling_vehicle() {
         let mut scene = Scene::from_source(CAR, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world, 0.0);
         }
@@ -2515,7 +2591,7 @@ mod tests {
         }"#;
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world, 0.0);
         }
@@ -2735,7 +2811,7 @@ mod tests {
     fn stick_world(source: &str) -> (Scene, PhysicsWorld) {
         let scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let physics = PhysicsWorld::build(&scene.world, &settings, &StickAssets).unwrap();
+        let physics = PhysicsWorld::build(&scene.world, &settings, &StickAssets, &scene.templates).unwrap();
         (scene, physics)
     }
 
@@ -2865,7 +2941,7 @@ mod tests {
         let (_, physics) = {
             let scene = Scene::from_source(DROP, "test.json").unwrap();
             let settings = PhysicsSettings::default();
-            let physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+            let physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
             (scene, physics)
         };
         assert!(physics.proxy_placements().is_empty());

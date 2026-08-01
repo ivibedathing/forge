@@ -536,6 +536,18 @@
       "pinned_by": "cli.rs"
     },
     {
+      "baseline": "examples/scenes/verify/baselines/m37_spawn.png",
+      "scene": "examples/scenes/verify/m37_spawn.json",
+      "args": [
+        "--steps",
+        "120"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M37",
+      "pinned_by": "cli.rs"
+    },
+    {
       "baseline": "examples/scenes/verify/baselines/m38_shadow_cascades.png",
       "scene": "examples/scenes/verify/m38_shadow_cascades.json",
       "args": [],

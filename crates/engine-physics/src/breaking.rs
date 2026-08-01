@@ -188,11 +188,20 @@ pub fn apply_breaks(
             let spawned = world.spawn(builder.build());
             physics.insert_entity(
                 spawned,
-                &fragment_name,
-                &fragment_transform,
-                Some(&body),
-                Some(&collider),
-                None,
+                &crate::Presence {
+                    name: &fragment_name,
+                    transform: &fragment_transform,
+                    body: Some(&body),
+                    collider: Some(&collider),
+                    break_threshold: None,
+                    // A fragment's collider is always a cuboid built from
+                    // `fragment.half_extents` and always carries no layers, so
+                    // neither the mesh source nor the layer table can reach it
+                    // — which is what makes M37 widening this call unable to
+                    // move a single breaking baseline.
+                    entity_mesh: None,
+                    meshes: &engine_core::mesh::BuiltinAssets,
+                },
             )?;
             fragments.push((fragment_name, spawned));
         }
@@ -247,6 +256,7 @@ mod tests {
             &scene.world,
             &PhysicsSettings::default(),
             &engine_core::mesh::BuiltinAssets,
+            &scene.templates,
         )
         .unwrap();
         let _ = &mut scene;

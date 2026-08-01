@@ -60,9 +60,9 @@ see [`cli-contract.md`](cli-contract.md).
 That file renders, simulates and validates as it stands. A repo contract test
 checks exactly this block, so it cannot rot silently.
 
-`name` and `entities` are required. `physics`, `environment` and `daylight` are
-optional scene-level blocks — siblings of `entities`, not components, because
-they describe the world rather than a thing in it.
+`name` and `entities` are required. `physics`, `environment`, `daylight` and
+`templates` are optional scene-level blocks — siblings of `entities`, not
+components, because they describe the world rather than a thing in it.
 
 ## Rules the schema cannot express
 
@@ -96,6 +96,46 @@ the engine generates rather than a file.
 its fields, so the entity carries **no** `Mesh` and **no** `Material`, and
 saying otherwise is a validation error. `Tree` is the near-exception — it grows
 its own geometry too, but the entity's `Material` is its bark.
+
+**`templates` are entities that do not exist yet.** A `templates` entry is an
+entity definition plus a `limit`, declared but never instantiated: nothing
+renders it, physics never sees it, and `simulate` never traces it. A script
+brings one into the world with `world.spawn_entity("Bullet", x, y, z)`, which
+returns the new entity's name — `Bullet#1`, `Bullet#2`, … — and
+`world.despawn_entity(name)` takes it back out.
+
+```json
+"templates": [
+  {
+    "name": "Bullet",
+    "limit": 48,
+    "components": [
+      { "type": "Transform", "scale": [0.1, 0.1, 0.1] },
+      { "type": "Mesh", "asset": "builtin:sphere" },
+      { "type": "RigidBody", "body": "dynamic", "gravity_scale": 0.0 },
+      { "type": "Collider", "shape": "sphere", "radius": 0.5 }
+    ]
+  }
+]
+```
+
+The block exists so that a spawn names something *the file already declares*
+rather than constructing geometry from a script, which would put scene data in
+a `.rhai` and stop the scene file being the whole truth about what can exist.
+Four consequences worth knowing before you write one:
+
+- **Template names share the entity name space.** A template may not take an
+  entity's name, because a script addresses both by name.
+- **The spawn call sets the position and nothing else.** A template's own
+  `rotation` and `scale` survive; a template with no `Transform` gets one.
+- **`limit` is the most instances that may be *live* at once**, default 64.
+  Spawning at the limit spawns nothing and returns the empty string, which is a
+  value the script checks — not an error, because a gun that fires faster than
+  its bullets expire is an ordinary game.
+- **Five components are refused inside a template**: `Script`, `Camera`,
+  `DirectionalLight`, `AmbientLight` and `PointLight`. Each has a scene-level
+  budget that validation checks, and a spawn must not be able to make a valid
+  scene invalid at step 40.
 
 **JSON has no comments, and that is a real cost.** It was accepted deliberately
 (the agent loop is specified as ordinary bash, and `jq` is ordinary bash while

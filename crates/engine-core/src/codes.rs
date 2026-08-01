@@ -260,6 +260,18 @@ registry! {
     SCRIPT_RUNTIME_ERROR = "script_runtime_error", Input,
         "a script failed while running";
 
+    // ── Entity spawning (M37) ──────────────────────────────────────────
+    TEMPLATE_NOT_OBJECT = "template_not_object", Input,
+        "an entry in \"templates\" is not a JSON object";
+    MISSING_TEMPLATE_NAME = "missing_template_name", Input,
+        "a template has no \"name\" field";
+    EMPTY_TEMPLATE_NAME = "empty_template_name", Input,
+        "a template's \"name\" is the empty string";
+    DUPLICATE_TEMPLATE_NAME = "duplicate_template_name", Input,
+        "a template's name is shared with another template or with an entity";
+    TEMPLATE_FORBIDDEN_COMPONENT = "template_forbidden_component", Input,
+        "a component whose scene-level budget a spawn could violate may not appear in a template";
+
     // ── Vehicles (M12) ─────────────────────────────────────────────────
     WHEEL_VEHICLE_NOT_FOUND = "wheel_vehicle_not_found", Input,
         "a Wheel's \"vehicle\" names no entity in the scene";

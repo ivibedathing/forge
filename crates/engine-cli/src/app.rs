@@ -508,6 +508,41 @@ impl ViewerApp {
                                     }
                                 }
                             }
+                            // Spawned entities enter physics between the
+                            // script step and the physics step (M37), exactly
+                            // where the headless loop puts them — the two
+                            // paths must not diverge or a recorded input stops
+                            // reproducing what the window did.
+                            let spawned = sim
+                                .scripts
+                                .as_ref()
+                                .map(engine_script::ScriptHost::take_spawns)
+                                .unwrap_or_default();
+                            if !spawned.is_empty() {
+                                let mut failed = None;
+                                if let Some(physics) = &mut sim.physics {
+                                    for (name, entity) in &spawned {
+                                        if let Err(e) = crate::simulate::insert_spawned(
+                                            physics,
+                                            &sim.scene.world,
+                                            *entity,
+                                            name,
+                                            &sim.assets,
+                                        ) {
+                                            failed = Some(e);
+                                            break;
+                                        }
+                                    }
+                                }
+                                if let Some(e) = failed {
+                                    self.error = Some(e);
+                                    break;
+                                }
+                                sim.scene.refresh_names();
+                                if let Some(scripts) = &mut sim.scripts {
+                                    scripts.sync_names(&sim.scene.world);
+                                }
+                            }
                             if let Some(physics) = &mut sim.physics {
                                 // `step_index` is 0-based and incremented
                                 // below, so the time this step ends at — the
@@ -516,6 +551,27 @@ impl ViewerApp {
                                 let events = physics
                                     .step(&mut sim.scene.world, (sim.step_index + 1) as f32 * dt);
                                 sim.contacts.apply(&events);
+                                // Despawns (M37) apply here, beside the
+                                // breaks and before them, matching the
+                                // headless loop step for step.
+                                let despawned = sim
+                                    .scripts
+                                    .as_ref()
+                                    .map(engine_script::ScriptHost::take_despawns)
+                                    .unwrap_or_default();
+                                if !despawned.is_empty() {
+                                    for name in &despawned {
+                                        let Some(entity) = sim.scene.entity(name) else {
+                                            continue;
+                                        };
+                                        let _ = sim.scene.world.despawn(entity);
+                                        physics.remove_entity(entity);
+                                    }
+                                    sim.scene.refresh_names();
+                                    if let Some(scripts) = &mut sim.scripts {
+                                        scripts.sync_names(&sim.scene.world);
+                                    }
+                                }
                                 // Breaks apply after physics, exactly as in
                                 // the headless loop — played and simulated
                                 // runs must not diverge.
