@@ -43,6 +43,17 @@ pub struct SceneFile {
     pub daylight: Option<DaylightSettings>,
 
     pub entities: Vec<EntityDef>,
+
+    /// Shapes a script may spawn at runtime (M37) — declared here, never
+    /// instantiated when the scene loads. Absent means the pre-M37 engine
+    /// exactly: nothing can be spawned, and no code path differs.
+    ///
+    /// A template is an [`EntityDef`] plus a `limit`, and it exists so a
+    /// spawn can name something *the file already declares* rather than
+    /// constructing geometry from a script, which would put scene data in a
+    /// `.rhai` and break invariant 2.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<TemplateDef>,
 }
 
 /// The scene-level `physics` block (M8).
@@ -159,6 +170,50 @@ pub struct EntityDef {
     #[serde(default)]
     pub components: Vec<ComponentData>,
 }
+
+/// One spawnable template in a scene file (M37).
+///
+/// Deliberately not a variant of [`EntityDef`]: a template is a *declaration*
+/// rather than a thing, and the difference shows up in every consumer —
+/// `Scene::instantiate` skips it, the renderer never sees it, `simulate` never
+/// traces it, and `validate` runs the per-entity walk on it but none of the
+/// scene-level budget passes.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateDef {
+    /// What `world.spawn_entity` names, and the stem of every instance's name
+    /// (`Bullet` spawns `Bullet#1`, `Bullet#2`, …). Unique among templates
+    /// *and* distinct from every entity name: one address space, because
+    /// `world.spawn_entity("Drone")` and `world.set_position("Drone", …)` must never
+    /// be able to mean two different things.
+    pub name: String,
+
+    /// The most instances of this template that may be **live** at once —
+    /// spawned minus despawned. Spawning at the limit spawns nothing and
+    /// returns the empty string, which is a value the script reads rather
+    /// than a crash: a gun that fires faster than its bullets expire is an
+    /// ordinary game, not a bug.
+    ///
+    /// A number in the file rather than a hard-coded ceiling because every
+    /// instance is a collider and the collider set is an input to the broad
+    /// phase — a scene that wants ten thousand bullets should have to say so
+    /// where `engine inspect` can read it. `>= 1`.
+    #[serde(default = "default_template_limit")]
+    #[schemars(range(min = 1))]
+    pub limit: u32,
+
+    #[serde(default)]
+    pub components: Vec<ComponentData>,
+}
+
+/// Enough for a magazine, few enough that a runaway spawn is caught by the
+/// cap rather than by the frame time.
+fn default_template_limit() -> u32 {
+    64
+}
+
+/// The default [`TemplateDef::limit`], for validation and `engine inspect`.
+pub const DEFAULT_TEMPLATE_LIMIT: u32 = 64;
 
 /// One thing to draw, with its geometry resolved and its transform flattened.
 #[derive(Debug, Clone)]
@@ -454,6 +509,10 @@ pub struct Scene {
     /// about the time of day. `None` is the pre-M21 engine exactly.
     pub daylight: Option<DaylightSettings>,
 
+    /// What this scene can spawn (M37), carried rather than instantiated.
+    /// Empty for a scene with no `templates` block.
+    pub templates: Vec<TemplateDef>,
+
     /// Name lookup, mirroring the [`Name`] component so targeting an entity by
     /// name does not require scanning the world.
     by_name: HashMap<String, Entity>,
@@ -525,6 +584,9 @@ impl Scene {
             physics,
             environment,
             daylight,
+            // Declared, not instantiated (M37) — the loop above walked
+            // `entities` and templates are deliberately not in it.
+            templates: file.templates,
             world,
             by_name,
         }

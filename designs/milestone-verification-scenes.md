@@ -1362,3 +1362,34 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)
+
+## M37 — Entity spawning: `verify/m37_spawn.json`
+
+A launcher on the left firing glowing rounds in a ballistic arc into three blocks on the right, at
+`--steps 120`, with a HUD line reading `shots in flight 5/6` and `fired 11`.
+
+**The arc of five shots is the assertion.** Nothing in the scene file draws a sphere — `Shot` is a
+`templates` entry, declared and never instantiated — so every ball in the frame was spawned by
+`world.spawn_entity`, given a velocity through the ordinary API *on the line after its spawn*,
+simulated by rapier, and reaped by name once it aged out. Each of the three ways this could break
+renders as the same picture: a spawn that silently did nothing, one that reached the ECS but not
+physics, and one whose velocity arrived a step late all leave a frame with no spheres in flight.
+The blocks being scattered is the fourth: it says the spawned bodies are in the broad phase and can
+push authored ones.
+
+`limit: 6` against a script that fires every 11 steps and reaps at 55 is what puts the HUD line at
+5/6 — the cap is exercised in the same frame that demonstrates the pool.
+
+No `Terrain` and no `Meadow` in frame, so it carries a hard bit-exact pin
+(`the_spawn_fixture_matches_its_baseline`). Six consecutive renders came back as one image,
+measured rather than assumed.
+
+**What a picture cannot say is a second test.**
+`simulate_reports_traces_and_bakes_what_a_run_spawned` covers the report's `spawned` total (11, not
+the 5 alive), the trace's `spawned` and `despawned` event lines, and that an instance name is never
+reused within a run.
+
+Also covered, outside the fixture: the showcase tour gains a `templates` block (the block-level
+coverage test requires it) and its campfire throws real ember bodies that land on the terrain; and
+the arena shooter's twenty-four parked bullets become one template, which deleted 864 lines from the
+generated scene.

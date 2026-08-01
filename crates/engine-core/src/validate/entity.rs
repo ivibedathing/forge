@@ -45,11 +45,92 @@ pub(super) struct SceneFacts<'a> {
     pub(super) hud_panel_names: std::collections::BTreeSet<String>,
 }
 
-/// Walk every entity, pushing per-entity errors and collecting the rest.
+/// Which list is being walked (M37).
+///
+/// `entities` and `templates` hold the same shape — a name and a component
+/// list — and take the same per-component checks, so they take the same walk.
+/// What differs is the JSON pointer, the word in the top-level messages, the
+/// codes those messages carry, and whether some components are forbidden. One
+/// walk with a `Kind` rather than two walks, because two walks is how the
+/// entity rules and the template rules start disagreeing about what a
+/// `Collider` may say.
+#[derive(Clone, Copy)]
+pub(super) struct Kind {
+    /// The JSON pointer segment and the top-level field name.
+    segment: &'static str,
+    /// The word in messages: "entity" or "template".
+    word: &'static str,
+    /// The keys an entry may carry, for the unknown-field check.
+    keys: &'static [&'static str],
+    not_object: &'static str,
+    missing_name: &'static str,
+    empty_name: &'static str,
+    duplicate_name: &'static str,
+    /// Components a spawn could use to violate a validated scene-level budget
+    /// — empty for entities, five long for templates. See
+    /// `designs/entity-spawning-design.md` §4.
+    forbidden: &'static [(&'static str, &'static str)],
+}
+
+impl Kind {
+    pub(super) const ENTITY: Self = Self {
+        segment: "entities",
+        word: "entity",
+        keys: &["name", "components"],
+        not_object: codes::ENTITY_NOT_OBJECT,
+        missing_name: codes::MISSING_ENTITY_NAME,
+        empty_name: codes::EMPTY_ENTITY_NAME,
+        duplicate_name: codes::DUPLICATE_ENTITY_NAME,
+        forbidden: &[],
+    };
+
+    pub(super) const TEMPLATE: Self = Self {
+        segment: "templates",
+        word: "template",
+        keys: &["name", "limit", "components"],
+        not_object: codes::TEMPLATE_NOT_OBJECT,
+        missing_name: codes::MISSING_TEMPLATE_NAME,
+        empty_name: codes::EMPTY_TEMPLATE_NAME,
+        duplicate_name: codes::DUPLICATE_TEMPLATE_NAME,
+        // Each of these is refused because spawning one could make a valid
+        // scene invalid at step 40, and the point of validation is that it
+        // cannot. The reason travels with the name so the error can say it.
+        forbidden: &[
+            (
+                "Script",
+                "scripts are compiled once when the run starts, so a spawned one \
+                 would never run",
+            ),
+            (
+                "Camera",
+                "a scene may mark at most one camera active, and a spawn cannot be \
+                 allowed to break a rule validation has already checked",
+            ),
+            (
+                "DirectionalLight",
+                "a scene may have at most one DirectionalLight",
+            ),
+            ("AmbientLight", "a scene may have at most one AmbientLight"),
+            (
+                "PointLight",
+                "a scene may carry at most 8 PointLight components, and overflowing \
+                 that budget drops lights silently rather than failing",
+            ),
+        ],
+    };
+
+    fn is_template(&self) -> bool {
+        !self.forbidden.is_empty()
+    }
+}
+
+/// Walk every entity — or every template (M37) — pushing per-entry errors and
+/// collecting the rest.
 pub(super) fn walk<'a>(
     cx: &Cx<'_>,
     schemas: &ComponentSchemas,
     entities: &'a [Value],
+    kind: Kind,
     errors: &mut Vec<EngineError>,
 ) -> SceneFacts<'a> {
     let mut seen_names: Vec<&str> = Vec::with_capacity(entities.len());
@@ -90,13 +171,14 @@ pub(super) fn walk<'a>(
     let mut hud_panel_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for (entity_index, entity) in entities.iter().enumerate() {
-        let entity_path = format!("/entities/{entity_index}");
+        let entity_path = format!("/{}/{entity_index}", kind.segment);
+        let word = kind.word;
 
         let Some(entity) = entity.as_object() else {
             errors.push(cx.err(
-                codes::ENTITY_NOT_OBJECT,
+                kind.not_object,
                 format!(
-                    "entity at index {entity_index} must be an object, found {}",
+                    "{word} at index {entity_index} must be an object, found {}",
                     kind_of(entity)
                 ),
                 &entity_path,
@@ -111,8 +193,8 @@ pub(super) fn walk<'a>(
             Some(Value::String(_)) => {
                 errors.push(
                     cx.err(
-                        codes::EMPTY_ENTITY_NAME,
-                        format!("entity at index {entity_index} has an empty name"),
+                        kind.empty_name,
+                        format!("{word} at index {entity_index} has an empty name"),
                         &format!("{entity_path}/name"),
                     )
                     .field("name"),
@@ -122,16 +204,16 @@ pub(super) fn walk<'a>(
             Some(other) => {
                 errors.push(
                     cx.wrong_type("name", "string", other, &format!("{entity_path}/name"))
-                        .entity(format!("<entity at index {entity_index}>")),
+                        .entity(format!("<{word} at index {entity_index}>")),
                 );
                 continue;
             }
             None => {
                 errors.push(
                     cx.err(
-                        codes::MISSING_ENTITY_NAME,
+                        kind.missing_name,
                         format!(
-                            "entity at index {entity_index} has no name; \
+                            "{word} at index {entity_index} has no name; \
                              names are how the CLI and agent edits target entities"
                         ),
                         &entity_path,
@@ -145,9 +227,9 @@ pub(super) fn walk<'a>(
         if seen_names.contains(&name) {
             errors.push(
                 cx.err(
-                    codes::DUPLICATE_ENTITY_NAME,
+                    kind.duplicate_name,
                     format!(
-                        "more than one entity is named {name:?}; names must be unique \
+                        "more than one {word} is named {name:?}; names must be unique \
                          because they are how entities are targeted"
                     ),
                     &format!("{entity_path}/name"),
@@ -158,17 +240,49 @@ pub(super) fn walk<'a>(
         seen_names.push(name);
 
         for key in entity.keys() {
-            if key != "name" && key != "components" {
+            if !kind.keys.contains(&key.as_str()) {
                 errors.push(
                     cx.err(
                         codes::UNKNOWN_FIELD,
-                        format!("unknown entity field {key:?}"),
+                        format!("unknown {word} field {key:?}"),
                         &format!("{entity_path}/{key}"),
                     )
                     .entity(name)
                     .field(key)
-                    .suggest_from(key, ["name", "components"]),
+                    .suggest_from(key, kind.keys.iter().copied()),
                 );
+            }
+        }
+
+        // A template's `limit` is the one field an entity does not have, and
+        // it is checked here rather than by the component schema walk because
+        // it is not a component. `>= 1`: a limit of zero is a template that
+        // can never spawn, which is a mistake with no legitimate reading.
+        if kind.is_template() {
+            match entity.get("limit") {
+                None => {}
+                Some(Value::Number(n)) if n.is_u64() && n.as_u64() != Some(0) => {}
+                Some(Value::Number(n)) if n.is_u64() => errors.push(
+                    cx.err(
+                        codes::VALUE_OUT_OF_RANGE,
+                        format!(
+                            "template {name:?} has a limit of 0, so nothing could ever \
+                             spawn from it; the smallest useful limit is 1"
+                        ),
+                        &format!("{entity_path}/limit"),
+                    )
+                    .entity(name)
+                    .field("limit"),
+                ),
+                Some(other) => errors.push(
+                    cx.wrong_type(
+                        "limit",
+                        "non-negative integer",
+                        other,
+                        &format!("{entity_path}/limit"),
+                    )
+                    .entity(name),
+                ),
             }
         }
 
@@ -252,6 +366,26 @@ pub(super) fn walk<'a>(
                 continue;
             }
             seen_types.push(type_name.clone());
+
+            // §4 of the spawning design: a template may not carry a component
+            // whose scene-level budget a spawn could then violate. Refused at
+            // validation rather than at the spawn, because "this scene is
+            // valid" has to keep meaning something after step 0.
+            if let Some((_, why)) = kind.forbidden.iter().find(|(c, _)| *c == type_name) {
+                errors.push(
+                    cx.err(
+                        codes::TEMPLATE_FORBIDDEN_COMPONENT,
+                        format!(
+                            "template {name:?} carries a {type_name}, which a template \
+                             may not: {why}"
+                        ),
+                        &component_path,
+                    )
+                    .entity(name)
+                    .component(&type_name),
+                );
+                continue;
+            }
 
             if checked.active_camera {
                 active_cameras.push((name.to_string(), component_path.clone()));

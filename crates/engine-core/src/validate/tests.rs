@@ -2240,3 +2240,189 @@ fn matching_layers_validate_clean() {
         validate_source(source, "t")
     );
 }
+
+// ── Entity spawning: the `templates` block (M37) ──────────────
+
+/// The shape the design intends: a template is an entity definition plus a
+/// `limit`, and takes the same per-component checks without any of the
+/// scene-level budget passes.
+#[test]
+fn accepts_a_template() {
+    let source = r#"{"name":"s","entities":[
+        {"name":"Gun","components":[{"type":"Transform"}]}
+    ],"templates":[
+        {"name":"Bullet","limit":48,"components":[
+            {"type":"Transform","scale":[0.1,0.1,0.1]},
+            {"type":"Mesh","asset":"builtin:sphere"},
+            {"type":"RigidBody","body":"dynamic","gravity_scale":0.0},
+            {"type":"Collider","shape":"sphere","radius":0.5,
+             "layers":["bullet"]}
+        ]}
+    ]}"#;
+    assert!(
+        codes_of(source).is_empty(),
+        "{:?}",
+        validate_source(source, "t")
+    );
+}
+
+/// `limit` defaults, so a template that says nothing about it is fine — and
+/// zero is refused, because a template that can never spawn has no reading
+/// under which it was meant.
+#[test]
+fn a_limit_is_optional_but_never_zero() {
+    let with = |limit: &str| {
+        format!(
+            r#"{{"name":"s","entities":[{{"name":"A","components":[]}}],
+            "templates":[{{"name":"B"{limit},"components":[]}}]}}"#
+        )
+    };
+    assert!(codes_of(&with("")).is_empty());
+    assert!(codes_of(&with(r#","limit":1"#)).is_empty());
+    assert_eq!(codes_of(&with(r#","limit":0"#)), ["value_out_of_range"]);
+    assert_eq!(codes_of(&with(r#","limit":-3"#)), ["invalid_field_type"]);
+    assert_eq!(codes_of(&with(r#","limit":"lots""#)), ["invalid_field_type"]);
+}
+
+/// Templates and entities share one name space, because a script addresses
+/// both by name.
+#[test]
+fn a_template_may_not_take_a_name_that_is_taken() {
+    let twice = r#"{"name":"s","entities":[{"name":"Drone","components":[]}],
+        "templates":[{"name":"Drone","components":[]}]}"#;
+    assert_eq!(codes_of(twice), ["duplicate_template_name"]);
+
+    let two_templates = r#"{"name":"s","entities":[],
+        "templates":[{"name":"B","components":[]},{"name":"B","components":[]}]}"#;
+    assert_eq!(codes_of(two_templates), ["duplicate_template_name"]);
+}
+
+/// The forbidden set, and the reason it exists: each of these would let a
+/// spawn make a valid scene invalid at step 40.
+#[test]
+fn a_template_may_not_carry_a_budgeted_component() {
+    for component in [
+        r#"{"type":"Script","source":"a.rhai"}"#,
+        r#"{"type":"Camera","active":true}"#,
+        r#"{"type":"DirectionalLight"}"#,
+        r#"{"type":"AmbientLight"}"#,
+        r#"{"type":"PointLight","range":4.0}"#,
+    ] {
+        let source = format!(
+            r#"{{"name":"s","entities":[{{"name":"A","components":[]}}],
+            "templates":[{{"name":"B","components":[{component}]}}]}}"#
+        );
+        // `Script` also trips `asset_not_found` on a file that is not there,
+        // which is the point: the forbidden check does not replace the
+        // ordinary ones, it joins them.
+        assert!(
+            codes_of(&source).contains(&"template_forbidden_component"),
+            "{component} gave {:?}",
+            codes_of(&source)
+        );
+    }
+}
+
+/// The same components are still fine on an *entity* — the rule is about
+/// where they sit, not about what they are.
+#[test]
+fn the_forbidden_set_does_not_leak_onto_entities() {
+    let source = r#"{"name":"s","entities":[
+        {"name":"Sun","components":[{"type":"DirectionalLight"}]},
+        {"name":"Eye","components":[{"type":"Camera","active":true}]}
+    ],"templates":[{"name":"B","components":[{"type":"Transform"}]}]}"#;
+    assert!(
+        codes_of(source).is_empty(),
+        "{:?}",
+        validate_source(source, "t")
+    );
+}
+
+/// Per-entity cross-component rules apply inside a template unchanged: a
+/// recipe owns its geometry there too.
+#[test]
+fn per_entity_rules_still_apply_inside_a_template() {
+    let source = r#"{"name":"s","entities":[],"templates":[
+        {"name":"Puddle","components":[
+            {"type":"Transform"},
+            {"type":"Water"},
+            {"type":"Mesh","asset":"builtin:plane"}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["water_with_mesh"]);
+}
+
+/// A template spawns into the *scene*, so its cross-entity references resolve
+/// against entities and never against other templates.
+#[test]
+fn a_templates_references_resolve_against_the_scene() {
+    let good = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform"},
+            {"type":"Terrain"}
+        ]}
+    ],"templates":[
+        {"name":"Patch","components":[
+            {"type":"Transform"},
+            {"type":"Meadow","terrain":"Ground"}
+        ]}
+    ]}"#;
+    assert!(codes_of(good).is_empty(), "{:?}", validate_source(good, "t"));
+
+    // The same reference to another *template* does not resolve: a spawned
+    // meadow cannot stand on terrain that does not exist yet.
+    let bad = r#"{"name":"s","entities":[],"templates":[
+        {"name":"Ground","components":[
+            {"type":"Transform"},
+            {"type":"Terrain"}
+        ]},
+        {"name":"Patch","components":[
+            {"type":"Transform"},
+            {"type":"Meadow","terrain":"Ground"}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(bad), ["meadow_terrain_not_found"]);
+}
+
+/// Structural problems in the block get their own codes rather than the
+/// entity ones, so a machine branching on `missing_entity_name` never has to
+/// re-read `path` to learn it was a template.
+#[test]
+fn a_broken_template_reports_as_a_template() {
+    let cases = [
+        (r#""templates":[42]"#, "template_not_object"),
+        (r#""templates":[{"components":[]}]"#, "missing_template_name"),
+        (r#""templates":[{"name":"","components":[]}]"#, "empty_template_name"),
+        (r#""templates":[{"name":"B","limt":2}]"#, "unknown_field"),
+    ];
+    for (block, code) in cases {
+        let source = format!(r#"{{"name":"s","entities":[],{block}}}"#);
+        assert_eq!(codes_of(&source), [code], "{block}");
+    }
+
+    let not_an_array = r#"{"name":"s","entities":[],"templates":{}}"#;
+    assert_eq!(codes_of(not_an_array), ["invalid_field_type"]);
+}
+
+/// Collision layers are a scene-wide budget, so a layer only a template
+/// mentions still counts against the 32 available bits.
+#[test]
+fn template_layers_count_against_the_scene_budget() {
+    let names: Vec<String> = (0..32).map(|i| format!("\"layer{i}\"")).collect();
+    let source = format!(
+        r#"{{"name":"s","entities":[
+            {{"name":"Ground","components":[
+                {{"type":"Transform"}},
+                {{"type":"Collider","shape":"cuboid","half_extents":[5.0,0.1,5.0],
+                 "layers":[{}]}}
+            ]}}
+        ],"templates":[
+            {{"name":"B","components":[
+                {{"type":"Transform"}},
+                {{"type":"Collider","shape":"sphere","radius":0.5,"layers":["one_too_many"]}}
+            ]}}
+        ]}}"#,
+        names.join(",")
+    );
+    assert_eq!(codes_of(&source), ["too_many_collision_layers"]);
+}

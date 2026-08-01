@@ -24,6 +24,7 @@ pub mod road;
 pub mod scene;
 pub mod schema;
 pub mod skeleton;
+pub mod spawn;
 pub mod terrain;
 pub mod texture;
 pub mod tree;

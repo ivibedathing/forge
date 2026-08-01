@@ -90,6 +90,11 @@ build fails.
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |
+| `template_not_object` | 1 | an entry in "templates" is not a JSON object |
+| `missing_template_name` | 1 | a template has no "name" field |
+| `empty_template_name` | 1 | a template's "name" is the empty string |
+| `duplicate_template_name` | 1 | a template's name is shared with another template or with an entity |
+| `template_forbidden_component` | 1 | a component whose scene-level budget a spawn could violate may not appear in a template |
 | `wheel_vehicle_not_found` | 1 | a Wheel's "vehicle" names no entity in the scene |
 | `wheel_vehicle_invalid` | 1 | a Wheel's "vehicle" must be a different entity with a dynamic RigidBody |
 | `wheel_with_physics` | 1 | a Wheel entity may not have its own RigidBody or Collider; the chassis owns all collision |

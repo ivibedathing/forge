@@ -6901,6 +6901,34 @@
         },
         "type": "object"
       },
+      "TemplateDef": {
+        "additionalProperties": false,
+        "description": "One spawnable template in a scene file (M37).\n\nDeliberately not a variant of [`EntityDef`]: a template is a *declaration*\nrather than a thing, and the difference shows up in every consumer —\n`Scene::instantiate` skips it, the renderer never sees it, `simulate` never\ntraces it, and `validate` runs the per-entity walk on it but none of the\nscene-level budget passes.",
+        "properties": {
+          "components": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ComponentData"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "default": 64,
+            "description": "The most instances of this template that may be **live** at once —\nspawned minus despawned. Spawning at the limit spawns nothing and\nreturns the empty string, which is a value the script reads rather\nthan a crash: a gun that fires faster than its bullets expire is an\nordinary game, not a bug.\n\nA number in the file rather than a hard-coded ceiling because every\ninstance is a collider and the collider set is an input to the broad\nphase — a scene that wants ten thousand bullets should have to say so\nwhere `engine inspect` can read it. `>= 1`.",
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "What `world.spawn_entity` names, and the stem of every instance's name\n(`Bullet` spawns `Bullet#1`, `Bullet#2`, …). Unique among templates\n*and* distinct from every entity name: one address space, because\n`world.spawn_entity(\"Drone\")` and `world.set_position(\"Drone\", …)` must never\nbe able to mean two different things.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "TerrainLayer": {
         "additionalProperties": false,
         "description": "One material a [`Terrain`] paints itself with, claiming a band of height and\na band of slope.\n\nA pixel's surface is the weighted average of every layer whose bands it falls\ninside; a layer that leaves both at their defaults covers everything and is\nthe base coat.\n\n**Slope does the heavy lifting.** Height alone gives horizontal stripes — a\ncontour map, and unmistakably so once the camera moves. What separates rock\nfrom grass in the world is that soil cannot cling to a steep face, so\n`slope_range` is the selector that reads as real and `height_range` adds\nbands of climate on top of it.",
@@ -7082,6 +7110,13 @@
           }
         ],
         "description": "Scene-level physics settings; absent means the defaults, so scenes\nwithout physics don't change (M8)."
+      },
+      "templates": {
+        "description": "Shapes a script may spawn at runtime (M37) — declared here, never\ninstantiated when the scene loads. Absent means the pre-M37 engine\nexactly: nothing can be spawned, and no code path differs.\n\nA template is an [`EntityDef`] plus a `limit`, and it exists so a\nspawn can name something *the file already declares* rather than\nconstructing geometry from a script, which would put scene data in a\n`.rhai` and break invariant 2.",
+        "items": {
+          "$ref": "#/$defs/TemplateDef"
+        },
+        "type": "array"
       }
     },
     "required": [

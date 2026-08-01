@@ -543,6 +543,15 @@
       "height": 360,
       "milestone": "M38",
       "pinned_by": "hand"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m37_spawn.png",
+      "scene": "examples/scenes/verify/m37_spawn.json",
+      "args": ["--steps", "120"],
+      "width": 640,
+      "height": 360,
+      "milestone": "M37",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [
