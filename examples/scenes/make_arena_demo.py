@@ -53,10 +53,15 @@ ASPECT = WIDTH / HEIGHT
 FOV = 46.0
 PITCH = -60.0
 
-STEPS = 900  # fifteen seconds at 60 Hz
+STEPS = 2100  # thirty-five seconds at 60 Hz
 CHUNK = 6  # steps between decisions — a tenth of a second is 6 steps
-DRONES = 10
+DRONES = 10  # per level; the file carries LEVELS x DRONES of them
+LEVELS = 4
 DRONE_HOVER = 0.95  # the altitude they hold; the aim point's height
+# How long the demo gives a level's drones to fly down from their park altitude
+# after it presses NEXT LEVEL. Below this the director would be aiming at an
+# empty arena and would wander off to the middle.
+DROP_STEPS = 30
 
 # The menu the run has to get through first (M28). Where the button *is* comes
 # from the engine — see `play_cursor` — because since M31 nothing in either
@@ -149,6 +154,17 @@ def to_cursor(target, eye):
     return ((ndc_x + 1.0) * 0.5, (1.0 - ndc_y) * 0.5)
 
 
+def level_drones(level):
+    """The ten entity names that are level `n`'s drones.
+
+    Levels own contiguous runs of a flat numbering — `make_arena.py` prints the
+    boundaries — so this is arithmetic rather than a table the two files would
+    have to keep in agreement.
+    """
+    first = (level - 1) * DRONES + 1
+    return [f"Drone{n:02d}" for n in range(first, first + DRONES)]
+
+
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
@@ -170,8 +186,14 @@ def main():
         keyframe(CLICK_AT, ["MouseLeft"], play),
         keyframe(CLICK_AT + 6, [], play),
     ]
-    watch = ["Player", "Eye"] + [f"Drone{n:02d}" for n in range(1, DRONES + 1)]
+    # The campaign, as the director sees it: a level is its ten drone names,
+    # and the level is over when the report has none of them left — a broken
+    # drone leaves the report entirely, which is the same signal this loop has
+    # always used for a kill, read one level up.
+    level = 1
+    watch = ["Player", "Eye"] + level_drones(level)
     last = None
+    resume_at = 0
 
     for step in range(START_AT, STEPS, CHUNK):
         state, watch = run(step, timeline, watch)
@@ -183,13 +205,33 @@ def main():
         # The nearest drone that is still flying — a broken one has left the
         # report entirely, which is how this loop knows what it killed.
         live = []
-        for n in range(1, DRONES + 1):
-            position = state.get(f"Drone{n:02d}")  # absent = shot
-            if position is None or position[1] > 6.0:
-                continue  # gone, or still parked up at its dormant altitude
+        parked = 0
+        for name in level_drones(level):
+            position = state.get(name)  # absent = shot
+            if position is None:
+                continue
+            if position[1] > 6.0:
+                parked += 1  # still up at its dormant altitude, or dropping in
+                continue
             flat = math.hypot(position[0] - player[0], position[2] - player[2])
             live.append((flat, position))
         live.sort(key=lambda item: item[0])
+
+        # Nothing of this level left anywhere: the card is up and the button
+        # says NEXT LEVEL. Press it the way the title screen is pressed —
+        # release on the button, since M31 captures a press — and start
+        # watching the next level's ten.
+        if not live and not parked and level < LEVELS and step >= resume_at:
+            timeline.append(keyframe(step, [], play))
+            timeline.append(keyframe(step + 8, ["MouseLeft"], play))
+            timeline.append(keyframe(step + 14, [], play))
+            level += 1
+            watch = ["Player", "Eye"] + level_drones(level)
+            last = None
+            resume_at = step + 14 + DROP_STEPS
+            continue
+        if step < resume_at:
+            continue  # the level's drones are on their way down
 
         held = []
         if live:
@@ -238,13 +280,14 @@ def main():
         text=True,
     )
     report = json.loads(out.stdout)
-    names = {f"Drone{n:02d}" for n in range(1, DRONES + 1)}
+    names = {name for n in range(1, LEVELS + 1) for name in level_drones(n)}
     # Exact names only: a shot drone leaves `Drone03.frag1` and friends behind,
     # which are ordinary entities and would count as survivors.
-    survivors = sum(1 for e in report["entities"] if e["entity"] in names)
+    standing = {e["entity"] for e in report["entities"] if e["entity"] in names}
+    killed = len(names) - len(standing)
     print(f"wrote {OUT}")
     print(f"  {len(timeline)} keyframes over {STEPS} steps ({STEPS / 60:.0f} s)")
-    print(f"  drones still flying at the end: {survivors} of {DRONES}")
+    print(f"  reached level {level} of {LEVELS}; {killed} drones destroyed")
 
 
 if __name__ == "__main__":
