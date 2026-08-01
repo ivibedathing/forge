@@ -1,0 +1,98 @@
+{
+  "name": "m37_spawn",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.13, 0.21, 0.42],
+    "sky_horizon": [0.46, 0.53, 0.66],
+    "sky_ground": [0.12, 0.12, 0.14],
+    "shadows": true,
+    "shadow_distance": 24.0,
+    "samples": 4
+  },
+  "physics": {
+    "timestep_hz": 60
+  },
+  "entities": [
+    {
+      "name": "Cam",
+      "components": [
+        { "type": "Transform", "position": [0.0, 3.2, 9.6], "rotation": [-13.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 50.0, "active": true }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-42.0, -34.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.96, 0.9], "intensity": 2.4 }
+      ]
+    },
+    {
+      "name": "Fill",
+      "components": [
+        { "type": "AmbientLight", "color": [0.5, 0.56, 0.68], "intensity": 0.26 }
+      ]
+    },
+    {
+      "name": "Floor",
+      "components": [
+        { "type": "Transform", "position": [0.0, -0.25, 0.0], "scale": [22.0, 0.5, 12.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.24, 0.26, 0.29], "roughness": 0.92 },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5], "friction": 0.9 }
+      ]
+    },
+    {
+      "name": "Launcher",
+      "components": [
+        { "type": "Transform", "position": [-5.4, 1.6, 0.0], "rotation": [0.0, 0.0, 16.0], "scale": [1.4, 1.0, 1.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.24, 0.26, 0.3], "metallic": 0.8, "roughness": 0.35 },
+        { "type": "Script", "source": "scripts/m37_spawn.rhai" }
+      ]
+    },
+    {
+      "name": "BlockA",
+      "components": [
+        { "type": "Transform", "position": [4.6, 0.4, -0.45], "scale": [0.8, 0.8, 0.8] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.68, 0.24, 0.2], "roughness": 0.7 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5], "density": 240.0 }
+      ]
+    },
+    {
+      "name": "BlockB",
+      "components": [
+        { "type": "Transform", "position": [4.6, 0.4, 0.45], "scale": [0.8, 0.8, 0.8] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.72, 0.55, 0.2], "roughness": 0.7 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5], "density": 240.0 }
+      ]
+    },
+    {
+      "name": "BlockC",
+      "components": [
+        { "type": "Transform", "position": [4.6, 1.2, 0.0], "scale": [0.8, 0.8, 0.8] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.3, 0.55, 0.42], "roughness": 0.7 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5], "density": 240.0 }
+      ]
+    }
+  ],
+  "templates": [
+    {
+      "name": "Shot",
+      "limit": 6,
+      "components": [
+        { "type": "Transform", "scale": [0.34, 0.34, 0.34] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.95, 0.72, 0.22], "emissive": [1.0, 0.52, 0.08], "roughness": 0.4 },
+        { "type": "RigidBody", "body": "dynamic", "ccd": true },
+        { "type": "Collider", "shape": "sphere", "radius": 0.5, "density": 900.0, "restitution": 0.15 }
+      ]
+    }
+  ]
+}

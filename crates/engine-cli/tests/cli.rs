@@ -28,6 +28,13 @@ fn scene_file(test: &str, contents: &str) -> PathBuf {
     path
 }
 
+/// A command's stdout as JSON — the shape every query command reports in.
+fn json_out(output: &Output) -> serde_json::Value {
+    let text = stdout_of(output);
+    serde_json::from_str(text.trim())
+        .unwrap_or_else(|e| panic!("stdout is not one JSON object ({e}): {text:?}"))
+}
+
 fn stdout_of(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout must be UTF-8")
 }
@@ -2552,13 +2559,23 @@ fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
     // Nothing may leave the world. A body that loses its ground contact
     // falls forever in silence — no error, no failed validation, just a
     // scene that renders wrong — so the tour asserts the floor holds.
+    //
+    // The floor is **below the deepest ground**, not below zero: M42 dug the
+    // pond's basin to −1.94 m, and a crate fragment thrown into it by the
+    // explosion comes to rest at −1.67, which is resting rather than falling.
+    // The constant only has to separate "on the ground somewhere" from
+    // "falling forever" — a body that loses contact at step 600 is past
+    // −100 m by step 900 — so it tracks the terrain rather than the origin.
+    // (Found in M43: adding one collider to the tour moved a fragment into
+    // the basin for the first time.)
+    let lost_below = -3.0;
     let last = lines
         .iter()
         .filter(|l| l["step"] == 900 && l.get("position").is_some());
     for row in last {
         let y = row["position"][1].as_f64().unwrap();
         assert!(
-            y > -1.0,
+            y > lost_below,
             "{} ended up at y={y}: it fell through the world",
             row["entity"]
         );
@@ -3035,6 +3052,126 @@ fn the_m23_road_fixture_pins_markings_and_a_drivable_surface() {
         (position[0] + 34.0).abs() < 0.5 && position[2].abs() < 0.5,
         "the ball should stay where it landed; a body flung along an internal \
          edge ends up off the road entirely: {position:?}"
+    );
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "180"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The M40 fixture: a circuit that can only be authored with all five of the
+/// milestone's additions at once — banked corners the engine signed itself, a
+/// pit lane that widens through `RoadPoint.width`, three roads riding an M22
+/// terrain rather than carrying pasted-in heights, a `Junction` where the pit
+/// lane meets the paddock road, and grain on the asphalt.
+///
+/// The render half pins the lot. The physics half pins the one claim a picture
+/// cannot make: **the banking has the right sign.** A ball dropped on the west
+/// straight, approaching a right-hand corner, has to roll toward the *inside*
+/// of that turn and stay on the asphalt. A bank signed the other way rolls it
+/// off the outside, which is a circuit that throws the car off at every corner
+/// — the exact failure `Road::auto_bank` exists to stop an author making by
+/// hand.
+#[test]
+fn the_m40_track_fixture_pins_banking_width_and_a_junction() {
+    let scene = repo_path("examples/scenes/verify/m40_track.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m40_track.png");
+
+    // Physics first: no GPU needed, so it runs on every machine.
+    let simulated = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "180"])
+        .args(["--entity", "Ball"])
+        .output()
+        .unwrap();
+    assert_eq!(simulated.status.code(), Some(0), "{simulated:?}");
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&simulated).trim()).unwrap();
+    let position = report["entities"][0]["position"]
+        .as_array()
+        .expect("the ball's position")
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect::<Vec<f64>>();
+
+    // The straight runs down x = -40 toward a corner that turns right, so the
+    // inside is +x and the outside is -x.
+    assert!(
+        position[0] > -40.0,
+        "a ball on a correctly banked road rolls toward the inside of the \
+         turn (+x from -40); it went the other way, which is the bank signed \
+         backwards: {position:?}"
+    );
+    // 4.5 m of asphalt plus 1.8 m of shoulder each side. Rolling *off* is as
+    // wrong as not rolling at all.
+    assert!(
+        position[0] < -33.7,
+        "the ball left the road entirely: {position:?}"
+    );
+    assert!(
+        position[1] > -4.0 && position[1] < 0.0,
+        "the ball should be resting on a road that follows the terrain about \
+         2.5 m below the origin, not fallen through it: {position:?}"
+    );
+
+    // The junction resolved every arm it names. A dropped arm is a hole in the
+    // patch, and a hole is exactly what the primitive exists to close.
+    let plan = engine().arg("junction-plan").arg(&scene).output().unwrap();
+    assert_eq!(plan.status.code(), Some(0), "{plan:?}");
+    let plan: serde_json::Value = serde_json::from_str(stdout_of(&plan).trim()).unwrap();
+    let arms = plan["arms"].as_array().expect("arms");
+    assert_eq!(arms.len(), 3, "the T junction has three arms: {plan}");
+    for arm in arms {
+        let reach = arm["reach"].as_f64().unwrap();
+        assert!(
+            (2.0..12.0).contains(&reach),
+            "arm {} met the junction {reach} m out, which is not a mouth: {plan}",
+            arm["road"]
+        );
+    }
+
+    // Per-point width reached what the file asked for and no more — the
+    // monotone cubic's whole job, one quantity over from the heights.
+    let centerline = engine()
+        .arg("road-centerline")
+        .arg(&scene)
+        .args(["--entity", "PitLane"])
+        .output()
+        .unwrap();
+    assert_eq!(centerline.status.code(), Some(0), "{centerline:?}");
+    let centerline: serde_json::Value =
+        serde_json::from_str(stdout_of(&centerline).trim()).unwrap();
+    let widths: Vec<f64> = centerline["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["width"].as_f64().unwrap())
+        .collect();
+    let widest = widths.iter().cloned().fold(f64::MIN, f64::max);
+    let narrowest = widths.iter().cloned().fold(f64::MAX, f64::min);
+    assert!(
+        (widest - 13.0).abs() < 1e-3,
+        "the pit lane is authored to reach 13 m and must not bulge past it: {widest}"
+    );
+    assert!(
+        (narrowest - 7.0).abs() < 1e-3,
+        "and must not pinch below the road's own 7 m: {narrowest}"
     );
 
     let diff = engine()
@@ -5841,6 +5978,1186 @@ fn the_shell_fixture_matches_its_baseline() {
     }
     let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
     assert_eq!(report["pass"], true, "{report}");
+}
+
+// ── Shadow cascades (M38) ─────────────────────────────────────────────────
+
+fn cascade_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m38_shadow_cascades.json")
+}
+
+#[test]
+fn the_cascade_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(cascade_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The milestone's fixture: a fence receding to 168 m under three nested
+/// cascades, so one object spans all three and the sharpness gradient runs
+/// along it rather than between three separate props.
+///
+/// It aims at flat ground with no `Terrain` in frame and renders at
+/// `samples: 1`, per CLAUDE.md's reproducibility rule, so it carries a hard
+/// bit-exact pin — three consecutive renders came back as one image, measured
+/// rather than assumed.
+#[test]
+fn the_m38_cascade_fixture_matches_its_baseline() {
+    let scene = cascade_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m38_shadow_cascades.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// A cascade count outside 1–4 is refused at validate time, with the
+/// environment block's own code rather than a schema type error.
+#[test]
+fn a_scene_asking_for_too_many_cascades_is_refused() {
+    let scene = scene_file(
+        "too-many-cascades",
+        r#"{"name":"s","environment":{"shadows":true,"shadow_cascades":9},"entities":[]}"#,
+    );
+
+    let output = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr_lines(&output);
+    assert!(
+        errors
+            .iter()
+            .any(|line| line["error"] == "invalid_environment_value"
+                && line["field"] == "shadow_cascades"),
+        "{errors:?}"
+    );
+}
+
+// ── Ragdolls (M39) ─────────────────────────────────────────────────────────
+
+/// The milestone's fixture: two identical walkers, and the only difference
+/// between them is a `Ragdoll` a script fires at step 40.
+fn ragdoll_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m39_ragdoll.json")
+}
+
+#[test]
+fn the_ragdoll_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(ragdoll_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The M39 fixture rendered mid-collapse: one walker folding onto the floor
+/// while its twin walks on.
+///
+/// The two walkers are the assertion, M30's fixture logic for the fourth time
+/// — they share a file, a mesh, a clip and a proxy set, so anything that made
+/// both wrong would leave them identical. Step 75 rather than the end of the
+/// run because a settled corpse is a flat pile: the frame where the milestone
+/// is legible is the one still falling.
+///
+/// No terrain in frame, per M22's rule, so this is a hard bit-exact pin — four
+/// consecutive renders came back as one image, measured rather than assumed.
+#[test]
+fn the_m39_ragdoll_fixture_pins_a_collapsing_character() {
+    let diff = engine()
+        .arg("diff-render")
+        .arg(ragdoll_scene())
+        .arg(repo_path(
+            "examples/scenes/verify/baselines/m39_ragdoll.png",
+        ))
+        .arg("--steps")
+        .arg("75")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The milestone's claim as a number, with no image read: the character
+/// physics took over falls, and its twin does not.
+///
+/// `Transform.position` following the root part is what makes this readable at
+/// all — a ragdoll whose transform stayed put would be invisible to `simulate`,
+/// to culling and to every script distance check, while being plainly
+/// somewhere else on screen (design §4).
+#[test]
+fn the_ragdolled_walker_falls_and_its_twin_keeps_walking() {
+    let output = engine()
+        .arg("simulate")
+        .arg(ragdoll_scene())
+        .arg("--steps")
+        .arg("150")
+        .arg("--entity")
+        .arg("Dropped")
+        .arg("--entity")
+        .arg("Walking")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let y_of = |name: &str| -> f64 {
+        report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == name)
+            .unwrap_or_else(|| panic!("no {name} in {report}"))["position"][1]
+            .as_f64()
+            .unwrap()
+    };
+
+    // Both are authored standing at y = 0 and carried by the same script line.
+    let dropped = y_of("Dropped");
+    assert!(
+        dropped > 0.05 && dropped < 0.45,
+        "the ragdoll's root should end up on the floor but above it — a hips \
+         joint at {dropped} is either still standing or fell through"
+    );
+    assert_eq!(
+        y_of("Walking"),
+        0.0,
+        "the walker with no Ragdoll must be exactly where the script put it"
+    );
+}
+
+/// M33's agreement test with its arrow reversed: physics is now the *source* of
+/// the pose, and `list-colliders` and `list-joints` still have to name the same
+/// point.
+///
+/// This is the check that the whole design turns on. The proxy's placement is
+/// read out of rapier; the joint's is read out of `Ragdoll.pose`, the component
+/// field physics wrote. If the write-back's `G = M⁻¹ · B · L⁻¹` were wrong in
+/// any of its three factors these would disagree by tens of centimetres.
+///
+/// Exactly, not to millimetres, unlike M33's: there is no stride latency here,
+/// because a ragdolled character's pose is not advanced by ground covered.
+#[test]
+fn a_ragdolled_characters_reports_agree_about_where_its_hips_are() {
+    let scene = ragdoll_scene();
+
+    let colliders = engine()
+        .arg("list-colliders")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Dropped")
+        .arg("--steps")
+        .arg("75")
+        .output()
+        .unwrap();
+    let colliders = json_stdout(&colliders);
+    let hips = colliders["colliders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["part"] == "Hips")
+        .unwrap_or_else(|| panic!("no Hips proxy in {colliders}"));
+
+    let joints = engine()
+        .arg("list-joints")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Dropped")
+        .arg("--steps")
+        .arg("75")
+        .output()
+        .unwrap();
+    let joints = json_stdout(&joints);
+    let joint = joints["rigs"][0]["joints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["name"] == "Hips")
+        .unwrap_or_else(|| panic!("no Hips joint in {joints}"));
+
+    // The Hips part carries no offset, so the two name the same point.
+    for axis in 0..3 {
+        let from_physics = hips["position"][axis].as_f64().unwrap();
+        let from_pose = joint["world"]["position"][axis].as_f64().unwrap();
+        assert!(
+            (from_physics - from_pose).abs() < 1e-3,
+            "axis {axis}: the proxy is at {from_physics}, the joint at {from_pose}"
+        );
+    }
+}
+
+/// A corpse baked mid-fall reloads into the same heap — **bit-exactly**.
+///
+/// This is why `Ragdoll.pose` is a component field rather than state in the
+/// physics world (design §2, and M32's rule that the bake is what settles the
+/// question). A pose that lived in `PhysicsWorld` would reload as a character
+/// standing up in its bind pose, and the bake's promise would be false for
+/// every dead body in every scene.
+#[test]
+fn a_ragdoll_baked_mid_fall_reloads_into_the_same_heap() {
+    let baked = repo_path("examples/scenes/verify/m39_baked_probe.json");
+    let _ = std::fs::remove_file(&baked);
+
+    let bake = engine()
+        .arg("simulate")
+        .arg(ragdoll_scene())
+        .arg("--steps")
+        .arg("75")
+        .arg("--bake")
+        .arg(&baked)
+        .output()
+        .unwrap();
+    assert!(bake.status.success(), "{:?}", stderr_lines(&bake));
+
+    // The pose is in the file, in full, and the flag with it.
+    let text = std::fs::read_to_string(&baked).unwrap();
+    let file: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let ragdoll = file["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Dropped")
+        .unwrap()["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["type"] == "Ragdoll")
+        .expect("the baked corpse must carry its Ragdoll")
+        .clone();
+    assert_eq!(ragdoll["active"], true, "{ragdoll}");
+    assert_eq!(
+        ragdoll["pose"].as_array().map(Vec::len),
+        Some(13),
+        "one entry per joint of the rig, {ragdoll}"
+    );
+
+    // And it draws as the frame it was baked from, with no steps at all.
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&baked)
+        .arg(repo_path(
+            "examples/scenes/verify/baselines/m39_ragdoll.png",
+        ))
+        .arg("--steps")
+        .arg("0")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        let _ = std::fs::remove_file(&baked);
+        eprintln!("skipping bake round-trip pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    let _ = std::fs::remove_file(&baked);
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// A `fit: "bone"` part takes its length from the posed rig, and a plain one
+/// does not (M39 §7).
+///
+/// The fixture's thigh capsules are fitted and its shin capsules are authored,
+/// so one pair reports a `half_height` the rig implies and the other reports
+/// the number in the file. This is the property M33 wanted when it refused
+/// resizing shapes — not that they never change, but that what they *are* is
+/// answerable with a command.
+#[test]
+fn a_fitted_part_reports_the_bone_and_an_authored_one_reports_the_file() {
+    let colliders = engine()
+        .arg("list-colliders")
+        .arg(ragdoll_scene())
+        .arg("--entity")
+        .arg("Walking")
+        .arg("--steps")
+        .arg("30")
+        .output()
+        .unwrap();
+    let colliders = json_stdout(&colliders);
+    let half_height = |part: &str| -> f64 {
+        colliders["colliders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["part"] == part)
+            .unwrap_or_else(|| panic!("no {part} in {colliders}"))["dimensions"][0]
+            .as_f64()
+            .unwrap()
+    };
+
+    // `KneeL` is authored at 0.15 and must stay there, exactly.
+    assert!(
+        (half_height("KneeL") - 0.15).abs() < 1e-6,
+        "an authored part must report the file's number, got {}",
+        half_height("KneeL")
+    );
+    // `LegL` is authored at 0.15 too and asks to fit; the walker's thigh is a
+    // different length, so the reported number must have moved off it.
+    let fitted = half_height("LegL");
+    assert!(
+        (fitted - 0.15).abs() > 1e-3,
+        "a fitted part must report the bone, not the authored 0.15, got {fitted}"
+    );
+}
+
+/// `engine fit-colliders` solves a proxy set and prints it as text — the
+/// answer to M33's refusal of runtime generation rather than an overruling of
+/// it (design §8). Without `--write` the scene file is untouched.
+#[test]
+fn fit_colliders_prints_a_proxy_set_and_leaves_the_file_alone() {
+    let scene = ragdoll_scene();
+    let before = std::fs::read_to_string(&scene).unwrap();
+
+    let output = engine()
+        .arg("fit-colliders")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Walking")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    assert_eq!(report["written"], false, "{report}");
+
+    let parts = report["entities"][0]["component"]["parts"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no parts in {report}"));
+    // One per joint the skin actually weights, which for this rig is all
+    // thirteen — and each names a joint of the rig rather than an index.
+    assert_eq!(parts.len(), 13, "{report}");
+    assert!(
+        parts.iter().any(|p| p["joint"] == "Head"),
+        "the fitted set must name joints, {report}"
+    );
+    // Every fitted shape has to be one a proxy may be, and a real size.
+    for part in parts {
+        assert_eq!(part["shape"], "cuboid", "{part}");
+        for axis in 0..3 {
+            assert!(
+                part["half_extents"][axis].as_f64().unwrap() > 0.0,
+                "a fitted extent must be positive, {part}"
+            );
+        }
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(&scene).unwrap(),
+        before,
+        "fit-colliders without --write must not touch the scene file"
+    );
+}
+
+/// The four ragdoll-specific refusals, each reported before a device or a step
+/// exists.
+#[test]
+fn ragdoll_validation_refuses_what_it_should() {
+    let dir = scratch_dir("ragdoll-validation");
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("bad.json");
+
+    // A Ragdoll with no SkinnedCollider: the bodies *are* the proxies.
+    std::fs::write(
+        &scene,
+        serde_json::json!({
+            "name": "bad",
+            "entities": [{
+                "name": "Ghost",
+                "components": [
+                    { "type": "Transform" },
+                    { "type": "Ragdoll" },
+                ],
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let codes = codes_of(&stderr_lines(
+        &engine().arg("validate").arg(&scene).output().unwrap(),
+    ));
+    assert!(
+        codes.contains(&"ragdoll_without_proxies".to_string()),
+        "{codes:?}"
+    );
+
+    // A hinge with no axis, a range that runs backwards, a range with no
+    // hinge, two overrides for one joint, and an override for a joint no part
+    // rides — all at once, because this validator reports every error.
+    std::fs::write(
+        &scene,
+        serde_json::json!({
+            "name": "bad",
+            "entities": [{
+                "name": "Walker",
+                "components": [
+                    { "type": "Transform" },
+                    { "type": "Mesh", "asset": "builtin:cube" },
+                    { "type": "SkinnedCollider", "parts": [
+                        { "joint": "Hips", "shape": "sphere", "radius": 0.1 },
+                    ]},
+                    { "type": "Ragdoll", "joints": [
+                        { "joint": "Hips", "hinge": [0.0, 0.0, 0.0] },
+                        { "joint": "Hips", "limit": 20.0 },
+                        { "joint": "Knee", "limit": 20.0 },
+                        { "joint": "Hips", "range": [10.0, 0.0] },
+                    ]},
+                ],
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let codes = codes_of(&stderr_lines(
+        &engine().arg("validate").arg(&scene).output().unwrap(),
+    ));
+    for wanted in [
+        "ragdoll_bad_hinge",
+        "ragdoll_duplicate_joint",
+        "ragdoll_unknown_joint",
+    ] {
+        assert!(
+            codes.contains(&wanted.to_string()),
+            "expected {wanted} in {codes:?}"
+        );
+    }
+}
+
+// ── Buoyancy and the water evaluator (M41) ──────────────────────────────
+
+/// A pond with two floats and a stone, sized so the whole pond is inside the
+/// patch and nothing needs a long settle.
+const POND: &str = r#"{
+  "name":"pond",
+  "physics":{"gravity":[0.0,-9.81,0.0],"timestep_hz":60},
+  "entities":[
+    {"name":"Cam","components":[
+      {"type":"Transform","position":[0.0,3.0,8.0],"rotation":[-15.0,0.0,0.0]},
+      {"type":"Camera","fov":50.0,"near":0.1,"far":100.0,"active":true}]},
+    {"name":"Bed","components":[
+      {"type":"Transform","position":[0.0,-3.0,0.0],"scale":[40.0,1.0,40.0]},
+      {"type":"Mesh","asset":"builtin:plane"},
+      {"type":"Material","albedo":[0.3,0.3,0.3]},
+      {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.05,0.5]}]},
+    {"name":"Lake","components":[
+      {"type":"Transform","scale":[20.0,1.0,20.0]},
+      {"type":"Water","segments":64,"waves":[
+        {"direction":30.0,"wavelength":6.0,"amplitude":0.12,"steepness":0.4,"speed":1.4}]}]},
+    {"name":"Cork","components":[
+      {"type":"Transform","position":[-1.5,0.6,0.0],"scale":[0.8,0.8,0.8]},
+      {"type":"Mesh","asset":"builtin:sphere"},
+      {"type":"Material","albedo":[0.8,0.4,0.1]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5,"density":250.0},
+      {"type":"Buoyancy","water":"Lake","samples":1,"drag":2.0}]},
+    {"name":"Anvil","components":[
+      {"type":"Transform","position":[1.5,0.6,0.0],"scale":[0.8,0.8,0.8]},
+      {"type":"Mesh","asset":"builtin:sphere"},
+      {"type":"Material","albedo":[0.2,0.2,0.2]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5,"density":7800.0},
+      {"type":"Buoyancy","water":"Lake","samples":1,"drag":2.0}]}
+  ]}"#;
+
+/// The claim buoyancy exists to make: what is lighter than water stays at the
+/// surface, and what is heavier goes to the bottom.
+///
+/// Two bodies identical in every way but `Collider.density`, so nothing that
+/// moved both — a broken evaluator, gravity, the bed — can make this pass. The
+/// numbers are metres and the pond is 3 m deep, so the gap between the two
+/// outcomes is far larger than any tolerance question.
+#[test]
+fn a_light_body_floats_and_a_dense_one_sinks() {
+    let scene = scene_file("buoyancy-density", POND);
+    let report = json_stdout(
+        &engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", "420"])
+            .args(["--entity", "Cork"])
+            .args(["--entity", "Anvil"])
+            .output()
+            .unwrap(),
+    );
+
+    let height_of = |name: &str| -> f64 {
+        report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == name)
+            .unwrap_or_else(|| panic!("{name} should be in the report"))["position"][1]
+            .as_f64()
+            .unwrap()
+    };
+
+    let cork = height_of("Cork");
+    let anvil = height_of("Anvil");
+    assert!(
+        cork > -0.6,
+        "a body a quarter the density of water must stay at the surface, not sink to {cork}"
+    );
+    assert!(
+        anvil < -2.0,
+        "a body denser than steel must reach the bed, not hover at {anvil}"
+    );
+}
+
+/// Buoyancy is opt-in, and this is what "opt-in" has to mean: the *same* light
+/// body with no `Buoyancy` component sinks like any other.
+///
+/// Without this, a passing float test proves only that something holds bodies
+/// up — it could be the water's collider, if water had one, or a bug.
+#[test]
+fn without_the_component_nothing_floats() {
+    let sinking = POND.replace(
+        r#",
+      {"type":"Buoyancy","water":"Lake","samples":1,"drag":2.0}]},
+    {"name":"Anvil"#,
+        r#"]},
+    {"name":"Anvil"#,
+    );
+    let scene = scene_file("buoyancy-optin", &sinking);
+    let report = json_stdout(
+        &engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", "420"])
+            .args(["--entity", "Cork"])
+            .output()
+            .unwrap(),
+    );
+    let cork = report["entities"][0]["position"][1].as_f64().unwrap();
+    assert!(
+        cork < -2.0,
+        "a cork with no Buoyancy is an ordinary body and belongs on the bed, not at {cork}"
+    );
+}
+
+/// `water-height` and `world.water_height` are one evaluator, exactly as
+/// `terrain-height` and `world.terrain_height` are.
+///
+/// The terrain twin of this test is what M22's one-implementation claim rests
+/// on; water needs it more, not less, because there is a *third* copy of the
+/// curve in `water.wgsl` that a render test holds separately.
+#[test]
+fn water_height_is_the_evaluator_scripts_ask() {
+    let scene = scene_file(
+        "water-sampler",
+        &POND.replace(
+            r#"{"name":"Cam","components":["#,
+            r#"{"name":"Probe","components":[{"type":"Script","source":"probe.rhai"}]},
+    {"name":"Cam","components":["#,
+        ),
+    );
+    std::fs::write(
+        scene.parent().unwrap().join("probe.rhai"),
+        "fn step(world, step) { world.hud(\"h=\" + world.water_height(\"Lake\", 2.5, -1.5)); }\n",
+    )
+    .unwrap();
+
+    // Ten steps, and the CLI is asked about **nine**. That is not an
+    // off-by-one: a script runs at the time its step *begins* at
+    // (`step_index`, 0-based) while physics and the render are handed the time
+    // it *ends* at, so the last of ten script calls saw 9/60 s. Terrain never
+    // had to care because a height field has no clock. Asking both at the same
+    // instant is the entire point of this test, so the offset is spelled out
+    // rather than absorbed into a tolerance.
+    let simulated = json_stdout(
+        &engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", "10"])
+            .output()
+            .unwrap(),
+    );
+    let from_script: f64 = simulated["hud"][0]
+        .as_str()
+        .expect("the script pushes one HUD line")
+        .trim_start_matches("h=")
+        .parse()
+        .unwrap();
+
+    let from_cli = json_stdout(
+        &engine()
+            .arg("water-height")
+            .arg(&scene)
+            .args(["--at", "2.5,-1.5"])
+            .args(["--steps", "9"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        from_cli["height"].as_f64().unwrap() as f32,
+        from_script as f32,
+        "the CLI and the script API must sample the same surface"
+    );
+}
+
+/// Water has edges, and the query says so rather than answering 0.0.
+#[test]
+fn water_height_reports_where_there_is_no_water() {
+    let scene = scene_file("water-edges", POND);
+    let inside = json_stdout(
+        &engine()
+            .arg("water-height")
+            .arg(&scene)
+            .args(["--at", "3,3"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(inside["water"], true);
+    assert!(inside["height"].is_number(), "{inside}");
+    assert_eq!(
+        inside["normal"].as_array().unwrap().len(),
+        3,
+        "the normal rides along: {inside}"
+    );
+
+    // The patch is 20 m across, so ±10 m is the edge.
+    let outside = json_stdout(
+        &engine()
+            .arg("water-height")
+            .arg(&scene)
+            .args(["--at", "10.5,0"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(outside["water"], false);
+    assert!(
+        outside.get("height").is_none(),
+        "no water means no height to report: {outside}"
+    );
+}
+
+/// The surface moves, so the query has a clock and it is load-bearing.
+#[test]
+fn water_height_answers_at_the_time_it_is_asked_about() {
+    let scene = scene_file("water-clock", POND);
+    let at = |args: [&str; 2]| -> f64 {
+        json_stdout(
+            &engine()
+                .arg("water-height")
+                .arg(&scene)
+                .args(["--at", "0,0"])
+                .args(args)
+                .output()
+                .unwrap(),
+        )["height"]
+            .as_f64()
+            .unwrap()
+    };
+
+    let start = at(["--time", "0.0"]);
+    let later = at(["--time", "1.7"]);
+    assert!(
+        (start - later).abs() > 1e-3,
+        "a travelling wave must have moved between t=0 and t=1.7: {start} vs {later}"
+    );
+    // `--steps` is the same clock at `steps / timestep_hz`, which is how a
+    // render and a physics step agree about where the wave is.
+    assert!(
+        (at(["--steps", "102"]) - later).abs() < 1e-6,
+        "102 steps at 60 Hz is 1.7 s"
+    );
+}
+
+/// The fixture: a raft and a buoy riding a swell, and a stone on the bed.
+///
+/// **The three densities are the assertion.** They share a pond, a clock and an
+/// evaluator, so anything that broke buoyancy as a whole would move all three
+/// together — only a working force law puts one at the waterline, one half out
+/// of it, and one on the bottom. Pinned bit-exactly: five renders of this scene
+/// came back as one image, because the camera holds no terrain and the scene
+/// renders at `samples: 1`.
+#[test]
+fn the_buoyancy_fixture_matches_its_baseline() {
+    let scene = repo_path("examples/scenes/verify/m41_buoyancy.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m41_buoyancy.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("480")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+}
+
+/// The fixture: three basins, two of them holding water (M42).
+///
+/// **The picture is the assertion that the height field and the collider are the
+/// same surface.** A raft floats in a dug pool, a boulder and a pebble rest on
+/// the floor of a dry crater 1.2 m below the field around it, and two
+/// overlapping circles read as one oblong pond — which is `max`-not-sum drawn
+/// rather than argued. Pinned bit-exactly: three renders came back as one image,
+/// because the scene renders at `samples: 1` and the camera holds no horizon.
+#[test]
+fn the_basin_fixture_matches_its_baseline() {
+    let scene = repo_path("examples/scenes/verify/m42_basins.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m42_basins.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("180")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+}
+
+/// `engine terrain-height` reports the basined ground, not the plain noise.
+///
+/// The GPU-free half of the fixture, and the one that would catch a basin
+/// applied in the mesh generator alone: the query, the collider and the drawn
+/// surface are one function, so the query is allowed to stand in for all three.
+#[test]
+fn terrain_height_reports_the_basin_floor() {
+    let scene = repo_path("examples/scenes/verify/m42_basins.json");
+    let height_at = |x: f32, z: f32| -> f64 {
+        let out = engine()
+            .arg("terrain-height")
+            .arg(&scene)
+            .arg("--at")
+            .arg(format!("{x},{z}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&out).trim()).unwrap();
+        report["height"].as_f64().unwrap()
+    };
+
+    // The pool's floor is its patch of noise minus 2.1 m. Both points sampled
+    // here are on the same gentle rise, so the *difference* is the basin and
+    // not the landscape — which is why the check is a range rather than an
+    // equality: `depth` is a subtraction from a field that is still varying
+    // underneath it, deliberately, so a basin on a hillside stays on the
+    // hillside.
+    let floor = height_at(-6.0, -8.0);
+    let beyond_the_rim = height_at(-6.0, -2.0);
+    assert!(
+        floor < -1.9,
+        "the pool floor is at {floor}, expected below -1.9"
+    );
+    assert!(
+        (1.7..2.5).contains(&(beyond_the_rim - floor)),
+        "the pool sits {} m below the ground outside it, expected about 2.1",
+        beyond_the_rim - floor
+    );
+
+    // `falloff: 0` is a wall, not a slope: 0.2 m apart across the crater's rim
+    // is the whole 1.2 m drop.
+    let inside_rim = height_at(-8.0, 9.4);
+    let outside_rim = height_at(-8.0, 9.7);
+    assert!(
+        outside_rim - inside_rim > 1.1,
+        "a zero falloff should be a cliff, but 0.3 m across it drops {} m",
+        outside_rim - inside_rim
+    );
+}
+
+/// A `Buoyancy` that names nothing, names the wrong thing, or sits on something
+/// that cannot be pushed — all at once, because validation reports everything at
+/// once (M5) and a scene with three mistakes should need one run to find them.
+#[test]
+fn buoyancy_refuses_the_component_that_could_do_nothing() {
+    let broken = r#"{
+  "name":"broken buoyancy",
+  "entities":[
+    {"name":"Cam","components":[
+      {"type":"Transform","position":[0.0,2.0,6.0]},
+      {"type":"Camera","fov":50.0,"near":0.1,"far":100.0,"active":true}]},
+    {"name":"Lake","components":[
+      {"type":"Transform","scale":[20.0,1.0,20.0]},
+      {"type":"Water"}]},
+    {"name":"Nameless","components":[
+      {"type":"Transform","position":[0.0,1.0,0.0]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5},
+      {"type":"Buoyancy"}]},
+    {"name":"WrongTarget","components":[
+      {"type":"Transform","position":[2.0,1.0,0.0]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5},
+      {"type":"Buoyancy","water":"Cam"}]},
+    {"name":"Typo","components":[
+      {"type":"Transform","position":[4.0,1.0,0.0]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5},
+      {"type":"Buoyancy","water":"Laike"}]},
+    {"name":"Statue","components":[
+      {"type":"Transform","position":[6.0,1.0,0.0]},
+      {"type":"RigidBody","body":"fixed"},
+      {"type":"Collider","shape":"sphere","radius":0.5},
+      {"type":"Buoyancy","water":"Lake"}]}
+  ]}"#;
+    let scene = scene_file("buoyancy-broken", broken);
+    let output = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let lines = stderr_lines(&output);
+    let codes = codes_of(&lines);
+    for expected in [
+        "buoyancy_water_missing",
+        "buoyancy_water_invalid",
+        "buoyancy_water_not_found",
+        "buoyancy_without_body",
+    ] {
+        assert!(
+            codes.iter().any(|code| code == expected),
+            "expected {expected} among {codes:?}"
+        );
+    }
+
+    // A near miss suggests the real surface, like every other name error here.
+    let typo = lines
+        .iter()
+        .find(|l| l["error"] == "buoyancy_water_not_found")
+        .expect("the typo case is reported");
+    assert_eq!(typo["did_you_mean"], "Lake");
+
+    // A fixed body cannot take a force, so the component on it is inert — that
+    // is the failure the render cannot show you and the reason this is an error
+    // rather than a warning.
+    let inert = lines
+        .iter()
+        .find(|l| l["error"] == "buoyancy_without_body")
+        .expect("the fixed body is reported");
+    assert_eq!(inert["entity"], "Statue");
+}
+
+/// The M37 fixture: a launcher firing entities that did not exist when the
+/// scene loaded, pinned bit-exactly.
+///
+/// **The arc of five shots is the assertion.** Nothing in the file draws a
+/// sphere — `Shot` is a `templates` entry, declared and not instantiated — so
+/// every ball in the frame was spawned by a script, given a velocity through
+/// the ordinary API on the line after its spawn, simulated by rapier, and
+/// reaped by name. A spawn that silently did nothing, arrived a step late, or
+/// never reached physics all render as a frame with no spheres in it.
+#[test]
+fn the_spawn_fixture_matches_its_baseline() {
+    let scene = repo_path("examples/scenes/verify/m37_spawn.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m37_spawn.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("120")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+}
+
+/// The report, the trace and the bake all have to say a spawn happened — a
+/// picture cannot answer "did my gun fire", which is the whole reason the
+/// query commands exist (M24/M25).
+#[test]
+fn simulate_reports_traces_and_bakes_what_a_run_spawned() {
+    let scene = repo_path("examples/scenes/verify/m37_spawn.json");
+    let dir = std::env::temp_dir().join(format!("engine-m37-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let trace = dir.join("m37_spawn.jsonl");
+
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "120"])
+        .arg("--trace")
+        .arg(&trace)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+
+    // A total, not a live count: eleven were fired and five are still up.
+    assert_eq!(report["spawned"], 11, "{report}");
+    assert_eq!(report["hud"][0], "shots in flight 5/6", "{report}");
+
+    // Spawned bodies are ordinary entities from the moment they exist, so they
+    // are in the report's `entities` array like anything else.
+    let names: Vec<String> = report["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["entity"].as_str().unwrap().to_string())
+        .collect();
+    assert!(names.contains(&"Shot#11".to_string()), "{names:?}");
+    assert!(
+        !names.contains(&"Shot#1".to_string()),
+        "the first shot was reaped: {names:?}"
+    );
+
+    // The trace records both halves as events, so a run is greppable.
+    let lines = std::fs::read_to_string(&trace).unwrap();
+    assert!(lines.contains(r#""spawned":"Shot#1""#), "no spawn event");
+    assert!(
+        lines.contains(r#""despawned":"Shot#1""#),
+        "no despawn event"
+    );
+
+    // And the names are never reused: `Shot#1` is spawned once in the whole
+    // run, however many times its slot is freed.
+    let spawns = lines
+        .lines()
+        .filter(|l| l.contains(r#""spawned":"Shot#1""#) && !l.contains("Shot#1x"))
+        .count();
+    assert_eq!(spawns, 1, "a name was reused");
+}
+
+// ── Material-aware fracture (M43) ──────────────────────────────────────────
+
+/// The fixture: four slabs of four materials, each with a weight dropped on it,
+/// rendered a second after the impacts.
+///
+/// **The four break patterns side by side are the assertion.** They share a
+/// scene, a clock and a hammer, so anything that broke fracture as a whole
+/// would move all four together — only a working material model puts glass
+/// slivers across the floor, wood splinters in a heap, stone chunks where the
+/// block was, and metal in two plates that barely parted. Pinned bit-exactly:
+/// three renders came back as one image, because the camera holds no terrain
+/// and the scene renders at `samples: 1`.
+#[test]
+fn the_fracture_fixture_matches_its_baseline() {
+    let scene = repo_path("examples/scenes/verify/m43_fracture.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m43_fracture.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("55")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+}
+
+/// `engine fracture` prints a `Breakable` and leaves the file alone; `--write`
+/// splices one in. The generator is a command, never a runtime behaviour, so
+/// "what did it produce" has to be answerable without running anything.
+#[test]
+fn fracture_generates_a_breakable_and_only_writes_when_asked() {
+    let scene = scene_file(
+        "fracture-write",
+        r#"{
+  "name": "one_crate",
+  "entities": [
+    { "name": "Crate", "components": [
+      { "type": "Transform", "scale": [0.8, 0.8, 0.8] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5] }
+    ] }
+  ]
+}
+"#,
+    );
+    let before = std::fs::read_to_string(&scene).unwrap();
+
+    let report: serde_json::Value = json_out(
+        &engine()
+            .arg("fracture")
+            .arg(&scene)
+            .arg("--entity")
+            .arg("Crate")
+            .arg("--material")
+            .arg("stone")
+            .arg("--pieces")
+            .arg("6")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(report["pieces"], 6, "{report}");
+    assert_eq!(report["material"], "stone");
+    assert_eq!(report["written"], false);
+    // The cells tile the source box, so their volumes sum to it — in metres,
+    // which for a unit collider at scale 0.8 is 0.8³.
+    let volume = report["volume"].as_f64().unwrap();
+    assert!((volume - 0.8_f64.powi(3)).abs() < 1e-4, "{volume}");
+    assert_eq!(
+        std::fs::read_to_string(&scene).unwrap(),
+        before,
+        "a report is not an edit"
+    );
+
+    // Every fragment is a shard, and the density is the material's.
+    let fragments = report["component"]["fragments"].as_array().unwrap();
+    assert_eq!(fragments.len(), 6);
+    for fragment in fragments {
+        assert!(fragment["points"].is_array(), "{fragment}");
+        assert!(fragment["mesh"].is_null(), "a shard is not a mesh ref");
+        assert_eq!(fragment["density"], 2400.0);
+    }
+
+    // --write splices it in, and what it wrote validates.
+    let written: serde_json::Value = json_out(
+        &engine()
+            .arg("fracture")
+            .arg(&scene)
+            .arg("--entity")
+            .arg("Crate")
+            .arg("--material")
+            .arg("stone")
+            .arg("--pieces")
+            .arg("6")
+            .arg("--threshold")
+            .arg("30")
+            .arg("--write")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(written["written"], true, "{written}");
+    let after = std::fs::read_to_string(&scene).unwrap();
+    assert!(after.contains(r#""material": "stone""#), "{after}");
+    assert!(after.contains(r#""impulse_threshold": 30.0"#), "{after}");
+    let checked = engine()
+        .arg("validate")
+        .arg(&scene)
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "the written scene must validate: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    // A second fracture keeps the threshold: it is a decision about the
+    // object, not about its shards.
+    let again = engine()
+        .arg("fracture")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Crate")
+        .arg("--seed")
+        .arg("9")
+        .arg("--write")
+        .output()
+        .unwrap();
+    assert!(again.status.success(), "{again:?}");
+    let refractured = std::fs::read_to_string(&scene).unwrap();
+    assert!(
+        refractured.contains(r#""impulse_threshold": 30.0"#),
+        "{refractured}"
+    );
+    // And the material too, without the flag.
+    assert!(
+        refractured.contains(r#""material": "stone""#),
+        "{refractured}"
+    );
+}
+
+/// The same seed is the same shards, and a different seed is different ones —
+/// the property that lets a generated scene file be committed at all.
+#[test]
+fn fracture_is_reproducible_from_its_seed() {
+    let scene = scene_file(
+        "fracture-seed",
+        r#"{
+  "name": "pane",
+  "entities": [
+    { "name": "Pane", "components": [
+      { "type": "Transform", "scale": [1.2, 0.04, 1.2] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5] }
+    ] }
+  ]
+}
+"#,
+    );
+
+    let run = |seed: &str| {
+        json_out(
+            &engine()
+                .arg("fracture")
+                .arg(&scene)
+                .arg("--entity")
+                .arg("Pane")
+                .arg("--material")
+                .arg("glass")
+                .arg("--seed")
+                .arg(seed)
+                .output()
+                .unwrap(),
+        )["component"]
+            .clone()
+    };
+    assert_eq!(run("4"), run("4"), "the same seed is the same break");
+    assert_ne!(run("4"), run("5"), "a different seed is a different break");
 }
 
 // ── Global illumination (M35) ─────────────────────────────────────────────

@@ -43,6 +43,17 @@ pub struct SceneFile {
     pub daylight: Option<DaylightSettings>,
 
     pub entities: Vec<EntityDef>,
+
+    /// Shapes a script may spawn at runtime (M37) — declared here, never
+    /// instantiated when the scene loads. Absent means the pre-M37 engine
+    /// exactly: nothing can be spawned, and no code path differs.
+    ///
+    /// A template is an [`EntityDef`] plus a `limit`, and it exists so a
+    /// spawn can name something *the file already declares* rather than
+    /// constructing geometry from a script, which would put scene data in a
+    /// `.rhai` and break invariant 2.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<TemplateDef>,
 }
 
 /// The scene-level `physics` block (M8).
@@ -107,6 +118,14 @@ pub struct EnvironmentSettings {
     #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub shadow_distance: f32,
 
+    /// How many nested shadow maps the sun renders (M38): `1`–`4`, default
+    /// `1`. Each cascade covers a third the extent of the one outside it and
+    /// is therefore three times sharper, so `3` at a `shadow_distance` of
+    /// 240 m gives 1.3 cm texels near the camera where 11.7 cm is all a single
+    /// map can offer. Costs one caster pass and 16 MB per cascade.
+    #[schemars(range(min = 1, max = 4))]
+    pub shadow_cascades: u32,
+
     /// Multisample count for the scene pass: `1` (off) or `4`. The HUD is
     /// composited after the resolve and is never multisampled, so text stays
     /// pixel-exact either way.
@@ -125,6 +144,8 @@ impl Default for EnvironmentSettings {
             fog_density: 0.0,
             shadows: false,
             shadow_distance: 60.0,
+            // One, so the sun renders exactly the map M16 shipped.
+            shadow_cascades: 1,
             samples: 1,
         }
     }
@@ -149,6 +170,50 @@ pub struct EntityDef {
     #[serde(default)]
     pub components: Vec<ComponentData>,
 }
+
+/// One spawnable template in a scene file (M37).
+///
+/// Deliberately not a variant of [`EntityDef`]: a template is a *declaration*
+/// rather than a thing, and the difference shows up in every consumer —
+/// `Scene::instantiate` skips it, the renderer never sees it, `simulate` never
+/// traces it, and `validate` runs the per-entity walk on it but none of the
+/// scene-level budget passes.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateDef {
+    /// What `world.spawn_entity` names, and the stem of every instance's name
+    /// (`Bullet` spawns `Bullet#1`, `Bullet#2`, …). Unique among templates
+    /// *and* distinct from every entity name: one address space, because
+    /// `world.spawn_entity("Drone")` and `world.set_position("Drone", …)` must never
+    /// be able to mean two different things.
+    pub name: String,
+
+    /// The most instances of this template that may be **live** at once —
+    /// spawned minus despawned. Spawning at the limit spawns nothing and
+    /// returns the empty string, which is a value the script reads rather
+    /// than a crash: a gun that fires faster than its bullets expire is an
+    /// ordinary game, not a bug.
+    ///
+    /// A number in the file rather than a hard-coded ceiling because every
+    /// instance is a collider and the collider set is an input to the broad
+    /// phase — a scene that wants ten thousand bullets should have to say so
+    /// where `engine inspect` can read it. `>= 1`.
+    #[serde(default = "default_template_limit")]
+    #[schemars(range(min = 1))]
+    pub limit: u32,
+
+    #[serde(default)]
+    pub components: Vec<ComponentData>,
+}
+
+/// Enough for a magazine, few enough that a runaway spawn is caught by the
+/// cap rather than by the frame time.
+fn default_template_limit() -> u32 {
+    64
+}
+
+/// The default [`TemplateDef::limit`], for validation and `engine inspect`.
+pub const DEFAULT_TEMPLATE_LIMIT: u32 = 64;
 
 /// One thing to draw, with its geometry resolved and its transform flattened.
 #[derive(Debug, Clone)]
@@ -239,6 +304,177 @@ pub struct RoadItem {
     pub surface: std::sync::Arc<crate::road::RoadSurface>,
     pub model: glam::Mat4,
     pub road: crate::components::Road,
+    /// Set when this draw is a [`Junction`](crate::components::Junction)'s
+    /// patch rather than a `Road`'s ribbon (M40).
+    ///
+    /// A junction is drawn by the road pipeline — same shader, same uniform,
+    /// markings switched off — so it belongs in this list. It is not a road,
+    /// though, and `engine road-centerline` filters on exactly this: a patch
+    /// has no centerline to publish.
+    pub junction: Option<crate::components::Junction>,
+}
+
+/// Every entity's name, for the free draw-list builders below.
+fn names_of(world: &World) -> std::collections::HashMap<String, Entity> {
+    world
+        .query::<(Entity, &Name)>()
+        .iter()
+        .map(|(entity, name)| (name.0.clone(), entity))
+        .collect()
+}
+
+fn flat_transform(world: &World, entity: Entity) -> Transform {
+    world
+        .get::<&Transform>(entity)
+        .map(|t| *t)
+        .unwrap_or_default()
+}
+
+/// One road's generated ribbon, resolving the terrain it named (M40).
+///
+/// Free rather than a [`Scene`] method because physics builds its trimesh
+/// colliders straight off a `World` and has to reach the same geometry the
+/// renderer draws. Two implementations of "which terrain does this road ride
+/// on" is exactly the disagreement `road-centerline` exists to prevent, one
+/// level down.
+fn road_surface_of(
+    world: &World,
+    names: &std::collections::HashMap<String, Entity>,
+    road: &crate::components::Road,
+    model: glam::Mat4,
+) -> std::sync::Arc<crate::road::RoadSurface> {
+    // Resolve the ground first, as `meadow_items` does and for the same reason:
+    // the borrows have to outlive the `surface` call that reads through them. A
+    // road that names no terrain — every road before M40 — resolves to `None`
+    // and keeps its authored heights.
+    let ground_entity = road
+        .follow_terrain
+        .as_deref()
+        .and_then(|n| names.get(n).copied());
+    let ground_terrain =
+        ground_entity.and_then(|e| world.get::<&crate::components::Terrain>(e).ok());
+    let ground_transform = ground_entity.map(|e| flat_transform(world, e));
+    let ground = match (&ground_terrain, &ground_transform) {
+        (Some(terrain), Some(transform)) => Some(crate::road::Ground { terrain, transform }),
+        _ => None,
+    };
+    crate::road::surface(road, model, ground)
+}
+
+/// Flatten a world's roads *and* its junction patches into one draw list (M40).
+///
+/// Both are drawn by the road pipeline, so both belong here; `RoadItem.junction`
+/// is what tells them apart for the consumers that care.
+pub fn road_items_of(world: &World) -> Vec<RoadItem> {
+    let names = names_of(world);
+    let mut items: Vec<RoadItem> = world
+        .query::<(Entity, &crate::components::Road)>()
+        .iter()
+        .map(|(entity, road)| {
+            let model = flat_transform(world, entity).matrix();
+            RoadItem {
+                entity: world
+                    .get::<&Name>(entity)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default(),
+                surface: road_surface_of(world, &names, road, model),
+                model,
+                road: road.clone(),
+                junction: None,
+            }
+        })
+        .collect();
+
+    items.extend(junction_items_of(world).into_iter().map(|item| RoadItem {
+        // A patch answers as a road because the pipeline asks it as one — see
+        // `junction::as_road`. The rest of `RoadSurface` is genuinely empty
+        // rather than faked: a junction has no centerline, no dashes and no
+        // kerbs, and every one of those is switched off in the uniform.
+        road: crate::junction::as_road(&item.junction, &item.surface),
+        surface: std::sync::Arc::new(crate::road::RoadSurface {
+            mesh: std::sync::Arc::clone(&item.surface.mesh),
+            length: 0.0,
+            dash_period: 0.0,
+            dash_duty: 1.0,
+            kerbs: Vec::new(),
+            centerline: Vec::new(),
+        }),
+        model: item.model,
+        entity: item.entity,
+        junction: Some(item.junction),
+    }));
+
+    items.sort_by(|a, b| a.entity.cmp(&b.entity));
+    items
+}
+
+/// Flatten a world's junctions, resolving each arm to the road it names (M40).
+pub fn junction_items_of(world: &World) -> Vec<JunctionItem> {
+    let names = names_of(world);
+    let mut items: Vec<JunctionItem> = world
+        .query::<(Entity, &crate::components::Junction)>()
+        .iter()
+        .map(|(entity, junction)| {
+            let model = flat_transform(world, entity).matrix();
+
+            // The arms' roads have to be *built* before the patch can be, and
+            // the built pieces have to outlive the borrows handed to
+            // `junction::surface` — so they are collected first and borrowed
+            // second. An arm naming an entity with no Road is dropped here and
+            // reported by validation (`junction_road_not_found`); the render
+            // path does not re-litigate what validation already said.
+            let resolved: Vec<(String, crate::components::Road, _, glam::Mat4, _)> = junction
+                .arms
+                .iter()
+                .filter_map(|arm| {
+                    let entity = names.get(&arm.road).copied()?;
+                    let road = (*world.get::<&crate::components::Road>(entity).ok()?).clone();
+                    let arm_model = flat_transform(world, entity).matrix();
+                    let surface = road_surface_of(world, &names, &road, arm_model);
+                    Some((arm.road.clone(), road, surface, arm_model, arm.end))
+                })
+                .collect();
+            let arms: Vec<crate::junction::Arm<'_>> = resolved
+                .iter()
+                .map(
+                    |(name, road, surface, arm_model, end)| crate::junction::Arm {
+                        name,
+                        road,
+                        surface,
+                        model: *arm_model,
+                        end: *end,
+                    },
+                )
+                .collect();
+
+            JunctionItem {
+                entity: world
+                    .get::<&Name>(entity)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default(),
+                surface: crate::junction::surface(junction, model, &arms),
+                model,
+                junction: junction.clone(),
+            }
+        })
+        .collect();
+    items.sort_by(|a, b| a.entity.cmp(&b.entity));
+    items
+}
+
+/// One junction, with its patch generated and the arms it resolved (M40).
+///
+/// Separate from the [`RoadItem`] the renderer draws, because the two answer
+/// different questions: the draw list wants geometry, and `engine
+/// junction-plan` wants to know *where the arms turned out to be* — which is
+/// the only way to tell a patch that stretched from a road that stopped short.
+#[derive(Debug, Clone)]
+pub struct JunctionItem {
+    /// The source entity's stable name (invariant 4).
+    pub entity: String,
+    pub surface: std::sync::Arc<crate::junction::JunctionSurface>,
+    pub model: glam::Mat4,
+    pub junction: crate::components::Junction,
 }
 
 /// One meadow, with its plants grown and placed (M29) — [`WaterItem`]'s
@@ -444,6 +680,10 @@ pub struct Scene {
     /// about the time of day. `None` is the pre-M21 engine exactly.
     pub daylight: Option<DaylightSettings>,
 
+    /// What this scene can spawn (M37), carried rather than instantiated.
+    /// Empty for a scene with no `templates` block.
+    pub templates: Vec<TemplateDef>,
+
     /// Name lookup, mirroring the [`Name`] component so targeting an entity by
     /// name does not require scanning the world.
     by_name: HashMap<String, Entity>,
@@ -537,6 +777,9 @@ impl Scene {
             physics,
             environment,
             daylight,
+            // Declared, not instantiated (M37) — the loop above walked
+            // `entities` and templates are deliberately not in it.
+            templates: file.templates,
             world,
             by_name,
         }
@@ -774,6 +1017,40 @@ impl Scene {
                 });
             }
         }
+        // Shards carry their geometry too (M43), and for the same reason a
+        // tree rides this list rather than getting its own: a shard is an
+        // ordinary opaque lit surface that happens to compute its own vertices.
+        // Shadows, fog, point lights, picking and the editor's selection all
+        // come free, and no second copy of any of them exists.
+        for (entity, shard) in self
+            .world
+            .query::<(Entity, &crate::components::Shard)>()
+            .iter()
+        {
+            let name = self
+                .world
+                .get::<&Name>(entity)
+                .map(|n| n.0.clone())
+                .unwrap_or_default();
+            let material = self
+                .world
+                .get::<&crate::components::Material>(entity)
+                .map(|m| (*m).clone())
+                .unwrap_or_default();
+            let textures = crate::texture::MaterialTextures::resolve(&material, assets)
+                .map_err(|e| e.entity(name.clone()))?;
+
+            items.push(RenderItem {
+                entity: name,
+                mesh: crate::shard::mesh_for(shard),
+                model: self.transform_of(entity).matrix(),
+                material,
+                textures,
+                terrain: None,
+                joints: Vec::new(),
+            });
+        }
+
         items.extend(self.terrain_items());
 
         Ok(items)
@@ -892,6 +1169,32 @@ impl Scene {
         let terrain = self.world.get::<&crate::components::Terrain>(entity).ok()?;
         let transform = self.transform_of(entity);
         Some(crate::terrain::world_height_at(&terrain, &transform, x, z))
+    }
+
+    /// The surface of a water patch over a world XZ position at `time` seconds
+    /// (M41) — what `world.water_height` and `engine water-height` resolve
+    /// through.
+    ///
+    /// `None` when the entity does not exist, has no `Water`, or when that
+    /// column is **outside the patch**. That last case is the difference from
+    /// [`terrain_height`](Self::terrain_height), which cannot fail: a height
+    /// field is defined wherever its formula is, while a body of water has
+    /// edges, and answering "0.0" past them is how a boat floats on dry land.
+    ///
+    /// Takes a clock, which no other query in the engine does, because water is
+    /// the first queryable surface that **moves**. Passing the same `time` the
+    /// render used gives the surface the render drew.
+    pub fn water_sample(
+        &self,
+        name: &str,
+        x: f32,
+        z: f32,
+        time: f32,
+    ) -> Option<crate::water::WaterSample> {
+        let entity = self.entity(name)?;
+        let water = self.world.get::<&crate::components::Water>(entity).ok()?;
+        let transform = self.transform_of(entity);
+        crate::water::sample_at(&water, &transform, x, z, time)
     }
 
     /// Flatten the world's water surfaces into a draw list (M18).
@@ -1021,23 +1324,12 @@ impl Scene {
     /// Sorted by entity name, so a road's place in the frame does not depend on
     /// how hecs happened to lay out archetypes.
     pub fn road_items(&self) -> Vec<RoadItem> {
-        let mut items: Vec<RoadItem> = self
-            .world
-            .query::<(Entity, &crate::components::Road)>()
-            .iter()
-            .map(|(entity, road)| RoadItem {
-                entity: self
-                    .world
-                    .get::<&Name>(entity)
-                    .map(|n| n.0.clone())
-                    .unwrap_or_default(),
-                surface: crate::road::surface(road),
-                model: self.transform_of(entity).matrix(),
-                road: road.clone(),
-            })
-            .collect();
-        items.sort_by(|a, b| a.entity.cmp(&b.entity));
-        items
+        road_items_of(&self.world)
+    }
+
+    /// The scene's junctions, with their patches generated (M40).
+    pub fn junction_items(&self) -> Vec<JunctionItem> {
+        junction_items_of(&self.world)
     }
 
     /// Extract the screen-space overlay as plain data, in **scene-file order**

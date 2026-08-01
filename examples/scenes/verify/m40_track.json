@@ -1,0 +1,589 @@
+{
+  "name": "m40_track",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [
+      0.17,
+      0.31,
+      0.6
+    ],
+    "sky_horizon": [
+      0.6,
+      0.69,
+      0.8
+    ],
+    "sky_ground": [
+      0.14,
+      0.15,
+      0.14
+    ],
+    "shadows": true,
+    "shadow_distance": 180.0,
+    "samples": 1
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.81,
+      0.0
+    ],
+    "timestep_hz": 60
+  },
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            300.0,
+            1.0,
+            300.0
+          ]
+        },
+        {
+          "type": "Terrain",
+          "segments": 200,
+          "seed": 11,
+          "height": 9.0,
+          "feature_scale": 90.0,
+          "octaves": 4,
+          "persistence": 0.5,
+          "warp": 0.3,
+          "layers": [
+            {
+              "albedo": [
+                0.1,
+                0.15,
+                0.07
+              ],
+              "roughness": 0.96
+            },
+            {
+              "albedo": [
+                0.13,
+                0.14,
+                0.08
+              ],
+              "roughness": 0.96,
+              "slope_range": [
+                14.0,
+                90.0
+              ],
+              "slope_blend": 8.0,
+              "noise": 0.9
+            }
+          ]
+        },
+        {
+          "type": "Collider",
+          "shape": "trimesh",
+          "friction": 0.8
+        }
+      ]
+    },
+    {
+      "name": "Circuit",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Road",
+          "closed": true,
+          "width": 9.0,
+          "shoulder": 1.8,
+          "skirt": 14.0,
+          "segment_length": 2.0,
+          "segment_angle": 4.0,
+          "color": [
+            0.075,
+            0.075,
+            0.085
+          ],
+          "roughness": 0.9,
+          "shoulder_color": [
+            0.19,
+            0.17,
+            0.13
+          ],
+          "bank_color": [
+            0.21,
+            0.18,
+            0.14
+          ],
+          "follow_terrain": "Ground",
+          "follow_smoothing": 16.0,
+          "auto_bank": 9.0,
+          "auto_bank_radius": 22.0,
+          "grain": 0.55,
+          "grain_scale": 0.4,
+          "points": [
+            {
+              "position": [
+                -40.0,
+                0.25,
+                0.0
+              ],
+              "radius": 0.0
+            },
+            {
+              "position": [
+                -40.0,
+                0.25,
+                -48.0
+              ],
+              "radius": 16.0
+            },
+            {
+              "position": [
+                24.0,
+                0.25,
+                -48.0
+              ],
+              "radius": 14.0
+            },
+            {
+              "position": [
+                54.0,
+                0.25,
+                -10.0
+              ],
+              "radius": 13.0
+            },
+            {
+              "position": [
+                36.0,
+                0.25,
+                38.0
+              ],
+              "radius": 12.0
+            },
+            {
+              "position": [
+                -16.0,
+                0.25,
+                50.0
+              ],
+              "radius": 20.0
+            },
+            {
+              "position": [
+                -40.0,
+                0.25,
+                26.0
+              ],
+              "radius": 17.0
+            }
+          ],
+          "markings": {
+            "color": [
+              0.9,
+              0.9,
+              0.88
+            ],
+            "edge_width": 0.16,
+            "edge_inset": 0.12,
+            "center_width": 0.14,
+            "center_dash": 3.0,
+            "center_gap": 5.0,
+            "kerb_max_radius": 14.0,
+            "kerb_width": 1.0,
+            "kerb_stripe": 1.5,
+            "kerb_color": [
+              0.78,
+              0.09,
+              0.07
+            ],
+            "start_line": true,
+            "start_line_width": 0.9
+          }
+        },
+        {
+          "type": "Collider",
+          "shape": "trimesh",
+          "friction": 0.95
+        }
+      ]
+    },
+    {
+      "name": "PitLane",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Road",
+          "closed": false,
+          "width": 7.0,
+          "shoulder": 1.4,
+          "skirt": 14.0,
+          "segment_length": 2.0,
+          "segment_angle": 4.0,
+          "color": [
+            0.08,
+            0.08,
+            0.09
+          ],
+          "roughness": 0.9,
+          "shoulder_color": [
+            0.19,
+            0.17,
+            0.13
+          ],
+          "bank_color": [
+            0.21,
+            0.18,
+            0.14
+          ],
+          "follow_terrain": "Ground",
+          "follow_smoothing": 14.0,
+          "grain": 0.55,
+          "grain_scale": 0.4,
+          "points": [
+            {
+              "position": [
+                -100.0,
+                0.3,
+                0.0
+              ],
+              "radius": 0.0
+            },
+            {
+              "position": [
+                -86.0,
+                0.3,
+                0.0
+              ],
+              "radius": 8.0,
+              "width": 13.0
+            },
+            {
+              "position": [
+                -74.0,
+                0.3,
+                0.0
+              ],
+              "radius": 8.0,
+              "width": 13.0
+            },
+            {
+              "position": [
+                -68.0,
+                0.3,
+                0.0
+              ],
+              "radius": 0.0
+            }
+          ],
+          "markings": {
+            "edge_width": 0.14,
+            "edge_inset": 0.1
+          }
+        }
+      ]
+    },
+    {
+      "name": "PaddockNorth",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Road",
+          "closed": false,
+          "width": 7.0,
+          "shoulder": 1.4,
+          "skirt": 14.0,
+          "segment_length": 2.0,
+          "segment_angle": 4.0,
+          "color": [
+            0.08,
+            0.08,
+            0.09
+          ],
+          "roughness": 0.9,
+          "shoulder_color": [
+            0.19,
+            0.17,
+            0.13
+          ],
+          "bank_color": [
+            0.21,
+            0.18,
+            0.14
+          ],
+          "follow_terrain": "Ground",
+          "follow_smoothing": 14.0,
+          "grain": 0.55,
+          "grain_scale": 0.4,
+          "points": [
+            {
+              "position": [
+                -62.0,
+                0.3,
+                -36.0
+              ],
+              "radius": 0.0
+            },
+            {
+              "position": [
+                -62.0,
+                0.3,
+                -6.0
+              ],
+              "radius": 0.0
+            }
+          ],
+          "markings": {
+            "edge_width": 0.14,
+            "edge_inset": 0.1
+          }
+        }
+      ]
+    },
+    {
+      "name": "PaddockSouth",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Road",
+          "closed": false,
+          "width": 7.0,
+          "shoulder": 1.4,
+          "skirt": 14.0,
+          "segment_length": 2.0,
+          "segment_angle": 4.0,
+          "color": [
+            0.08,
+            0.08,
+            0.09
+          ],
+          "roughness": 0.9,
+          "shoulder_color": [
+            0.19,
+            0.17,
+            0.13
+          ],
+          "bank_color": [
+            0.21,
+            0.18,
+            0.14
+          ],
+          "follow_terrain": "Ground",
+          "follow_smoothing": 14.0,
+          "grain": 0.55,
+          "grain_scale": 0.4,
+          "points": [
+            {
+              "position": [
+                -62.0,
+                0.3,
+                36.0
+              ],
+              "radius": 0.0
+            },
+            {
+              "position": [
+                -62.0,
+                0.3,
+                6.0
+              ],
+              "radius": 0.0
+            }
+          ],
+          "markings": {
+            "edge_width": 0.14,
+            "edge_inset": 0.1
+          }
+        }
+      ]
+    },
+    {
+      "name": "PitJunction",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Junction",
+          "arms": [
+            {
+              "road": "PitLane",
+              "end": "end"
+            },
+            {
+              "road": "PaddockNorth",
+              "end": "end"
+            },
+            {
+              "road": "PaddockSouth",
+              "end": "end"
+            }
+          ],
+          "flare": 1.0,
+          "corner_segments": 8,
+          "shoulder": 1.4,
+          "skirt": 14.0,
+          "color": [
+            0.08,
+            0.08,
+            0.09
+          ],
+          "roughness": 0.9,
+          "shoulder_color": [
+            0.19,
+            0.17,
+            0.13
+          ],
+          "bank_color": [
+            0.21,
+            0.18,
+            0.14
+          ],
+          "grain": 0.55,
+          "grain_scale": 0.4
+        },
+        {
+          "type": "Collider",
+          "shape": "trimesh",
+          "friction": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Ball",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -40.0,
+            8.0,
+            -24.0
+          ],
+          "scale": [
+            1.4,
+            1.4,
+            1.4
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.7,
+            0.18,
+            0.14
+          ],
+          "roughness": 0.45
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "sphere",
+          "radius": 0.5,
+          "friction": 0.6
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "rotation": [
+            -38.0,
+            34.0,
+            0.0
+          ]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [
+            1.0,
+            0.97,
+            0.92
+          ],
+          "intensity": 1.7
+        }
+      ]
+    },
+    {
+      "name": "Ambient",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [
+            0.72,
+            0.8,
+            1.0
+          ],
+          "intensity": 0.22
+        }
+      ]
+    },
+    {
+      "name": "Eye",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -100.0,
+            26.0,
+            40.0
+          ],
+          "rotation": [
+            -16.0,
+            -48.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "fov": 52.0,
+          "near": 0.5,
+          "far": 400.0,
+          "active": true
+        }
+      ]
+    }
+  ]
+}

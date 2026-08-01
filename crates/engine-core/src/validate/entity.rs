@@ -39,8 +39,18 @@ pub(super) struct SceneFacts<'a> {
     pub(super) distinct_layers: Vec<(String, String)>,
     pub(super) wheels: Vec<(String, crate::components::Wheel, String)>,
     pub(super) meadows: Vec<(String, crate::components::Meadow, String)>,
+    /// Roads that name a `Terrain` to follow (M40), and junctions that name
+    /// roads — both are cross-entity references, so both wait for the pass
+    /// where every name is known. The meadow pass's shape.
+    pub(super) roads: Vec<(String, crate::components::Road, String)>,
+    pub(super) junctions: Vec<(String, crate::components::Junction, String)>,
+    pub(super) road_names: std::collections::BTreeSet<String>,
+    pub(super) closed_road_names: std::collections::BTreeSet<String>,
     pub(super) terrain_names: std::collections::BTreeSet<String>,
     pub(super) foot_plants: Vec<(String, crate::components::FootPlant, String)>,
+    pub(super) buoyancies: Vec<(String, crate::components::Buoyancy, String)>,
+    pub(super) water_names: std::collections::BTreeSet<String>,
+    pub(super) collider_names: std::collections::BTreeSet<String>,
     pub(super) hud_elements: Vec<HudRef>,
     pub(super) hud_panel_names: std::collections::BTreeSet<String>,
     /// Every `LightProbeVolume`, with its `spacing` and the path that declared
@@ -49,11 +59,92 @@ pub(super) struct SceneFacts<'a> {
     pub(super) probe_volumes: Vec<(String, f32, String)>,
 }
 
-/// Walk every entity, pushing per-entity errors and collecting the rest.
+/// Which list is being walked (M37).
+///
+/// `entities` and `templates` hold the same shape — a name and a component
+/// list — and take the same per-component checks, so they take the same walk.
+/// What differs is the JSON pointer, the word in the top-level messages, the
+/// codes those messages carry, and whether some components are forbidden. One
+/// walk with a `Kind` rather than two walks, because two walks is how the
+/// entity rules and the template rules start disagreeing about what a
+/// `Collider` may say.
+#[derive(Clone, Copy)]
+pub(super) struct Kind {
+    /// The JSON pointer segment and the top-level field name.
+    segment: &'static str,
+    /// The word in messages: "entity" or "template".
+    word: &'static str,
+    /// The keys an entry may carry, for the unknown-field check.
+    keys: &'static [&'static str],
+    not_object: &'static str,
+    missing_name: &'static str,
+    empty_name: &'static str,
+    duplicate_name: &'static str,
+    /// Components a spawn could use to violate a validated scene-level budget
+    /// — empty for entities, five long for templates. See
+    /// `designs/entity-spawning-design.md` §4.
+    forbidden: &'static [(&'static str, &'static str)],
+}
+
+impl Kind {
+    pub(super) const ENTITY: Self = Self {
+        segment: "entities",
+        word: "entity",
+        keys: &["name", "components"],
+        not_object: codes::ENTITY_NOT_OBJECT,
+        missing_name: codes::MISSING_ENTITY_NAME,
+        empty_name: codes::EMPTY_ENTITY_NAME,
+        duplicate_name: codes::DUPLICATE_ENTITY_NAME,
+        forbidden: &[],
+    };
+
+    pub(super) const TEMPLATE: Self = Self {
+        segment: "templates",
+        word: "template",
+        keys: &["name", "limit", "components"],
+        not_object: codes::TEMPLATE_NOT_OBJECT,
+        missing_name: codes::MISSING_TEMPLATE_NAME,
+        empty_name: codes::EMPTY_TEMPLATE_NAME,
+        duplicate_name: codes::DUPLICATE_TEMPLATE_NAME,
+        // Each of these is refused because spawning one could make a valid
+        // scene invalid at step 40, and the point of validation is that it
+        // cannot. The reason travels with the name so the error can say it.
+        forbidden: &[
+            (
+                "Script",
+                "scripts are compiled once when the run starts, so a spawned one \
+                 would never run",
+            ),
+            (
+                "Camera",
+                "a scene may mark at most one camera active, and a spawn cannot be \
+                 allowed to break a rule validation has already checked",
+            ),
+            (
+                "DirectionalLight",
+                "a scene may have at most one DirectionalLight",
+            ),
+            ("AmbientLight", "a scene may have at most one AmbientLight"),
+            (
+                "PointLight",
+                "a scene may carry at most 8 PointLight components, and overflowing \
+                 that budget drops lights silently rather than failing",
+            ),
+        ],
+    };
+
+    fn is_template(&self) -> bool {
+        !self.forbidden.is_empty()
+    }
+}
+
+/// Walk every entity — or every template (M37) — pushing per-entry errors and
+/// collecting the rest.
 pub(super) fn walk<'a>(
     cx: &Cx<'_>,
     schemas: &ComponentSchemas,
     entities: &'a [Value],
+    kind: Kind,
     errors: &mut Vec<EngineError>,
 ) -> SceneFacts<'a> {
     let mut seen_names: Vec<&str> = Vec::with_capacity(entities.len());
@@ -81,11 +172,25 @@ pub(super) fn walk<'a>(
     // is another entity, so the check waits until every name is known — the
     // wheel pass's shape.
     let mut meadows: Vec<(String, crate::components::Meadow, String)> = Vec::new();
+    // Road and junction pass inputs (M40), for the meadow pass's reason: a road
+    // names the terrain it rides on and a junction names the roads that reach
+    // it, and neither name can be checked until every entity has been seen.
+    let mut roads: Vec<(String, crate::components::Road, String)> = Vec::new();
+    let mut junctions: Vec<(String, crate::components::Junction, String)> = Vec::new();
+    let mut road_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut closed_road_names: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     let mut terrain_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // Foot planting pass inputs (M32): a `FootPlant` names the Terrain its
     // feet stand on, so it waits for every name too — the meadow pass's shape,
     // for the meadow pass's reason.
     let mut foot_plants: Vec<(String, crate::components::FootPlant, String)> = Vec::new();
+    // Buoyancy pass inputs (M41): a `Buoyancy` names the Water it floats on
+    // and needs a body and a shape on its own entity, so it waits for every
+    // name too — the meadow pass's shape a third time.
+    let mut buoyancies: Vec<(String, crate::components::Buoyancy, String)> = Vec::new();
+    let mut water_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut collider_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // One HUD element awaiting the cross-entity pass (M31): its owner, the
     // component that owns the `parent` reference, the reference itself, and
     // the component-s JSON path. Collected across all four kinds because
@@ -95,13 +200,14 @@ pub(super) fn walk<'a>(
     let mut hud_panel_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for (entity_index, entity) in entities.iter().enumerate() {
-        let entity_path = format!("/entities/{entity_index}");
+        let entity_path = format!("/{}/{entity_index}", kind.segment);
+        let word = kind.word;
 
         let Some(entity) = entity.as_object() else {
             errors.push(cx.err(
-                codes::ENTITY_NOT_OBJECT,
+                kind.not_object,
                 format!(
-                    "entity at index {entity_index} must be an object, found {}",
+                    "{word} at index {entity_index} must be an object, found {}",
                     kind_of(entity)
                 ),
                 &entity_path,
@@ -116,8 +222,8 @@ pub(super) fn walk<'a>(
             Some(Value::String(_)) => {
                 errors.push(
                     cx.err(
-                        codes::EMPTY_ENTITY_NAME,
-                        format!("entity at index {entity_index} has an empty name"),
+                        kind.empty_name,
+                        format!("{word} at index {entity_index} has an empty name"),
                         &format!("{entity_path}/name"),
                     )
                     .field("name"),
@@ -127,16 +233,16 @@ pub(super) fn walk<'a>(
             Some(other) => {
                 errors.push(
                     cx.wrong_type("name", "string", other, &format!("{entity_path}/name"))
-                        .entity(format!("<entity at index {entity_index}>")),
+                        .entity(format!("<{word} at index {entity_index}>")),
                 );
                 continue;
             }
             None => {
                 errors.push(
                     cx.err(
-                        codes::MISSING_ENTITY_NAME,
+                        kind.missing_name,
                         format!(
-                            "entity at index {entity_index} has no name; \
+                            "{word} at index {entity_index} has no name; \
                              names are how the CLI and agent edits target entities"
                         ),
                         &entity_path,
@@ -150,9 +256,9 @@ pub(super) fn walk<'a>(
         if seen_names.contains(&name) {
             errors.push(
                 cx.err(
-                    codes::DUPLICATE_ENTITY_NAME,
+                    kind.duplicate_name,
                     format!(
-                        "more than one entity is named {name:?}; names must be unique \
+                        "more than one {word} is named {name:?}; names must be unique \
                          because they are how entities are targeted"
                     ),
                     &format!("{entity_path}/name"),
@@ -163,17 +269,49 @@ pub(super) fn walk<'a>(
         seen_names.push(name);
 
         for key in entity.keys() {
-            if key != "name" && key != "components" {
+            if !kind.keys.contains(&key.as_str()) {
                 errors.push(
                     cx.err(
                         codes::UNKNOWN_FIELD,
-                        format!("unknown entity field {key:?}"),
+                        format!("unknown {word} field {key:?}"),
                         &format!("{entity_path}/{key}"),
                     )
                     .entity(name)
                     .field(key)
-                    .suggest_from(key, ["name", "components"]),
+                    .suggest_from(key, kind.keys.iter().copied()),
                 );
+            }
+        }
+
+        // A template's `limit` is the one field an entity does not have, and
+        // it is checked here rather than by the component schema walk because
+        // it is not a component. `>= 1`: a limit of zero is a template that
+        // can never spawn, which is a mistake with no legitimate reading.
+        if kind.is_template() {
+            match entity.get("limit") {
+                None => {}
+                Some(Value::Number(n)) if n.is_u64() && n.as_u64() != Some(0) => {}
+                Some(Value::Number(n)) if n.is_u64() => errors.push(
+                    cx.err(
+                        codes::VALUE_OUT_OF_RANGE,
+                        format!(
+                            "template {name:?} has a limit of 0, so nothing could ever \
+                             spawn from it; the smallest useful limit is 1"
+                        ),
+                        &format!("{entity_path}/limit"),
+                    )
+                    .entity(name)
+                    .field("limit"),
+                ),
+                Some(other) => errors.push(
+                    cx.wrong_type(
+                        "limit",
+                        "non-negative integer",
+                        other,
+                        &format!("{entity_path}/limit"),
+                    )
+                    .entity(name),
+                ),
             }
         }
 
@@ -211,11 +349,20 @@ pub(super) fn walk<'a>(
         // A `SkinnedCollider` (M33): its proxies ride the entity's rig, so the
         // checks need the entity's `Mesh` and its scale.
         let mut skinned_collider: Option<(crate::components::SkinnedCollider, String)> = None;
+        // A `Ragdoll` (M39): its bodies *are* the proxies, so every check it
+        // has needs the `SkinnedCollider` beside it.
+        let mut ragdoll: Option<(crate::components::Ragdoll, String)> = None;
         let mut tree_path: Option<String> = None;
+        let mut shard_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
         let mut has_transform = false;
         let mut scale = glam::Vec3::ONE;
+        let mut rotation = glam::Vec3::ZERO;
+        // Only the terrain-basin check reads this, and it reads it in world XZ:
+        // a basin is authored in world space, so the question "does it land on
+        // this patch" is asked about the patch's world footprint (M42).
+        let mut position = glam::Vec3::ZERO;
         let mut rigid_body: Option<(crate::components::BodyKind, String)> = None;
         let mut collider: Option<(crate::components::Collider, String)> = None;
         let mut wheel_path: Option<String> = None;
@@ -223,6 +370,7 @@ pub(super) fn walk<'a>(
         let mut water: Option<(crate::components::Water, String)> = None;
         let mut terrain: Option<(crate::components::Terrain, String)> = None;
         let mut road: Option<(crate::components::Road, String)> = None;
+        let mut junction: Option<(crate::components::Junction, String)> = None;
         let mut meadow: Option<(crate::components::Meadow, String)> = None;
         let mut light_probe_volume: Option<(crate::components::LightProbeVolume, String)> = None;
         // Whether this entity carries anything a `HudInteract` could use as
@@ -259,6 +407,26 @@ pub(super) fn walk<'a>(
             }
             seen_types.push(type_name.clone());
 
+            // §4 of the spawning design: a template may not carry a component
+            // whose scene-level budget a spawn could then violate. Refused at
+            // validation rather than at the spawn, because "this scene is
+            // valid" has to keep meaning something after step 0.
+            if let Some((_, why)) = kind.forbidden.iter().find(|(c, _)| *c == type_name) {
+                errors.push(
+                    cx.err(
+                        codes::TEMPLATE_FORBIDDEN_COMPONENT,
+                        format!(
+                            "template {name:?} carries a {type_name}, which a template \
+                             may not: {why}"
+                        ),
+                        &component_path,
+                    )
+                    .entity(name)
+                    .component(&type_name),
+                );
+                continue;
+            }
+
             if checked.active_camera {
                 active_cameras.push((name.to_string(), component_path.clone()));
             }
@@ -278,6 +446,9 @@ pub(super) fn walk<'a>(
             if type_name == "Tree" {
                 tree_path = Some(component_path.clone());
             }
+            if type_name == "Shard" {
+                shard_path = Some(component_path.clone());
+            }
             if type_name == "Material" {
                 material_paths.push(component_path.clone());
             }
@@ -285,6 +456,8 @@ pub(super) fn walk<'a>(
                 Some(ComponentData::Transform(t)) => {
                     has_transform = true;
                     scale = t.scale;
+                    rotation = t.rotation;
+                    position = t.position;
                 }
                 Some(ComponentData::RigidBody(rb)) => {
                     body_kinds.insert(name.to_string(), rb.body);
@@ -306,6 +479,7 @@ pub(super) fn walk<'a>(
                     mesh_asset = Some(mesh.asset.clone());
                 }
                 Some(ComponentData::Collider(c)) => {
+                    collider_names.insert(name.to_string());
                     collider = Some((c, component_path));
                 }
                 Some(ComponentData::Wheel(w)) => {
@@ -318,6 +492,7 @@ pub(super) fn walk<'a>(
                     }
                 }
                 Some(ComponentData::Water(w)) => {
+                    water_names.insert(name.to_string());
                     water = Some((w, component_path));
                 }
                 Some(ComponentData::Cloud(_)) => {
@@ -328,7 +503,16 @@ pub(super) fn walk<'a>(
                     terrain = Some((t, component_path));
                 }
                 Some(ComponentData::Road(r)) => {
+                    road_names.insert(name.to_string());
+                    if r.closed {
+                        closed_road_names.insert(name.to_string());
+                    }
+                    roads.push((name.to_string(), r.clone(), component_path.clone()));
                     road = Some((r, component_path));
+                }
+                Some(ComponentData::Junction(j)) => {
+                    junctions.push((name.to_string(), j.clone(), component_path.clone()));
+                    junction = Some((j, component_path));
                 }
                 Some(ComponentData::Meadow(m)) => {
                     meadows.push((name.to_string(), m.clone(), component_path.clone()));
@@ -342,8 +526,14 @@ pub(super) fn walk<'a>(
                     foot_plant = Some(component_path.clone());
                     foot_plants.push((name.to_string(), p, component_path));
                 }
+                Some(ComponentData::Buoyancy(b)) => {
+                    buoyancies.push((name.to_string(), b, component_path));
+                }
                 Some(ComponentData::SkinnedCollider(s)) => {
                     skinned_collider = Some((s, component_path));
+                }
+                Some(ComponentData::Ragdoll(r)) => {
+                    ragdoll = Some((r, component_path));
                 }
                 Some(ComponentData::HudPanel(p)) => {
                     has_hud_element = true;
@@ -566,11 +756,17 @@ pub(super) fn walk<'a>(
             // without a mesh file duplicating what the renderer already draws —
             // and for a road it is the whole point, since the surface driven and
             // the surface drawn then cannot be authored apart.
+            // A `Shard` (M43) is the third: a `convex_hull` collider on one,
+            // with no asset, collides with the hull the shard draws — which is
+            // what makes a broken piece's drawn shape and collided shape
+            // impossible to author apart.
             if mesh_shape
                 && collider_data.asset.is_none()
                 && !has_mesh
                 && terrain.is_none()
                 && road.is_none()
+                && junction.is_none()
+                && shard_path.is_none()
             {
                 errors.push(
                     cx.err(
@@ -706,6 +902,61 @@ pub(super) fn walk<'a>(
             }
         }
 
+        // ── Ragdolls (M39) ────────────────────────────────────────────
+        //
+        // The bodies are the proxies (design §4), so a `Ragdoll` without a
+        // `SkinnedCollider` has nothing to fall. Whether the parts form one
+        // tree needs the rig's ancestry and is engine-assets' half, beside the
+        // joint-name checks — the M30/M32 division, for the third time.
+        if let Some((ragdoll, path)) = &ragdoll {
+            match skinned_collider.as_ref() {
+                None => {
+                    errors.push(
+                        cx.err(
+                            codes::RAGDOLL_WITHOUT_PROXIES,
+                            format!(
+                                "entity {name:?} has a Ragdoll but no SkinnedCollider; a \
+                                 ragdoll's bodies *are* its proxies, so the hitbox that \
+                                 was shot is the body that falls, and a character with no \
+                                 hitboxes has nothing to fall"
+                            ),
+                            path,
+                        )
+                        .entity(name)
+                        .component("Ragdoll"),
+                    );
+                }
+                Some((proxies, _)) => {
+                    // An override for a joint no part rides constrains nothing,
+                    // and reads in the file as a knee that bends when it does
+                    // not — the failure mode a typo deserves a name for.
+                    let ridden: Vec<&str> =
+                        proxies.parts.iter().map(|p| p.joint.as_str()).collect();
+                    for (i, joint) in ragdoll.joints.iter().enumerate() {
+                        if ridden.contains(&joint.joint.as_str()) {
+                            continue;
+                        }
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_UNKNOWN_JOINT,
+                                format!(
+                                    "the Ragdoll override for {:?} names a joint no part \
+                                     of this SkinnedCollider rides, so it would constrain \
+                                     nothing",
+                                    joint.joint
+                                ),
+                                &format!("{path}/joints/{i}/joint"),
+                            )
+                            .entity(name)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/joint"))
+                            .suggest_from(&joint.joint, ridden.iter().copied()),
+                        );
+                    }
+                }
+            }
+        }
+
         // ── Wheel entity checks (M12) ─────────────────────────────────
         if let Some(path) = &wheel_path {
             if !has_transform {
@@ -782,6 +1033,28 @@ pub(super) fn walk<'a>(
             );
         }
 
+        // ── Shard entity checks (M43) ─────────────────────────────────
+        //
+        // A `Shard` *is* the entity's geometry, for `tree_with_mesh`'s reason:
+        // two geometries at one transform draw on top of each other and
+        // nothing says which one the author meant. Its `Material` is fine —
+        // that is the shard's surface, the same exception a Tree's bark is.
+        if let (Some(path), true) = (&shard_path, has_mesh) {
+            errors.push(
+                cx.err(
+                    codes::SHARD_WITH_MESH,
+                    format!(
+                        "entity {name:?} has both a Shard and a Mesh; a Shard is the \
+                         convex hull of its own points, so the two would draw on top \
+                         of each other — split them into two entities"
+                    ),
+                    mesh_path.as_deref().unwrap_or(path),
+                )
+                .entity(name)
+                .component("Shard"),
+            );
+        }
+
         // ── Cloud entity checks (M20) ─────────────────────────────────
         //
         // A `Cloud` grows the entity's geometry and shades it with its own
@@ -840,6 +1113,64 @@ pub(super) fn walk<'a>(
                     )
                     .entity(name)
                     .component("Road"),
+                );
+            }
+        }
+
+        // A road that follows a terrain samples the ground in world space and
+        // brings the answer back into its own local space (M40). That mapping
+        // is exact for the translation, scale and yaw a road is actually placed
+        // with, and *not* for a roll or a pitch — local `y` stops being world
+        // "up", and the road comes out skewed against the ground it is meant to
+        // be lying on. Rare, silent, and impossible to diagnose from the render.
+        if let Some((road, path)) = &road {
+            if road.follow_terrain.is_some() && (rotation.x != 0.0 || rotation.z != 0.0) {
+                errors.push(
+                    cx.err(
+                        codes::ROAD_FOLLOW_ROTATED,
+                        format!(
+                            "the Road on {name:?} follows a Terrain, but its Transform \
+                             rotates {:.1}° about X and {:.1}° about Z; ground heights \
+                             are sampled in world space and brought back into the \
+                             road's local space, which only lines up when the road is \
+                             level — place it with a yaw and a translation, and put the \
+                             tilt in the terrain",
+                            rotation.x, rotation.z
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Road")
+                    .field("follow_terrain")
+                    .warning(),
+                );
+            }
+        }
+
+        // ── Junction surface checks (M40) ─────────────────────────────
+        //
+        // The road rule, one primitive over: a `Junction` generates its own
+        // patch and carries its own colours, so a `Mesh` or `Material` beside
+        // it is a second, silently ignored answer to what this surface is.
+        if let Some((_, path)) = &junction {
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::JUNCTION_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a Junction component and also {extras}; \
+                             a junction generates its own patch from the roads that reach \
+                             it and carries its own colours — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Junction"),
                 );
             }
         }
@@ -959,6 +1290,94 @@ pub(super) fn walk<'a>(
                 }
                 if layer.slope_range[0] > layer.slope_range[1] {
                     inverted("slope_range", layer.slope_range, "°");
+                }
+            }
+
+            // ── Basins (M42) ─────────────────────────────────────────────
+            //
+            // Both of these are warnings rather than errors: a basin that cuts
+            // nothing is legal, and a basin that misses this patch is legal too
+            // — M22 promises world-space sampling precisely so that one terrain
+            // description can be shared across several patches, and a shared
+            // description names basins some of its patches do not contain.
+            // What is *not* fine is either happening silently, because the
+            // symptom in both cases is identical: the ground is exactly what it
+            // was and nothing says why.
+            let centre = glam::Vec2::new(position.x, position.z);
+            let half = (glam::Vec2::new(scale.x, scale.z) * 0.5).abs();
+            let (patch_min, patch_max) = (centre - half, centre + half);
+
+            for (index, basin) in terrain.basins.iter().enumerate() {
+                let path = |field: &str| format!("{path}/basins/{index}/{field}");
+                let footprint = basin.radius + basin.falloff;
+
+                if basin.depth == 0.0 || footprint == 0.0 {
+                    let why = if basin.depth == 0.0 {
+                        "depth 0".to_string()
+                    } else {
+                        "radius 0 and falloff 0, so no footprint".to_string()
+                    };
+                    errors.push(
+                        cx.err(
+                            codes::TERRAIN_BASIN_NO_EFFECT,
+                            format!(
+                                "entity {name:?} basin {index} has {why}, so it cuts \
+                                 nothing and the ground there is the plain noise"
+                            ),
+                            &path(if basin.depth == 0.0 {
+                                "depth"
+                            } else {
+                                "radius"
+                            }),
+                        )
+                        .entity(name)
+                        .component("Terrain")
+                        .field("basins")
+                        .warning(),
+                    );
+                    continue;
+                }
+
+                // Rectangle against rectangle rather than circle against
+                // rectangle: the answer only has to be right about *missing
+                // entirely*, and the bounding box of a basin that clips a
+                // corner is the case where the two disagree — a warning that
+                // fires on a basin which does reach the patch is worse than one
+                // that stays quiet on a basin which barely does not.
+                let (basin_min, basin_max) = (
+                    glam::Vec2::new(basin.center[0], basin.center[1]) - footprint,
+                    glam::Vec2::new(basin.center[0], basin.center[1]) + footprint,
+                );
+                let overlaps = basin_min.x <= patch_max.x
+                    && basin_max.x >= patch_min.x
+                    && basin_min.y <= patch_max.y
+                    && basin_max.y >= patch_min.y;
+
+                if !overlaps {
+                    errors.push(
+                        cx.err(
+                            codes::TERRAIN_BASIN_OUTSIDE_PATCH,
+                            format!(
+                                "entity {name:?} basin {index} is centred at \
+                                 ({}, {}) with a footprint of {footprint} m, which \
+                                 misses the patch's own extent \
+                                 x [{}, {}], z [{}, {}] — basin centres are in \
+                                 **world** XZ, like every other terrain sample, not \
+                                 in the patch's local space",
+                                basin.center[0],
+                                basin.center[1],
+                                patch_min.x,
+                                patch_max.x,
+                                patch_min.y,
+                                patch_max.y
+                            ),
+                            &path("center"),
+                        )
+                        .entity(name)
+                        .component("Terrain")
+                        .field("basins")
+                        .warning(),
+                    );
                 }
             }
         }
@@ -1177,10 +1596,12 @@ pub(super) fn walk<'a>(
         // so it does not also collect this: one mistake, one diagnostic.
         if !has_mesh
             && tree_path.is_none()
+            && shard_path.is_none()
             && water.is_none()
             && cloud_path.is_none()
             && terrain.is_none()
             && road.is_none()
+            && junction.is_none()
             && meadow.is_none()
         {
             for material_path in material_paths {
@@ -1202,6 +1623,10 @@ pub(super) fn walk<'a>(
     }
 
     SceneFacts {
+        roads,
+        junctions,
+        road_names,
+        closed_road_names,
         seen_names,
         active_cameras,
         players,
@@ -1216,6 +1641,9 @@ pub(super) fn walk<'a>(
         meadows,
         terrain_names,
         foot_plants,
+        buoyancies,
+        water_names,
+        collider_names,
         hud_elements,
         hud_panel_names,
         probe_volumes,

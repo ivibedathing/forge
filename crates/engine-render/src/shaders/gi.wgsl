@@ -22,12 +22,18 @@
 // second binding costs nothing; a declaration whose legality depends on which
 // other producer is in the list is the kind of coupling this seam exists to
 // avoid.
+//
+// They start at 6 rather than 5 because M38's cascade matrix buffer holds
+// binding 5, and holds it *conditionally* — present in the layout only beyond
+// one cascade. A binding number is not a position in a list: the layout may
+// skip 5 and these still resolve, which is why GI does not have to care whether
+// the frame is cascaded.
 
-@group(2) @binding(5) var gi_sh0: texture_3d<f32>;
-@group(2) @binding(6) var gi_sh1: texture_3d<f32>;
-@group(2) @binding(7) var gi_sh2: texture_3d<f32>;
-@group(2) @binding(8) var gi_sh3: texture_3d<f32>;
-@group(2) @binding(9) var gi_sampler: sampler;
+@group(2) @binding(6) var gi_sh0: texture_3d<f32>;
+@group(2) @binding(7) var gi_sh1: texture_3d<f32>;
+@group(2) @binding(8) var gi_sh2: texture_3d<f32>;
+@group(2) @binding(9) var gi_sh3: texture_3d<f32>;
+@group(2) @binding(10) var gi_sampler: sampler;
 
 // The gain on the three linear coefficients. Derived, not tuned: it is the
 // value that makes an unoccluded probe reconstruct `sky_ambient(n)` exactly.

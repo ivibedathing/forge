@@ -908,6 +908,218 @@ pub(crate) fn with_water_refraction() -> std::borrow::Cow<'static, str> {
     std::borrow::Cow::Owned(out)
 }
 
+// ── The cascade seam (M38) ───────────────────────────────────────────────────
+//
+// Four shaders sample the shadow map — `mesh.wgsl`, `water.wgsl`, `road.wgsl`
+// and `meadow.wgsl` — each with its own near-copy of the lookup. All four have
+// to change together: a bind group layout declaring a `D2Array` texture against
+// a shader declaring `texture_depth_2d` is a pipeline-creation error, not a
+// rendering difference.
+//
+// They change the way everything else on this path changes — by anchored
+// substitution, so that at one cascade the file that reaches the compiler is
+// the file on disk. See CLAUDE.md's first trap for why that is not a stylistic
+// preference.
+
+/// The shadow-map bindings, identical in all four receivers.
+const SHADOW_BINDINGS: &str = "@group(2) @binding(0) var shadow_map: texture_depth_2d;\n\
+                               @group(2) @binding(1) var shadow_sampler: sampler_comparison;\n";
+
+/// What they become, plus the cascade matrices and the live count.
+fn cascade_bindings(cascades: u32) -> String {
+    format!(
+        "@group(2) @binding(0) var shadow_map: texture_depth_2d_array;\n\
+         @group(2) @binding(1) var shadow_sampler: sampler_comparison;\n\
+         \n\
+         // The sun's nested cascades (M38), innermost first. The pipelines know\n\
+         // the live count at build time, so it is a constant here rather than a\n\
+         // uniform lane that could disagree with the texture's layer count.\n\
+         const CASCADE_COUNT: u32 = {cascades}u;\n\
+         \n\
+         struct CascadeUniform {{\n\
+         \x20   view_proj: array<mat4x4<f32>, {max}>,\n\
+         }};\n\
+         \n\
+         @group(2) @binding(5) var<uniform> cascade: CascadeUniform;\n",
+        max = super::MAX_SHADOW_CASCADES,
+    )
+}
+
+/// One cascade's 3×3 PCF — M16's loop with a layer index, shared by all four
+/// receivers because all four were already running the same nine taps.
+const CASCADE_SAMPLE: &str = "\
+/// One cascade's 3×3 PCF, and how far into that cascade's map the point sits.\n\
+///\n\
+/// `.x` is the lit fraction; `.y` is the inset, and a value above 1 means this\n\
+/// cascade does not hold the point at all, so the caller moves outward.\n\
+fn cascade_sample(index: u32, world_position: vec3<f32>, bias: f32) -> vec2<f32> {\n\
+\x20   let light_clip = cascade.view_proj[index] * vec4<f32>(world_position, 1.0);\n\
+\x20   let projected = light_clip.xyz / light_clip.w;\n\
+\x20   if projected.z > 1.0 || projected.z < 0.0 {\n\
+\x20       return vec2<f32>(1.0, 2.0);\n\
+\x20   }\n\
+\x20   let inset = max(abs(projected.x), abs(projected.y));\n\
+\x20   if inset > 1.0 {\n\
+\x20       return vec2<f32>(1.0, 2.0);\n\
+\x20   }\n\
+\n\
+\x20   // Clip xy is [-1, 1] with +Y up; texture uv is [0, 1] with +V down.\n\
+\x20   let uv = vec2<f32>(projected.x * 0.5 + 0.5, 0.5 - projected.y * 0.5);\n\
+\x20   let reference = projected.z - bias;\n\
+\n\
+\x20   let texel = frame.params.z;\n\
+\x20   var sum = 0.0;\n\
+\x20   for (var y = -1; y <= 1; y = y + 1) {\n\
+\x20       for (var x = -1; x <= 1; x = x + 1) {\n\
+\x20           let offset = vec2<f32>(f32(x), f32(y)) * texel;\n\
+\x20           // `...CompareLevel` rather than `...Compare`: this runs inside an\n\
+\x20           // if, and the implicit-derivative form is only valid in uniform\n\
+\x20           // control flow.\n\
+\x20           sum = sum + textureSampleCompareLevel(\n\
+\x20               shadow_map,\n\
+\x20               shadow_sampler,\n\
+\x20               uv + offset,\n\
+\x20               index,\n\
+\x20               reference,\n\
+\x20           );\n\
+\x20       }\n\
+\x20   }\n\
+\n\
+\x20   return vec2<f32>(sum / 9.0, inset);\n\
+}\n";
+
+/// The cascaded lookup, in place of a receiver's single-map one.
+///
+/// `bias` is the receiver's own — water's is a flat constant and the other
+/// three scale theirs by slope — because unifying them would change what a
+/// water shadow looks like today, and at one cascade this milestone changes
+/// nothing.
+fn cascaded_lookup(name: &str, params: &str, world: &str, bias: &str) -> String {
+    format!(
+        "{CASCADE_SAMPLE}\n\
+         /// How lit this point is by the sun: 1 fully, 0 fully shadowed.\n\
+         ///\n\
+         /// The cascades are nested, so the first that contains the point is\n\
+         /// also the sharpest that does: the search runs outward and stops.\n\
+         ///\n\
+         /// M16's fade across the last 15% of a map becomes a fade *to the next\n\
+         /// cascade*, and only the outermost still fades to lit — which is what\n\
+         /// it did when it was the only one. A hard switch would show: two\n\
+         /// cascades agree on where a shadow is but not on how soft it is, and\n\
+         /// a penumbra that changes width along a curve across the ground reads\n\
+         /// as a bug.\n\
+         fn {name}({params}) -> f32 {{\n\
+         {bias}\
+         \x20   for (var c = 0u; c < CASCADE_COUNT; c = c + 1u) {{\n\
+         \x20       let here = cascade_sample(c, {world}, bias);\n\
+         \x20       if here.y > 1.0 {{\n\
+         \x20           continue;\n\
+         \x20       }}\n\
+         \x20       let fade = smoothstep(0.85, 1.0, here.y);\n\
+         \x20       if c + 1u == CASCADE_COUNT {{\n\
+         \x20           return mix(here.x, 1.0, fade);\n\
+         \x20       }}\n\
+         \x20       if fade <= 0.0 {{\n\
+         \x20           return here.x;\n\
+         \x20       }}\n\
+         \x20       let next = cascade_sample(c + 1u, {world}, bias);\n\
+         \x20       if next.y > 1.0 {{\n\
+         \x20           return mix(here.x, 1.0, fade);\n\
+         \x20       }}\n\
+         \x20       return mix(here.x, next.x, fade);\n\
+         \x20   }}\n\
+         \x20   return 1.0;\n\
+         }}\n",
+    )
+}
+
+/// The slope-scaled bias `mesh.wgsl`, `road.wgsl` and `meadow.wgsl` share.
+const SLOPE_BIAS: &str = "\
+\x20   let slope = sqrt(max(1.0 - n_dot_l * n_dot_l, 0.0)) / max(n_dot_l, 0.05);\n\
+\x20   let bias = clamp(0.0006 * slope, 0.0004, 0.006);\n";
+
+/// Replace a whole function — and the doc comment above it — in a shader.
+///
+/// Anchoring on the signature rather than on the forty lines under it, for the
+/// reason the anchors exist at all: an anchor that has to be kept character-
+/// identical to a body someone might reasonably reformat is an anchor that will
+/// silently stop matching. The signature is the part that cannot change without
+/// the call sites changing too.
+///
+/// The doc comment goes with it because it would otherwise be describing the
+/// wrong function: `mesh.wgsl`'s says "over a single orthographic map", which is
+/// exactly what the cascaded variant is not.
+fn replace_function(source: &str, signature: &str, replacement: &str) -> String {
+    assert_eq!(
+        source.matches(signature).count(),
+        1,
+        "a shadow receiver no longer contains this signature exactly once, so the \
+         cascaded pipeline would compile as if cascades were absent:\n{signature}"
+    );
+    // The signature sits in column zero, so this is already a line start.
+    let mut start = source.find(signature).expect("asserted above");
+    // Back up over the contiguous `///` block introducing it.
+    while start > 0 {
+        let previous = source[..start - 1].rfind('\n').map_or(0, |at| at + 1);
+        if !source[previous..start].trim_start().starts_with("///") {
+            break;
+        }
+        start = previous;
+    }
+
+    let body = &source[start..];
+    let end = start
+        + body
+            .find("\n}\n")
+            .expect("a WGSL function ends with a brace in column zero")
+        + 3;
+    format!("{}{replacement}{}", &source[..start], &source[end..])
+}
+
+/// A receiver shader with the cascaded lookup spliced in (M38).
+///
+/// At one cascade this returns the source untouched — not an equivalent
+/// rearrangement of it, the same `&str` — which is what makes every committed
+/// baseline safe by construction rather than by measurement.
+pub(crate) fn with_cascades(source: &str, cascades: u32) -> std::borrow::Cow<'_, str> {
+    if cascades <= 1 {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    assert_eq!(
+        source.matches(SHADOW_BINDINGS).count(),
+        1,
+        "a shadow receiver no longer declares the shadow map exactly as the other \
+         three do, so its cascaded variant would bind an array texture to a \
+         2D sampler:\n{SHADOW_BINDINGS}"
+    );
+    let out = source.replace(SHADOW_BINDINGS, &cascade_bindings(cascades));
+
+    // Water's lookup takes no normal — a wave surface is nearly flat, so M18
+    // gave it a flat generous bias instead of a slope-scaled one.
+    let (signature, replacement) = if out.contains("fn shadow_lit(world: vec3<f32>) -> f32 {") {
+        (
+            "fn shadow_lit(world: vec3<f32>) -> f32 {",
+            cascaded_lookup(
+                "shadow_lit",
+                "world: vec3<f32>",
+                "world",
+                "    let bias = 0.0015;\n",
+            ),
+        )
+    } else {
+        (
+            "fn shadow_factor(world_position: vec3<f32>, n_dot_l: f32) -> f32 {",
+            cascaded_lookup(
+                "shadow_factor",
+                "world_position: vec3<f32>, n_dot_l: f32",
+                "world_position",
+                SLOPE_BIAS,
+            ),
+        )
+    };
+    std::borrow::Cow::Owned(replace_function(&out, signature, &replacement))
+}
+
 #[cfg(test)]
 mod seam_tests {
     /// The anchors are asserted at pipeline build, but only for *presence*.
@@ -1077,7 +1289,7 @@ mod seam_tests {
              * sampled.occlusion;\n"
         ));
         // …the field is declared…
-        assert!(both.contains("@group(2) @binding(5) var gi_sh0: texture_3d<f32>;"));
+        assert!(both.contains("@group(2) @binding(6) var gi_sh0: texture_3d<f32>;"));
         // …and the shared lighting body is still the file's.
         assert!(both.contains("let base_color = direct + ambient + emissive;"));
     }
@@ -1147,7 +1359,7 @@ mod seam_tests {
         for (what, variant) in [("road", &road), ("meadow", &meadow)] {
             // The field, the sampler, and the uniform fields that place it.
             assert!(
-                variant.contains("@group(2) @binding(5) var gi_sh0: texture_3d<f32>;")
+                variant.contains("@group(2) @binding(6) var gi_sh0: texture_3d<f32>;")
                     && variant.contains("gi_origin: vec4<f32>,")
                     && variant.contains("gi_params: vec4<f32>,"),
                 "{what} did not receive the GI prelude"
@@ -1228,6 +1440,88 @@ mod seam_tests {
             (by_rows - expected).length() < 1e-5,
             "packed rows transform to {by_rows:?}, the matrix to {expected:?}"
         );
+    }
+
+    /// One cascade must return the file itself, not a rearrangement of it
+    /// (M38 §4). This is the property every committed baseline rests on, and
+    /// the cheapest place to catch a splice that started firing unconditionally.
+    #[test]
+    fn one_cascade_leaves_every_receiver_exactly_as_it_sits_on_disk() {
+        for source in [
+            include_str!("../shaders/mesh.wgsl"),
+            include_str!("../shaders/water.wgsl"),
+            include_str!("../shaders/road.wgsl"),
+            include_str!("../shaders/meadow.wgsl"),
+        ] {
+            assert_eq!(super::with_cascades(source, 1), source);
+        }
+    }
+
+    /// And beyond one, that each substitution actually landed — a splice that
+    /// silently did nothing would bind an array texture to a shader sampling a
+    /// 2D one, which fails at pipeline creation rather than in a render, but
+    /// only on the machine that runs it.
+    #[test]
+    fn the_cascaded_receivers_sample_an_array() {
+        for (name, source) in [
+            ("mesh", include_str!("../shaders/mesh.wgsl")),
+            ("water", include_str!("../shaders/water.wgsl")),
+            ("road", include_str!("../shaders/road.wgsl")),
+            ("meadow", include_str!("../shaders/meadow.wgsl")),
+        ] {
+            let cascaded = super::with_cascades(source, 3);
+            for expected in [
+                "var shadow_map: texture_depth_2d_array;",
+                "const CASCADE_COUNT: u32 = 3u;",
+                "@group(2) @binding(5) var<uniform> cascade: CascadeUniform;",
+                "fn cascade_sample(index: u32",
+                "cascade.view_proj[index]",
+            ] {
+                assert!(
+                    cascaded.contains(expected),
+                    "{name}'s cascaded splice lost {expected:?}"
+                );
+            }
+            // The single-map lookup is gone rather than shadowed by the new one.
+            assert!(
+                !cascaded.contains("frame.light_view_proj * vec4<f32>(world"),
+                "{name} still holds its single-map projection"
+            );
+            // And the receiver keeps its own bias: water's is flat, the rest
+            // scale theirs by slope.
+            let slope = cascaded.contains("let slope = sqrt(max(1.0 - n_dot_l");
+            assert_eq!(slope, name != "water", "{name} took the wrong bias");
+        }
+    }
+
+    /// GI and cascades are independent transforms of one source, and a surface
+    /// under a cascaded sun inside a probe volume takes both.
+    ///
+    /// They are the two milestones that both wanted binding 5 in group 2 — M38
+    /// for the cascade matrices, M35 for the first probe plane — which is why
+    /// the field starts at 6. A binding number is not a position in a list, so
+    /// the cascade entry being *conditional* costs GI nothing; this asserts the
+    /// two declarations coexist rather than trusting that reading.
+    #[test]
+    fn a_cascaded_surface_inside_a_volume_takes_both() {
+        for (name, variant) in [
+            ("mesh", super::plain_mesh(true)),
+            ("terrain", super::with_terrain(true)),
+            ("textured", super::with_textures(true)),
+            ("road", super::with_road_gi()),
+            ("meadow", super::with_meadow_gi()),
+        ] {
+            let both = super::with_cascades(&variant, 3);
+            for expected in [
+                "@group(2) @binding(5) var<uniform> cascade: CascadeUniform;",
+                "@group(2) @binding(6) var gi_sh0: texture_3d<f32>;",
+                "@group(2) @binding(10) var gi_sampler: sampler;",
+                "var shadow_map: texture_depth_2d_array;",
+                "fn gi_fill(",
+            ] {
+                assert!(both.contains(expected), "{name} lost {expected:?}");
+            }
+        }
     }
 
     /// Every slot past the rig's joint count is zero, and nothing indexes them

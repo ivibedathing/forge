@@ -202,6 +202,27 @@ pub fn number_from_f32(v: f32) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// Rewrite every number in a value as the shortest text that round-trips
+/// through `f32` — `0.1276797`, not `0.12767969071865082`.
+///
+/// `serde_json` widens an `f32` to `f64` on the way in, and the widened value
+/// prints all seventeen digits of a number the engine only ever had seven of.
+/// Anything generated (a fracture's shards, a fitted collider set) goes
+/// through this before it is spliced, or the scene file fills with precision
+/// nobody wrote and no reader can use.
+pub fn shorten_floats(value: &mut Value) {
+    match value {
+        Value::Number(n) => {
+            if let Some(f) = n.as_f64() {
+                *value = number_from_f32(f as f32);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(shorten_floats),
+        Value::Object(fields) => fields.values_mut().for_each(shorten_floats),
+        _ => {}
+    }
+}
+
 /// Serialize a JSON value in scene-file style: floats keep a decimal point
 /// (`3.0`, not `3`), arrays of scalars go on one line with `", "` separators
 /// — the style every example scene and the M-fixtures use.
@@ -212,10 +233,63 @@ pub fn format_value(value: &Value) -> String {
             let inner: Vec<String> = items.iter().map(format_value).collect();
             format!("[{}]", inner.join(", "))
         }
+        // An array of scalar arrays — a shard's points (M43) — in the same
+        // style one level up, rather than serde's spaceless compact form.
+        Value::Array(items)
+            if items.iter().all(|v| {
+                v.as_array()
+                    .is_some_and(|inner| inner.iter().all(|x| !x.is_array() && !x.is_object()))
+            }) =>
+        {
+            let inner: Vec<String> = items.iter().map(format_value).collect();
+            format!("[{}]", inner.join(", "))
+        }
         // Strings, bools, null, and (rare) nested containers: serde's
         // compact form is already correct.
         other => serde_json::to_string(other).unwrap_or_else(|_| "null".to_string()),
     }
+}
+
+/// Whether a value is one this module breaks across lines rather than writing
+/// inline: an array holding arrays or objects.
+///
+/// The line length of an inline one is unbounded, and *that* is the problem —
+/// a fourteen-shard `Breakable` (M43) came out as a single six-thousand
+/// character line, which is a JSON scene format that is no longer
+/// git-diffable by construction (invariant 1). Arrays of scalars stay inline:
+/// a `[0.5, 0.5, 0.5]` is one value and reads like one.
+fn is_block(value: &Value) -> bool {
+    matches!(value, Value::Array(items) if items.iter().any(|v| v.is_array() || v.is_object()))
+}
+
+/// [`format_value`] for a value that has to break across lines, with `indent`
+/// the indentation of the line the value *starts* on.
+///
+/// One element per line, each element itself inline — so a point list reads
+/// one point per line and a fragment list one fragment per line, which is the
+/// granularity a diff is useful at.
+fn format_block(value: &Value, indent: &str) -> String {
+    let Value::Array(items) = value else {
+        return format_value(value);
+    };
+    if items.is_empty() {
+        return "[]".to_string();
+    }
+    let inner = format!("{indent}  ");
+    let lines: Vec<String> = items
+        .iter()
+        .map(|item| match item {
+            Value::Object(fields) => {
+                let pairs: Vec<String> = fields
+                    .iter()
+                    .map(|(k, v)| format!("{k:?}: {}", format_value(v)))
+                    .collect();
+                format!("{inner}{{ {} }}", pairs.join(", "))
+            }
+            other => format!("{inner}{}", format_value(other)),
+        })
+        .collect();
+    format!("[\n{}\n{indent}]", lines.join(",\n"))
 }
 
 fn format_number(n: &serde_json::Number) -> String {
@@ -548,7 +622,14 @@ pub fn apply_add_component(source: &str, edit: &AddComponent) -> Result<String> 
             &format!("/entities/{entity_index}/components"),
             existing.len(),
             &text,
-            &|indent| format!("{indent}{text}"),
+            // Re-rendered at the indentation the array turned out to have,
+            // which is what lets a block-shaped field line up under it.
+            &|indent| {
+                format!(
+                    "{indent}{}",
+                    component_text_at(&edit.component, &edit.fields, indent)
+                )
+            },
         ),
         None => {
             // No components array at all: the new key's value is authored as
@@ -565,7 +646,12 @@ pub fn apply_add_component(source: &str, edit: &AddComponent) -> Result<String> 
                 &format!("/entities/{entity_index}/components"),
                 0,
                 &text,
-                &|indent| format!("{indent}{text}"),
+                &|indent| {
+                    format!(
+                        "{indent}{}",
+                        component_text_at(&edit.component, &edit.fields, indent)
+                    )
+                },
             )
         }
     }
@@ -747,13 +833,38 @@ fn line_indent(source: &str, at: usize) -> String {
 
 /// One component in scene style: `{ "type": "Mesh", "asset": "x.glb" }`.
 fn component_text(kind: &str, fields: &[(String, Value)]) -> String {
-    let mut parts = vec![format!("\"type\": {kind:?}")];
-    parts.extend(
-        fields
-            .iter()
-            .map(|(k, v)| format!("{k:?}: {}", format_value(v))),
-    );
-    format!("{{ {} }}", parts.join(", "))
+    component_text_at(kind, fields, "")
+}
+
+/// A component as text, at a known indentation.
+///
+/// One line, exactly as it always was — **unless** a field is block-shaped
+/// (see [`is_block`]), in which case the component opens out and that field
+/// takes a line per element. The condition matters: every pre-M43 caller
+/// writes only scalars and short arrays, so their output is byte-identical
+/// and the editor's committed splices did not move.
+fn component_text_at(kind: &str, fields: &[(String, Value)], indent: &str) -> String {
+    if !fields.iter().any(|(_, v)| is_block(v)) {
+        let mut parts = vec![format!("\"type\": {kind:?}")];
+        parts.extend(
+            fields
+                .iter()
+                .map(|(k, v)| format!("{k:?}: {}", format_value(v))),
+        );
+        return format!("{{ {} }}", parts.join(", "));
+    }
+
+    let inner = format!("{indent}  ");
+    let mut parts = vec![format!("{inner}\"type\": {kind:?}")];
+    parts.extend(fields.iter().map(|(k, v)| {
+        let text = if is_block(v) {
+            format_block(v, &inner)
+        } else {
+            format_value(v)
+        };
+        format!("{inner}{k:?}: {text}")
+    }));
+    format!("{{\n{}\n{indent}}}", parts.join(",\n"))
 }
 
 /// The entity as an indented block, `indent` being its opening brace's

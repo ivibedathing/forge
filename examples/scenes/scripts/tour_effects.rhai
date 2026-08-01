@@ -57,6 +57,45 @@ fn step(world, step) {
     let pit = world.terrain_height("Ground", 9.0, -13.0);
     world.set_position("FireLight", 9.0, pit + 1.05 + flick * 0.12, -13.0);
 
+    // --- Embers (M37) -------------------------------------------------------
+    // Real objects, not sprites. Each one is an entity spawned from the scene's
+    // `Ember` template, thrown out of the fire on its own arc, bouncing off the
+    // terrain, and reaped once it has burned out. Until M37 a run could only
+    // ever shrink, so this had to be either a particle — which has no collider
+    // and cannot land on anything — or a prop parked out of frame from step 0.
+    let first = world.state("ember_first", 1).to_int();
+    let next = world.state("ember_next", 1).to_int();
+
+    // Reaped by age from the oldest end. Ember #n was spawned at step
+    // (n-1)*24, which is exact because the rate is fixed *and* the limit is
+    // never reached: 150 steps of life at one every 24 is at most seven alive
+    // against a limit of eight, so no spawn is ever refused and no index is
+    // ever skipped. Raise the rate without raising the limit and this stops
+    // being true.
+    while first < next {
+        if step - (first - 1) * 24 < 150 {
+            break;
+        }
+        world.despawn_entity("Ember#" + first);
+        first += 1;
+    }
+    if step % 24 == 0 {
+        let ember = world.spawn_entity("Ember", 9.0, pit + 1.5, -13.0);
+        if ember != "" {
+            // The sandbox has no randomness by design, so the spread comes off
+            // the clock — the flicker's trick, on three slower periods.
+            world.set_linear_velocity(
+                ember,
+                sin(t * 2.3) * 1.7,
+                3.5 + sin(t * 3.7) * 0.6,
+                cos(t * 1.9) * 1.7,
+            );
+            next += 1;
+        }
+    }
+    world.set_state("ember_first", first);
+    world.set_state("ember_next", next);
+
     // --- Pond ---------------------------------------------------------------
     // Nothing here any more, and that is the point. Until M18 this was sixteen
     // cube tiles that a loop pushed up and down on one travelling sine: every

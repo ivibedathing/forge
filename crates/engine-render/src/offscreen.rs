@@ -147,7 +147,13 @@ pub fn render_with_adapter(
     let msaa = (samples > 1)
         .then(|| scene_renderer::msaa_color_texture(&gpu.device, FORMAT, width, height, samples));
 
-    let mut renderer = SceneRenderer::configured(&gpu.device, FORMAT, samples, gi.is_some());
+    let mut renderer = SceneRenderer::configured(
+        &gpu.device,
+        FORMAT,
+        samples,
+        environment.shadow_cascades,
+        gi.is_some(),
+    );
     let view_projection =
         scene_renderer::view_projection(camera, camera_model, width as f32 / height as f32);
 

@@ -9,7 +9,8 @@
 use std::collections::HashSet;
 
 use engine_core::components::{
-    BodyKind, Breakable, Collider, ColliderShapeKind, Material, Mesh, Name, RigidBody, Transform,
+    BodyKind, Breakable, Collider, ColliderShapeKind, Material, Mesh, Name, RigidBody, Shard,
+    Transform, HALF_CUBE,
 };
 use engine_core::Result;
 use glam::Vec3;
@@ -50,7 +51,12 @@ pub fn apply_breaks(
                 .map(|(entity, _)| entity);
             if let Some(entity) = found {
                 if !pending.iter().any(|p| p.entity == entity) {
-                    pending.push(PendingBreak { entity, kick: None });
+                    pending.push(PendingBreak {
+                        entity,
+                        kick: None,
+                        // A scripted break has no geometry to scatter from.
+                        impact: None,
+                    });
                 }
             }
         }
@@ -102,6 +108,10 @@ pub fn apply_breaks(
         let parent_rotation = transform.quat();
         let angular_radians = angular_degrees * (std::f32::consts::PI / 180.0);
 
+        // What it is made of, and so how its pieces behave once they are
+        // pieces (M43). `None` is M14: the parent's motion and nothing else.
+        let behaviour = breakable.material.map(|m| m.behaviour());
+
         let mut fragments = Vec::with_capacity(breakable.fragments.len());
         for (i, fragment) in breakable.fragments.iter().enumerate() {
             let mut fragment_name = format!("{name}.frag{i}");
@@ -127,16 +137,43 @@ pub fn apply_breaks(
                 scale: transform.scale * fragment.scale,
             };
 
+            // A shard carries its own geometry and collides with its own hull;
+            // a mesh fragment is M14's box. Exactly one of the two, which
+            // validation is what guarantees — a fragment with neither is
+            // skipped rather than spawned as an invisible collider.
+            let shard = fragment.points.as_ref().map(|points| Shard {
+                points: points.clone(),
+            });
+            if shard.is_none() && fragment.mesh.is_none() {
+                continue;
+            }
+
             // Rigid-body kinematics: a point on a spinning parent moves at
             // v + ω x r, so fragments fly apart the way the parent moved.
             let mut velocity = linear + angular_radians.cross(position - transform.position);
+            let mut spin = angular_degrees;
+
+            // Mass, for the explosion's momentum kick: a shard's hull volume,
+            // or the box M14 assumed. `scale` is a length per axis, so volume
+            // scales by their product.
+            let scaled = fragment_transform.scale;
+            let volume = match &shard {
+                Some(shard) => {
+                    engine_core::shard::volume(&shard.points)
+                        * (scaled.x * scaled.y * scaled.z).abs()
+                }
+                None => {
+                    let extents = fragment.half_extents.unwrap_or(HALF_CUBE) * scaled;
+                    8.0 * (extents.x * extents.y * extents.z).abs()
+                }
+            };
+            let mass = fragment.density * volume;
+
             if let Some(explosion) = pending_break.kick {
                 let delta = position - explosion.center;
                 let distance = delta.length();
                 if distance < explosion.radius {
                     let magnitude = explosion.impulse * (1.0 - distance / explosion.radius);
-                    let extents = fragment.half_extents * fragment_transform.scale;
-                    let mass = fragment.density * 8.0 * (extents.x * extents.y * extents.z).abs();
                     let direction = if distance > 1e-6 {
                         delta / distance
                     } else {
@@ -148,10 +185,42 @@ pub fn apply_breaks(
                 }
             }
 
+            // The material's scatter (M43): pieces thrown away from where the
+            // thing was struck, at a speed the material chooses and the hit's
+            // severity scales. Absent material, absent impact, or a scripted
+            // break with no impact at all, and none of this runs — which is
+            // what keeps every pre-M43 scene byte-identical.
+            if let (Some(behaviour), Some(impact)) = (behaviour, pending_break.impact) {
+                let jitter = jitter_of(i);
+                let away = position - impact.point;
+                let mut direction = if away.length() > 1e-4 {
+                    away.normalize()
+                } else {
+                    // Struck dead on its own centroid: throw it up and out
+                    // rather than dividing by nothing.
+                    (Vec3::Y + jitter * 0.5).normalize_or(Vec3::Y)
+                };
+                // Nothing is thrown *downward*. A crate hit from above has
+                // every fragment below the contact point, so the honest
+                // "away from the impact" direction is into the floor — where
+                // that half of a real break's energy does go, and where this
+                // engine's version of it would only become penetration for
+                // the solver to push back out. What a break shows is the
+                // sideways half, so the vertical component is floored here.
+                direction.y = direction.y.max(MIN_LIFT);
+                let direction = direction.normalize();
+                // The jitter is a quarter of the direction so a scatter still
+                // reads as radial — this is spray, not randomness.
+                let sprayed = (direction + jitter * 0.25).normalize_or(direction);
+                let speed = behaviour.burst_speed * impact.severity;
+                velocity += sprayed * speed;
+                spin += jitter * (behaviour.spin * impact.severity);
+            }
+
             let body = RigidBody {
                 body: BodyKind::Dynamic,
                 linear_velocity: velocity,
-                angular_velocity: angular_degrees,
+                angular_velocity: spin,
                 gravity_scale: 1.0,
                 linear_damping: 0.0,
                 angular_damping: 0.0,
@@ -160,13 +229,18 @@ pub fn apply_breaks(
                 locked_rotations: [false; 3],
             };
             let collider = Collider {
-                shape: ColliderShapeKind::Cuboid,
-                half_extents: Some(fragment.half_extents),
+                shape: match shard {
+                    Some(_) => ColliderShapeKind::ConvexHull,
+                    None => ColliderShapeKind::Cuboid,
+                },
+                half_extents: shard
+                    .is_none()
+                    .then(|| fragment.half_extents.unwrap_or(HALF_CUBE)),
                 radius: None,
                 half_height: None,
                 asset: None,
-                friction: 0.5,
-                restitution: 0.0,
+                friction: behaviour.map_or(0.5, |b| b.friction),
+                restitution: behaviour.map_or(0.0, |b| b.restitution),
                 density: fragment.density,
                 sensor: false,
                 offset: Vec3::ZERO,
@@ -177,9 +251,13 @@ pub fn apply_breaks(
             let mut builder = EntityBuilder::new();
             builder.add(Name(fragment_name.clone()));
             builder.add(fragment_transform);
-            builder.add(Mesh {
-                asset: fragment.mesh.clone(),
-            });
+            match (&shard, &fragment.mesh) {
+                (Some(shard), _) => builder.add(shard.clone()),
+                (None, Some(asset)) => builder.add(Mesh {
+                    asset: asset.clone(),
+                }),
+                (None, None) => unreachable!("a fragment with no geometry was skipped above"),
+            };
             if let Some(material) = &material {
                 builder.add(material.clone());
             }
@@ -188,11 +266,23 @@ pub fn apply_breaks(
             let spawned = world.spawn(builder.build());
             physics.insert_entity(
                 spawned,
-                &fragment_name,
-                &fragment_transform,
-                Some(&body),
-                Some(&collider),
-                None,
+                &crate::Presence {
+                    name: &fragment_name,
+                    transform: &fragment_transform,
+                    body: Some(&body),
+                    collider: Some(&collider),
+                    break_threshold: None,
+                    // A mesh fragment's collider is a cuboid built from
+                    // `fragment.half_extents` and carries no layers, so
+                    // neither the mesh source nor the layer table can reach it
+                    // — which is what makes M37 widening this call unable to
+                    // move a single breaking baseline. A shard's comes from
+                    // its own points, which is the one thing here that does
+                    // need something passed in.
+                    entity_mesh: None,
+                    shard: shard.as_ref(),
+                    meshes: &engine_core::mesh::BuiltinAssets,
+                },
             )?;
             fragments.push((fragment_name, spawned));
         }
@@ -204,6 +294,30 @@ pub fn apply_breaks(
     }
 
     Ok(events)
+}
+
+/// The least upward a scattered fragment may be thrown, as a fraction of its
+/// scatter speed — see where it is applied.
+const MIN_LIFT: f32 = 0.2;
+
+/// A fragment's own spray direction, in `[-1, 1]` per axis (M43).
+///
+/// A hash of the fragment's index rather than a running RNG, deliberately: it
+/// has no state to carry across a break, it does not care what order the
+/// fragments were visited in, and fragment 3 of a crate gets the same spray
+/// however many crates broke first. The constants are the usual xorshift
+/// scramble, written out here for the reason `particles.rs` and `tree.rs`
+/// write theirs out — the sequence is part of what a scene *means*.
+fn jitter_of(index: usize) -> Vec3 {
+    let mut state = (index as u32).wrapping_mul(0x9E37_79B9) | 1;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        // [0, 1) → [-1, 1)
+        (state as f32 / u32::MAX as f32) * 2.0 - 1.0
+    };
+    Vec3::new(next(), next(), next())
 }
 
 #[cfg(test)]
@@ -247,6 +361,7 @@ mod tests {
             &scene.world,
             &PhysicsSettings::default(),
             &engine_core::mesh::BuiltinAssets,
+            &scene.templates,
         )
         .unwrap();
         let _ = &mut scene;
@@ -417,6 +532,210 @@ mod tests {
     fn breaking_is_deterministic() {
         let run = || {
             let (mut scene, mut physics) = scene(CRATE_DROP);
+            step_and_break(&mut scene, &mut physics, 300);
+            let mut positions: Vec<(String, [f32; 3])> = scene
+                .world
+                .query::<(&Name, &Transform)>()
+                .iter()
+                .map(|(name, transform)| (name.0.clone(), transform.position.to_array()))
+                .collect();
+            positions.sort_by(|a, b| a.0.cmp(&b.0));
+            positions
+        };
+        assert_eq!(run(), run());
+    }
+
+    // ── Material-aware fracture (M43) ──────────────────────────────────
+
+    /// A tetrahedral shard, as `engine fracture` would write one.
+    const SHARD_POINTS: &str = "[[-0.25,-0.25,-0.25],[0.25,-0.25,-0.25],\
+                                [0.0,0.25,-0.25],[0.0,0.0,0.25]]";
+
+    /// The crate, but its fragments are shards and it knows what it is made of.
+    fn shard_crate(material: &str) -> String {
+        CRATE_DROP.replace(
+            r#""impulse_threshold": 5.0, "fragments": [
+            {"mesh": "builtin:cube", "offset": [-0.25, -0.25, 0.0],
+             "scale": [0.5, 0.5, 0.5], "half_extents": [0.25, 0.25, 0.25]},
+            {"mesh": "builtin:cube", "offset": [0.25, 0.25, 0.0],
+             "scale": [0.5, 0.5, 0.5], "half_extents": [0.25, 0.25, 0.25]}
+          ]"#,
+            &format!(
+                r#""impulse_threshold": 5.0, "material": "{material}", "fragments": [
+            {{"points": {SHARD_POINTS}, "offset": [-0.25, -0.25, 0.0]}},
+            {{"points": {SHARD_POINTS}, "offset": [0.25, 0.25, 0.0]}}
+          ]"#
+            ),
+        )
+    }
+
+    #[test]
+    fn a_shard_fragment_spawns_with_its_own_hull() {
+        let source = shard_crate("stone");
+        let (mut scene, mut physics) = scene(&source);
+        let events = apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
+
+        assert_eq!(events[0].fragments.len(), 2);
+        for (name, entity) in &events[0].fragments {
+            let shard = scene
+                .world
+                .get::<&Shard>(*entity)
+                .unwrap_or_else(|_| panic!("{name} carries its geometry"));
+            assert_eq!(shard.points.len(), 4, "the authored points, verbatim");
+            assert!(
+                scene.world.get::<&Mesh>(*entity).is_err(),
+                "{name} owns its geometry, so it has no Mesh"
+            );
+
+            let collider = scene.world.get::<&Collider>(*entity).unwrap();
+            assert_eq!(collider.shape, ColliderShapeKind::ConvexHull);
+            assert_eq!(
+                collider.half_extents, None,
+                "a shard's collider is its hull, not a box around it"
+            );
+        }
+
+        // And physics agrees: the hull reached rapier, so the shard is a
+        // convex polyhedron in the world rather than a missing collider.
+        let shapes: Vec<&str> = physics
+            .collider_report()
+            .into_iter()
+            .filter(|c| c.entity.starts_with("Crate.frag"))
+            .map(|c| c.shape)
+            .collect();
+        assert_eq!(shapes, ["convex_hull", "convex_hull"], "{shapes:?}");
+    }
+
+    #[test]
+    fn a_material_throws_its_fragments_away_from_the_impact() {
+        // The ball lands on top, so the pieces must come off it: the scatter
+        // is aimed from the contact point, not from the parent's centre.
+        let (mut scene, mut physics) = scene(&shard_crate("glass"));
+        let mut events = Vec::new();
+        for _ in 0..300 {
+            physics.step(&mut scene.world, 0.0);
+            events.extend(apply_breaks(&mut scene.world, &mut physics, &[]).unwrap());
+            if !events.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(events.len(), 1, "the ball breaks the crate: {events:?}");
+
+        let mut thrown = 0;
+        for (name, entity) in &events[0].fragments {
+            let body = scene.world.get::<&RigidBody>(*entity).unwrap();
+            assert!(
+                body.linear_velocity.length() > 1.0,
+                "{name} should have been thrown, not dropped: {:?}",
+                body.linear_velocity
+            );
+            assert!(
+                body.angular_velocity.length() > 1.0,
+                "{name} should be tumbling: {:?}",
+                body.angular_velocity
+            );
+            assert!(
+                body.linear_velocity.y > 0.0,
+                "{name} was thrown into the floor: {:?}",
+                body.linear_velocity
+            );
+            thrown += 1;
+        }
+        assert_eq!(thrown, 2, "both pieces came off the hit");
+    }
+
+    #[test]
+    fn a_material_is_the_only_thing_that_scatters() {
+        // The M14 path, untouched: without a material the fragments take the
+        // parent's motion and nothing else. A static crate's is zero, so this
+        // is the sharpest possible statement of "pre-M43 scenes are
+        // byte-identical".
+        let (mut scene, mut physics) = scene(CRATE_DROP);
+        let events = apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
+        for (name, entity) in &events[0].fragments {
+            let body = scene.world.get::<&RigidBody>(*entity).unwrap();
+            assert_eq!(body.linear_velocity, Vec3::ZERO, "{name} was not thrown");
+            assert_eq!(body.angular_velocity, Vec3::ZERO, "{name} is not spinning");
+            let collider = scene.world.get::<&Collider>(*entity).unwrap();
+            assert_eq!(collider.friction, 0.5, "M14's fragment surface");
+            assert_eq!(collider.restitution, 0.0);
+        }
+    }
+
+    #[test]
+    fn a_scripted_break_has_nothing_to_scatter_from() {
+        // `world.break_entity` names no impact point, and inventing one would
+        // put energy into the scene that nothing in the file accounts for.
+        let (mut scene, mut physics) = scene(&shard_crate("glass"));
+        let events = apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
+        for (name, entity) in &events[0].fragments {
+            let body = scene.world.get::<&RigidBody>(*entity).unwrap();
+            assert_eq!(
+                body.linear_velocity,
+                Vec3::ZERO,
+                "{name} moved without an impact"
+            );
+        }
+    }
+
+    #[test]
+    fn each_material_lays_its_own_surface_on_the_pieces() {
+        for (material, friction, restitution) in [
+            ("glass", 0.2, 0.1),
+            ("wood", 0.6, 0.05),
+            ("stone", 0.8, 0.0),
+            ("metal", 0.4, 0.02),
+        ] {
+            let (mut scene, mut physics) = scene(&shard_crate(material));
+            let events =
+                apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
+            let (_, entity) = events[0].fragments[0];
+            let collider = scene.world.get::<&Collider>(entity).unwrap();
+            assert_eq!(collider.friction, friction, "{material} friction");
+            assert_eq!(collider.restitution, restitution, "{material} restitution");
+        }
+    }
+
+    #[test]
+    fn glass_throws_its_shards_further_than_stone_drops_them() {
+        // The claim the whole material model rests on, measured rather than
+        // asserted in a comment.
+        let speed_of = |material: &str| {
+            let (mut scene, mut physics) = scene(&shard_crate(material));
+            let mut events = Vec::new();
+            for _ in 0..300 {
+                physics.step(&mut scene.world, 0.0);
+                events.extend(apply_breaks(&mut scene.world, &mut physics, &[]).unwrap());
+                if !events.is_empty() {
+                    break;
+                }
+            }
+            let speeds: Vec<f32> = events[0]
+                .fragments
+                .iter()
+                .map(|(_, e)| {
+                    scene
+                        .world
+                        .get::<&RigidBody>(*e)
+                        .unwrap()
+                        .linear_velocity
+                        .length()
+                })
+                .collect();
+            speeds.iter().sum::<f32>() / speeds.len() as f32
+        };
+        let glass = speed_of("glass");
+        let stone = speed_of("stone");
+        assert!(
+            glass > stone * 3.0,
+            "glass left at {glass} m/s and stone at {stone} m/s"
+        );
+    }
+
+    #[test]
+    fn a_shard_break_is_deterministic() {
+        let run = || {
+            let (mut scene, mut physics) = scene(&shard_crate("wood"));
             step_and_break(&mut scene, &mut physics, 300);
             let mut positions: Vec<(String, [f32; 3])> = scene
                 .world

@@ -99,7 +99,9 @@ changes what you learn about a broken scene.
 - Asset paths are **relative to the scene file**. Absolute paths are rejected.
   A `materials/*.json` is the exception that proves it: its own texture
   references are relative to *it*, which is what lets two scenes share one.
-- Scene-level blocks beside `entities`: `physics`, `environment`, `daylight`.
+- Scene-level blocks beside `entities`: `physics`, `environment`, `daylight`,
+  and `templates` — entity definitions that are **declared and not
+  instantiated**, so a script can spawn them at runtime (see Scripting).
 
 There are no comments in JSON, so anything a scene needs to say about itself
 has to be a real field.
@@ -308,6 +310,29 @@ Reads and writes by entity name: `position` / `set_position`, `rotation` /
 `set_light_intensity`, `particle_rate` / `set_particle_rate`, `hud`, and
 `state` / `set_state` for numeric memory between steps.
 
+**Entities can be created and destroyed at runtime.** `spawn_entity(template,
+x, y, z)` makes one instance of a `templates` entry and returns its name —
+`Bullet#1`, `Bullet#2`, … — which the whole API above then works on, so the
+line after a spawn can set the new thing's velocity. `despawn_entity(name)`
+takes any entity back out, applied after this step's physics. The scene file
+still declares every shape that can exist, which is why a spawn names a
+template instead of describing geometry.
+
+```rhai
+let shot = world.spawn_entity("Bullet", mx, my, mz);
+if shot != "" {                              // "" means the template's limit
+    world.set_linear_velocity(shot, ax * 40.0, 0.0, az * 40.0);
+}
+```
+
+A template's `limit` is how many instances may be **live** at once (default
+64). Spawning at the limit spawns nothing and returns the empty string rather
+than failing — a gun that fires faster than its rounds expire is an ordinary
+game — and `spawn_count(template)` / `spawn_limit(template)` let a script ask
+before it calls. Five components are refused inside a template (`Script`,
+`Camera`, `DirectionalLight`, `AmbientLight`, `PointLight`), because each has a
+scene-level budget a spawn must not be able to break.
+
 A game also needs a shell, which is four more calls. `save(slot)` /
 `load(slot)` / `has_save(slot)` write and read the whole `state` map as sorted
 JSON in `saves/slot<N>.json` beside the scene — a save is that map and nothing
@@ -316,9 +341,12 @@ anywhere; slots are `0..9`, and an empty one reads as `false` rather than
 failing, because "is there a save?" is a menu's first question. `quit()` closes
 the viewer's window, and headlessly stops the run and reports `quit_at_step`.
 The `environment` block is writable through `shadows` / `set_shadows`,
-`sky` / `set_sky`, `fog` / `set_fog` and `samples` / `set_samples`, which is
-what a graphics-settings screen drives; `set_samples` takes 1 or 4 and errors
-at the call on anything else. And `animation_clip` / `set_animation_clip`
+`sky` / `set_sky`, `fog` / `set_fog`, `samples` / `set_samples` and
+`shadow_cascades` / `set_shadow_cascades`, which is what a graphics-settings
+screen drives; `set_samples` takes 1 or 4 and `set_shadow_cascades` takes 1 to
+4, both erroring at the call on anything else. Those two rebuild every pipeline
+when they change, so they are a settings screen's deliberate actions rather
+than sliders. And `animation_clip` / `set_animation_clip`
 switches a skinned character between clips as a **hard cut** — blending is a
 standing non-goal, so a change of gait is a change of clip, and the cut resets
 `phase` because two clips do not share a cycle.

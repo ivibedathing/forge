@@ -16,10 +16,11 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use engine_core::components::ComponentData;
 use engine_core::components::{
     BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent, Name,
-    RigidBody as RigidBodyData, Road, SkinnedCollider, Terrain as TerrainData, Transform,
-    Wheel as WheelData,
+    Ragdoll as RagdollData, RigidBody as RigidBodyData, Shard as ShardData, SkinnedCollider,
+    Terrain as TerrainData, Transform, Wheel as WheelData,
 };
 use engine_core::mesh::{MeshSource, PhysicsAssets};
 use engine_core::scene::PhysicsSettings;
@@ -35,7 +36,10 @@ use rapier3d::prelude::*;
 mod breaking;
 pub use breaking::{apply_breaks, BreakEvent};
 
+mod ragdoll;
 mod skinned;
+
+mod buoyancy;
 
 /// One contact begin/end between two named entities — what traces record.
 /// Shared vocabulary from `engine-core` so scripting can consume contacts
@@ -106,17 +110,45 @@ pub struct Explosion {
 pub struct PendingBreak {
     pub entity: Entity,
     pub kick: Option<Explosion>,
+    /// Where the break came from and how hard it was (M43), for the scatter a
+    /// `Breakable.material` throws its fragments with.
+    ///
+    /// `None` for `world.break_entity`: a scripted break has no geometry to
+    /// scatter from, and inventing one would put energy into the scene that
+    /// nothing in the file accounts for.
+    pub impact: Option<Impact>,
 }
+
+/// Where a break was struck and how far past its threshold the hit was (M43).
+#[derive(Debug, Clone, Copy)]
+pub struct Impact {
+    /// World-space: the contact point for a collision, the blast centre for an
+    /// explosion.
+    pub point: Vec3,
+    /// The hit's impulse over the threshold that let it through, so a hit at
+    /// exactly the threshold is 1. Clamped by the producer — a truck at 40 m/s
+    /// should not fire the debris into orbit.
+    pub severity: f32,
+}
+
+/// The hardest a hit is allowed to count as, however hard it actually was.
+/// Past roughly this the scatter stops reading as a break and starts reading
+/// as an explosion, which is a different component.
+const MAX_SEVERITY: f32 = 4.0;
 
 /// Collects rapier collision events; drained after each step.
 #[derive(Default)]
 struct EventSink {
     collisions: Mutex<Vec<CollisionEvent>>,
-    /// `(pair, contact impulse)` for pairs that opted into force events —
-    /// breakable colliders only (M12). rapier reports force; multiplying by
-    /// `dt` here makes the number an impulse, which survives a
+    /// `(pair, contact impulse, where it landed)` for pairs that opted into
+    /// force events — breakable colliders only (M12). rapier reports force;
+    /// multiplying by `dt` here makes the number an impulse, which survives a
     /// `timestep_hz` change.
-    impulses: Mutex<Vec<(ColliderHandle, ColliderHandle, f32)>>,
+    ///
+    /// The contact point rides along for M43's scatter. Nothing the solver
+    /// does reads it, so collecting it cannot move a body: a scene with no
+    /// `Breakable.material` simulates exactly as it did before.
+    impulses: Mutex<Vec<(ColliderHandle, ColliderHandle, f32, Vec3)>>,
 }
 
 impl EventHandler for EventSink {
@@ -136,15 +168,36 @@ impl EventHandler for EventSink {
         &self,
         dt: Real,
         _bodies: &RigidBodySet,
-        _colliders: &ColliderSet,
+        colliders: &ColliderSet,
         contact_pair: &ContactPair,
         total_force_magnitude: Real,
     ) {
+        // The deepest contact of the pair, in world space: `local_p1` is on
+        // the first collider, so its own transform is what places it. A pair
+        // with no manifold point (a speculative contact whose force still
+        // reported) falls back to the first collider's centre — a break needs
+        // *a* point, and the centre is the least wrong one available.
+        let point = contact_pair
+            .find_deepest_contact()
+            .and_then(|(_, contact)| {
+                colliders
+                    .get(contact_pair.collider1)
+                    .map(|collider| collider.position() * contact.local_p1)
+            })
+            .map(|p| Vec3::new(p.x, p.y, p.z))
+            .or_else(|| {
+                colliders
+                    .get(contact_pair.collider1)
+                    .map(|c| c.translation())
+            })
+            .unwrap_or(Vec3::ZERO);
+
         if let Ok(mut impulses) = self.impulses.lock() {
             impulses.push((
                 contact_pair.collider1,
                 contact_pair.collider2,
                 total_force_magnitude * dt,
+                point,
             ));
         }
     }
@@ -200,6 +253,53 @@ pub struct PhysicsWorld {
     /// Proxy colliders → the part name reports address them by. Absent for
     /// every ordinary collider, which is exactly how a report tells them apart.
     part_of_collider: HashMap<ColliderHandle, String>,
+    /// Ragdolls (M39), in the proxies' own entity-name order. One per entity
+    /// carrying both a `Ragdoll` and a `SkinnedCollider`; inactive until the
+    /// handoff, and a scene with none never reaches any of this.
+    ragdolls: Vec<ragdoll::Ragdoll>,
+    /// Kicks queued by `world.ragdoll_impulse`, applied at the next step
+    /// beside the explosions and for the same reason: an impulse applied
+    /// before integration moves the body on the step it fires.
+    queued_kicks: Vec<(String, String, Vec3)>,
+    /// Floating bodies (M41), in entity-name order. Empty for every scene with
+    /// no `Buoyancy`, which is what keeps the step it costs at zero.
+    buoyant: Vec<buoyancy::Buoyant>,
+    /// Collision-layer name → its bit in rapier's 32-bit interaction groups
+    /// (M12), kept rather than dropped at the end of `build` because a
+    /// runtime spawn (M37) has to land on the *same* bit assignment as the
+    /// scene it spawns into. A bullet whose `"bullet"` layer meant a
+    /// different bit than the wall's `collides_with` would pass through it.
+    layer_bits: HashMap<String, Group>,
+}
+
+/// Everything [`PhysicsWorld::insert_entity`] needs to give one entity a rapier
+/// presence.
+///
+/// A named struct rather than eight positional arguments, and for
+/// `SceneFacts`' reason (see `designs/notes/m05-validation.md`): four of these
+/// are `Option`s and two of those are `Option<&str>`-shaped, so passing them
+/// positionally would let a swapped pair type-check and simulate the wrong
+/// thing. Construction is field-init shorthand and the body destructures by
+/// name, which makes the mapping name-identity end to end.
+#[derive(Clone, Copy)]
+pub struct Presence<'a> {
+    /// The entity's stable name, as reports and contact events address it.
+    pub name: &'a str,
+    pub transform: &'a Transform,
+    pub body: Option<&'a RigidBodyData>,
+    pub collider: Option<&'a ColliderData>,
+    /// A thresholded `Breakable` opts the entity's collider into contact-force
+    /// events.
+    pub break_threshold: Option<f32>,
+    /// The entity's own `Mesh.asset`, for a `trimesh`/`convex_hull` collider.
+    pub entity_mesh: Option<&'a str>,
+    /// The entity's `Shard` (M43), the other thing a `convex_hull` collider
+    /// with no asset can be built from — and what a broken piece uses, so the
+    /// hull it collides with is the hull it draws.
+    pub shard: Option<&'a ShardData>,
+    /// Where that mesh comes from. A caller with only builtin shapes passes
+    /// [`engine_core::mesh::BuiltinAssets`].
+    pub meshes: &'a dyn MeshSource,
 }
 
 /// One wheel awaiting assembly into a `Vehicle`, as `build` collects them:
@@ -221,7 +321,11 @@ impl PhysicsWorld {
     /// without physics never construct a physics world. A `Breakable`
     /// counts (M12): its fragments spawn as dynamic bodies, so a break
     /// needs a physics world even if nothing else does.
-    pub fn scene_has_physics(world: &World) -> bool {
+    /// A `templates` entry counts too (M37), for the `Breakable` reason: a
+    /// scene whose only bodies arrive by `world.spawn_entity` still needs somewhere
+    /// to put them, and without this the viewer would build no physics world
+    /// and every spawned bullet would hang in the air.
+    pub fn scene_has_physics(world: &World, templates: &[engine_core::scene::TemplateDef]) -> bool {
         world.query::<&RigidBodyData>().iter().next().is_some()
             || world.query::<&ColliderData>().iter().next().is_some()
             || world.query::<&Breakable>().iter().next().is_some()
@@ -229,6 +333,15 @@ impl PhysicsWorld {
             // no body of its own, so without this a scene whose only physics
             // is a hitbox set would build no world at all.
             || world.query::<&SkinnedCollider>().iter().next().is_some()
+            || templates.iter().flat_map(|t| t.components.iter()).any(|c| {
+                matches!(
+                    c,
+                    ComponentData::RigidBody(_)
+                        | ComponentData::Collider(_)
+                        | ComponentData::Breakable(_)
+                        | ComponentData::SkinnedCollider(_)
+                )
+            })
     }
 
     /// Build a fresh physics world from the (already validated) scene world.
@@ -239,10 +352,17 @@ impl PhysicsWorld {
     /// one source rather than two arguments, because the file a proxy's joints
     /// come out of is the entity's own `Mesh.asset`, the same file the mesh
     /// collider would have read.
+    ///
+    /// `templates` are the shapes the scene can spawn (M37). They are *not*
+    /// built into bodies — nothing is spawned until a script asks — but their
+    /// collision-layer names join the bit assignment, because a layer that
+    /// only a spawned collider mentions still has to mean the same bit as the
+    /// wall that filters on it.
     pub fn build(
         world: &World,
         settings: &PhysicsSettings,
         meshes: &dyn PhysicsAssets,
+        templates: &[engine_core::scene::TemplateDef],
     ) -> Result<Self> {
         let mut physics = Self {
             pipeline: PhysicsPipeline::new(),
@@ -272,6 +392,10 @@ impl PhysicsWorld {
             proxies: Vec::new(),
             rig_of: HashMap::new(),
             part_of_collider: HashMap::new(),
+            ragdolls: Vec::new(),
+            queued_kicks: Vec::new(),
+            buoyant: Vec::new(),
+            layer_bits: HashMap::new(),
         };
 
         // Collision layers (M12): map each distinct name to one bit of
@@ -290,16 +414,69 @@ impl PhysicsWorld {
                 names.extend(proxies.layers.iter().flatten().cloned());
                 names.extend(proxies.collides_with.iter().flatten().cloned());
             }
+            // Template layers (M37) join the same namespace and the same
+            // budget. A scene with no `templates` block adds nothing here, so
+            // the bit assignment it had before is the bit assignment it keeps.
+            for component in templates.iter().flat_map(|t| t.components.iter()) {
+                match component {
+                    ComponentData::Collider(collider) => {
+                        names.extend(collider.layers.iter().flatten().cloned());
+                        names.extend(collider.collides_with.iter().flatten().cloned());
+                    }
+                    ComponentData::SkinnedCollider(proxies) => {
+                        names.extend(proxies.layers.iter().flatten().cloned());
+                        names.extend(proxies.collides_with.iter().flatten().cloned());
+                    }
+                    _ => {}
+                }
+            }
             names
                 .into_iter()
                 .enumerate()
                 .map(|(bit, name)| (name, Group::from_bits_truncate(1 << (bit as u32 % 32))))
                 .collect()
         };
+        physics.layer_bits.clone_from(&layer_bits);
+
+        // Every surface an entity *generates* — a Road's ribbon, a Junction's
+        // patch — built once here, by entity name, through the same functions
+        // the renderer's draw list goes through (M40). Before M40 a road could
+        // be regenerated from its own component inside `build_collider`; a road
+        // that follows a `Terrain` it names, and a junction bounded by the
+        // roads that reach it, both need the rest of the world in view.
+        let generated: HashMap<String, GeneratedSurface> = {
+            let mut surfaces = HashMap::new();
+            for item in engine_core::scene::road_items_of(world) {
+                surfaces.insert(
+                    item.entity.clone(),
+                    GeneratedSurface {
+                        kind: if item.junction.is_some() {
+                            "Junction"
+                        } else {
+                            "Road"
+                        },
+                        mesh: Arc::clone(&item.surface.mesh),
+                    },
+                );
+            }
+            // A shard's hull (M43), through the same `shard::mesh_for` the
+            // renderer draws — so an authored piece of rubble collides with
+            // the shape on screen, not with a box around it.
+            for (name, shard) in world.query::<(&Name, &ShardData)>().iter() {
+                surfaces.insert(
+                    name.0.clone(),
+                    GeneratedSurface {
+                        kind: "Shard",
+                        mesh: engine_core::shard::mesh_for(shard),
+                    },
+                );
+            }
+            surfaces
+        };
 
         // Deterministic build order: hecs iteration order is stable for a
         // freshly spawned world, and every simulate run spawns fresh.
-        for (entity, name, transform, body, collider, mesh, terrain, breakable, road) in world
+        for (entity, name, transform, body, collider, mesh, terrain, breakable) in world
             .query::<(
                 Entity,
                 &Name,
@@ -309,7 +486,6 @@ impl PhysicsWorld {
                 Option<&MeshComponent>,
                 Option<&TerrainData>,
                 Option<&Breakable>,
-                Option<&Road>,
             )>()
             .iter()
         {
@@ -374,7 +550,7 @@ impl PhysicsWorld {
                     &physics.name_of[&entity],
                     mesh.map(|m| m.asset.as_str()),
                     terrain,
-                    road,
+                    generated.get(&physics.name_of[&entity]),
                     meshes,
                     &layer_bits,
                     break_threshold.is_some(),
@@ -523,7 +699,13 @@ impl PhysicsWorld {
             // Uniform by validation, so any axis is *the* scale.
             let scale = transform.scale.x;
             let model = transform.matrix();
+            // For a ragdoll reloaded out of a bake this is the *ragdoll's* pose
+            // — `posed_globals_at` reads `Ragdoll.pose` before it resolves a
+            // clip — so a corpse's proxies are built where the corpse is
+            // lying, with no special case here. That is what makes the bake
+            // round-trip work.
             let globals = engine_core::locomotion::posed_globals_at(world, entity, &rig, Some(0.0));
+            let first_part = physics.proxies.len();
 
             for part in &proxies.parts {
                 let Some(joint) = skin.joint_named(&part.joint) else {
@@ -607,27 +789,90 @@ impl PhysicsWorld {
                     part: part.part_name().to_string(),
                     local,
                     body,
+                    fit: part.fit.map(|_| skinned::Fit {
+                        radius: part.radius.unwrap_or(0.0) * scale,
+                        half_length: match part.shape {
+                            engine_core::components::ColliderShapeKind::Cuboid => {
+                                part.half_extents.map(|h| h.y * scale).unwrap_or_default()
+                            }
+                            _ => part.half_height.unwrap_or_default() * scale,
+                        },
+                        half_extents: part.half_extents.map(|h| h * scale),
+                    }),
+                });
+            }
+
+            // The ragdoll (M39), if this character has one. Recorded after its
+            // parts so the indices are the range this entity just wrote, and
+            // the graph comes from the shared `engine_core::ragdoll` so that
+            // validation and the simulation cannot disagree about which part
+            // hangs from which.
+            if world.get::<&RagdollData>(entity).is_ok() {
+                let parents = engine_core::ragdoll::parent_parts(skin, &proxies.parts);
+                // `ragdoll_disconnected_parts` refuses more than one root, and
+                // `ragdoll_without_proxies` refuses none at all; a world built
+                // past either takes the first, which is a character that
+                // simulates oddly rather than one that panics.
+                let root = engine_core::ragdoll::roots(&parents)
+                    .first()
+                    .copied()
+                    .unwrap_or(0);
+                physics.ragdolls.push(ragdoll::Ragdoll {
+                    entity,
+                    parts: (first_part..physics.proxies.len()).collect(),
+                    parents,
+                    root,
+                    active: false,
+                    joints: Vec::new(),
+                    frozen: Vec::new(),
                 });
             }
             physics.rig_of.insert(entity, rig);
         }
 
+        // A scene that ships `"active": true` is a corpse from step 0, which is
+        // what lets a fixture exist without a script — and what a bake reloads
+        // as. Done after the loop so every proxy handle is in place.
+        for index in 0..physics.ragdolls.len() {
+            let entity = physics.ragdolls[index].entity;
+            let active = world
+                .get::<&RagdollData>(entity)
+                .map(|r| r.active)
+                .unwrap_or(false);
+            if active {
+                physics.activate_ragdoll(world, index, 0.0);
+            }
+        }
+
+        // Floating bodies (M41), last: it reads the bodies and colliders every
+        // branch above inserted, and a body's exact volume is only knowable
+        // once its collider exists. A break's fragments cannot be buoyant —
+        // fragments are pre-authored and carry no `Buoyancy` — so this list is
+        // fixed for the run, and a body that is later removed falls out through
+        // the handle lookup rather than needing the list rebuilt.
+        physics.collect_buoyant(world);
+
         Ok(physics)
     }
 
-    /// Insert one entity's physics presence — shared by the initial build
-    /// and by fragment spawning (M12). Entities with neither a body nor a
-    /// collider have no presence and are skipped. A `break_threshold` opts
-    /// the entity's collider into contact-force events.
-    pub fn insert_entity(
-        &mut self,
-        entity: Entity,
-        name: &str,
-        transform: &Transform,
-        body: Option<&RigidBodyData>,
-        collider: Option<&ColliderData>,
-        break_threshold: Option<f32>,
-    ) -> Result<()> {
+    /// Insert one entity's physics presence — shared by the initial build,
+    /// by fragment spawning (M12), and by `world.spawn_entity` (M37). Entities
+    /// with neither a body nor a collider have no presence and are skipped.
+    ///
+    /// The **layer table is the scene's** rather than an empty one: a spawned
+    /// bullet's `"bullet"` layer has to mean the same bit as the wall that
+    /// filters on it, and an empty table would silently give it none.
+    pub fn insert_entity(&mut self, entity: Entity, presence: &Presence<'_>) -> Result<()> {
+        let Presence {
+            name,
+            transform,
+            body,
+            collider,
+            break_threshold,
+            entity_mesh,
+            shard,
+            meshes,
+        } = *presence;
         if body.is_none() && collider.is_none() {
             return Ok(());
         }
@@ -678,18 +923,23 @@ impl PhysicsWorld {
         });
 
         if let Some(collider) = collider {
-            // Spawned entities (fragments) carry cuboid colliders with no
-            // mesh shapes, no terrain, no roads and no layers, so builtin
-            // meshes and an empty layer table cover every caller.
+            // No terrain and no road: a `Terrain` or a `Road` owns its grid,
+            // is authored once, and is not something a break or a spawn
+            // produces — the mesh-shaped case that *is* reachable reads the
+            // entity's own `Mesh.asset`, which is why that one is a parameter.
+            let shard_surface = shard.map(|shard| GeneratedSurface {
+                kind: "Shard",
+                mesh: engine_core::shard::mesh_for(shard),
+            });
             let built = build_collider(
                 collider,
                 transform,
                 name,
+                entity_mesh,
                 None,
-                None,
-                None,
-                &engine_core::mesh::BuiltinAssets,
-                &HashMap::new(),
+                shard_surface.as_ref(),
+                meshes,
+                &self.layer_bits,
                 break_threshold.is_some(),
             )?;
             let handle = match body_handle {
@@ -749,6 +999,16 @@ impl PhysicsWorld {
         self.queued_explosions.push(explosion);
     }
 
+    /// Queue a kick to one ragdoll part, by the entity name and the part name
+    /// `world.touching_parts` already returns (M39 §9).
+    ///
+    /// Addressed by name rather than by handle because a script has names and
+    /// nothing else — the same reason `queue_explosion` takes a point.
+    pub fn queue_ragdoll_impulse(&mut self, entity: &str, part: &str, impulse: Vec3) {
+        self.queued_kicks
+            .push((entity.to_string(), part.to_string(), impulse));
+    }
+
     /// The break decisions the last step made, sorted by entity name and
     /// deduplicated (first cause wins, so an explosion's kick survives).
     /// Callers apply them via [`apply_breaks`](crate::apply_breaks).
@@ -774,10 +1034,30 @@ impl PhysicsWorld {
     /// no proxies ignores it entirely, which is why every pre-M33 golden trace
     /// is untouched whatever is passed.
     pub fn step(&mut self, world: &mut World, time: f32) -> Vec<ContactEvent> {
-        // 0. Proxies follow the pose the render will draw at the end of this
+        // 0. Ragdoll handoffs (M39). A script sets `Ragdoll.active` and this is
+        //    where it takes effect — before the proxies are posed, because from
+        //    this step on they are not followers. M10's ordering, and M12's
+        //    one-step latency for the same reason: scripts run before physics.
+        for index in 0..self.ragdolls.len() {
+            if self.ragdolls[index].active {
+                continue;
+            }
+            let entity = self.ragdolls[index].entity;
+            let active = world
+                .get::<&RagdollData>(entity)
+                .map(|r| r.active)
+                .unwrap_or(false);
+            if active {
+                self.activate_ragdoll(world, index, time);
+            }
+        }
+
+        // 0.5. Proxies follow the pose the render will draw at the end of this
         //    step, which is exactly what `set_next_kinematic_position` means:
         //    rapier interpolates from where the body is to where it is told it
-        //    will be. Nothing here reads a proxy back into the skeleton.
+        //    will be. Nothing here reads a proxy back into the skeleton —
+        //    except for a ragdolled character, which this skips entirely
+        //    because its proxies are now the thing being read.
         self.pose_proxies(world, time);
 
         // 1. Kinematic bodies follow whatever the world says their
@@ -842,13 +1122,53 @@ impl PhysicsWorld {
                 if distance >= explosion.radius {
                     continue;
                 }
-                if explosion.impulse * (1.0 - distance / explosion.radius) >= threshold {
+                let delivered = explosion.impulse * (1.0 - distance / explosion.radius);
+                if delivered >= threshold {
                     self.pending_breaks.push(PendingBreak {
                         entity,
                         kick: Some(*explosion),
+                        impact: Some(Impact {
+                            point: explosion.center,
+                            severity: (delivered / threshold).clamp(1.0, MAX_SEVERITY),
+                        }),
                     });
                 }
             }
+        }
+
+        // 1.6. Ragdoll kicks (M39): an impulse to one named hitbox, applied
+        //      before integration so the head snaps back on the step the shot
+        //      landed. Impulses to distinct bodies commute, so queue order is
+        //      the only order that can matter and it is the call order.
+        let kicks = std::mem::take(&mut self.queued_kicks);
+        for (entity, part, impulse) in kicks {
+            let Some(proxy) = self.proxies.iter().find(|proxy| {
+                proxy.part == part
+                    && self
+                        .name_of
+                        .get(&proxy.entity)
+                        .is_some_and(|n| *n == entity)
+            }) else {
+                continue;
+            };
+            if let Some(body) = self.bodies.get_mut(proxy.body) {
+                // Only a dynamic body takes an impulse; the script layer
+                // already refuses a character that has not ragdolled, so
+                // reaching this with a kinematic proxy means the two disagree.
+                if body.is_dynamic() {
+                    body.apply_impulse(impulse, true);
+                }
+            }
+        }
+
+        // 1.75. Buoyancy (M41): the weight of the water each floating body
+        //       displaces, pushed up at the columns that displace it. Before
+        //       the solver integrates, so a hull rises the same step the wave
+        //       under it does — and before vehicles, since an amphibious
+        //       chassis should feel the water its suspension is casting into.
+        //       Costs nothing at all when no entity has a `Buoyancy`.
+        if !self.buoyant.is_empty() {
+            self.apply_buoyancy(world, time);
         }
 
         // 2. Vehicles (M12): push script-written controls into each
@@ -942,6 +1262,15 @@ impl PhysicsWorld {
             &self.events,
         );
 
+        // 3.5. Ragdolls read their skeleton back out of where the bodies ended
+        //      up (M39) — the one place in this engine where physics writes a
+        //      pose, and it writes it into a component rather than into this
+        //      struct. Before the transform write-back below, which a ragdolled
+        //      entity's own (now disabled) body no longer takes part in.
+        if !self.ragdolls.is_empty() {
+            self.write_back_ragdolls(world);
+        }
+
         // 4. Write back into hecs for dynamic bodies: the scene components
         //    are the only state anyone else ever sees.
         for (&entity, &handle) in &self.body_of {
@@ -1004,22 +1333,37 @@ impl PhysicsWorld {
             Ok(mut impulses) => std::mem::take(&mut *impulses),
             Err(_) => Vec::new(),
         };
-        let mut peak: HashMap<Entity, f32> = HashMap::new();
-        for (h1, h2, impulse) in impulses {
+        //    The peak's own contact point rides with it (M43): the hardest
+        //    contact of the step is the one a break scatters away from.
+        let mut peak: HashMap<Entity, (f32, Vec3)> = HashMap::new();
+        for (h1, h2, impulse, point) in impulses {
             for handle in [h1, h2] {
                 let Some(&entity) = self.entity_of_collider.get(&handle) else {
                     continue;
                 };
                 if self.break_thresholds.contains_key(&entity) {
-                    let slot = peak.entry(entity).or_insert(0.0);
-                    *slot = slot.max(impulse);
+                    let slot = peak.entry(entity).or_insert((0.0, point));
+                    if impulse > slot.0 {
+                        *slot = (impulse, point);
+                    }
                 }
             }
         }
-        for (entity, impulse) in peak {
-            if impulse >= self.break_thresholds[&entity] {
-                self.pending_breaks
-                    .push(PendingBreak { entity, kick: None });
+        // Sorted, because a HashMap's iteration order is not a contract and
+        // this decides the order breaks are queued in.
+        let mut struck: Vec<(Entity, (f32, Vec3))> = peak.into_iter().collect();
+        struck.sort_by_key(|(entity, _)| entity.to_bits());
+        for (entity, (impulse, point)) in struck {
+            let threshold = self.break_thresholds[&entity];
+            if impulse >= threshold {
+                self.pending_breaks.push(PendingBreak {
+                    entity,
+                    kick: None,
+                    impact: Some(Impact {
+                        point,
+                        severity: (impulse / threshold).clamp(1.0, MAX_SEVERITY),
+                    }),
+                });
             }
         }
 
@@ -1049,8 +1393,22 @@ impl PhysicsWorld {
         if self.proxies.is_empty() {
             return;
         }
+        // Entities physics has taken the skeleton of (M39): their proxies are
+        // dynamic now, and telling a dynamic body where it "will be" would
+        // teleport a corpse back onto the pose it fell out of, every step.
+        let ragdolled: std::collections::HashSet<Entity> = self
+            .ragdolls
+            .iter()
+            .filter(|r| r.active)
+            .map(|r| r.entity)
+            .collect();
+
         let mut posed: HashMap<Entity, (glam::Mat4, Vec<glam::Mat4>)> = HashMap::new();
-        for proxy in &self.proxies {
+        let mut refits: Vec<(usize, f32)> = Vec::new();
+        for (index, proxy) in self.proxies.iter().enumerate() {
+            if ragdolled.contains(&proxy.entity) {
+                continue;
+            }
             let entry = match posed.entry(proxy.entity) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::hash_map::Entry::Vacant(slot) => {
@@ -1075,8 +1433,294 @@ impl PhysicsWorld {
                 continue;
             };
             let pose = skinned::part_pose(*model, global, proxy.local);
+
+            // A `fit: "bone"` part takes its length from the posed rig (M39
+            // §7). Measured here, applied below: the shape swap needs
+            // `&mut self.colliders` while this loop holds `&self.proxies`, and
+            // a second pass is cheaper than cloning the proxy list.
+            if let Some(fit) = &proxy.fit {
+                if let Some(rig) = self.rig_of.get(&proxy.entity) {
+                    if let Some(skin) = &rig.skin {
+                        if let Some(half) =
+                            ragdoll::fitted_half_length(skin, globals, proxy.joint, fit.radius)
+                        {
+                            if (half - fit.half_length).abs() > ragdoll::FIT_EPSILON {
+                                refits.push((index, half));
+                            }
+                        }
+                    }
+                }
+            }
+
             if let Some(body) = self.bodies.get_mut(proxy.body) {
                 body.set_next_kinematic_position(pose);
+            }
+        }
+
+        // The rebuilds this step decided on. A rig whose clips animate rotation
+        // only — every clip in this repo — leaves this empty after the first
+        // step, so the feature costs one comparison per part per step on the
+        // scenes that use it and nothing at all on the scenes that do not.
+        for (index, half) in refits {
+            let proxy = &self.proxies[index];
+            let Some(fit) = &proxy.fit else { continue };
+            let shape = match fit.half_extents {
+                Some(half_extents) => SharedShape::cuboid(half_extents.x, half, half_extents.z),
+                None => SharedShape::capsule_y(half, fit.radius),
+            };
+            let proxy_body = proxy.body;
+            let handles: Vec<ColliderHandle> = self
+                .bodies
+                .get(proxy_body)
+                .map(|b| b.colliders().to_vec())
+                .unwrap_or_default();
+            for handle in handles {
+                if let Some(collider) = self.colliders.get_mut(handle) {
+                    collider.set_shape(shape.clone());
+                }
+            }
+            if let Some(fit) = &mut self.proxies[index].fit {
+                fit.half_length = half;
+            }
+        }
+    }
+
+    /// Hand a character's skeleton to physics (M39), once and for the rest of
+    /// the run.
+    ///
+    /// The proxies stop being kinematic followers and become dynamic bodies
+    /// wired together with joints. **`set_body_type` rather than a rebuild**:
+    /// every handle, layer mask and report mapping stays valid, so the collider
+    /// *set* does not change — which matters more here than tidiness, because
+    /// that set is an input to rapier's broad phase and a scene that gains a
+    /// body re-blesses every baseline it has.
+    fn activate_ragdoll(&mut self, world: &World, index: usize, time: f32) {
+        let entity = self.ragdolls[index].entity;
+        if self.ragdolls[index].active {
+            return;
+        }
+        let (Some(rig), Ok(component)) =
+            (self.rig_of.get(&entity), world.get::<&RagdollData>(entity))
+        else {
+            return;
+        };
+        let Some(skin) = rig.skin.clone() else { return };
+        let rig = rig.clone();
+
+        let transform = world
+            .get::<&Transform>(entity)
+            .map(|t| *t)
+            .unwrap_or_default();
+        let model = transform.matrix();
+        // The pose the character was *drawn* at this step: the bodies start
+        // exactly where the picture had them, so nothing snaps on the frame a
+        // ragdoll fires.
+        let globals = engine_core::locomotion::posed_globals_at(world, entity, &rig, Some(time));
+        let rest = engine_core::skeleton::joint_globals(&skin, None, 0.0);
+
+        // A corpse that stops dead reads as a bug. A character with a body of
+        // its own hands its velocity to every part, so a runner's ragdoll keeps
+        // going — the arcade half of the milestone, and one line of it.
+        let inherited = world
+            .get::<&RigidBodyData>(entity)
+            .map(|b| b.linear_velocity)
+            .unwrap_or(Vec3::ZERO);
+
+        // ── The bodies ────────────────────────────────────────────────
+        let parts = self.ragdolls[index].parts.clone();
+        let mut placement: Vec<Option<ragdoll::Placement>> = vec![None; parts.len()];
+        for (slot, &part) in parts.iter().enumerate() {
+            let proxy = &self.proxies[part];
+            let global = globals
+                .get(proxy.joint)
+                .copied()
+                .unwrap_or(glam::Mat4::IDENTITY);
+            let pose = skinned::part_pose(model, global, proxy.local);
+            placement[slot] = Some(ragdoll::Placement {
+                translation: pose.translation,
+                rotation: pose.rotation,
+                joint: proxy.joint,
+                local: proxy.local,
+            });
+
+            if let Some(body) = self.bodies.get_mut(proxy.body) {
+                body.set_body_type(RigidBodyType::Dynamic, true);
+                body.set_position(pose, true);
+                body.set_linvel(inherited, true);
+                body.set_angvel(Vec3::ZERO, true);
+                body.set_linear_damping(component.linear_damping);
+                body.set_angular_damping(component.angular_damping);
+            }
+            // rapier's own volume, not a second implementation of it: a mass
+            // this crate computed and a mass rapier computed are exactly the
+            // two answers a generator is warned against having.
+            let proxy_body = proxy.body;
+            let handles: Vec<ColliderHandle> = self
+                .bodies
+                .get(proxy_body)
+                .map(|b| b.colliders().to_vec())
+                .unwrap_or_default();
+            for handle in handles {
+                if let Some(collider) = self.colliders.get_mut(handle) {
+                    collider.set_density(component.density);
+                }
+            }
+            // **Explicitly, and this is not optional.** A collider's density
+            // only reaches its body when the body's mass properties are
+            // recomputed, and for a body that has been *kinematic* since it
+            // was inserted that never happened — mass is meaningless to a
+            // kinematic body, so rapier never needed it. Leaving it out gives
+            // every part a near-zero mass, and the symptom is spectacular: the
+            // fixture's ragdoll left the scene at about 40 m/s from a 6 N·s
+            // kick, and nothing about the joints or the limits was wrong.
+            let colliders = &self.colliders;
+            if let Some(body) = self.bodies.get_mut(proxy_body) {
+                body.recompute_mass_properties_from_colliders(colliders);
+            }
+        }
+
+        // ── The joints ────────────────────────────────────────────────
+        let overrides = |joint: &str| component.joints.iter().find(|o| o.joint == joint);
+        let mut joints = Vec::new();
+        for (slot, &part) in parts.iter().enumerate() {
+            let Some(parent_slot) = self.ragdolls[index].parents.get(slot).copied().flatten()
+            else {
+                continue;
+            };
+            let (Some(child), Some(parent)) = (
+                placement[slot].as_ref().cloned(),
+                placement[parent_slot].as_ref().cloned(),
+            ) else {
+                continue;
+            };
+
+            // Anchored at the child *joint's* origin — the anatomical joint,
+            // not either capsule's centre — so an elbow hinges where an elbow
+            // is.
+            let anchor = (model
+                * globals
+                    .get(child.joint)
+                    .copied()
+                    .unwrap_or(glam::Mat4::IDENTITY))
+            .w_axis
+            .truncate();
+            let name = skin.joints[child.joint].name.clone();
+            let joint = ragdoll::joint_between(
+                parent.frame(anchor),
+                child.frame(anchor),
+                ragdoll::rest_relative(
+                    &rest,
+                    (parent.joint, parent.local),
+                    (child.joint, child.local),
+                ),
+                overrides(&name),
+                component.limit,
+            );
+            let parent_body = self.proxies[parts[parent_slot]].body;
+            joints.push(self.impulse_joints.insert(
+                parent_body,
+                self.proxies[part].body,
+                joint,
+                true,
+            ));
+        }
+
+        // ── The character's own body steps aside ──────────────────────
+        //
+        // A capsule left enabled holds its own corpse off the floor, which is
+        // the most likely symptom of getting this wrong and reads as a bug in
+        // the joints rather than as a collider nobody turned off.
+        let own: Vec<ColliderHandle> = self
+            .entity_of_collider
+            .iter()
+            .filter(|(handle, &owner)| {
+                owner == entity && !self.part_of_collider.contains_key(*handle)
+            })
+            .map(|(handle, _)| *handle)
+            .collect();
+        for handle in own {
+            if let Some(collider) = self.colliders.get_mut(handle) {
+                collider.set_enabled(false);
+            }
+        }
+        if let Some(&handle) = self.body_of.get(&entity) {
+            if let Some(body) = self.bodies.get_mut(handle) {
+                body.set_enabled(false);
+            }
+        }
+
+        self.ragdolls[index].joints = joints;
+        self.ragdolls[index].frozen = engine_core::ragdoll::locals_from_globals(&skin, &globals);
+        self.ragdolls[index].active = true;
+    }
+
+    /// Read every active ragdoll's skeleton out of its bodies and write it into
+    /// the scene (M39 §2).
+    ///
+    /// **This is M33's arrow reversed, and the write lands in a component.**
+    /// `Ragdoll.pose` is a field of the file, exactly as `AnimationPlayer.phase`
+    /// is, so a corpse baked mid-fall reloads into the same heap and every
+    /// reader — the render, `list-joints`, `list-colliders`,
+    /// `world.joint_position` — sees it through the seam it already used.
+    ///
+    /// The entity's own `Transform` follows the **root** part, so
+    /// `Transform.position` keeps meaning "where the character is": culling, a
+    /// script's distance check and `simulate --entity` would otherwise all be
+    /// wrong about something plainly visible somewhere else. Its rotation and
+    /// scale are left alone — the orientation is in the pose, where the
+    /// skeleton is.
+    fn write_back_ragdolls(&mut self, world: &mut World) {
+        for index in 0..self.ragdolls.len() {
+            if !self.ragdolls[index].active {
+                continue;
+            }
+            let entity = self.ragdolls[index].entity;
+            let Some(skin) = self.rig_of.get(&entity).and_then(|r| r.skin.clone()) else {
+                continue;
+            };
+
+            // The new model matrix first: every joint global is derived through
+            // its inverse, so solving before the root has moved would put the
+            // whole skeleton one step behind the body it hangs on.
+            let root_body =
+                self.proxies[self.ragdolls[index].parts[self.ragdolls[index].root]].body;
+            let Some(root) = self.bodies.get(root_body) else {
+                continue;
+            };
+            let root_translation = root.translation();
+            let model = {
+                let mut transform = match world.get::<&mut Transform>(entity) {
+                    Ok(mut t) => {
+                        t.position = root_translation;
+                        *t
+                    }
+                    Err(_) => Transform::default(),
+                };
+                transform.position = root_translation;
+                transform.matrix()
+            };
+            let to_skin = model.inverse();
+
+            let mut solved: Vec<Option<glam::Mat4>> = vec![None; skin.joints.len()];
+            for &part in &self.ragdolls[index].parts {
+                let proxy = &self.proxies[part];
+                let Some(body) = self.bodies.get(proxy.body) else {
+                    continue;
+                };
+                let world_pose =
+                    glam::Mat4::from_rotation_translation(*body.rotation(), body.translation());
+                // `B = M · G · L`, so `G = M⁻¹ · B · L⁻¹` — `part_pose`'s
+                // arithmetic, run backwards, which is the whole reversal in one
+                // line.
+                if let Some(slot) = solved.get_mut(proxy.joint) {
+                    *slot = Some(to_skin * world_pose * proxy.local.inverse());
+                }
+            }
+
+            let pose =
+                engine_core::ragdoll::solve_pose(&skin, &self.ragdolls[index].frozen, &solved);
+            if let Ok(mut component) = world.get::<&mut RagdollData>(entity) {
+                component.pose = Some(engine_core::ragdoll::pose_field(&skin, &pose));
             }
         }
     }
@@ -1253,10 +1897,18 @@ impl PhysicsWorld {
 ///
 /// Nine parameters, and they are nine independent lookups the caller has
 /// already done — the component, its transform, and the four places a shape's
-/// geometry can come from (its own asset, the entity's Mesh, a Terrain, a
-/// Road). Bundling them into a struct would build that struct per collider at
-/// scene load and hide which sources a given shape actually consults, which is
-/// the whole subtlety of this function.
+/// geometry can come from (its own asset, the entity's Mesh, a Terrain, or a
+/// surface the entity generates). Bundling them into a struct would build that
+/// struct per collider at scene load and hide which sources a given shape
+/// actually consults, which is the whole subtlety of this function.
+/// A surface an entity generates rather than loads, resolved before the
+/// collider loop — see `build_collider`'s `generated` parameter.
+struct GeneratedSurface {
+    /// What generated it, for the error message naming where geometry failed.
+    kind: &'static str,
+    mesh: Arc<engine_core::mesh::MeshData>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_collider(
     collider: &ColliderData,
@@ -1266,7 +1918,14 @@ fn build_collider(
     terrain: Option<&TerrainData>,
     // `road` is the entity's Road when it has one: a mesh-shaped collider with
     // no asset, no Mesh and no Terrain takes the road's generated ribbon (M23).
-    road: Option<&Road>,
+    // The surface this entity *generates*, when it has one: a `Road`'s ribbon
+    // or a `Junction`'s patch, already built. Pre-resolved rather than rebuilt
+    // here because since M40 both are functions of more than their own
+    // component — a road may follow a `Terrain` it names, and a junction is
+    // bounded by the roads that reach it — and physics reading the same
+    // `Arc` the renderer draws is what keeps the surface driven and the
+    // surface drawn from drifting apart.
+    generated: Option<&GeneratedSurface>,
     meshes: &dyn MeshSource,
     layer_bits: &HashMap<String, Group>,
     force_events: bool,
@@ -1306,31 +1965,38 @@ fn build_collider(
             // collidable without a mesh file duplicating what the renderer
             // already draws — and, for a road, they are what makes the surface
             // driven and the surface drawn impossible to author apart.
-            let (asset, mesh, from_road) =
-                match (collider.asset.as_deref().or(entity_mesh), terrain, road) {
-                    (Some(asset), _, _) => (
-                        asset.to_string(),
-                        meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
-                        false,
+            let (asset, mesh, from_road) = match (
+                collider.asset.as_deref().or(entity_mesh),
+                terrain,
+                generated,
+            ) {
+                (Some(asset), _, _) => (
+                    asset.to_string(),
+                    meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
+                    false,
+                ),
+                (None, Some(terrain), _) => (
+                    "the entity's Terrain".to_string(),
+                    engine_core::terrain::surface_grid(
+                        terrain,
+                        glam::Vec2::new(transform.position.x, transform.position.z),
+                        glam::Vec2::new(scale.x, scale.z),
                     ),
-                    (None, Some(terrain), _) => (
-                        "the entity's Terrain".to_string(),
-                        engine_core::terrain::surface_grid(
-                            terrain,
-                            glam::Vec2::new(transform.position.x, transform.position.z),
-                            glam::Vec2::new(scale.x, scale.z),
-                        ),
-                        false,
-                    ),
-                    (None, None, Some(road)) => (
-                        format!("the Road on {entity:?}"),
-                        engine_core::road::surface(road).mesh.clone(),
-                        true,
-                    ),
-                    (None, None, None) => {
-                        return Err(shape_bug(entity, "mesh collider with no asset in reach"))
-                    }
-                };
+                    false,
+                ),
+                (None, None, Some(generated)) => (
+                    format!("the {} on {entity:?}", generated.kind),
+                    std::sync::Arc::clone(&generated.mesh),
+                    // A junction's patch is road-generated geometry too:
+                    // the same coplanar-triangle contact bug is waiting on
+                    // it, and a car crossing a junction is exactly the case
+                    // that finds it.
+                    true,
+                ),
+                (None, None, None) => {
+                    return Err(shape_bug(entity, "mesh collider with no asset in reach"))
+                }
+            };
             let vertices: Vec<Vec3> = mesh
                 .positions
                 .iter()
@@ -1536,7 +2202,8 @@ mod tests {
     fn simulate(source: &str, steps: u32) -> (Scene, PhysicsWorld, Vec<ContactEvent>) {
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         let mut all_events = Vec::new();
         for _ in 0..steps {
             all_events.extend(physics.step(&mut scene.world, 0.0));
@@ -1594,7 +2261,9 @@ mod tests {
         let apex = |source: &str| -> f32 {
             let mut scene = Scene::from_source(source, "t.json").unwrap();
             let settings = PhysicsSettings::default();
-            let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+            let mut physics =
+                PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates)
+                    .unwrap();
             let mut bounced = false;
             let mut apex: f32 = 0.0;
             let mut previous_y = 5.0f32;
@@ -1641,7 +2310,8 @@ mod tests {
         ]}"#;
         let mut scene = Scene::from_source(source, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
 
         // Move the transform externally; the body must follow, not fight.
         let entity = scene.entity("Mover").unwrap();
@@ -1727,7 +2397,8 @@ mod tests {
         }"#;
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         let entity = scene.entity("Car").unwrap();
 
         // Settle, then "throttle": write a forward velocity like a script.
@@ -1865,7 +2536,8 @@ mod tests {
     fn engine_force_drives_the_chassis_forward() {
         let mut scene = Scene::from_source(CAR, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
 
         // Settle onto the springs first, then floor it.
         for _ in 0..120 {
@@ -1916,7 +2588,8 @@ mod tests {
         );
         let mut scene = Scene::from_source(&source, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world, 0.0);
         }
@@ -1951,7 +2624,8 @@ mod tests {
     fn brakes_stop_a_rolling_vehicle() {
         let mut scene = Scene::from_source(CAR, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world, 0.0);
         }
@@ -2015,7 +2689,8 @@ mod tests {
         }"#;
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world, 0.0);
         }
@@ -2235,7 +2910,8 @@ mod tests {
     fn stick_world(source: &str) -> (Scene, PhysicsWorld) {
         let scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let physics = PhysicsWorld::build(&scene.world, &settings, &StickAssets).unwrap();
+        let physics =
+            PhysicsWorld::build(&scene.world, &settings, &StickAssets, &scene.templates).unwrap();
         (scene, physics)
     }
 
@@ -2365,7 +3041,9 @@ mod tests {
         let (_, physics) = {
             let scene = Scene::from_source(DROP, "test.json").unwrap();
             let settings = PhysicsSettings::default();
-            let physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+            let physics =
+                PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates)
+                    .unwrap();
             (scene, physics)
         };
         assert!(physics.proxy_placements().is_empty());

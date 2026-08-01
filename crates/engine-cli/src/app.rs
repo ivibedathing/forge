@@ -512,6 +512,48 @@ impl ViewerApp {
                                             impulse: blast.impulse,
                                         });
                                     }
+                                    for kick in scripts.take_kicks() {
+                                        physics.queue_ragdoll_impulse(
+                                            &kick.entity,
+                                            &kick.part,
+                                            kick.impulse.into(),
+                                        );
+                                    }
+                                }
+                            }
+                            // Spawned entities enter physics between the
+                            // script step and the physics step (M37), exactly
+                            // where the headless loop puts them — the two
+                            // paths must not diverge or a recorded input stops
+                            // reproducing what the window did.
+                            let spawned = sim
+                                .scripts
+                                .as_ref()
+                                .map(engine_script::ScriptHost::take_spawns)
+                                .unwrap_or_default();
+                            if !spawned.is_empty() {
+                                let mut failed = None;
+                                if let Some(physics) = &mut sim.physics {
+                                    for (name, entity) in &spawned {
+                                        if let Err(e) = crate::simulate::insert_spawned(
+                                            physics,
+                                            &sim.scene.world,
+                                            *entity,
+                                            name,
+                                            &sim.assets,
+                                        ) {
+                                            failed = Some(e);
+                                            break;
+                                        }
+                                    }
+                                }
+                                if let Some(e) = failed {
+                                    self.error = Some(e);
+                                    break;
+                                }
+                                sim.scene.refresh_names();
+                                if let Some(scripts) = &mut sim.scripts {
+                                    scripts.sync_names(&sim.scene.world);
                                 }
                             }
                             if let Some(physics) = &mut sim.physics {
@@ -522,6 +564,27 @@ impl ViewerApp {
                                 let events = physics
                                     .step(&mut sim.scene.world, (sim.step_index + 1) as f32 * dt);
                                 sim.contacts.apply(&events);
+                                // Despawns (M37) apply here, beside the
+                                // breaks and before them, matching the
+                                // headless loop step for step.
+                                let despawned = sim
+                                    .scripts
+                                    .as_ref()
+                                    .map(engine_script::ScriptHost::take_despawns)
+                                    .unwrap_or_default();
+                                if !despawned.is_empty() {
+                                    for name in &despawned {
+                                        let Some(entity) = sim.scene.entity(name) else {
+                                            continue;
+                                        };
+                                        let _ = sim.scene.world.despawn(entity);
+                                        physics.remove_entity(entity);
+                                    }
+                                    sim.scene.refresh_names();
+                                    if let Some(scripts) = &mut sim.scripts {
+                                        scripts.sync_names(&sim.scene.world);
+                                    }
+                                }
                                 // Breaks apply after physics, exactly as in
                                 // the headless loop — played and simulated
                                 // runs must not diverge.
@@ -599,7 +662,13 @@ impl ViewerApp {
                 });
 
                 let wanted_samples = environment.samples.max(1);
+                // Cascades are the second such field (M38): the count decides
+                // whether the shadow map binds as a 2D texture or an array, so
+                // it is pipeline state exactly as `samples` is. GI is the third
+                // (M35), for the same reason — it is spliced into the source.
+                let wanted_cascades = environment.shadow_cascades.clamp(1, 4);
                 if renderer.samples() != wanted_samples
+                    || renderer.cascades() != wanted_cascades
                     || renderer.gi_enabled() != gi_field.is_some()
                 {
                     let (width, height) = target.size();
@@ -611,6 +680,7 @@ impl ViewerApp {
                         &target.gpu.device,
                         format,
                         wanted_samples,
+                        wanted_cascades,
                         gi_field.is_some(),
                     );
                     (*depth, *msaa) = frame_attachments(
@@ -742,10 +812,16 @@ impl ApplicationHandler for ViewerApp {
                 let (depth, msaa) =
                     frame_attachments(&target.gpu.device, target.format(), width, height, samples);
                 Paint::Scene {
-                    renderer: Box::new(SceneRenderer::with_samples(
+                    renderer: Box::new(SceneRenderer::configured(
                         &target.gpu.device,
                         target.format(),
                         samples,
+                        scene.environment.shadow_cascades,
+                        // Not yet: whether a field is resident is a question
+                        // about a *loaded bake*, not about the scene file, and
+                        // the per-frame check below rebuilds on the first frame
+                        // if the answer turns out to be yes.
+                        false,
                     )),
                     depth,
                     msaa,

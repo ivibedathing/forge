@@ -1312,6 +1312,63 @@ whole-stage replacement of the vertex stage into an assembly from per-producer c
 **29 of 29** committed render artifacts rendered byte for byte as they did at `main`, and the
 producer-less assembly is asserted equal to the stage in `mesh.wgsl` character for character.
 
+## M38 — Shadow cascades: `verify/m38_shadow_cascades.json`
+
+A fence of 22 posts and one 176 m rail receding from the camera to 168 m, plus three blocks at
+5 m, 32 m and 88 m, on flat ground under three nested cascades at `shadow_distance: 240`.
+
+**One object spans all three cascades**, which is the assertion: the rail is a single caster whose
+shadow runs from the near cascade to the far one, so the sharpness gradient shows up *along* it and
+a cascade that failed to render, or that was selected in the wrong order, breaks the line rather
+than dimming the scene. Rendering the same file at `shadow_cascades: 1` is the comparison: the near
+post's shadow goes from a crisp line to a grey smear, which is the 11.7 cm texel a single 240 m map
+can afford.
+
+Flat ground, no `Terrain` in frame, `samples: 1` — CLAUDE.md's reproducibility rule — so it carries
+a hard bit-exact pin (`the_m38_cascade_fixture_matches_its_baseline`). Three consecutive renders
+came back as one image, measured rather than assumed.
+
+What it covers: the nested split distances, the array shadow map and its per-layer caster passes,
+the per-cascade frame uniform the casters bind, the group-2 cascade matrices, and the cascaded
+lookup spliced into `mesh.wgsl`. Not covered by the fixture and covered by tests instead: water,
+road and meadow receivers under cascades, and the fade between two cascades at the band edge.
+
+**The bit-exactness half** is the A/B between binaries, and it is the whole design's load-bearing
+claim: at `shadow_cascades: 1` every shader compiles the source that sits on disk, so all 40
+committed baselines must render byte for byte as they do at `main`.
+
+---
+
+## M40 — Roads that build a track: `verify/m40_track.json`
+
+A closed circuit riding an M22 terrain, with auto-banked corners, kerbs and a start line; a pit lane
+that widens from 7 m to 13 m and back through `RoadPoint.width`; two paddock roads; and a `Junction`
+where all three meet in a T. Grain on every one of them. A ball is dropped on the west straight.
+
+**It cannot be authored without all five of M40's additions at once**, which is the point: banking
+needs the engine to pick the sign, the pit lane needs per-point width, none of the four roads carries
+a pasted-in height, and the T is a hole in the asphalt without the junction primitive.
+
+The **physics half pins the claim a picture cannot make**: the banking has the right sign. The ball
+sits on a straight approaching a right-hand corner, and it has to roll toward the *inside* of that
+turn and stay on the asphalt. Signed the other way it rolls off the outside — a circuit that throws
+the car off at every corner, which is exactly the mistake `Road.auto_bank` exists to stop an author
+making by hand. The test also asserts the junction resolved all three arms (a dropped arm is a hole
+in the patch) and that the width profile reached 13 m without bulging past it.
+
+`samples: 1`, because there is terrain in frame — CLAUDE.md's reproducibility rule — so it carries a
+hard bit-exact pin (`the_m40_track_fixture_pins_banking_width_and_a_junction`).
+
+What it covers: the shared `Profile` behind height, width and bank; the cross-section scale and roll;
+terrain sampling *across* the road rather than down its middle; the junction patch, its flares and
+its mouths; and grain through `road.wgsl`. Not covered by the fixture and covered by tests instead:
+pinned heights (`RoadPoint.pin_height`), `flare: 0`, and a junction between exactly two arms.
+
+**The bit-exactness half** is the A/B between binaries, and it is what "everything defaults to M23"
+means: with grain off, no per-point width, no bank and no `follow_terrain`, every committed baseline
+must render byte for byte as it does at `main`. Measured at 34 of 34 comparable artifacts, the six
+tour frames excluded because the tour *scene* gained four entities in the same commit.
+
 ---
 
 ## Cumulative matrix
@@ -1337,3 +1394,105 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)
+
+## M37 — Entity spawning: `verify/m37_spawn.json`
+
+A launcher on the left firing glowing rounds in a ballistic arc into three blocks on the right, at
+`--steps 120`, with a HUD line reading `shots in flight 5/6` and `fired 11`.
+
+**The arc of five shots is the assertion.** Nothing in the scene file draws a sphere — `Shot` is a
+`templates` entry, declared and never instantiated — so every ball in the frame was spawned by
+`world.spawn_entity`, given a velocity through the ordinary API *on the line after its spawn*,
+simulated by rapier, and reaped by name once it aged out. Each of the three ways this could break
+renders as the same picture: a spawn that silently did nothing, one that reached the ECS but not
+physics, and one whose velocity arrived a step late all leave a frame with no spheres in flight.
+The blocks being scattered is the fourth: it says the spawned bodies are in the broad phase and can
+push authored ones.
+
+`limit: 6` against a script that fires every 11 steps and reaps at 55 is what puts the HUD line at
+5/6 — the cap is exercised in the same frame that demonstrates the pool.
+
+No `Terrain` and no `Meadow` in frame, so it carries a hard bit-exact pin
+(`the_spawn_fixture_matches_its_baseline`). Six consecutive renders came back as one image,
+measured rather than assumed.
+
+**What a picture cannot say is a second test.**
+`simulate_reports_traces_and_bakes_what_a_run_spawned` covers the report's `spawned` total (11, not
+the 5 alive), the trace's `spawned` and `despawned` event lines, and that an instance name is never
+reused within a run.
+
+Also covered, outside the fixture: the showcase tour gains a `templates` block (the block-level
+coverage test requires it) and its campfire throws real ember bodies that land on the terrain; and
+the arena shooter's twenty-four parked bullets become one template, which deleted 864 lines from the
+generated scene.
+
+## M42 — Terrain basins: `verify/m42_basins.json`
+
+Three depressions cut into one fBm patch at `--steps 180`: a pool with a raft floating in it, a dry
+crater with a vertical wall (`falloff: 0`) holding a boulder and a pebble, and two overlapping
+circles that read as a single oblong pond.
+
+**The overlapping pair is the assertion that a sum would fail.** Two `depth: 1.5` basins 4 m apart
+share a floor at 1.5 m under `max`; under a sum their overlap would be a 3 m pit down the middle and
+the "one pond" would read as two craters with a trench between them. The picture distinguishes the
+two rules at a glance, which no scalar assertion does as cheaply.
+
+**The raft and the boulder are the assertion that the collider is the same surface as the render.**
+Neither is placed on a floor any file states: the raft is settled by `Buoyancy` against water whose
+bed was dug by the height field, and the boulder is dropped from 4 m onto a crater floor that
+exists only because `height_at` subtracts a basin. A basin applied in the mesh generator alone —
+the obvious wrong implementation — draws this frame identically except that both fall through.
+
+No horizon in frame and `samples: 1`, so it carries a hard bit-exact pin
+(`the_basin_fixture_matches_its_baseline`); three consecutive renders came back as one image.
+
+```
+engine validate examples/scenes/verify/m42_basins.json --strict
+engine diff-render examples/scenes/verify/m42_basins.json \
+    examples/scenes/verify/baselines/m42_basins.png --steps 180
+engine terrain-height examples/scenes/verify/m42_basins.json --at -6,-8   # the pool floor
+engine terrain-height examples/scenes/verify/m42_basins.json --at -6,-2   # the ground outside it
+```
+
+**What a picture cannot say is a second test.** `terrain_height_reports_the_basin_floor` asks the
+query for the pool's floor and for the field 6 m away, and requires the difference to be the
+authored 2.1 m — a basin is a *subtraction from a field that still varies underneath it*, so the
+check is a range rather than an equality, deliberately: a basin on a hillside stays on the hillside.
+It also steps 0.3 m across the dry crater's rim and requires the whole 1.2 m drop, which is what
+`falloff: 0` means and what no other fixture in the repo asserts.
+
+## M43 — Material-aware fracture: `verify/m43_fracture.json`
+
+Four slabs of four materials in a row — a glass pane, a wood plank, a stone block, a metal plate —
+each with the same steel weight dropped on it, rendered at `--steps 55`, a second after the impacts.
+
+**The four break patterns side by side are the assertion.** They share a scene, a clock and a
+hammer, so anything that broke fracture as a whole would move all four together. Only a working
+material model puts glass slivers scattered across the floor, wood splinters in a heap with long
+pieces still standing, stone chunks sitting where the block was, and metal in two plates that barely
+parted. The picture distinguishes four algorithms at a glance, which no scalar assertion does as
+cheaply — and the *ordering* it shows (glass throws its pieces roughly six times as far as stone
+drops its chunks) is the one claim the whole material model rests on.
+
+**Every shard in the file was generated, not authored.** The four `Breakable` components came out of
+`engine fracture --write`, which is the milestone's other half: the generator is a command, so what
+the runtime sees is ordinary text a reader can diff, edit and re-generate from the same seed.
+
+No terrain in frame and `samples: 1`, so it carries a hard bit-exact pin
+(`the_fracture_fixture_matches_its_baseline`); three consecutive renders came back as one image.
+
+```
+engine validate examples/scenes/verify/m43_fracture.json --strict
+engine diff-render examples/scenes/verify/m43_fracture.json \
+    examples/scenes/verify/baselines/m43_fracture.png --steps 55
+engine simulate examples/scenes/verify/m43_fracture.json --steps 55 --trace /tmp/f.jsonl
+grep -o '"broke":"[A-Za-z]*"' /tmp/f.jsonl   # all four, once each
+engine fracture examples/scenes/verify/m43_fracture.json --entity StoneBlock --seed 9
+```
+
+**What a picture cannot say is in the generator's own tests.** They are properties rather than
+pixels: the cells tile the source box to within 1% of its volume (fragments that overlapped would be
+interpenetrating bodies at spawn, and rapier would fling them apart), every cell bounds a volume and
+stays inside the box, the piece count is exact, the same seed reproduces the same points, wood's
+splinters run along the grain, and glass's shards span the full thickness of the pane and come out
+smaller near the impact.

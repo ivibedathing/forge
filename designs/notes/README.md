@@ -36,13 +36,14 @@ taught.
 `m07-editor.md`
 
 **Simulation** — `m08-physics.md` (collision too), `m09-animation.md`, `m10-scripting.md`,
-`m13-particles-and-m17-fire.md`, `m14-breaking.md`, `m33-skinned-colliders.md`
+`m13-particles-and-m17-fire.md`, `m14-breaking.md`, `m33-skinned-colliders.md`,
+`m37-entity-spawning.md`
 
 **Geometry recipes** — `m18-water.md`, `m27-water-refraction.md`, `m19-trees.md`, `m20-clouds.md`,
-`m22-terrain.md`, `m23-roads.md`, `m29-meadows.md`
+`m22-terrain.md`, `m23-roads.md`, `m40-road-authoring.md`, `m29-meadows.md`
 
-**Environment and time** — `m16-environment.md`, `m17-point-lights.md`, `m21-daylight.md`,
-`m15-frame-cost.md`
+**Environment and time** — `m16-environment.md`, `m38-shadow-cascades.md`, `m17-point-lights.md`,
+`m21-daylight.md`, `m15-frame-cost.md`
 
 **Materials** — `m26-materials.md`
 

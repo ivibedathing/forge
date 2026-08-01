@@ -88,6 +88,21 @@ them reads.
 `Water` and `Cloud` deliberately do not receive GI — water's fill is dominated by
 its sky reflection, and a cloud has no inside.
 
+## GI and M38's cascades wanted the same binding
+
+Both milestones were built in parallel off the same base, and both claimed
+**binding 5 of group 2** — M38 for the cascade matrix buffer, M35 for the first
+probe plane. Merging them was a rename and nothing more, because **a binding
+number is not a position in a list**: GI starts at 6, the layout skips 5 at one
+cascade, and WGSL resolves each declaration by its own index. The cascade entry
+being *conditional* costs GI nothing for the same reason.
+
+The two shader transforms compose in one direction only —
+`with_sky_common(with_cascades(<gi-composed source>, cascades))` — because
+`with_cascades` rewrites the shadow lookup and GI rewrites `AMBIENT`/`FILL`,
+which are disjoint. `a_cascaded_surface_inside_a_volume_takes_both` asserts all
+five receivers carry both declarations rather than trusting that reading.
+
 ## One volume reaches the GPU
 
 The design allows several volumes (smallest spacing wins, name-sorted on a tie)
@@ -117,9 +132,15 @@ to tell that from a bad bake.
   `showcase_585` disagreeing with *itself* — four distinct images from five
   renders on each binary, with the two populations overlapping. Sixth time in
   this repo's history that the answer was the adapter.
-- **The tour**: station 01 (forest) changes 10.9% of its pixels; the other five
-  stations change under 1% each. That is §3.1 working, not a weak volume — open
-  ground *must* barely move, and the frame with a canopy is the one that does.
+- **The tour**, measured after merging M37–M43 in: GI touches **48–74% of every
+  station's pixels**, and the largest channel delta on five of the six is **14 to
+  18** — under the manifest's threshold of 24. Only `showcase_90`, the frame
+  looking into the forest, puts pixels over it: 118 of 230,400, max delta 32.
+  That shape is §3.1 working rather than a weak volume. An unoccluded probe
+  reconstructs `sky_ambient` exactly, so open ground *cannot* move much; what
+  moves is what has something above it, and the canopy frame is the one with a
+  lot of that. A version of this feature that changed the open frames would be
+  the version that had a bug.
 
 ## Traps
 
@@ -136,6 +157,14 @@ to tell that from a bad bake.
   other command runs first. So moving a wall and re-rendering silently keeps the
   old bounce. `bake-gi` writes the hash and the format carries it; nothing reads
   it back yet.
+
+  **This is not hypothetical — the M37–M43 merge walked straight into it.** The
+  tour gained an entity's worth of geometry per milestone, every one of the 1,050
+  probes moved on the re-bake, and `inputs_hash` went from `852eb35b022c82d1` to
+  `9f833d7ff5a93b23`. `validate` was green the whole time, because `spacing`,
+  `bounces` and the derived grid had not changed. The re-bake happened because a
+  human knew the scene had moved, which is exactly the thing a gate is supposed
+  to replace.
 - **A probe exactly on the volume's boundary has weight zero.** `blend` fades
   inward from each face and `weight()` returns 0 at distance 0, so a floor lying
   exactly on the volume's bottom face receives no GI at all. Size the volume to
