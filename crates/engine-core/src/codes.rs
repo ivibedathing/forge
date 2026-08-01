@@ -262,6 +262,20 @@ registry! {
     TOO_MANY_GROWTH_STAGES = "too_many_growth_stages", Input,
         "a Meadow has more life-cycle stages than the shader's table holds";
 
+    // ── Global illumination (M35) ──────────────────────────────────────
+    LIGHT_PROBE_VOLUME_WITH_MESH = "light_probe_volume_with_mesh", Input,
+        "a LightProbeVolume entity is a region of space, not geometry; it may not also have a Mesh or a Material";
+    LIGHT_PROBE_VOLUME_WITHOUT_TRANSFORM = "light_probe_volume_without_transform", Input,
+        "a LightProbeVolume takes its bounds from its Transform, so it needs one";
+    GI_BAKE_MISSING = "gi_bake_missing", Input,
+        "a LightProbeVolume's \"bake\" names a file that is not there; run `engine bake-gi`";
+    GI_BAKE_STALE = "gi_bake_stale", Input,
+        "a GI bake was taken from a different scene than the one loading it; re-run `engine bake-gi`";
+    GI_BAKE_MALFORMED = "gi_bake_malformed", Input,
+        "a GI bake file parses but its version, grid or basis disagrees with the component";
+    TOO_MANY_GI_PROBES = "too_many_gi_probes", Input,
+        "a LightProbeVolume's bounds and spacing would place more probes than the engine will bake";
+
     // ── UI system (M31) ────────────────────────────────────────────────
     HUD_PARENT_NOT_FOUND = "hud_parent_not_found", Input,
         "a HUD element's \"parent\" names no entity in the scene";

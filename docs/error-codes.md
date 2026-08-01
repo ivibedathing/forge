@@ -103,6 +103,12 @@ build fails.
 | `meadow_terrain_invalid` | 1 | a Meadow's "terrain" must name an entity that has a Terrain component |
 | `meadow_stages_invalid` | 1 | a Meadow needs at least two life-cycle stages with strictly increasing "at" |
 | `too_many_growth_stages` | 1 | a Meadow has more life-cycle stages than the shader's table holds |
+| `light_probe_volume_with_mesh` | 1 | a LightProbeVolume entity is a region of space, not geometry; it may not also have a Mesh or a Material |
+| `light_probe_volume_without_transform` | 1 | a LightProbeVolume takes its bounds from its Transform, so it needs one |
+| `gi_bake_missing` | 1 | a LightProbeVolume's "bake" names a file that is not there; run `engine bake-gi` |
+| `gi_bake_stale` | 1 | a GI bake was taken from a different scene than the one loading it; re-run `engine bake-gi` |
+| `gi_bake_malformed` | 1 | a GI bake file parses but its version, grid or basis disagrees with the component |
+| `too_many_gi_probes` | 1 | a LightProbeVolume's bounds and spacing would place more probes than the engine will bake |
 | `hud_parent_not_found` | 1 | a HUD element's "parent" names no entity in the scene |
 | `hud_parent_not_panel` | 1 | a HUD element's "parent" must name an entity that has a HudPanel |
 | `hud_parent_cycle` | 1 | a chain of HUD "parent" references loops back on itself |

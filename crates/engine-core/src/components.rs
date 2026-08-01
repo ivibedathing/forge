@@ -3222,6 +3222,96 @@ pub struct SkinnedCollider {
 /// in step with it.
 ///
 /// The name list feeds `did_you_mean` suggestions and the spawn arm feeds
+/// A region of space holding a grid of baked light probes (M35).
+///
+/// The fill light every other surface gets is a lie: `sky_ambient` hands the
+/// whole sky hemisphere to the inside of a forest, the underside of a truck and
+/// a bare patch of open ground alike, because nothing in the engine knows that
+/// geometry stands between a surface and the sky. A `LightProbeVolume` replaces
+/// that constant with a function of *where you are standing and which way you
+/// are facing* — which is what puts contact darkening under an object and lets
+/// colour travel off a coloured wall.
+///
+/// Like [`Water`], [`Terrain`], [`Road`], [`Cloud`] and [`Meadow`], the entity
+/// carries a `Transform` and this component and **no `Mesh` and no `Material`**
+/// (`light_probe_volume_with_mesh`). Unlike those, it grows no geometry at all:
+/// the `Transform` is read purely as *bounds* — a unit box scaled and
+/// positioned, non-uniform scale being the normal case.
+///
+/// ```json
+/// { "type": "LightProbeVolume", "spacing": 4.0, "bake": "gi/showcase.gi.json" }
+/// ```
+///
+/// Several volumes may overlap, which is how an interior gets finer spacing than
+/// the landscape around it; the smallest `spacing` wins, name-sorted where two
+/// tie. A point outside every volume falls back to `sky_ambient`, which is
+/// exactly the pre-M35 path — so [`blend`](LightProbeVolume::blend) exists to
+/// make that boundary a fade rather than a step.
+///
+/// The bake is a file rather than a load-time computation because the loop is
+/// the product: a BVH build plus a few hundred thousand rays is seconds, and it
+/// would otherwise be paid by every `screenshot`, every `diff-render` and every
+/// editor reload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct LightProbeVolume {
+    /// Metres between probes, `> 0`.
+    ///
+    /// A spacing, not a resolution: resizing a volume keeps its GI detail
+    /// instead of stretching it, and two volumes at the same spacing agree
+    /// where they meet. Probe counts are derived from this and the `Transform`
+    /// scale, reported by `bake-gi`, and bounded by `too_many_gi_probes`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub spacing: f32,
+
+    /// Path to the baked transfer file, relative to the **scene file**
+    /// (invariant 3), conventionally `gi/<name>.gi.json`.
+    ///
+    /// Written by `engine bake-gi`. A path that is not there is
+    /// `gi_bake_missing`; one taken from a different version of the scene is
+    /// `gi_bake_stale`. Neither is a warning, because a bake that disagrees
+    /// with its geometry renders light that is quietly wrong — the one failure
+    /// mode this system is built to make impossible.
+    pub bake: String,
+
+    /// Light bounces the bake gathers, `[1, 2]`.
+    ///
+    /// Bounce one holds nearly all of the visible difference; bounce two costs
+    /// another pass over the volume and mostly lifts the black out of deep
+    /// occlusion.
+    #[schemars(range(min = 1, max = 2))]
+    pub bounces: u32,
+
+    /// Scales the whole effect, `>= 0`.
+    ///
+    /// Exists so an authoring pass can dial GI back without re-baking, and so
+    /// `0.0` is a one-field A/B against the pre-M35 look. Animatable, which is
+    /// how a scene fades GI in.
+    #[schemars(range(min = 0.0))]
+    pub intensity: f32,
+
+    /// Metres of fade at the volume's edge, `>= 0`.
+    ///
+    /// Over this distance the volume's irradiance crosses to whatever lies
+    /// outside it — another volume, or the `sky_ambient` fallback. Without it
+    /// the boundary is a visible step, since the two models disagree by exactly
+    /// the occlusion the volume measured.
+    #[schemars(range(min = 0.0))]
+    pub blend: f32,
+}
+
+impl Default for LightProbeVolume {
+    fn default() -> Self {
+        Self {
+            spacing: 4.0,
+            bake: String::new(),
+            bounces: 1,
+            intensity: 1.0,
+            blend: 1.0,
+        }
+    }
+}
+
 /// hecs; generating all three from one list is what stops a new component from
 /// being loadable but unsuggestable, or schema'd but never spawned.
 macro_rules! components {
@@ -3299,6 +3389,7 @@ components!(
     Meadow,
     FootPlant,
     SkinnedCollider,
+    LightProbeVolume,
 );
 
 #[cfg(test)]
@@ -3401,7 +3492,8 @@ mod tests {
                 "Road",
                 "Meadow",
                 "FootPlant",
-                "SkinnedCollider"
+                "SkinnedCollider",
+                "LightProbeVolume"
             ]
         );
     }

@@ -1045,6 +1045,61 @@ pub(super) fn check_component(
                 }
             }
         }
+
+        // ── GI bake file (M35) ────────────────────────────────────────────
+        //
+        // A bake that disagrees with its scene renders light that is quietly
+        // wrong, which is the one failure mode this system is built to make
+        // impossible — so the file is checked at `validate`, the cheapest gate
+        // there is, and never at the upload.
+        //
+        // Two of the three checks live here, because they need only the file:
+        // that it is there, and that it is the shape the format promises.
+        // `gi_bake_stale` needs the whole scene's geometry to recompute the
+        // digest against, so it belongs to a scene-level pass, not this one.
+        ComponentData::LightProbeVolume(ref volume) => {
+            let bake_path = &format!("{component_path}/bake");
+            let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+            let file = base_dir.join(&volume.bake);
+
+            if volume.bake.is_empty() || !file.is_file() {
+                let named = if volume.bake.is_empty() {
+                    "names no bake file".to_string()
+                } else {
+                    format!("names no bake file at {:?}", volume.bake)
+                };
+                errors.push(
+                    cx.err(
+                        codes::GI_BAKE_MISSING,
+                        format!(
+                            "entity {entity:?} {named} (bake paths resolve relative to \
+                             the scene file); run `engine bake-gi` to write one"
+                        ),
+                        bake_path,
+                    )
+                    .entity(entity)
+                    .component("LightProbeVolume")
+                    .field("bake"),
+                );
+            } else if let Ok(text) = std::fs::read_to_string(&file) {
+                if let Err(bad) = crate::gi::BakedGi::parse(&text) {
+                    errors.push(
+                        cx.err(
+                            codes::GI_BAKE_MALFORMED,
+                            format!(
+                                "the GI bake at {:?} is not readable: {bad}; \
+                                 re-run `engine bake-gi`",
+                                volume.bake
+                            ),
+                            bake_path,
+                        )
+                        .entity(entity)
+                        .component("LightProbeVolume")
+                        .field("bake"),
+                    );
+                }
+            }
+        }
     }
 
     checked

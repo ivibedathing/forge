@@ -580,6 +580,22 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        "LightProbeVolume" => {
+            let Ok(mut c) = world.get::<&mut crate::components::LightProbeVolume>(entity) else {
+                return false;
+            };
+            match field {
+                // The two fields that scale an existing field rather than
+                // change which field was baked. `intensity` is the one a scene
+                // fades GI in with; `blend` widens the volume's edge fade.
+                // `spacing` and `bounces` are in `NOT_ANIMATABLE` — they are
+                // inputs to the bake, and driving one would invalidate the file
+                // on disk every frame it changed.
+                "intensity" => c.intensity = scalar,
+                "blend" => c.blend = scalar,
+                _ => return false,
+            }
+        }
         "Meadow" => {
             let Ok(mut c) = world.get::<&mut Meadow>(entity) else {
                 return false;
@@ -664,6 +680,14 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     ("Meadow", "size_jitter"),
     ("Meadow", "stagger"),
     ("Meadow", "max_slope"),
+    // A fourth reason, and the strongest: these two are inputs to a file on
+    // disk. `spacing` decides the probe grid and `bounces` decides what was
+    // gathered into it, so a clip driving either would put the component and
+    // its bake into disagreement on the first frame — which `gi_bake_stale`
+    // is built to catch at `validate` and could not catch mid-run. GI fades in
+    // through `intensity`, which is exactly what that field is for.
+    ("LightProbeVolume", "spacing"),
+    ("LightProbeVolume", "bounces"),
     // A different reason, and the only one of its kind: a clip's values are
     // scalars and 3-vectors, and these are 2-vectors, which the format cannot
     // spell. Scrolling UVs is the feature that would want them and it is
@@ -1195,7 +1219,8 @@ mod tests {
                 {"type":"Terrain"},
                 {"type":"Road"},
                 {"type":"Meadow"},
-                {"type":"FootPlant","feet":[{"ankle":"Foot.L"}],"ground":"Ground"}
+                {"type":"FootPlant","feet":[{"ankle":"Foot.L"}],"ground":"Ground"},
+                {"type":"LightProbeVolume"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

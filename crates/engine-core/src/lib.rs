@@ -13,6 +13,7 @@ pub mod contact;
 pub mod daylight;
 pub mod error;
 pub mod formatter;
+pub mod gi;
 pub mod input;
 pub mod lineindex;
 pub mod locomotion;

@@ -24,6 +24,7 @@ scene's components with the defaults filled in.
 | [`HudPanel`](#hudpanel) | A screen-space container that lays its children out (M31). |
 | [`HudRect`](#hudrect) | A screen-space solid rectangle (M12): the primitive behind health bars, |
 | [`HudText`](#hudtext) | A screen-space text label (M12): lines of the built-in 8×8 pixel font, |
+| [`LightProbeVolume`](#lightprobevolume) | Defines the serialized component union alongside everything that must stay |
 | [`Material`](#material) | Surface appearance, in the metallic/roughness parameterization every |
 | [`Meadow`](#meadow) | Ground cover that grows, seeds and dies on a loop: grass, weeds, wildflowers |
 | [`Mesh`](#mesh) | Renderable geometry. |
@@ -374,6 +375,51 @@ always been.
 | `text` | `string` | — | The label. `\n` breaks a line explicitly; `wrap` breaks it automatically. Scripts may rewrite it via `world.set_hud_text` — an empty string is a legal rest value for a script-driven readout. |
 | `visible` | `boolean` | `true` | Drawn and hit-testable when true (the default). Hiding a panel hides its whole subtree — one boolean is how a menu opens and closes. |
 | `wrap` | `number` | `0` | Wrap width in pixels; `0` (the default) is no wrapping. Breaks on spaces — a word longer than `wrap` overflows rather than splitting, since a mid-word break in a fixed-width font reads as corruption. (at least 0) |
+
+## LightProbeVolume
+
+Defines the serialized component union alongside everything that must stay
+in step with it.
+
+The name list feeds `did_you_mean` suggestions and the spawn arm feeds
+A region of space holding a grid of baked light probes (M35).
+
+The fill light every other surface gets is a lie: `sky_ambient` hands the
+whole sky hemisphere to the inside of a forest, the underside of a truck and
+a bare patch of open ground alike, because nothing in the engine knows that
+geometry stands between a surface and the sky. A `LightProbeVolume` replaces
+that constant with a function of *where you are standing and which way you
+are facing* — which is what puts contact darkening under an object and lets
+colour travel off a coloured wall.
+
+Like [`Water`], [`Terrain`], [`Road`], [`Cloud`] and [`Meadow`], the entity
+carries a `Transform` and this component and **no `Mesh` and no `Material`**
+(`light_probe_volume_with_mesh`). Unlike those, it grows no geometry at all:
+the `Transform` is read purely as *bounds* — a unit box scaled and
+positioned, non-uniform scale being the normal case.
+
+```json
+{ "type": "LightProbeVolume", "spacing": 4.0, "bake": "gi/showcase.gi.json" }
+```
+
+Several volumes may overlap, which is how an interior gets finer spacing than
+the landscape around it; the smallest `spacing` wins, name-sorted where two
+tie. A point outside every volume falls back to `sky_ambient`, which is
+exactly the pre-M35 path — so [`blend`](LightProbeVolume::blend) exists to
+make that boundary a fade rather than a step.
+
+The bake is a file rather than a load-time computation because the loop is
+the product: a BVH build plus a few hundred thousand rays is seconds, and it
+would otherwise be paid by every `screenshot`, every `diff-render` and every
+editor reload.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `bake` | `string` | `""` | Path to the baked transfer file, relative to the **scene file** (invariant 3), conventionally `gi/<name>.gi.json`.  Written by `engine bake-gi`. A path that is not there is `gi_bake_missing`; one taken from a different version of the scene is `gi_bake_stale`. Neither is a warning, because a bake that disagrees with its geometry renders light that is quietly wrong — the one failure mode this system is built to make impossible. |
+| `blend` | `number` | `1` | Metres of fade at the volume's edge, `>= 0`.  Over this distance the volume's irradiance crosses to whatever lies outside it — another volume, or the `sky_ambient` fallback. Without it the boundary is a visible step, since the two models disagree by exactly the occlusion the volume measured. (at least 0) |
+| `bounces` | `integer` | `1` | Light bounces the bake gathers, `[1, 2]`.  Bounce one holds nearly all of the visible difference; bounce two costs another pass over the volume and mostly lifts the black out of deep occlusion. (at least 1, at most 2) |
+| `intensity` | `number` | `1` | Scales the whole effect, `>= 0`.  Exists so an authoring pass can dial GI back without re-baking, and so `0.0` is a one-field A/B against the pre-M35 look. Animatable, which is how a scene fades GI in. (at least 0) |
+| `spacing` | `number` | `4` | Metres between probes, `> 0`.  A spacing, not a resolution: resizing a volume keeps its GI detail instead of stretching it, and two volumes at the same spacing agree where they meet. Probe counts are derived from this and the `Transform` scale, reported by `bake-gi`, and bounded by `too_many_gi_probes`. (greater than 0) |
 
 ## Material
 

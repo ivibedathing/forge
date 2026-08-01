@@ -219,6 +219,7 @@ pub(super) fn walk<'a>(
         let mut terrain: Option<(crate::components::Terrain, String)> = None;
         let mut road: Option<(crate::components::Road, String)> = None;
         let mut meadow: Option<(crate::components::Meadow, String)> = None;
+        let mut light_probe_volume: Option<(crate::components::LightProbeVolume, String)> = None;
         // Whether this entity carries anything a `HudInteract` could use as
         // its hit box (M31).
         let mut has_hud_element = false;
@@ -327,6 +328,9 @@ pub(super) fn walk<'a>(
                 Some(ComponentData::Meadow(m)) => {
                     meadows.push((name.to_string(), m.clone(), component_path.clone()));
                     meadow = Some((m, component_path));
+                }
+                Some(ComponentData::LightProbeVolume(v)) => {
+                    light_probe_volume = Some((v, component_path));
                 }
                 Some(ComponentData::FootPlant(p)) => {
                     foot_plant = Some(component_path.clone());
@@ -1002,6 +1006,79 @@ pub(super) fn walk<'a>(
                     .entity(name)
                     .component("Meadow")
                     .field("density"),
+                );
+            }
+        }
+
+        // ── LightProbeVolume checks (M35) ────────────────────────────────
+        if let Some((volume, path)) = &light_probe_volume {
+            // The recipe rule, for a component that grows no geometry at all:
+            // this entity is a *region of space*, and a Mesh beside it is a
+            // second, silently ignored answer to what the entity is. Stated
+            // separately from the other recipes because the reason differs —
+            // the others own geometry, this one owns none.
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::LIGHT_PROBE_VOLUME_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a LightProbeVolume and also {extras}; \
+                             a probe volume is a region of space that lights other \
+                             surfaces and draws nothing itself — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("LightProbeVolume"),
+                );
+            }
+
+            // The Transform *is* the bounds — there is no other source for
+            // them, so without one the volume covers nothing and every probe
+            // would land on top of every other.
+            if !has_transform {
+                errors.push(
+                    cx.err(
+                        codes::LIGHT_PROBE_VOLUME_WITHOUT_TRANSFORM,
+                        format!(
+                            "entity {name:?} has a LightProbeVolume but no Transform; \
+                             the Transform is the volume's bounds — a unit box scaled \
+                             and positioned"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("LightProbeVolume"),
+                );
+            }
+
+            // Refused before anything is allocated — `tree_too_complex`'s rule.
+            // A hung bake that produces no output is the worst failure an agent
+            // loop can hit, and the arithmetic predicting the count is exact.
+            let probes = crate::gi::probe_count_for(volume, scale);
+            if probes > crate::gi::MAX_GI_PROBES {
+                let grid = crate::gi::grid_counts(scale, volume.spacing);
+                errors.push(
+                    cx.err(
+                        codes::TOO_MANY_GI_PROBES,
+                        format!(
+                            "entity {name:?} would place a {}×{}×{} grid ({probes} probes) \
+                             over the limit of {}; raise spacing or shrink the volume",
+                            grid[0],
+                            grid[1],
+                            grid[2],
+                            crate::gi::MAX_GI_PROBES
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("LightProbeVolume")
+                    .field("spacing"),
                 );
             }
         }
