@@ -27,8 +27,8 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**32 of the 38 baselines are pinned by a test** (M33's fixture arrived with its own), and the six
-that are not are the six `showcase_*` frames — deliberately. They are not byte-reproducible on this adapter (measured repeatedly at four
+**33 of the 39 baselines are pinned by a test** (M33's and M36's fixtures each arrived with their
+own), and the six that are not are the six `showcase_*` frames — deliberately. They are not byte-reproducible on this adapter (measured repeatedly at four
 to six distinct images from six renders of an *unchanged* scene, on any binary), so a test
 asserting them would fail at random, which is worse than no test. They keep their `diff_args`
 tolerance in the manifest and stay the sweep's job; `cli.rs` says so where someone would go to add
@@ -63,6 +63,12 @@ found exactly those two frames differing out of 36 artifacts — and neither bin
 itself on either, so the difference is the adapter and not the change. **This is the reason the
 `md5`-it-N-times step is not optional**: a two-artifact A/B failure looks damning and here meant
 nothing.
+
+**M36's A/B found four** — 90, 585, 646 and 810 — and the probe settled every one of them the same
+way, over four renders of the *unchanged* scene per binary: 585 at 3-of-4 new and 4-of-4 base, 646
+at 3-of-4 new, 810 at 3-of-4 on both, and 90 at 2-of-4 base. Every differing frame had a binary
+disagreeing with **itself**, so the A/B difference carried no information — the fourth time this
+has been measured and the fourth time the answer was the adapter.
 
 The `draw` split then found **three** — 585, 646 and **`showcase_810`** — and the probe settled 810
 the same way: **3 distinct of 6 on both binaries**, `main`'s included. That retires the older note

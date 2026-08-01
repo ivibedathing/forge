@@ -16,9 +16,9 @@
 //! list behind `world.hud` (cleared every step, so what is on screen is a
 //! pure function of the step that drew it).
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::path::Path;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use std::sync::Arc;
@@ -30,6 +30,7 @@ use engine_core::components::{
 use engine_core::contact::ContactState;
 use engine_core::daylight::{Daylight, DaylightSettings};
 use engine_core::input::{self, InputState, Pointer};
+use engine_core::scene::EnvironmentSettings;
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
 use rhai::packages::{
@@ -53,6 +54,63 @@ const MAX_HUD_CHARS: usize = 96;
 /// engine.
 fn runtime(message: String) -> Box<EvalAltResult> {
     Box::new(EvalAltResult::ErrorRuntime(message.into(), Position::NONE))
+}
+
+/// Where save slots live, relative to the scene file (M36).
+const SAVE_DIR: &str = "saves";
+
+/// How many slots there are. Ten is arbitrary and finite on purpose: the slot
+/// is an *index*, not a name, because a script naming its own file is exactly
+/// what the sandbox exists to prevent.
+const SAVE_SLOTS: i64 = 10;
+
+/// Validate a slot index and turn it into its path.
+fn slot_path(dir: &Path, slot: i64) -> std::result::Result<PathBuf, Box<EvalAltResult>> {
+    if !(0..SAVE_SLOTS).contains(&slot) {
+        return Err(runtime(format!(
+            "save slot must be 0..{}, got {slot}",
+            SAVE_SLOTS - 1
+        )));
+    }
+    Ok(dir.join(format!("slot{slot}.json")))
+}
+
+/// Write the `world.state` map to a slot.
+///
+/// A `BTreeMap` rather than the `HashMap` it comes from, so keys are sorted
+/// and two saves of one state are the same bytes — invariant 1's "git-diffable
+/// by construction" applied to a file the engine writes rather than one an
+/// agent does.
+fn write_slot(
+    path: &Path,
+    state: &HashMap<String, f64>,
+) -> std::result::Result<(), Box<EvalAltResult>> {
+    let sorted: BTreeMap<&str, f64> = state.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    let body = serde_json::to_string_pretty(&sorted)
+        .map_err(|e| runtime(format!("could not encode save: {e}")))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| runtime(format!("could not create {}: {e}", parent.display())))?;
+    }
+    std::fs::write(path, body + "\n")
+        .map_err(|e| runtime(format!("could not write {}: {e}", path.display())))
+}
+
+/// Read a slot back, or `None` when it does not exist.
+///
+/// A missing slot is `None` and not an error because "is there a save?" is a
+/// menu's first question; a slot that exists and does not parse *is* an error,
+/// because that is a bug rather than an empty slot.
+#[allow(clippy::type_complexity)]
+fn read_slot(path: &Path) -> std::result::Result<Option<HashMap<String, f64>>, Box<EvalAltResult>> {
+    let body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(runtime(format!("could not read {}: {e}", path.display()))),
+    };
+    let parsed: BTreeMap<String, f64> = serde_json::from_str(&body)
+        .map_err(|e| runtime(format!("{} is not a valid save: {e}", path.display())))?;
+    Ok(Some(parsed.into_iter().collect()))
 }
 
 /// A blast queued by `world.explode`, waiting for the next physics step.
@@ -96,6 +154,22 @@ pub struct ScriptHost {
     /// once at build. Rigs are shared and immutable, so holding them costs a
     /// pointer each and spares `world.joint_position` a file read per call.
     rigs: Rc<HashMap<String, Arc<engine_core::skeleton::Rig>>>,
+    /// Set by `world.quit` (M36), drained by the caller via
+    /// [`ScriptHost::quit_requested`] — the `take_breaks` pattern, for the same
+    /// reason: what quitting *means* differs between the viewer (close the
+    /// window) and a headless run (stop stepping and report it), and neither
+    /// belongs in the script host.
+    quit: Rc<Cell<bool>>,
+    /// The scene's `environment` block, seeded at build and writable from
+    /// scripts since M36. The caller owns the `Scene`, so it reads this back
+    /// after each step via [`ScriptHost::environment`] and assigns
+    /// `scene.environment`; `Scene::resolved_at` is untouched.
+    environment: Rc<RefCell<EnvironmentSettings>>,
+    /// Where `world.save`/`world.load` put their slots: `<scene dir>/saves`.
+    /// Next to the scene for M10's reason — everything in this engine resolves
+    /// relative to the scene file, and a save in `/tmp` is a save nobody can
+    /// commit.
+    save_dir: Rc<PathBuf>,
 }
 
 /// What scripts see: the world, entity names, and the fixed timestep.
@@ -142,6 +216,12 @@ struct WorldApi {
     time: f32,
     /// The scene's rigs (M30), by `Mesh.asset`.
     rigs: Rc<HashMap<String, Arc<engine_core::skeleton::Rig>>>,
+    /// `world.quit` (M36): a request the caller drains after the step.
+    quit: Rc<Cell<bool>>,
+    /// `world.set_shadows` and friends (M36): the live `environment` block.
+    environment: Rc<RefCell<EnvironmentSettings>>,
+    /// `world.save`/`world.load` (M36): where the slots live.
+    save_dir: Rc<PathBuf>,
 }
 
 impl WorldApi {
@@ -412,6 +492,55 @@ impl WorldApi {
         Ok(transform.matrix() * globals[index])
     }
 
+    /// Does `clip` name something this entity can actually play (M36)?
+    ///
+    /// Checked at the call rather than at the next render, because
+    /// `AnimationPlayer.clip` bakes: a bad value has to be a located script
+    /// error and not a scene file that fails its own validation. The rules are
+    /// M30's, reached from the other side — the fragment form is required, the
+    /// asset it names has to be the one on this entity's `Mesh`, and the clip
+    /// has to exist in it.
+    fn check_clip(
+        &mut self,
+        name: &str,
+        clip: &str,
+    ) -> std::result::Result<(), Box<EvalAltResult>> {
+        use engine_core::skeleton::ClipRef;
+
+        let entity = self.entity(name)?;
+        let world = self.world.borrow();
+
+        // A property clip has no rig to check against — M9 owns those, and its
+        // own validation does. Only the skeletal form is checkable here.
+        let ClipRef::Skeletal { asset, clip: want } = ClipRef::parse(clip) else {
+            return Ok(());
+        };
+
+        let mesh = world
+            .get::<&Mesh>(entity)
+            .map(|mesh| mesh.asset.clone())
+            .map_err(|_| runtime(format!("entity {name:?} has no Mesh, so it has no rig")))?;
+        if mesh != asset {
+            // M30's `skeletal_player_mesh_mismatch`, as a runtime error: a clip
+            // out of a file the entity does not draw would silently never play.
+            return Err(runtime(format!(
+                "entity {name:?} draws {mesh:?}, so it cannot play a clip from {asset:?}"
+            )));
+        }
+        let rig = self
+            .rigs
+            .get(&mesh)
+            .ok_or_else(|| runtime(format!("{mesh:?} carries no skin")))?;
+        if rig.clip_named(want).is_some() {
+            return Ok(());
+        }
+        let mut message = format!("{mesh:?} has no clip named {want:?}");
+        if let Some(near) = engine_core::error::closest_match(want, rig.clip_names()) {
+            message.push_str(&format!(" (did you mean {near:?}?)"));
+        }
+        Err(runtime(message))
+    }
+
     /// The vehicle path: velocity access needs a `RigidBody`; what a write
     /// means is the physics step's business (dynamic bodies pick it up
     /// before integrating — see `PhysicsWorld::step`).
@@ -668,6 +797,103 @@ fn curated_engine() -> rhai::Engine {
     engine.register_fn("set_state", |w: &mut WorldApi, key: &str, value: i64| {
         w.state.borrow_mut().insert(key.to_string(), value as f64);
     });
+
+    // Saves (M36). The whole `world.state` map, written as sorted JSON next to
+    // the scene. What a save *is* comes out of M32's rule — ask what should
+    // survive, and the answer says whether something is state or data: the bake
+    // already writes where every body ended up, and this writes the memory the
+    // bake deliberately drops. A load therefore restores the campaign and not
+    // the arena, since the engine cannot spawn an entity and a broken drone
+    // cannot come back. That is the game's problem to state, not the engine's:
+    // here it is simply a map in and a map out.
+    engine.register_fn(
+        "save",
+        |w: &mut WorldApi, slot: i64| -> std::result::Result<bool, Box<EvalAltResult>> {
+            let path = slot_path(&w.save_dir, slot)?;
+            write_slot(&path, &w.state.borrow())?;
+            Ok(true)
+        },
+    );
+    engine.register_fn(
+        "load",
+        |w: &mut WorldApi, slot: i64| -> std::result::Result<bool, Box<EvalAltResult>> {
+            let path = slot_path(&w.save_dir, slot)?;
+            let Some(loaded) = read_slot(&path)? else {
+                return Ok(false);
+            };
+            // Replaced wholesale rather than merged: a merge leaves keys from
+            // the run being abandoned, and what that produces is a bug three
+            // levels later rather than a wrong number now.
+            *w.state.borrow_mut() = loaded;
+            Ok(true)
+        },
+    );
+    engine.register_fn(
+        "has_save",
+        |w: &mut WorldApi, slot: i64| -> std::result::Result<bool, Box<EvalAltResult>> {
+            let path = slot_path(&w.save_dir, slot)?;
+            Ok(path.exists())
+        },
+    );
+
+    // Quitting (M36). Queued like a break, for the same reason: what it means
+    // is the caller's business. The viewer closes its window; a headless run
+    // stops stepping and reports the step it stopped on.
+    engine.register_fn("quit", |w: &mut WorldApi| {
+        w.quit.set(true);
+    });
+
+    // The `environment` block, writable since M36 — the settings screen the
+    // arena shooter wanted, and the one place where a script reaches something
+    // that was read off the file at load and never again.
+    //
+    // Every setter is a no-op that writes the value it already holds unless a
+    // script calls it, which is what keeps a scene touching none of them
+    // byte-identical: the caller assigns back a value equal to the one it had.
+    engine.register_fn("shadows", |w: &mut WorldApi| w.environment.borrow().shadows);
+    engine.register_fn("set_shadows", |w: &mut WorldApi, on: bool| {
+        w.environment.borrow_mut().shadows = on;
+    });
+    engine.register_fn("sky", |w: &mut WorldApi| w.environment.borrow().sky);
+    engine.register_fn("set_sky", |w: &mut WorldApi, on: bool| {
+        w.environment.borrow_mut().sky = on;
+    });
+    engine.register_fn("fog", |w: &mut WorldApi| {
+        f64::from(w.environment.borrow().fog_density)
+    });
+    engine.register_fn(
+        "set_fog",
+        |w: &mut WorldApi, density: f64| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Negated so NaN fails, like every other numeric guard in this
+            // file — `density >= 0.0` is false for NaN and would let one
+            // through into a uniform.
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
+            if !(density >= 0.0) || density > f64::from(f32::MAX) {
+                return Err(runtime(format!(
+                    "fog density must be zero or positive, got {density}"
+                )));
+            }
+            w.environment.borrow_mut().fog_density = density as f32;
+            Ok(())
+        },
+    );
+    engine.register_fn("samples", |w: &mut WorldApi| {
+        w.environment.borrow().samples as i64
+    });
+    engine.register_fn(
+        "set_samples",
+        |w: &mut WorldApi, samples: i64| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Validated at the call, M13's rule for `set_particle_rate`: a bad
+            // value is a located script error rather than a baked file that
+            // fails its own validation. The vocabulary is the schema's — 1 or
+            // 4, and nothing silently rounds.
+            if samples != 1 && samples != 4 {
+                return Err(runtime(format!("samples must be 1 or 4, got {samples}")));
+            }
+            w.environment.borrow_mut().samples = samples as u32;
+            Ok(())
+        },
+    );
 
     engine.register_fn(
         "break_entity",
@@ -1290,6 +1516,39 @@ fn curated_engine() -> rhai::Engine {
             })
         },
     );
+    // Switching clips (M36). A **hard cut**, and that is the design rather than
+    // a limitation: M9 §8 rejected blending, M30 restated the rejection, and
+    // M32 restated it again — *a gait change here is a different clip*. This is
+    // the call that makes that sentence actionable, and a game with an idle and
+    // a run is the thing that wanted it.
+    //
+    // The clip is validated against the rig the host already resolved, so a
+    // typo is a located runtime error with `did_you_mean` — the `world.key`
+    // treatment, which M30 gave joint names for the same reason.
+    engine.register_fn(
+        "set_animation_clip",
+        |w: &mut WorldApi, name: &str, clip: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            w.check_clip(name, clip)?;
+            let stored = clip.to_string();
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| {
+                if p.clip == stored {
+                    return;
+                }
+                p.clip = stored.clone();
+                // Reset, never carried over: a phase is a fraction of a *cycle*
+                // and two clips do not share one, so carrying it is M32's
+                // `speed` trap in another place — the pose teleports on the
+                // step the gait changes.
+                p.phase = 0.0;
+            })
+        },
+    );
+    engine.register_fn(
+        "animation_clip",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<String, Box<EvalAltResult>> {
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| p.clip.clone())
+        },
+    );
 
     // Emission rate (M13): the one particle parameter a script drives, so
     // effects can answer to gameplay — a skidding tire smokes, a healthy
@@ -1466,6 +1725,7 @@ impl ScriptHost {
         scene_path: &Path,
         timestep_hz: u32,
         daylight: Option<DaylightSettings>,
+        environment: EnvironmentSettings,
         rigs: &dyn engine_core::skeleton::RigSource,
     ) -> Result<Option<Self>> {
         let base_dir = scene_path.parent().unwrap_or(Path::new(""));
@@ -1536,7 +1796,29 @@ impl ScriptHost {
             explosions: Rc::new(RefCell::new(Vec::new())),
             daylight,
             rigs: Rc::new(skins),
+            quit: Rc::new(Cell::new(false)),
+            environment: Rc::new(RefCell::new(environment)),
+            save_dir: Rc::new(base_dir.join(SAVE_DIR)),
         }))
+    }
+
+    /// Did a script call `world.quit` (M36)?
+    ///
+    /// A read, not a drain: quitting is terminal, so a caller that asks twice
+    /// in one frame must get the same answer both times. What it *does* about
+    /// it is the caller's business — the viewer closes the window, a headless
+    /// run stops stepping and says so on the report.
+    pub fn quit_requested(&self) -> bool {
+        self.quit.get()
+    }
+
+    /// The `environment` block as scripts have left it (M36).
+    ///
+    /// Equal to what was passed to [`ScriptHost::build`] unless a script called
+    /// one of the setters, which is what keeps a scene that touches none of
+    /// them byte-identical to the pre-M36 engine.
+    pub fn environment(&self) -> EnvironmentSettings {
+        *self.environment.borrow()
     }
 
     /// Rebuild the name table from the world. Call after anything changes
@@ -1596,6 +1878,9 @@ impl ScriptHost {
             hud: Rc::new(RefCell::new(Vec::new())),
             breaks: Rc::clone(&self.breaks),
             explosions: Rc::clone(&self.explosions),
+            quit: Rc::clone(&self.quit),
+            environment: Rc::clone(&self.environment),
+            save_dir: Rc::clone(&self.save_dir),
         };
 
         let mut failure: Option<EngineError> = None;
@@ -1730,6 +2015,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -1767,6 +2053,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -1806,6 +2093,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -1864,6 +2152,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -1934,6 +2223,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2001,6 +2291,7 @@ mod tests {
                 &path,
                 60,
                 None,
+                Default::default(),
                 &engine_core::mesh::BuiltinAssets,
             )
             .unwrap()
@@ -2040,6 +2331,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2089,6 +2381,7 @@ mod tests {
             &scene_path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2139,6 +2432,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2176,6 +2470,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2214,6 +2509,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2284,6 +2580,7 @@ mod tests {
             &scene_path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2348,6 +2645,7 @@ mod tests {
             &scene_path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2398,6 +2696,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2429,6 +2728,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2469,6 +2769,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2533,6 +2834,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2575,6 +2877,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2609,6 +2912,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2637,6 +2941,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2690,6 +2995,7 @@ mod tests {
             &scene_path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2752,6 +3058,7 @@ mod tests {
             &scene_path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2791,6 +3098,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2838,6 +3146,7 @@ mod tests {
             &scene_path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2889,6 +3198,7 @@ mod tests {
                 &path,
                 60,
                 None,
+                Default::default(),
                 &engine_core::mesh::BuiltinAssets,
             )
             .unwrap()
@@ -2921,6 +3231,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -2982,6 +3293,7 @@ mod tests {
             &scene_path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -3037,6 +3349,7 @@ mod tests {
                 &scene_path,
                 60,
                 None,
+                Default::default(),
                 &engine_core::mesh::BuiltinAssets,
             )
             .unwrap()
@@ -3079,6 +3392,7 @@ mod tests {
             &scene_path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -3136,6 +3450,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -3194,6 +3509,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -3257,6 +3573,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -3326,6 +3643,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -3375,6 +3693,7 @@ mod tests {
             &path,
             60,
             None,
+            Default::default(),
             &engine_core::mesh::BuiltinAssets,
         )
         .unwrap()
@@ -3392,6 +3711,210 @@ mod tests {
         assert_eq!(
             error.error, "script_runtime_error",
             "timestamp() must not exist: {error:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Drive one script for `steps` steps with the default everything.
+    fn run_steps(host: &ScriptHost, scene: &mut Scene, steps: u64) {
+        for step in 0..steps {
+            host.step(
+                &mut scene.world,
+                step,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap();
+        }
+    }
+
+    fn host_for(scene: &Scene, path: &Path) -> ScriptHost {
+        ScriptHost::build(
+            &scene.world,
+            path,
+            60,
+            None,
+            Default::default(),
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    /// M36. The round trip is the whole promise: what one run saved, a
+    /// *different* run loads. Two hosts rather than one, because a single
+    /// host's `world.state` would return the right answer even if the file
+    /// were never written.
+    #[test]
+    fn a_save_written_by_one_run_is_read_by_the_next() {
+        let dir = temp_dir("save");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                if step == 0 { world.set_state("score", 4200.0); }
+                if step == 0 { world.set_state("level", 3.0); }
+                if step == 1 { let ok = world.save(2); }
+            }"#,
+        );
+        run_steps(&host_for(&scene, &path), &mut scene, 2);
+
+        // Sorted keys and a plain map: a save is git-diffable by construction,
+        // which is invariant 1 applied to a file the engine writes.
+        let written = std::fs::read_to_string(dir.join("saves/slot2.json")).unwrap();
+        assert!(
+            written.find("\"level\"").unwrap() < written.find("\"score\"").unwrap(),
+            "keys must be sorted: {written}"
+        );
+
+        let (mut fresh, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                if step == 0 { world.load(2); }
+                if step == 1 {
+                    let s = world.state("score", 0.0);
+                    world.set_position("Mover", s, world.state("level", 0.0), 0.0);
+                }
+            }"#,
+        );
+        run_steps(&host_for(&fresh, &path), &mut fresh, 2);
+        let entity = fresh.entity("Mover").unwrap();
+        let p = fresh.world.get::<&Transform>(entity).unwrap().position;
+        assert_eq!((p.x, p.y), (4200.0, 3.0), "the save did not come back");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An empty slot is `false`, not an error — "is there a save?" is a menu's
+    /// first question, and making it cost an error makes every menu wrap it.
+    /// An out-of-range slot *is* an error, because a script choosing its own
+    /// path is what the sandbox exists to prevent.
+    #[test]
+    fn an_empty_slot_is_false_and_an_impossible_slot_is_an_error() {
+        let dir = temp_dir("slots");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                let found = world.load(7);
+                let there = world.has_save(7);
+                if !found && !there { world.set_position("Mover", 1.0, 1.0, 1.0); }
+            }"#,
+        );
+        run_steps(&host_for(&scene, &path), &mut scene, 1);
+        let entity = scene.entity("Mover").unwrap();
+        let p = scene.world.get::<&Transform>(entity).unwrap().position;
+        assert_eq!(p.x, 1.0, "an absent slot must read as absent, not fail");
+
+        let (mut scene, path) =
+            scene_with_script(&dir, r#"fn step(world, step) { world.save(10); }"#);
+        let host = host_for(&scene, &path);
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(
+            error.message.contains("0..9"),
+            "the message must name the range: {}",
+            error.message
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M36. `quit` is a request the caller drains, not an error and not a
+    /// world change — the `take_breaks` shape, because what quitting *means*
+    /// differs between the viewer and a headless run.
+    #[test]
+    fn quit_is_a_request_the_caller_reads() {
+        let dir = temp_dir("quit");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { if step == 3 { world.quit(); } }"#,
+        );
+        let host = host_for(&scene, &path);
+        run_steps(&host, &mut scene, 3);
+        assert!(!host.quit_requested(), "nothing asked to quit yet");
+        run_steps(&host, &mut scene, 4);
+        assert!(host.quit_requested());
+        // Terminal, so asking twice must answer twice — a caller that checks
+        // it in two places must not race itself.
+        assert!(host.quit_requested());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M36. A scene that calls no setter must leave the block exactly as it
+    /// was — that equality is what keeps every pre-M36 baseline byte-identical,
+    /// since the caller assigns this back unconditionally.
+    #[test]
+    fn an_untouched_environment_block_comes_back_unchanged() {
+        let dir = temp_dir("env-untouched");
+        let (mut scene, path) =
+            scene_with_script(&dir, r#"fn step(world, step) { let d = world.dt(); }"#);
+        let authored = EnvironmentSettings {
+            sky: true,
+            fog_density: 0.004,
+            samples: 4,
+            ..Default::default()
+        };
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            authored,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        run_steps(&host, &mut scene, 5);
+        assert_eq!(host.environment(), authored);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn environment_setters_reach_the_block_and_reject_impossible_values() {
+        let dir = temp_dir("env-write");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                if step == 0 { world.set_shadows(true); }
+                if step == 0 { world.set_samples(4); }
+                if step == 1 { world.set_fog(0.02); }
+                if step == 2 { world.set_sky(!world.sky()); }
+            }"#,
+        );
+        let host = host_for(&scene, &path);
+        run_steps(&host, &mut scene, 3);
+        let env = host.environment();
+        assert!(env.shadows && env.sky);
+        assert_eq!(env.samples, 4);
+        assert!((env.fog_density - 0.02).abs() < 1e-6);
+
+        // The vocabulary is the schema's — 1 or 4, and nothing silently
+        // rounds, for M13's reason: this value ends up in a scene file.
+        let (mut scene, path) =
+            scene_with_script(&dir, r#"fn step(world, step) { world.set_samples(2); }"#);
+        let host = host_for(&scene, &path);
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("must be 1 or 4"),
+            "{}",
+            error.message
         );
         std::fs::remove_dir_all(&dir).ok();
     }

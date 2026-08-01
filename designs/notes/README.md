@@ -54,7 +54,7 @@ taught.
 
 **Ergonomics and units** — `m24-m25-agent-ergonomics.md`, `m34-one-unit-is-one-metre.md`
 
-**Demos and shipping** — `showcase-tour-notes.md`, `distribution-notes.md`
+**Demos and shipping** — `m36-game-shell.md`, `showcase-tour-notes.md`, `distribution-notes.md`
 
 **Cross-cutting** — `verification-history.md` (the measurements behind the verification rules)
 

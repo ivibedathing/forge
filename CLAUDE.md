@@ -67,20 +67,20 @@ actually says.
 materials only: the entity's `Material` is its bark.
 
 **Scene-level blocks**, siblings of `entities`: `physics` (gravity, `timestep_hz`), `environment`
-(sky, fog, shadows, MSAA — `m16-environment.md`), and `daylight` (the clock-driven sun, moon and
-sky palette — `m21-daylight.md`).
+(sky, fog, shadows, MSAA — `m16-environment.md`, **script-writable since M36**), and `daylight`
+(the clock-driven sun, moon and sky palette — `m21-daylight.md`).
 
 **System order per fixed step**: animations → scripts → physics → particles → render.
 
 ## Current state
 
-**M0–M34 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M36 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
-planting, M33 skinned collider proxies, M34 the metre. (M7 editor at scope E0–E2 + validation
-panel + `--watch`.)
+planting, M33 skinned collider proxies, M34 the metre, M36 the game shell. (M35 is a design doc
+only — global illumination, not built. M7 editor at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -114,7 +114,8 @@ engine road-centerline <scene.json> [--entity Name]  # where a Road actually wen
 engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
 #   every collider physics holds — shape, size, world placement — read back out of the
 #   built world, so a skinned hitbox nothing renders is still answerable (M33)
-engine ui-layout <scene.json> [--width W --height H] [--entity N]...  # where the UI landed (M31)
+engine ui-layout <scene.json> [--width W --height H] [--entity N]... [--steps N] [--input f]
+#   where the UI landed (M31); --steps reports what a script *painted* (M36)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
 engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; keyboard AND mouse; FPS readout is viewer-only
@@ -193,7 +194,7 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**32 of the 38 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**33 of the 39 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
@@ -204,9 +205,9 @@ for eight consecutive full sweeps. **The other 30 entries carry no `diff_args` a
 bit-exact, and a failure there is real.**
 
 **Which tour frames flake carries no information; whether one is stable under repetition does.**
-Three sweeps each picked a different subset of the six. Both binaries disagree with themselves on
-the same frames, which is why the `md5`-it-N-times step is not optional — a two-artifact A/B failure
-looks damning and has twice meant nothing.
+Four separate sweeps each picked a different subset of the six, M36's A/B included. Every time, the
+differing frame had a binary disagreeing with **itself** — which is why the `md5`-it-N-times step is
+not optional. Four measurements, four times the answer was the adapter.
 
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
@@ -359,8 +360,11 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
 - **Showcase tour** → `showcase-tour-notes.md`, design in `designs/showcase-tour.md`. A 900-step
   camera move with every system running at once. **A test fails on any component the tour does not
   use**, so a new component's commit adds an entity here.
+- **The game shell (M36)** → `m36-game-shell.md`, design in `designs/arena-menu-design.md`. Saves,
+  a quit request, a script-writable `environment` block, and clip cutting — the three of the arena's
+  four menu items that turned out to be engine work rather than script work.
 - **Arena shooter** → `designs/arena-shooter.md`. The other live demo, and the worked example of the
-  M31 UI system.
+  M31 UI system — a five-screen shell since M36, with a rigged player carrying three weapons.
 - **Distribution** → `distribution-notes.md`, design in `designs/distribution-design.md`. Prebuilt
   binaries on a `v*` tag, `install.sh`, and `engine init` scaffolding a project.
 
@@ -522,6 +526,11 @@ Deferred follow-ups, by area:
   field whose absence is the 8×8 font), pointer lock and scroll, text input and focus, per-side
   padding, and world-space UI (a health bar over an enemy's head is a *projection* question and
   wants `world.project(x, y, z)`).
+- **Game shell** (after M36): more than one save slot and a save browser (which wants a clock a
+  script does not have), autosave, restoring a mid-level arena (which wants entity spawning, the
+  arena shooter's oldest constraint), and a per-joint aim override so a twin-stick character can
+  turn its torso without its legs — the one item here that would **reverse** a settled decision
+  rather than extend one.
 - **Deferred with an A/B attached**: fixing `builtin:plane`/`builtin:cube`'s UV layout, and changing
   `builtin:triangle`.
 

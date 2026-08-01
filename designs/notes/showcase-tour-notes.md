@@ -59,7 +59,11 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
   hug-sized cards that are three different sizes for three screens, `visible` in place of the
   empty-string/zero-size pair, a play HUD authored *hidden* so `--steps 0` is the title screen, and
   a demo director that asks `engine ui-layout` where the button is instead of hard-coding the
-  fraction. It also carries the one trap in `HudImage`: with no `slice` an image is all middle band
+  fraction. **M36 turned that menu into a five-screen shell** — Settings, Save, Load and Quit on a
+  column of seven labelled slots — put a seventeen-joint rig where a cylinder and a sphere used to
+  stand in for the player, and gave it three weapons hung off `HandR` through `world.joint_position`
+  (M30's sanctioned prop pattern, and the first use of it in the repo). See
+  `designs/notes/m36-game-shell.md`. It also carries the one trap in `HudImage`: with no `slice` an image is all middle band
   and the middle band **tiles**, so an icon must be drawn at its source size — 32 px of a 16 px
   reticle is four reticles. Its demo timeline is authored by a closed-loop director,
   `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a drone at step 431, and
