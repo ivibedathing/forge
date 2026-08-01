@@ -40,7 +40,7 @@ taught.
 `m37-entity-spawning.md`
 
 **Geometry recipes** — `m18-water.md`, `m27-water-refraction.md`, `m19-trees.md`, `m20-clouds.md`,
-`m22-terrain.md`, `m23-roads.md`, `m29-meadows.md`
+`m22-terrain.md`, `m23-roads.md`, `m40-road-authoring.md`, `m29-meadows.md`
 
 **Environment and time** — `m16-environment.md`, `m38-shadow-cascades.md`, `m17-point-lights.md`,
 `m21-daylight.md`, `m15-frame-cost.md`

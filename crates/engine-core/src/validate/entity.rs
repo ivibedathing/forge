@@ -39,8 +39,18 @@ pub(super) struct SceneFacts<'a> {
     pub(super) distinct_layers: Vec<(String, String)>,
     pub(super) wheels: Vec<(String, crate::components::Wheel, String)>,
     pub(super) meadows: Vec<(String, crate::components::Meadow, String)>,
+    /// Roads that name a `Terrain` to follow (M40), and junctions that name
+    /// roads — both are cross-entity references, so both wait for the pass
+    /// where every name is known. The meadow pass's shape.
+    pub(super) roads: Vec<(String, crate::components::Road, String)>,
+    pub(super) junctions: Vec<(String, crate::components::Junction, String)>,
+    pub(super) road_names: std::collections::BTreeSet<String>,
+    pub(super) closed_road_names: std::collections::BTreeSet<String>,
     pub(super) terrain_names: std::collections::BTreeSet<String>,
     pub(super) foot_plants: Vec<(String, crate::components::FootPlant, String)>,
+    pub(super) buoyancies: Vec<(String, crate::components::Buoyancy, String)>,
+    pub(super) water_names: std::collections::BTreeSet<String>,
+    pub(super) collider_names: std::collections::BTreeSet<String>,
     pub(super) hud_elements: Vec<HudRef>,
     pub(super) hud_panel_names: std::collections::BTreeSet<String>,
 }
@@ -157,11 +167,25 @@ pub(super) fn walk<'a>(
     // is another entity, so the check waits until every name is known — the
     // wheel pass's shape.
     let mut meadows: Vec<(String, crate::components::Meadow, String)> = Vec::new();
+    // Road and junction pass inputs (M40), for the meadow pass's reason: a road
+    // names the terrain it rides on and a junction names the roads that reach
+    // it, and neither name can be checked until every entity has been seen.
+    let mut roads: Vec<(String, crate::components::Road, String)> = Vec::new();
+    let mut junctions: Vec<(String, crate::components::Junction, String)> = Vec::new();
+    let mut road_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut closed_road_names: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     let mut terrain_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // Foot planting pass inputs (M32): a `FootPlant` names the Terrain its
     // feet stand on, so it waits for every name too — the meadow pass's shape,
     // for the meadow pass's reason.
     let mut foot_plants: Vec<(String, crate::components::FootPlant, String)> = Vec::new();
+    // Buoyancy pass inputs (M41): a `Buoyancy` names the Water it floats on
+    // and needs a body and a shape on its own entity, so it waits for every
+    // name too — the meadow pass's shape a third time.
+    let mut buoyancies: Vec<(String, crate::components::Buoyancy, String)> = Vec::new();
+    let mut water_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut collider_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // One HUD element awaiting the cross-entity pass (M31): its owner, the
     // component that owns the `parent` reference, the reference itself, and
     // the component-s JSON path. Collected across all four kinds because
@@ -320,11 +344,15 @@ pub(super) fn walk<'a>(
         // A `SkinnedCollider` (M33): its proxies ride the entity's rig, so the
         // checks need the entity's `Mesh` and its scale.
         let mut skinned_collider: Option<(crate::components::SkinnedCollider, String)> = None;
+        // A `Ragdoll` (M39): its bodies *are* the proxies, so every check it
+        // has needs the `SkinnedCollider` beside it.
+        let mut ragdoll: Option<(crate::components::Ragdoll, String)> = None;
         let mut tree_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
         let mut has_transform = false;
         let mut scale = glam::Vec3::ONE;
+        let mut rotation = glam::Vec3::ZERO;
         let mut rigid_body: Option<(crate::components::BodyKind, String)> = None;
         let mut collider: Option<(crate::components::Collider, String)> = None;
         let mut wheel_path: Option<String> = None;
@@ -332,6 +360,7 @@ pub(super) fn walk<'a>(
         let mut water: Option<(crate::components::Water, String)> = None;
         let mut terrain: Option<(crate::components::Terrain, String)> = None;
         let mut road: Option<(crate::components::Road, String)> = None;
+        let mut junction: Option<(crate::components::Junction, String)> = None;
         let mut meadow: Option<(crate::components::Meadow, String)> = None;
         // Whether this entity carries anything a `HudInteract` could use as
         // its hit box (M31).
@@ -413,6 +442,7 @@ pub(super) fn walk<'a>(
                 Some(ComponentData::Transform(t)) => {
                     has_transform = true;
                     scale = t.scale;
+                    rotation = t.rotation;
                 }
                 Some(ComponentData::RigidBody(rb)) => {
                     body_kinds.insert(name.to_string(), rb.body);
@@ -434,6 +464,7 @@ pub(super) fn walk<'a>(
                     mesh_asset = Some(mesh.asset.clone());
                 }
                 Some(ComponentData::Collider(c)) => {
+                    collider_names.insert(name.to_string());
                     collider = Some((c, component_path));
                 }
                 Some(ComponentData::Wheel(w)) => {
@@ -446,6 +477,7 @@ pub(super) fn walk<'a>(
                     }
                 }
                 Some(ComponentData::Water(w)) => {
+                    water_names.insert(name.to_string());
                     water = Some((w, component_path));
                 }
                 Some(ComponentData::Cloud(_)) => {
@@ -456,7 +488,16 @@ pub(super) fn walk<'a>(
                     terrain = Some((t, component_path));
                 }
                 Some(ComponentData::Road(r)) => {
+                    road_names.insert(name.to_string());
+                    if r.closed {
+                        closed_road_names.insert(name.to_string());
+                    }
+                    roads.push((name.to_string(), r.clone(), component_path.clone()));
                     road = Some((r, component_path));
+                }
+                Some(ComponentData::Junction(j)) => {
+                    junctions.push((name.to_string(), j.clone(), component_path.clone()));
+                    junction = Some((j, component_path));
                 }
                 Some(ComponentData::Meadow(m)) => {
                     meadows.push((name.to_string(), m.clone(), component_path.clone()));
@@ -466,8 +507,14 @@ pub(super) fn walk<'a>(
                     foot_plant = Some(component_path.clone());
                     foot_plants.push((name.to_string(), p, component_path));
                 }
+                Some(ComponentData::Buoyancy(b)) => {
+                    buoyancies.push((name.to_string(), b, component_path));
+                }
                 Some(ComponentData::SkinnedCollider(s)) => {
                     skinned_collider = Some((s, component_path));
+                }
+                Some(ComponentData::Ragdoll(r)) => {
+                    ragdoll = Some((r, component_path));
                 }
                 Some(ComponentData::HudPanel(p)) => {
                     has_hud_element = true;
@@ -695,6 +742,7 @@ pub(super) fn walk<'a>(
                 && !has_mesh
                 && terrain.is_none()
                 && road.is_none()
+                && junction.is_none()
             {
                 errors.push(
                     cx.err(
@@ -827,6 +875,61 @@ pub(super) fn walk<'a>(
             for layer in proxies.collides_with.iter().flatten() {
                 layer_refs.push((layer.clone(), name.to_string(), path.clone()));
                 note_distinct(layer, path);
+            }
+        }
+
+        // ── Ragdolls (M39) ────────────────────────────────────────────
+        //
+        // The bodies are the proxies (design §4), so a `Ragdoll` without a
+        // `SkinnedCollider` has nothing to fall. Whether the parts form one
+        // tree needs the rig's ancestry and is engine-assets' half, beside the
+        // joint-name checks — the M30/M32 division, for the third time.
+        if let Some((ragdoll, path)) = &ragdoll {
+            match skinned_collider.as_ref() {
+                None => {
+                    errors.push(
+                        cx.err(
+                            codes::RAGDOLL_WITHOUT_PROXIES,
+                            format!(
+                                "entity {name:?} has a Ragdoll but no SkinnedCollider; a \
+                                 ragdoll's bodies *are* its proxies, so the hitbox that \
+                                 was shot is the body that falls, and a character with no \
+                                 hitboxes has nothing to fall"
+                            ),
+                            path,
+                        )
+                        .entity(name)
+                        .component("Ragdoll"),
+                    );
+                }
+                Some((proxies, _)) => {
+                    // An override for a joint no part rides constrains nothing,
+                    // and reads in the file as a knee that bends when it does
+                    // not — the failure mode a typo deserves a name for.
+                    let ridden: Vec<&str> =
+                        proxies.parts.iter().map(|p| p.joint.as_str()).collect();
+                    for (i, joint) in ragdoll.joints.iter().enumerate() {
+                        if ridden.contains(&joint.joint.as_str()) {
+                            continue;
+                        }
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_UNKNOWN_JOINT,
+                                format!(
+                                    "the Ragdoll override for {:?} names a joint no part \
+                                     of this SkinnedCollider rides, so it would constrain \
+                                     nothing",
+                                    joint.joint
+                                ),
+                                &format!("{path}/joints/{i}/joint"),
+                            )
+                            .entity(name)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/joint"))
+                            .suggest_from(&joint.joint, ridden.iter().copied()),
+                        );
+                    }
+                }
             }
         }
 
@@ -964,6 +1067,64 @@ pub(super) fn walk<'a>(
                     )
                     .entity(name)
                     .component("Road"),
+                );
+            }
+        }
+
+        // A road that follows a terrain samples the ground in world space and
+        // brings the answer back into its own local space (M40). That mapping
+        // is exact for the translation, scale and yaw a road is actually placed
+        // with, and *not* for a roll or a pitch — local `y` stops being world
+        // "up", and the road comes out skewed against the ground it is meant to
+        // be lying on. Rare, silent, and impossible to diagnose from the render.
+        if let Some((road, path)) = &road {
+            if road.follow_terrain.is_some() && (rotation.x != 0.0 || rotation.z != 0.0) {
+                errors.push(
+                    cx.err(
+                        codes::ROAD_FOLLOW_ROTATED,
+                        format!(
+                            "the Road on {name:?} follows a Terrain, but its Transform \
+                             rotates {:.1}° about X and {:.1}° about Z; ground heights \
+                             are sampled in world space and brought back into the \
+                             road's local space, which only lines up when the road is \
+                             level — place it with a yaw and a translation, and put the \
+                             tilt in the terrain",
+                            rotation.x, rotation.z
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Road")
+                    .field("follow_terrain")
+                    .warning(),
+                );
+            }
+        }
+
+        // ── Junction surface checks (M40) ─────────────────────────────
+        //
+        // The road rule, one primitive over: a `Junction` generates its own
+        // patch and carries its own colours, so a `Mesh` or `Material` beside
+        // it is a second, silently ignored answer to what this surface is.
+        if let Some((_, path)) = &junction {
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::JUNCTION_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a Junction component and also {extras}; \
+                             a junction generates its own patch from the roads that reach \
+                             it and carries its own colours — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("Junction"),
                 );
             }
         }
@@ -1183,6 +1344,7 @@ pub(super) fn walk<'a>(
             && cloud_path.is_none()
             && terrain.is_none()
             && road.is_none()
+            && junction.is_none()
             && meadow.is_none()
         {
             for material_path in material_paths {
@@ -1204,6 +1366,10 @@ pub(super) fn walk<'a>(
     }
 
     SceneFacts {
+        roads,
+        junctions,
+        road_names,
+        closed_road_names,
         seen_names,
         active_cameras,
         players,
@@ -1218,6 +1384,9 @@ pub(super) fn walk<'a>(
         meadows,
         terrain_names,
         foot_plants,
+        buoyancies,
+        water_names,
+        collider_names,
         hud_elements,
         hud_panel_names,
     }

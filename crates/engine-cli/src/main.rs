@@ -263,6 +263,22 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Print where a Junction's arms actually met it (M40).
+    ///
+    /// A junction is bounded by the *mouths* of the roads that reach it, and
+    /// the author's job is to end each road near the crossing — so the question
+    /// that matters is where those mouths turned out to be. A screenshot cannot
+    /// tell a road that stopped 8 m short from one that arrived at the wrong
+    /// angle, and both produce a patch that looks wrong in the same way.
+    ///
+    /// `road-centerline`'s reason, one primitive over.
+    JunctionPlan {
+        scene: PathBuf,
+        /// Which junction, when the scene has more than one.
+        #[arg(long)]
+        entity: Option<String>,
+    },
+
     /// Print every collider the physics world holds: shape, size, and where
     /// it actually is (M33).
     ///
@@ -287,6 +303,37 @@ enum Command {
         /// Replay an input timeline while stepping.
         #[arg(long)]
         input: Option<PathBuf>,
+    },
+
+    /// Solve a `SkinnedCollider` from a skinned mesh's vertex weights (M39).
+    ///
+    /// M33 refused generating a proxy set at runtime — "a derived artifact with
+    /// no text form, which is invariant 1 read backwards" — and this is the
+    /// answer to that rather than an overruling of it. The generator runs when
+    /// an author asks it to, its output is JSON they read and edit, and
+    /// `--write` splices it into the scene file so the file still says
+    /// everything. Nothing at load time or step time consults a vertex weight.
+    ///
+    /// Deliberately not folded into `engine import`: a proxy set is a *choice*
+    /// about a character, and every imported rig arriving with hitboxes nobody
+    /// asked for is a scene file that got bigger for no reason.
+    FitColliders {
+        scene: PathBuf,
+        /// Narrow to one entity. Absent, every skinned entity in the scene.
+        #[arg(long)]
+        entity: Option<String>,
+        /// The shape to fit. `cuboid` is the bucket's bounding box exactly,
+        /// with no axis to guess, which is why it is the default. `capsule`
+        /// suits a rig whose bones are long — on a stubby one the dominant
+        /// axis is a near-tie and the result is a capsule that is nearly a
+        /// sphere, correct and useless.
+        #[arg(long, default_value = "cuboid")]
+        shape: String,
+        /// Splice the result into the scene file, replacing any
+        /// `SkinnedCollider` already on the entity. Without it, the component
+        /// is printed and the file is untouched.
+        #[arg(long)]
+        write: bool,
     },
 
     /// Print where every HUD element ends up on screen (M31).
@@ -342,6 +389,31 @@ enum Command {
         /// one; with several, naming one is required.
         #[arg(long)]
         entity: Option<String>,
+    },
+
+    /// Ask a water surface how high it is at a world XZ position, and which way
+    /// it faces.
+    ///
+    /// The same evaluator `world.water_height` and buoyancy answer with, so a
+    /// prop placed from the shell floats at the height the physics agrees with.
+    /// Unlike `terrain-height` this takes a clock — water moves — and it can
+    /// report *no water here*, because a patch has edges.
+    WaterHeight {
+        scene: PathBuf,
+        /// World position as x,z — the height is what is being asked for.
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+        /// Which surface, when the scene has more than one. Defaults to the
+        /// only one; with several, naming one is required.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Seconds of scene time. Overrides `--steps` when given, exactly as on
+        /// `screenshot`.
+        #[arg(long, default_value_t = 0.0)]
+        time: f32,
+        /// Fixed steps to convert into scene time, when `--time` is absent.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
     },
 
     /// Print entities with every component field resolved — defaults filled
@@ -551,12 +623,19 @@ fn main() {
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
+        Command::JunctionPlan { scene, entity } => junction_plan(scene, entity),
         Command::ListColliders {
             scene,
             entity,
             steps,
             input,
         } => list_colliders(scene, entity, steps, input),
+        Command::FitColliders {
+            scene,
+            entity,
+            shape,
+            write,
+        } => fit_colliders(scene, entity, shape, write),
         Command::UiLayout {
             scene,
             width,
@@ -566,6 +645,13 @@ fn main() {
             input,
         } => ui_layout(scene, width, height, entity, steps, input),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
+        Command::WaterHeight {
+            scene,
+            at,
+            entity,
+            time,
+            steps,
+        } => water_height(scene, at, entity, time, steps),
         Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Import {
             model,
@@ -938,6 +1024,215 @@ fn list_colliders(
     Ok(())
 }
 
+/// `engine fit-colliders` — solve a proxy set from a skin's vertex weights
+/// (M39 §8).
+///
+/// M33 refused runtime generation, correctly: a hitbox set the engine invented
+/// each load would be a derived artifact with no text form, which is invariant
+/// 1 read backwards. This is the same computation with the invariant intact —
+/// it runs when an author asks, it prints JSON they can edit, and `--write`
+/// splices it through `formatter`, the editor's own commit path, so every other
+/// byte of the scene file is untouched.
+///
+/// An existing `SkinnedCollider` keeps its `layers`, `collides_with`, `friction`
+/// and `restitution`: those are decisions about the character, and only the
+/// shapes are what this solves.
+fn fit_colliders(
+    scene_path: PathBuf,
+    entity: Option<String>,
+    shape: String,
+    write: bool,
+) -> Result<()> {
+    let display = scene_path.display().to_string();
+    let shape_kind: engine_core::components::ColliderShapeKind =
+        serde_json::from_value(serde_json::Value::String(shape.clone())).map_err(|_| {
+            EngineError::new(
+                codes::UNKNOWN_SHAPE,
+                format!("{shape:?} is not a shape a proxy may be"),
+            )
+            .file(&display)
+            .suggest_from(&shape, ["capsule", "cuboid", "sphere"])
+        })?;
+    if matches!(
+        shape_kind,
+        engine_core::components::ColliderShapeKind::Trimesh
+            | engine_core::components::ColliderShapeKind::ConvexHull
+    ) {
+        return Err(EngineError::new(
+            codes::COLLIDER_PART_SHAPE_UNSUPPORTED,
+            format!(
+                "{shape:?} describes one specific mesh, and a proxy exists precisely \
+                 because the skinned mesh is on the GPU; fit \"capsule\", \"cuboid\" \
+                 or \"sphere\""
+            ),
+        )
+        .file(&display));
+    }
+
+    // The *file*, not the instantiated world: this reads and writes component
+    // definitions, and `Scene` has already spent them into hecs.
+    let source = std::fs::read_to_string(&scene_path).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_UNREADABLE,
+            format!("cannot read {display}: {e}"),
+        )
+        .file(&display)
+    })?;
+    load_scene(&scene_path)?;
+    let scene: engine_core::SceneFile = serde_json::from_str(&source).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_PARSE_DESYNC,
+            format!("{display} passed validation but failed to parse: {e}"),
+        )
+        .file(&display)
+    })?;
+    let base_dir = scene_path.parent().unwrap_or(Path::new("."));
+
+    // Entity order is the file's, which is what makes a regenerated set diff
+    // cleanly against the committed one.
+    let mut fitted: Vec<(String, Vec<engine_core::components::ColliderPart>)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for entry in &scene.entities {
+        if entity.as_ref().is_some_and(|wanted| &entry.name != wanted) {
+            continue;
+        }
+        let asset = entry.components.iter().find_map(|c| match c {
+            engine_core::components::ComponentData::Mesh(mesh) => Some(mesh.asset.clone()),
+            _ => None,
+        });
+        let Some(asset) = asset else { continue };
+        let Ok(engine_core::mesh::MeshAsset::File(path)) =
+            engine_core::mesh::MeshAsset::resolve(&asset, base_dir)
+        else {
+            continue;
+        };
+        let rig = engine_assets::load_rig(&path)?;
+        let Some(skin) = rig.skin.as_ref() else {
+            skipped.push(entry.name.clone());
+            continue;
+        };
+        let mesh = engine_assets::load_gltf(&path)?;
+        if mesh.joint_weights.is_empty() {
+            skipped.push(entry.name.clone());
+            continue;
+        }
+        fitted.push((
+            entry.name.clone(),
+            engine_core::ragdoll::fit_parts(skin, &mesh, shape_kind),
+        ));
+    }
+
+    if fitted.is_empty() {
+        let wanted = entity.as_deref().unwrap_or("any entity");
+        return Err(EngineError::new(
+            codes::MESH_HAS_NO_SKIN,
+            format!(
+                "no skinned mesh to fit in {display} for {wanted}; \
+                 `engine list-joints` says which entities carry a rig"
+            ),
+        )
+        .file(&display));
+    }
+
+    if write {
+        for (name, parts) in &fitted {
+            // Re-read per entity: each splice is committed before the next
+            // one is rebased onto it, the editor's own commit shape.
+            let mut source = std::fs::read_to_string(&scene_path).map_err(|e| {
+                EngineError::new(
+                    codes::SCENE_UNREADABLE,
+                    format!("cannot read {display} to edit it: {e}"),
+                )
+                .file(&display)
+            })?;
+            // Layers, friction and restitution are statements about the
+            // character rather than about its shapes, so a refit keeps them.
+            let kept: Vec<(String, serde_json::Value)> = scene
+                .entities
+                .iter()
+                .find(|e| &e.name == name)
+                .and_then(|e| {
+                    e.components.iter().find_map(|c| match c {
+                        engine_core::components::ComponentData::SkinnedCollider(s) => Some(s),
+                        _ => None,
+                    })
+                })
+                .map(|existing| {
+                    let mut kept = Vec::new();
+                    if let Some(layers) = &existing.layers {
+                        kept.push(("layers".into(), serde_json::json!(layers)));
+                    }
+                    if let Some(with) = &existing.collides_with {
+                        kept.push(("collides_with".into(), serde_json::json!(with)));
+                    }
+                    kept.push(("friction".into(), serde_json::json!(existing.friction)));
+                    kept.push((
+                        "restitution".into(),
+                        serde_json::json!(existing.restitution),
+                    ));
+                    kept
+                })
+                .unwrap_or_default();
+
+            // Remove-then-add rather than a field edit: `parts` is an array of
+            // objects, and `SetComponentField` is for scalars. A removal that
+            // finds nothing is not an error here — most entities have none yet.
+            if !kept.is_empty() {
+                if let Ok(edited) = engine_core::formatter::apply_remove_component(
+                    &source,
+                    &engine_core::formatter::RemoveComponent {
+                        entity: name.clone(),
+                        component: "SkinnedCollider".into(),
+                    },
+                ) {
+                    source = edited;
+                }
+            }
+            let encoded = serde_json::to_value(parts).map_err(|e| {
+                EngineError::new(
+                    codes::SCENE_PARSE_DESYNC,
+                    format!("a fitted part did not encode: {e}"),
+                )
+            })?;
+            let mut fields = vec![("parts".to_string(), encoded)];
+            fields.extend(kept);
+            let edited = engine_core::formatter::apply_add_component(
+                &source,
+                &engine_core::formatter::AddComponent {
+                    entity: name.clone(),
+                    component: "SkinnedCollider".into(),
+                    fields,
+                },
+            )?;
+            engine_core::formatter::write_atomic(&scene_path, &edited)?;
+        }
+    }
+
+    let entities: Vec<serde_json::Value> = fitted
+        .iter()
+        .map(|(name, parts)| {
+            serde_json::json!({
+                "entity": name,
+                "component": { "type": "SkinnedCollider", "parts": parts },
+            })
+        })
+        .collect();
+    println!(
+        "{}",
+        serde_json::json!({
+            "scene": display,
+            "shape": shape,
+            "written": write,
+            // A rig whose vertices carry no weights is reported rather than
+            // silently absent: "it fitted nothing" and "there was nothing to
+            // fit" are different answers and an agent needs to tell them apart.
+            "skipped": skipped,
+            "entities": entities,
+        })
+    );
+    Ok(())
+}
+
 /// `engine road-centerline` — publish a road's sampled centerline (M23).
 ///
 /// The road's geometry is generated from its polygon of corners, and anything
@@ -949,7 +1244,14 @@ fn list_colliders(
 /// The transform is applied, so the positions are world space.
 fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
     let scene = load_scene(&scene_path)?;
-    let roads = scene.road_items();
+    // Junction patches ride in the same draw list (M40) and are not roads:
+    // a patch has no centerline to publish, and counting them here would make
+    // "the scene has 3 roads" wrong.
+    let roads: Vec<_> = scene
+        .road_items()
+        .into_iter()
+        .filter(|item| item.junction.is_none())
+        .collect();
 
     let road = match (&entity, roads.len()) {
         (Some(name), _) => roads
@@ -999,6 +1301,10 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
                 "position": [world.x, world.y, world.z],
                 "forward": [point.direction.x, point.direction.y],
                 "v": point.v,
+                // M40: the cross-section, so a car placed on a banked corner
+                // does not have to re-derive the roll from the polygon.
+                "width": point.width,
+                "bank": point.bank.to_degrees(),
             })
         })
         .collect();
@@ -1012,6 +1318,85 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
             "shoulder": road.road.shoulder,
             "closed": road.road.closed,
             "points": points,
+        })
+    );
+    Ok(())
+}
+
+/// `engine junction-plan <scene> [--entity N]` — where a junction's arms met it
+/// (M40).
+///
+/// The transform is applied, so the positions are world space, matching
+/// `road-centerline`. `reach` is how far each mouth sits from the patch's
+/// centre: a set of similar reaches is a tidy junction, and one much larger
+/// than the rest is the road that stopped short.
+fn junction_plan(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
+    let scene = load_scene(&scene_path)?;
+    let junctions = scene.junction_items();
+
+    let junction = match (&entity, junctions.len()) {
+        (Some(name), _) => junctions
+            .iter()
+            .find(|item| item.entity == *name)
+            .ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {name:?} with a Junction component"),
+                )
+                .entity(name)
+                .file(scene_path.display().to_string())
+                .suggest_from(name, junctions.iter().map(|item| item.entity.as_str()))
+            })?,
+        (None, 1) => &junctions[0],
+        (None, 0) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                "scene has no entity with a Junction component",
+            )
+            .file(scene_path.display().to_string()))
+        }
+        (None, _) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                format!(
+                    "scene has {} junctions ({}); name one with --entity",
+                    junctions.len(),
+                    junctions
+                        .iter()
+                        .map(|item| item.entity.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .file(scene_path.display().to_string()))
+        }
+    };
+
+    let arms: Vec<serde_json::Value> = junction
+        .surface
+        .mouths
+        .iter()
+        .map(|mouth| {
+            let world = junction.model.transform_point3(mouth.center);
+            serde_json::json!({
+                "road": mouth.road,
+                "position": [world.x, world.y, world.z],
+                "into": [mouth.into.x, mouth.into.y],
+                "width": mouth.half_asphalt * 2.0,
+                "half_total": mouth.half_total,
+                "reach": mouth.reach,
+            })
+        })
+        .collect();
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "entity": junction.entity,
+            "width": junction.surface.half_asphalt * 2.0,
+            "shoulder": junction.surface.shoulder,
+            "triangles": junction.surface.mesh.triangle_count(),
+            "arms": arms,
         })
     );
     Ok(())
@@ -1188,59 +1573,13 @@ fn terrain_height(scene_path: PathBuf, at: String, entity: Option<String>) -> Re
     let (x, z) = parse_xz(&at)?;
     let scene = load_scene(&scene_path)?;
 
-    let patches: Vec<String> = {
-        let mut names: Vec<String> = scene
-            .names()
-            .filter(|name| {
-                scene.entity(name).is_some_and(|entity| {
-                    scene
-                        .world
-                        .get::<&engine_core::components::Terrain>(entity)
-                        .is_ok()
-                })
-            })
-            .map(str::to_string)
-            .collect();
-        names.sort();
-        names
-    };
-
-    // The `road-centerline` convention exactly: name one when there are
-    // several, default to the only one, and fail rather than guess.
-    let name = match (&entity, patches.len()) {
-        (Some(requested), _) => patches
-            .iter()
-            .find(|patch| *patch == requested)
-            .cloned()
-            .ok_or_else(|| {
-                EngineError::new(
-                    codes::ENTITY_NOT_FOUND,
-                    format!("no entity named {requested:?} with a Terrain component"),
-                )
-                .entity(requested)
-                .file(scene_path.display().to_string())
-                .suggest_from(requested, patches.iter().map(String::as_str))
-            })?,
-        (None, 1) => patches[0].clone(),
-        (None, 0) => {
-            return Err(EngineError::new(
-                codes::MISSING_COMPONENT,
-                "scene has no entity with a Terrain component",
-            )
-            .file(scene_path.display().to_string()))
-        }
-        (None, _) => {
-            return Err(EngineError::new(
-                codes::MISSING_COMPONENT,
-                format!(
-                    "scene has {} terrain patches ({}); name one with --entity",
-                    patches.len(),
-                    patches.join(", ")
-                ),
-            )
-            .file(scene_path.display().to_string()))
-        }
-    };
+    let name = sole_entity_with::<engine_core::components::Terrain>(
+        &scene,
+        &scene_path,
+        &entity,
+        "Terrain",
+        "terrain patches",
+    )?;
 
     let height = scene
         .terrain_height(&name, x, z)
@@ -1255,6 +1594,114 @@ fn terrain_height(scene_path: PathBuf, at: String, entity: Option<String>) -> Re
             "height": height,
         })
     );
+    Ok(())
+}
+
+/// Which entity a "where is the surface" query is about: the one the caller
+/// named, or the only candidate, and an error rather than a guess.
+///
+/// The `road-centerline` convention, factored out when `water-height` became
+/// the third command to want it. Naming the candidates in the ambiguous case is
+/// the part worth keeping — an agent that has to re-read the scene file to find
+/// out what it could have written has been sent back to the picture.
+fn sole_entity_with<C: engine_core::hecs::Component>(
+    scene: &engine_core::Scene,
+    scene_path: &Path,
+    requested: &Option<String>,
+    component: &str,
+    plural: &str,
+) -> Result<String> {
+    let mut candidates: Vec<String> = scene
+        .names()
+        .filter(|name| {
+            scene
+                .entity(name)
+                .is_some_and(|entity| scene.world.get::<&C>(entity).is_ok())
+        })
+        .map(str::to_string)
+        .collect();
+    candidates.sort();
+
+    match (requested, candidates.len()) {
+        (Some(requested), _) => candidates
+            .iter()
+            .find(|candidate| *candidate == requested)
+            .cloned()
+            .ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {requested:?} with a {component} component"),
+                )
+                .entity(requested)
+                .file(scene_path.display().to_string())
+                .suggest_from(requested, candidates.iter().map(String::as_str))
+            }),
+        (None, 1) => Ok(candidates.remove(0)),
+        (None, 0) => Err(EngineError::new(
+            codes::MISSING_COMPONENT,
+            format!("scene has no entity with a {component} component"),
+        )
+        .file(scene_path.display().to_string())),
+        (None, count) => Err(EngineError::new(
+            codes::MISSING_COMPONENT,
+            format!(
+                "scene has {count} {plural} ({}); name one with --entity",
+                candidates.join(", ")
+            ),
+        )
+        .file(scene_path.display().to_string())),
+    }
+}
+
+/// Ask a water surface where it is at a world XZ position (M41).
+///
+/// `terrain-height`'s twin, and different from it in exactly the two ways water
+/// is different from ground. It takes a **clock**, because the surface moves —
+/// resolved by `scene_time`, so the number printed is the number the render at
+/// that frame drew and the number a buoyant body felt. And it can answer *no
+/// water here*, because a patch is a bounded body: a column past the edge
+/// reports `"water": false` with no height rather than a confident 0.0.
+///
+/// The normal rides along because it costs nothing — it falls out of the same
+/// derivatives — and because a script sitting a boat *on* a wave needs it, so
+/// asking for it later would mean a second command.
+fn water_height(
+    scene_path: PathBuf,
+    at: String,
+    entity: Option<String>,
+    time: f32,
+    steps: u32,
+) -> Result<()> {
+    let (x, z) = parse_xz(&at)?;
+    let scene = load_scene(&scene_path)?;
+    let name = sole_entity_with::<engine_core::components::Water>(
+        &scene,
+        &scene_path,
+        &entity,
+        "Water",
+        "water surfaces",
+    )?;
+    let seconds = scene_time(time, steps, &scene);
+
+    let report = match scene.water_sample(&name, x, z, seconds) {
+        Some(sample) => serde_json::json!({
+            "entity": name,
+            "x": x,
+            "z": z,
+            "time": seconds,
+            "water": true,
+            "height": sample.height,
+            "normal": [sample.normal.x, sample.normal.y, sample.normal.z],
+        }),
+        None => serde_json::json!({
+            "entity": name,
+            "x": x,
+            "z": z,
+            "time": seconds,
+            "water": false,
+        }),
+    };
+    println!("{report}");
     Ok(())
 }
 

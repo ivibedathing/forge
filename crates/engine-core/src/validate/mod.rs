@@ -192,7 +192,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     passes::collision_layers(&cx, &facts, &mut errors);
     passes::wheel(&cx, &facts, &mut errors);
     passes::meadow(&cx, &facts, &mut errors);
+    passes::road_ground(&cx, &facts, &mut errors);
+    passes::junction(&cx, &facts, &mut errors);
     passes::foot_planting(&cx, &facts, &mut errors);
+    passes::buoyancy(&cx, &facts, &mut errors);
     passes::hud_parent(&cx, &facts, &mut errors);
     passes::animation(&cx, &facts, &mut errors);
 

@@ -1016,148 +1016,153 @@ impl SceneRenderer {
             // cascades pays four times M16's caster cost. At one cascade this
             // loop runs once, over the map M16 allocated.
             for cascade in 0..shadow_map.cascades.len() {
-            // Cascade `i`'s frame uniform is this frame's with `i`'s matrix in
-            // `light_view_proj` — which is how four caster shaders that know
-            // nothing about cascades each draw into the right one.
-            let frame_group = self
-                .cascade_resources
-                .as_ref()
-                .map_or(&self.frame_uniform.bind_group, |held| {
-                    &held.caster_groups[cascade]
-                });
-            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("shadow-pass"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &shadow_map.cascades[cascade],
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+                // Cascade `i`'s frame uniform is this frame's with `i`'s matrix in
+                // `light_view_proj` — which is how four caster shaders that know
+                // nothing about cascades each draw into the right one.
+                let frame_group = self
+                    .cascade_resources
+                    .as_ref()
+                    .map_or(&self.frame_uniform.bind_group, |held| {
+                        &held.caster_groups[cascade]
+                    });
+                let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("shadow-pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &shadow_map.cascades[cascade],
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
                     }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
 
-            if let Some(objects) = &self.objects {
-                shadow_pass.set_pipeline(&self.shadow_pipeline);
-                shadow_pass.set_bind_group(1, frame_group, &[]);
-                let cast = |pass: &mut wgpu::RenderPass<'_>, object: usize, mesh: &CachedMesh| {
-                    pass.set_bind_group(
-                        0,
-                        &objects.bind_group,
-                        &[(object as u64 * self.object_stride) as u32],
-                    );
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-                };
-                for &index in opaque {
-                    if cutout[index] || skin_slots[index].is_some() {
-                        continue;
-                    }
-                    cast(&mut shadow_pass, index, &self.meshes[&keys[index]]);
-                }
-                // Cut-out casters after the solid ones, in one run: the switch
-                // costs one pipeline change a frame, and a scene with no
-                // `alpha_cutoff` never enters this loop.
-                let mut switched = false;
-                for &index in opaque {
-                    if !cutout[index] || skin_slots[index].is_some() {
-                        continue;
-                    }
-                    let Some(key) = material_keys[index] else {
-                        continue;
-                    };
-                    if !switched {
-                        shadow_pass.set_pipeline(&self.shadow_cutout_pipeline);
-                        shadow_pass.set_bind_group(1, frame_group, &[]);
-                        switched = true;
-                    }
-                    let mesh = &self.meshes[&keys[index]];
-                    shadow_pass.set_bind_group(
-                        0,
-                        &objects.bind_group,
-                        &[(index as u64 * self.object_stride) as u32],
-                    );
-                    shadow_pass.set_bind_group(2, &self.materials[&key].bind_group, &[]);
-                    shadow_pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    shadow_pass.set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
-                    shadow_pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
-                    shadow_pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-                }
-                // Skinned casters (M27), in their own two runs. Without them a
-                // walking character casts its **rest pose** — a wrongness that
-                // reads as a renderer bug and is actually a missing pipeline.
-                if let (Some(skinned), Some(skin_objects)) = (&self.skinned, &self.skinned_objects)
-                {
-                    let mut solid = false;
-                    for &index in opaque {
-                        let Some(slot) = skin_slots[index] else {
-                            continue;
-                        };
-                        if cutout[index] {
-                            continue;
-                        }
-                        if !solid {
-                            shadow_pass.set_pipeline(&skinned.shadow);
-                            shadow_pass.set_bind_group(1, frame_group, &[]);
-                            solid = true;
-                        }
-                        self.draw_skinned(
-                            &mut shadow_pass,
-                            skin_objects,
-                            keys[index],
-                            index,
-                            slot,
-                            SkinnedInputs::CASTER,
+                if let Some(objects) = &self.objects {
+                    shadow_pass.set_pipeline(&self.shadow_pipeline);
+                    shadow_pass.set_bind_group(1, frame_group, &[]);
+                    let cast = |pass: &mut wgpu::RenderPass<'_>,
+                                object: usize,
+                                mesh: &CachedMesh| {
+                        pass.set_bind_group(
+                            0,
+                            &objects.bind_group,
+                            &[(object as u64 * self.object_stride) as u32],
                         );
-                    }
-                    let mut cut = false;
+                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    };
                     for &index in opaque {
-                        let Some(slot) = skin_slots[index] else {
+                        if cutout[index] || skin_slots[index].is_some() {
                             continue;
-                        };
-                        if !cutout[index] {
+                        }
+                        cast(&mut shadow_pass, index, &self.meshes[&keys[index]]);
+                    }
+                    // Cut-out casters after the solid ones, in one run: the switch
+                    // costs one pipeline change a frame, and a scene with no
+                    // `alpha_cutoff` never enters this loop.
+                    let mut switched = false;
+                    for &index in opaque {
+                        if !cutout[index] || skin_slots[index].is_some() {
                             continue;
                         }
                         let Some(key) = material_keys[index] else {
                             continue;
                         };
-                        if !cut {
-                            shadow_pass.set_pipeline(&skinned.shadow_cutout);
+                        if !switched {
+                            shadow_pass.set_pipeline(&self.shadow_cutout_pipeline);
                             shadow_pass.set_bind_group(1, frame_group, &[]);
-                            cut = true;
+                            switched = true;
                         }
-                        self.draw_skinned(
+                        let mesh = &self.meshes[&keys[index]];
+                        shadow_pass.set_bind_group(
+                            0,
+                            &objects.bind_group,
+                            &[(index as u64 * self.object_stride) as u32],
+                        );
+                        shadow_pass.set_bind_group(2, &self.materials[&key].bind_group, &[]);
+                        shadow_pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        shadow_pass
+                            .set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
+                        shadow_pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
+                        shadow_pass
+                            .set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    }
+                    // Skinned casters (M27), in their own two runs. Without them a
+                    // walking character casts its **rest pose** — a wrongness that
+                    // reads as a renderer bug and is actually a missing pipeline.
+                    if let (Some(skinned), Some(skin_objects)) =
+                        (&self.skinned, &self.skinned_objects)
+                    {
+                        let mut solid = false;
+                        for &index in opaque {
+                            let Some(slot) = skin_slots[index] else {
+                                continue;
+                            };
+                            if cutout[index] {
+                                continue;
+                            }
+                            if !solid {
+                                shadow_pass.set_pipeline(&skinned.shadow);
+                                shadow_pass.set_bind_group(1, frame_group, &[]);
+                                solid = true;
+                            }
+                            self.draw_skinned(
+                                &mut shadow_pass,
+                                skin_objects,
+                                keys[index],
+                                index,
+                                slot,
+                                SkinnedInputs::CASTER,
+                            );
+                        }
+                        let mut cut = false;
+                        for &index in opaque {
+                            let Some(slot) = skin_slots[index] else {
+                                continue;
+                            };
+                            if !cutout[index] {
+                                continue;
+                            }
+                            let Some(key) = material_keys[index] else {
+                                continue;
+                            };
+                            if !cut {
+                                shadow_pass.set_pipeline(&skinned.shadow_cutout);
+                                shadow_pass.set_bind_group(1, frame_group, &[]);
+                                cut = true;
+                            }
+                            self.draw_skinned(
+                                &mut shadow_pass,
+                                skin_objects,
+                                keys[index],
+                                index,
+                                slot,
+                                SkinnedInputs::cutout_caster(key),
+                            );
+                        }
+                        switched |= solid || cut;
+                    }
+                    if switched {
+                        shadow_pass.set_pipeline(&self.shadow_pipeline);
+                    }
+                    // Roads cast too — an embankment's shadow across the valley
+                    // below it is most of what makes an elevated road read as
+                    // elevated. The pipeline is unchanged: it reads only the model
+                    // matrix, which is why roads share the object uniform array.
+                    for (index, road_key) in road_keys.iter().enumerate().take(roads.len()) {
+                        cast(
                             &mut shadow_pass,
-                            skin_objects,
-                            keys[index],
-                            index,
-                            slot,
-                            SkinnedInputs::cutout_caster(key),
+                            items.len() + index,
+                            &self.meshes[road_key],
                         );
                     }
-                    switched |= solid || cut;
                 }
-                if switched {
-                    shadow_pass.set_pipeline(&self.shadow_pipeline);
-                }
-                // Roads cast too — an embankment's shadow across the valley
-                // below it is most of what makes an elevated road read as
-                // elevated. The pipeline is unchanged: it reads only the model
-                // matrix, which is why roads share the object uniform array.
-                for (index, road_key) in road_keys.iter().enumerate().take(roads.len()) {
-                    cast(
-                        &mut shadow_pass,
-                        items.len() + index,
-                        &self.meshes[road_key],
-                    );
-                }
-            }
             }
         }
     }

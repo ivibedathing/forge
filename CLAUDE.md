@@ -42,17 +42,20 @@ actually says.
 | `AmbientLight` | Uniform fill light. At most one per scene; with `sky` on it becomes hemispheric. | `m04-lighting.md` |
 | `PointLight` | A local lamp with a hard `range` horizon; ≤8 per scene, no shadows. | `m17-point-lights.md` |
 | `RigidBody` | Makes an entity dynamic, kinematic or fixed; scripts read and write its velocities. | `m08-physics.md` |
+| `Buoyancy` | Floats a dynamic body on a named `Water`, sampling its collider in columns so a hull rights itself. | `m41-buoyancy.md` |
 | `Collider` | The shape physics sees — cuboid/sphere/capsule/trimesh/convex_hull — plus friction, density (**kg/m³**), and collision layers. | `m08-physics.md` |
 | `Script` | Runs `fn step(world, step)` once per fixed step against the curated `world` API. | `m10-scripting.md` |
 | `AnimationPlayer` | Plays a property clip (`*.anim.json`) or a glTF skeletal clip (`mesh.glb#Walk`); `stride`/`phase` drive a gait by ground covered. | `m09-animation.md`, `m30-skeletal-animation.md`, `m32-locomotion.md` |
 | `FootPlant` | Plants a skinned character's feet on the `Terrain` under it, dropping the hips to reach. | `m32-locomotion.md` |
-| `SkinnedCollider` | Hangs simple collision proxies off named joints, re-posed from the rig every step. | `m33-skinned-colliders.md` |
+| `SkinnedCollider` | Hangs simple collision proxies off named joints, re-posed from the rig every step; a part may `fit` its bone. | `m33-skinned-colliders.md`, `m39-ragdolls.md` |
+| `Ragdoll` | Hands a skinned character's skeleton to physics — one-way, per entity — and carries the resulting `pose`. | `m39-ragdolls.md` |
 | `ParticleEmitter` | A seeded deterministic cone emitter around local **−Z**; M17's fields turn a smoke cone into flame. | `m13-particles-and-m17-fire.md` |
 | `Breakable` | Lists pre-authored fragments and the impulse that shatters the entity into them. | `m14-breaking.md` |
 | `Wheel` | One raycast-suspension wheel on its own *visual* entity, naming the chassis it drives. | `m11_5-vehicles-and-wheels.md` |
-| `Water` | A body of water that **owns its surface** — Gerstner waves, depth colouring, foam, refraction. | `m18-water.md`, `m27-water-refraction.md` |
+| `Water` | A body of water that **owns its surface** — Gerstner waves, depth colouring, foam, refraction. Since M41 it also carries the fluid's `density`, the one field nothing renders. | `m18-water.md`, `m27-water-refraction.md`, `m41-buoyancy.md` |
 | `Terrain` | A height-field patch that **owns its grid**, painted by height/slope layers; the ground everything stands on. | `m22-terrain.md` |
-| `Road` | A drivable ribbon from a polygon centerline with corner radii; markings are drawn per pixel. | `m23-roads.md` |
+| `Road` | A drivable ribbon from a polygon centerline with corner radii; markings are drawn per pixel. Since M40 it can widen per point, bank, and ride a `Terrain`. | `m23-roads.md`, `m40-road-authoring.md` |
+| `Junction` | The patch of asphalt where roads meet, bounded by the mouths of the roads that name it. **Owns its geometry**, and is drawn by the road shader. | `m40-road-authoring.md` |
 | `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. | `m19-trees.md` |
 | `Cloud` | A cluster of interpenetrating lobes that drifts; **owns its mesh**. | `m20-clouds.md` |
 | `Meadow` | Ground cover on a seed→grass→weeds→straw→collapse life cycle, animated entirely in the vertex stage. | `m29-meadows.md` |
@@ -62,8 +65,8 @@ actually says.
 | `HudImage` | A nine-sliced textured rectangle. **With no `slice` it is all middle band, and the middle band tiles.** | `m31-ui-system.md` |
 | `HudInteract` | Makes the HUD element on its own entity hoverable, pressable and clickable — polled, never dispatched. | `m31-ui-system.md` |
 
-**Recipes own their geometry**, so `Water`, `Terrain`, `Road`, `Cloud` and `Meadow` carry **no
-`Mesh` and no `Material`** — authoring one is a validation error. A `Tree` is the exception on
+**Recipes own their geometry**, so `Water`, `Terrain`, `Road`, `Junction`, `Cloud` and `Meadow`
+carry **no `Mesh` and no `Material`** — authoring one is a validation error. A `Tree` is the exception on
 materials only: the entity's `Material` is its bark.
 
 **Scene-level blocks**, siblings of `entities`: `physics` (gravity, `timestep_hz`), `environment`
@@ -76,14 +79,15 @@ script spawns at runtime — `m37-entity-spawning.md`).
 
 ## Current state
 
-**M0–M38 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M41 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
-M38 shadow cascades. (M35 is a design doc only — global illumination, not built. M7 editor at scope
-E0–E2 + validation panel + `--watch`.)
+M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy.
+(M35 is a design doc only — global illumination, not built. M7 editor at scope E0–E2 + validation
+panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -115,12 +119,20 @@ engine list-joints <scene-or-mesh> [--entity Name] [--time T] [--steps N]
 #   the rig and where it is (M30); --steps for a pose the simulation reached, and a
 #   measured `stride` when the entity has a FootPlant (M32)
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
+#   plus the local width and bank per sample (M40)
+engine junction-plan <scene.json> [--entity Name]    # where a Junction's arms met it (M40)
 engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
 #   every collider physics holds — shape, size, world placement — read back out of the
 #   built world, so a skinned hitbox nothing renders is still answerable (M33)
+engine fit-colliders <scene.json> [--entity Name] [--shape S] [--write]
+#   solve a SkinnedCollider from the skin's vertex weights and print it as JSON;
+#   --write splices it into the scene. A command, never a runtime behaviour (M39)
 engine ui-layout <scene.json> [--width W --height H] [--entity N]... [--steps N] [--input f]
 #   where the UI landed (M31); --steps reports what a script *painted* (M36)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
+engine water-height <scene.json> --at x,z [--entity N] [--time T] [--steps N]
+#   where the water is, and which way it faces (M41); the first query that takes a
+#   clock, and the first that can answer "no water here" rather than a height
 engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24);
 #   also reports the scene's `templates` — what it can spawn — with defaults filled in (M37)
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; keyboard AND mouse; FPS readout is viewer-only
@@ -136,7 +148,7 @@ engine info                              # selected GPU adapter as JSON
 
 **The query commands exist because looking at a picture cannot answer where something is.** Reach
 for `inspect` (what did you author), `simulate --entity` (where did it end up), `terrain-height`,
-`road-centerline`, `list-joints`, `list-colliders` and `ui-layout` rather than re-deriving any of
+`road-centerline`, `junction-plan`, `list-joints`, `list-colliders` and `ui-layout` rather than re-deriving any of
 them — a generator that re-derives a curve is how two implementations start disagreeing.
 
 ## Traps that cost time
@@ -166,6 +178,11 @@ The cross-cutting ones. Per-system traps are in each note.
   *file*: a scene that gains a body re-blesses. **M37 is the sharpest case**: the tour's embers
   moved the *breaking crates* at the other end of the arena, and the diff image is entirely
   somewhere the change is not.
+- **A kinematic body has no mass properties, so promoting one to dynamic needs an explicit
+  `recompute_mass_properties_from_colliders`.** `Collider::set_density` alone leaves the body at a
+  near-zero mass, because mass was meaningless to it until that moment and rapier never computed
+  one. The symptom is a ragdoll leaving the scene at 40 m/s from a 6 N·s kick, which sends you to
+  read the joints — and the joints are fine (M39).
 - **`spawn` is a reserved keyword in Rhai**, which is why the script call is `spawn_entity` (M37).
   The curated engine also has an expression-complexity budget that rejects a six-term string
   concatenation at *compile* time — split it into two statements.
@@ -182,6 +199,19 @@ The cross-cutting ones. Per-system traps are in each note.
   pipeline creation. And `water.wgsl`'s `FrameUniform` stops at `params`: uniform field offsets are
   positional, so a field appended after `point_lights` is unreachable from water without giving it
   an eight-light array it never reads. **Check all four before appending to a shared uniform** (M38).
+- **A road's cross-section widens in the *positions* while `u` stays nominal**, which is how the
+  mitre worked since M23 and how per-point width works since M40. The shader's
+  `|u| > half + shoulder` therefore finds the skirt with nothing extra uploaded — and the price is
+  that **paint scales with the road**: a section at 1.5× width wears a 1.5× wider edge line. Holding
+  the shoulder at a constant metre width would need a third vertex channel on a ULP-sensitive path.
+- **A road following a `Terrain` samples the ground across its own cross-section, not down its
+  middle**, and takes the highest of the three (M40). The naive centerline-only version punches a
+  *hole* in a wide road on sloping ground, because the uphill edge ends up buried and the engine
+  does not carve terrain. This is why `width_scales` is computed **before** `followed_heights` in
+  `road::build`; swapping them back samples the ground at the wrong offsets on any road that widens.
+- **A junction's shoulder quad across a mouth is degenerate and must stay skipped** (M40): all four
+  of its corners lie on the mouth line, so the quad has zero area and a `NaN` normal. `mouth_of` is
+  what excludes it, and nothing is lost — the shoulder there is the road's own.
 - **`builtin:cube`'s faces disagree on which way `u` runs, in pairs rather than in axes.** Anything
   strongly directional on a cube draws differently on all four sides. `builtin:plane`'s UVs are not
   the intuitive ones either — fixing both is deferred as its own change with its own A/B (M26).
@@ -195,6 +225,12 @@ The cross-cutting ones. Per-system traps are in each note.
   copy elsewhere breaks every one of them.
 - **An absent cursor is the centre of the frame** (M28), so "no `--input`" is not the untouched case
   for a scene with anything interactive in the middle.
+- **A script's clock is one step behind physics and the render.** A script runs at the time its step
+  *begins* at (`step_index · dt`, 0-based); physics and the render get the time it *ends* at. This
+  predates M41 and is documented in `simulate.rs`, but water is the first thing in the script API
+  where it is **visible**, because it is the first surface that moves — comparing
+  `world.water_height` at `--steps N` against `engine water-height` wants `--steps N-1`. Terrain
+  never had to care: a height field has no clock.
 
 ## Verification
 
@@ -214,20 +250,24 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**35 of the 41 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**38 of the 44 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02` in the manifest and stay the sweep's job; `cli.rs` says so
 where someone would go to add them. The pixel *allowance* is there rather than a wider threshold
 because the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held
-for eight consecutive full sweeps. **The other 32 entries carry no `diff_args` at all — they are
+for eight consecutive full sweeps. **The other 38 entries carry no `diff_args` at all — they are
 bit-exact, and a failure there is real.**
 
 **Which tour frames flake carries no information; whether one is stable under repetition does.**
 Five separate sweeps each picked a different subset of the six, M36's and M38's A/Bs included.
 Every time, the differing frame had a binary disagreeing with **itself** — which is why the
 `md5`-it-N-times step is not optional. Five measurements, five times the answer was the adapter.
+M40's A/B is the cleanest statement of the rule so far: **34 of 34** comparable artifacts came back
+byte-identical between a `main` binary and the milestone's, and the only six excluded were the tour
+frames — excluded because the tour *scene* gained four entities in that commit, not because they
+flaked.
 
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
@@ -306,6 +346,10 @@ made without reading its note first. Paths are under `designs/notes/`.
   impulse, by a script call, or by an explosion.
 - **Skinned collider proxies (M33)** → `m33-skinned-colliders.md`. Simple shapes hung off named
   joints and re-posed from the rig each step, so a skinned character can be hit and can push things.
+- **Ragdolls (M39)** → `m39-ragdolls.md`. M33's one-way rule reversed for one entity at a time:
+  physics takes the skeleton over and hands it back as `Ragdoll.pose`, a **component field** — which
+  is how invariant 2 survives and why a corpse baked mid-fall reloads into the same heap. Brings
+  `ColliderPart.fit` and `engine fit-colliders` with it.
 - **Entity spawning (M37)** → `m37-entity-spawning.md`, design in `designs/entity-spawning-design.md`.
   A `templates` block the script spawns from, so a run can grow rather than only shrink.
 
@@ -317,6 +361,10 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   stage, depth colouring and shore foam.
 - **Water refraction (M27)** → `m27-water-refraction.md`. One `ior` field bending what is seen
   through the surface, defaulting to no bending.
+- **The wave evaluator and buoyancy (M41)** → `m41-buoyancy.md`, design in
+  `designs/buoyancy-design.md`. The Gerstner sum mirrored on the CPU so `engine water-height`,
+  `world.water_height` and a floating `Buoyancy` body can all ask where the surface is — held to the
+  shader by a GPU agreement test that reads the drawn surface back out of a render.
 - **Trees (M19)** → `m19-trees.md`. A grown tree — bark plus leaves — from a parameter recipe rather
   than a mesh file.
 - **Clouds (M20)** → `m20-clouds.md`. Drifting clusters of interpenetrating lobes.
@@ -324,6 +372,9 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   the ground everything else stands on.
 - **Roads (M23)** → `m23-roads.md`. A drivable ribbon from a polygon centerline with corner radii,
   its markings drawn per pixel.
+- **Road authoring (M40)** → `m40-road-authoring.md`, design in `designs/road-authoring-design.md`.
+  Per-point width, banking the engine signs itself, roads that ride a `Terrain`, asphalt grain, and
+  `Junction` — the patch a ribbon cannot be. Every one of them defaults to M23.
 - **Meadows (M29)** → `m29-meadows.md`. Ground cover on a seed→grass→weeds→straw→collapse life
   cycle, animated entirely in the vertex stage.
 
@@ -529,10 +580,9 @@ assets → M4 materials + lighting → M5 validation hardening → M6 diff-rende
 M8 physics → M9 animation (A0–A1) → M10 scripting — **the roadmap is complete.** Each milestone from
 M4 on ends by running its fixture from `designs/milestone-verification-scenes.md`.
 
-**The four that block a capability rather than polish one** — entity spawning, hot reload,
-alpha-cut leaves, and a CPU wave evaluator — are pulled out into
-`designs/structural-holes.md`, with what each one costs a live demo today. **Entity spawning is
-built** (M37); the other three stand. The rest, by area:
+**The two that block a capability rather than polish one** — hot reload and alpha-cut leaves — are
+pulled out into `designs/structural-holes.md`, with what each one costs a live demo today. (Of the
+original four, entity spawning was M37 and a CPU wave evaluator was M41.) The rest, by area:
 
 - **Editor**: E3 (structure edits), E4 (undo); picking against the *posed* mesh (CPU ray picking
   hits the rest pose).
@@ -544,13 +594,24 @@ built** (M37); the other three stand. The rest, by area:
   see `m38-shadow-cascades.md`. **Alpha-cut leaves are a missing feature**, not an
   authoring job: `Tree::leaf_material` synthesizes a `Material` from `leaf_color`/`leaf_roughness`
   alone, so leaf maps mean new `Tree` fields, a schema regeneration, and a validation pass.
-- **Water**: a CPU wave evaluator and therefore buoyancy.
-- **Roads** (after M23): junctions (two roads crossing wants a patch primitive, not a ribbon),
-  banked cross-sections, per-point road width, roads that follow a `Terrain`, and asphalt grain.
-- **Characters** (after M30/M32/M33): ragdolls (physics writing the skeleton, which is the one-way
-  rule reversed and wants its own answer to where the pose then comes from), proxies that resize
-  with the posed bone, generating a proxy set from vertex weights, planting against arbitrary
-  colliders, arm and hand IK with authored pole targets, toe joints.
+- **Water** (after M41): wave-driven drift (a Gerstner wave's orbital velocity would carry a float
+  along with it, and wants its own answer to whether a raft eventually crosses the pond), drag on a
+  submerged swimmer as distinct from a floating hull, and waves that respond to the body — which the
+  purity of (file, time) currently forbids, and which is what the CPU/GPU agreement rests on.
+- **Roads** (after M40, which built all five of M23's deferred items): **carving** — a road cutting
+  a shelf into the `Terrain` it follows, which M40 rejected because `Terrain` owns its grid and a
+  second recipe mutating it makes the ground a function of which other entities exist; it needs its
+  own answer to where the height field then lives. Also junction markings (stop bars, turn arrows —
+  they want a lane model), roads whose *shoulder* width is authored apart from the asphalt (which
+  wants the third vertex channel M40 declined to add), per-point `segment_length`, and pinned
+  heights closer together than `follow_blend`, which today warn rather than compose.
+- **Characters** (after M30/M32/M33/M39): planting against arbitrary colliders rather than only a
+  `Terrain`, arm and hand IK with authored pole targets, and toe joints — the three M39 left for the
+  IK milestone. Also getting up from a ragdoll (a return path is a blend, still rejected, or a hard
+  snap), partial ragdolls (a per-joint *partition* of pose ownership, which needs a rule for the
+  boundary joint), motors and therefore active ragdolls, self-collision inside one ragdoll, and
+  proxies generated from vertex weights *for a `Ragdoll` specifically* — `engine fit-colliders` fits
+  hitboxes, not a mass distribution.
 - **UI** (after M31): a bitmap-font atlas (the sanctioned path to better text — a PNG plus an
   in-repo JSON of glyph cells, sampled nearest, no new dependency and no float, arriving as a `font`
   field whose absence is the 8×8 font), pointer lock and scroll, text input and focus, per-side

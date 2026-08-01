@@ -105,8 +105,11 @@ engine list-animations <scene-or-clip-or-gltf> [--schema]
 engine list-joints <scene-or-gltf> [--entity Name] [--time T] [--clip Name]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
+engine junction-plan <scene.json> [--entity Name]    # where a Junction's arms met it
 engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
                                              # every collider physics holds, and where
+engine fit-colliders <scene.json> [--entity Name] [--shape S] [--write]
+                                             # solve a proxy set from vertex weights, as text
 engine ui-layout <scene.json> [--width W --height H] [--entity Name]... [--steps N] [--input f]
                                              # where the UI landed; --steps for what a script painted
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
@@ -341,8 +344,10 @@ held set changes, so a human play session becomes a committable artifact that
 
 `engine road-centerline` prints one object: the road's `entity`, `length`,
 `width`, `shoulder`, `closed`, and its sampled `points` — each with a world
-`position`, a unit `forward` in the XZ plane, and `v`, the metres along the
-centerline that the road's markings are painted in. It exists because a `Road`
+`position`, a unit `forward` in the XZ plane, `v`, the metres along the
+centerline that the road's markings are painted in, and (M40) the local `width`
+in metres and `bank` in degrees, so anything placed on a banked or widened
+stretch does not re-derive the roll or the edge. It exists because a `Road`
 generates its geometry from a polygon of corners, and anything placed *along*
 that road (a guardrail, a sign, a start line) needs the samples the ribbon was
 actually built from; re-deriving them in a generator is how two implementations
@@ -351,6 +356,18 @@ make_car_track.py` is the worked example: it writes the road, asks where it
 went, and writes the scene again with the barriers on it. With no `--entity`
 the scene must contain exactly one road; naming one that is not there is
 `entity_not_found` with a `did_you_mean`.
+
+`engine junction-plan` prints one object: the junction's `entity`, the `width`
+and `shoulder` the shader is told about, the patch's `triangles`, and one `arms`
+row per road that reached it — its `road`, world `position`, unit `into`
+heading, `width`, `half_total`, and `reach`, how far that mouth sits from the
+patch's centre. A junction is bounded by the *mouths* of the roads reaching it
+and the author's job is to end each road near the crossing, so `reach` is the
+number that matters: a set of similar reaches is a tidy junction, and one much
+larger than the rest is the road that stopped short. A screenshot cannot tell
+that from an arm arriving at the wrong angle, and both look wrong the same way.
+`road-centerline`'s reason, one primitive over — and the same `--entity`
+convention, including `entity_not_found` with a `did_you_mean`.
 
 `engine list-colliders` prints `steps` and one `colliders` array, name-sorted:
 each row's `entity`, `shape` (`sphere`/`cuboid`/`capsule`/`trimesh`/
@@ -367,6 +384,20 @@ matters most for a proxy, whose placement comes from a *pose* and which appears
 in no render at all. `--steps N` runs the simulation first, because a
 stride-driven pose is what the run reached rather than a function of the file —
 `list-joints` grew the same flag in M32 for the same reason.
+
+`engine fit-colliders` prints `scene`, the `shape` it fitted, whether it
+`written` anything, a `skipped` array of entities whose mesh carries no skin,
+and one `entities` row per fitted character: the entity's name and a complete
+`SkinnedCollider` component. Each vertex goes to the joint holding its largest
+weight and a shape is fitted to that bucket in the joint's own bind frame;
+joints with fewer than eight vertices are left out. `--write` splices the
+component into the scene file through the editor's own commit path, keeping any
+existing `layers`, `collides_with`, `friction` and `restitution` — those are
+decisions about the character, and only the shapes are what this solves.
+
+**Generation is a command, never a runtime behaviour** (M39 §8). Nothing at
+load time or step time consults a vertex weight; the file still says everything,
+and a regenerated set that differs from the committed one shows up as a diff.
 
 ## The render digest
 

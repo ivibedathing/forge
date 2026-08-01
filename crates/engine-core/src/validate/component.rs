@@ -360,6 +360,95 @@ pub(super) fn check_component(
                     .field("markings"),
                 );
             }
+
+            // Pins closer together than the blend they fade over pull on each
+            // other, and neither height is reached exactly (M40). Silent, and
+            // visible only as a bridge deck that came out 30 cm low — so it is
+            // said out loud instead.
+            if road.follow_terrain.is_some() && road.follow_blend > 0.0 {
+                let pinned: Vec<usize> = road
+                    .points
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.pin_height)
+                    .map(|(i, _)| i)
+                    .collect();
+                for pair in pinned.windows(2) {
+                    let (a, b) = (&road.points[pair[0]], &road.points[pair[1]]);
+                    let gap = glam::Vec2::new(a.position.x, a.position.z)
+                        .distance(glam::Vec2::new(b.position.x, b.position.z));
+                    // Straight-line distance under-reads the arc between them,
+                    // so this only fires when they are genuinely close — the
+                    // direction a warning should err in.
+                    if gap < road.follow_blend {
+                        errors.push(
+                            cx.err(
+                                codes::ROAD_PINS_OVERLAP,
+                                format!(
+                                    "points {} and {} are both pinned and {gap:.1} m apart, \
+                                     inside this road's follow_blend of {:.1} m; each pin is \
+                                     a correction faded out over that distance, so two \
+                                     inside one blend pull on each other and neither height \
+                                     is reached exactly — move them apart or shorten \
+                                     follow_blend",
+                                    pair[0], pair[1], road.follow_blend,
+                                ),
+                                &format!("{component_path}/points/{}", pair[1]),
+                            )
+                            .entity(entity)
+                            .component("Road")
+                            .field("points")
+                            .warning(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // A junction's arms are checked against the scene in the junction pass,
+        // which is where the other entities are in view. What is checkable from
+        // the component alone is how many there are and whether two of them are
+        // the same end of the same road — which builds a patch with a zero-width
+        // wedge in it.
+        ComponentData::Junction(ref junction) => {
+            if junction.arms.len() < 2 {
+                errors.push(
+                    cx.err(
+                        codes::JUNCTION_TOO_FEW_ARMS,
+                        format!(
+                            "Junction has {} arm(s); a patch is bounded by the mouths of \
+                             the roads reaching it, so it needs at least 2",
+                            junction.arms.len()
+                        ),
+                        &format!("{component_path}/arms"),
+                    )
+                    .entity(entity)
+                    .component("Junction")
+                    .field("arms"),
+                );
+            }
+            for (index, arm) in junction.arms.iter().enumerate() {
+                if let Some(first) = junction.arms[..index]
+                    .iter()
+                    .position(|other| other.road == arm.road && other.end == arm.end)
+                {
+                    errors.push(
+                        cx.err(
+                            codes::JUNCTION_DUPLICATE_ARM,
+                            format!(
+                                "arms {first} and {index} both name the {:?} end of road \
+                                 {:?}; two arms at one mouth leave a zero-width wedge in \
+                                 the patch",
+                                arm.end, arm.road
+                            ),
+                            &format!("{component_path}/arms/{index}"),
+                        )
+                        .entity(entity)
+                        .component("Junction")
+                        .field("arms"),
+                    );
+                }
+            }
         }
 
         // The flat Collider struct keeps the file walkable; which fields each
@@ -629,6 +718,29 @@ pub(super) fn check_component(
         // check with the component alone.
         ComponentData::FootPlant(_) => {}
 
+        // Buoyancy (M41). Only one thing is answerable without the rest of the
+        // scene: that the surface was named at all. An empty `water` is what an
+        // author who omitted the field gets, and it has to be an error rather
+        // than a default — there is no water a boat can be assumed to float on.
+        // Whether that name resolves, and whether this entity is even a body
+        // that can be pushed, is the cross-entity pass's.
+        ComponentData::Buoyancy(ref buoyancy) => {
+            if buoyancy.water.trim().is_empty() {
+                errors.push(
+                    cx.err(
+                        codes::BUOYANCY_WATER_MISSING,
+                        "this Buoyancy names no water; \"water\" must be the name of a \
+                         Water entity for the body to have a surface to float on"
+                            .to_string(),
+                        &format!("{component_path}/water"),
+                    )
+                    .entity(entity)
+                    .component("Buoyancy")
+                    .field("water"),
+                );
+            }
+        }
+
         // A proxy set (M33). Everything here is answerable from the component
         // alone: which shapes a proxy may be, that each part carries the
         // dimensions its shape needs, that no two parts report under one name,
@@ -705,6 +817,26 @@ pub(super) fn check_component(
                         .field(format!("parts/{i}/shape")),
                     );
                     continue;
+                }
+
+                // A sphere has one dimension and it is not a length along the
+                // bone, so there is nothing for `fit` to solve (M39 §7).
+                if part.fit.is_some() && part.shape == Sphere {
+                    errors.push(
+                        cx.err(
+                            codes::COLLIDER_PART_FIT_UNSUPPORTED,
+                            format!(
+                                "part {label:?} is a sphere asking to fit its bone, but a \
+                                 sphere has no length to solve; \"fit\" applies to \
+                                 \"capsule\" (its half_height) and \"cuboid\" (its Y \
+                                 half-extent)"
+                            ),
+                            &format!("{part_path}/fit"),
+                        )
+                        .entity(entity)
+                        .component("SkinnedCollider")
+                        .field(format!("parts/{i}/fit")),
+                    );
                 }
 
                 // `Collider`'s per-shape rule, applied per part.
@@ -819,6 +951,92 @@ pub(super) fn check_component(
                         .component("SkinnedCollider")
                         .field(field),
                     );
+                }
+            }
+        }
+
+        // A ragdoll (M39). Answerable from the component alone: that no two
+        // overrides claim one joint, and that a hinge describes a real axis and
+        // a range that runs forwards. Whether the joints are ones some part
+        // rides, and whether the parts form one tree, need the
+        // `SkinnedCollider` beside it and live in `entity.rs`.
+        ComponentData::Ragdoll(ref ragdoll) => {
+            let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for (i, joint) in ragdoll.joints.iter().enumerate() {
+                let joint_path = format!("{component_path}/joints/{i}");
+                let name = joint.joint.as_str();
+
+                if !seen.insert(name) {
+                    errors.push(
+                        cx.err(
+                            codes::RAGDOLL_DUPLICATE_JOINT,
+                            format!(
+                                "two Ragdoll joint overrides name {name:?}; which one wins \
+                                 would be an ordering accident, so neither does"
+                            ),
+                            &joint_path,
+                        )
+                        .entity(entity)
+                        .component("Ragdoll")
+                        .field(format!("joints/{i}/joint")),
+                    );
+                }
+
+                match (joint.hinge, joint.range) {
+                    (Some(axis), _) if axis.length_squared() <= 0.0 => {
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_BAD_HINGE,
+                                format!(
+                                    "the hinge axis on {name:?} is {:?}, which names no \
+                                     direction; a hinge turns about an axis in the child \
+                                     part's frame, so [1, 0, 0] is a knee that bends about \
+                                     local X",
+                                    axis.to_array()
+                                ),
+                                &format!("{joint_path}/hinge"),
+                            )
+                            .entity(entity)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/hinge")),
+                        );
+                    }
+                    // Negated so a NaN fails — the repo's rule, and the reason
+                    // is written out at `Collider`'s dimension check.
+                    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                    (Some(_), Some(range)) if !(range[0] <= range[1]) => {
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_BAD_HINGE,
+                                format!(
+                                    "the hinge range on {name:?} is [{}, {}]; it is \
+                                     [min, max] in degrees and must run forwards",
+                                    range[0], range[1]
+                                ),
+                                &format!("{joint_path}/range"),
+                            )
+                            .entity(entity)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/range")),
+                        );
+                    }
+                    (None, Some(_)) => {
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_BAD_HINGE,
+                                format!(
+                                    "the override on {name:?} sets \"range\" without \
+                                     \"hinge\"; a range is a hinge's travel, and a cone's \
+                                     extent is \"limit\""
+                                ),
+                                &format!("{joint_path}/range"),
+                            )
+                            .entity(entity)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/range")),
+                        );
+                    }
+                    _ => {}
                 }
             }
         }

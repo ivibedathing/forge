@@ -345,6 +345,219 @@ pub(super) fn meadow(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Engin
     }
 }
 
+/// Roads that follow a terrain (M40): the ground a road rides on.
+///
+/// The meadow pass's shape, and the same failure it prevents — a
+/// `follow_terrain` that resolves to nothing falls back to the road's authored
+/// heights, which is a road hanging in the air over a hillside with nothing in
+/// the file or the render saying why.
+pub(super) fn road_ground(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
+    let SceneFacts {
+        roads,
+        terrain_names,
+        seen_names,
+        ..
+    } = facts;
+
+    for (owner, road, road_component_path) in roads {
+        let Some(ground) = &road.follow_terrain else {
+            continue;
+        };
+        let terrain_path = format!("{road_component_path}/follow_terrain");
+        if !seen_names.contains(&ground.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::ROAD_TERRAIN_NOT_FOUND,
+                    format!(
+                        "the Road on {owner:?} follows terrain {ground:?}, which is not \
+                         an entity in this scene"
+                    ),
+                    &terrain_path,
+                )
+                .entity(owner)
+                .component("Road")
+                .field("follow_terrain")
+                .suggest_from(ground, seen_names.iter().copied()),
+            );
+        } else if !terrain_names.contains(ground.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::ROAD_TERRAIN_INVALID,
+                    format!(
+                        "the Road on {owner:?} follows terrain {ground:?}, but that \
+                         entity has no Terrain component; a road samples its ground \
+                         height from a Terrain patch, so the name must be one"
+                    ),
+                    &terrain_path,
+                )
+                .entity(owner)
+                .component("Road")
+                .field("follow_terrain")
+                .suggest_from(ground, terrain_names.iter().map(String::as_str)),
+            );
+        }
+    }
+}
+
+/// Junctions (M40): the roads whose mouths bound the patch.
+///
+/// An arm that resolves to nothing is silently dropped by the generator, and
+/// what comes back is a patch with one side missing — a hole exactly where the
+/// junction was supposed to close one. Every reason the meadow pass exists.
+pub(super) fn junction(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
+    let SceneFacts {
+        junctions,
+        road_names,
+        closed_road_names,
+        seen_names,
+        ..
+    } = facts;
+
+    for (owner, junction, component_path) in junctions {
+        for (index, arm) in junction.arms.iter().enumerate() {
+            let arm_path = format!("{component_path}/arms/{index}/road");
+            if !seen_names.contains(&arm.road.as_str()) {
+                errors.push(
+                    cx.err(
+                        codes::JUNCTION_ROAD_NOT_FOUND,
+                        format!(
+                            "arm {index} of the Junction on {owner:?} names road \
+                             {:?}, which is not an entity in this scene",
+                            arm.road
+                        ),
+                        &arm_path,
+                    )
+                    .entity(owner)
+                    .component("Junction")
+                    .field("arms")
+                    .suggest_from(&arm.road, seen_names.iter().copied()),
+                );
+            } else if !road_names.contains(arm.road.as_str()) {
+                errors.push(
+                    cx.err(
+                        codes::JUNCTION_ROAD_INVALID,
+                        format!(
+                            "arm {index} of the Junction on {owner:?} names road \
+                             {:?}, but that entity has no Road component; a junction \
+                             is bounded by the mouths of roads, so every arm must \
+                             name one",
+                            arm.road
+                        ),
+                        &arm_path,
+                    )
+                    .entity(owner)
+                    .component("Junction")
+                    .field("arms")
+                    .suggest_from(&arm.road, road_names.iter().map(String::as_str)),
+                );
+            } else if closed_road_names.contains(arm.road.as_str()) {
+                errors.push(
+                    cx.err(
+                        codes::JUNCTION_ARM_CLOSED,
+                        format!(
+                            "arm {index} of the Junction on {owner:?} names road \
+                             {:?}, which is closed; a closed road is a loop with no \
+                             free end for a junction to meet — split it into two \
+                             open roads that both end here",
+                            arm.road
+                        ),
+                        &arm_path,
+                    )
+                    .entity(owner)
+                    .component("Junction")
+                    .field("arms"),
+                );
+            }
+        }
+    }
+}
+
+/// Buoyancy (M41): the water a body floats on, and the body itself.
+pub(super) fn buoyancy(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
+    let SceneFacts {
+        buoyancies,
+        water_names,
+        collider_names,
+        body_kinds,
+        seen_names,
+        ..
+    } = facts;
+
+    // ── Buoyancy pass (M41) ────────────────────────────────────────────
+    //
+    // Two halves. The meadow pass's name check, because the same silent failure
+    // is available — a `water` that resolves to nothing would leave a boat
+    // sinking with nothing in the file saying why. And a check the meadow pass
+    // has no equivalent of: buoyancy is *a force*, so an entity with no dynamic
+    // body has nothing for it to act on. Authoring one there is a component
+    // that cannot do anything, which is exactly the class of mistake a render
+    // cannot show you.
+    for (owner, buoyancy, component_path) in buoyancies {
+        let water_path = format!("{component_path}/water");
+        if !buoyancy.water.trim().is_empty() {
+            if !seen_names.contains(&buoyancy.water.as_str()) {
+                errors.push(
+                    cx.err(
+                        codes::BUOYANCY_WATER_NOT_FOUND,
+                        format!(
+                            "the Buoyancy on {owner:?} names water {:?}, which is not an \
+                             entity in this scene",
+                            buoyancy.water
+                        ),
+                        &water_path,
+                    )
+                    .entity(owner)
+                    .component("Buoyancy")
+                    .field("water")
+                    .suggest_from(&buoyancy.water, seen_names.iter().copied()),
+                );
+            } else if !water_names.contains(buoyancy.water.as_str()) {
+                errors.push(
+                    cx.err(
+                        codes::BUOYANCY_WATER_INVALID,
+                        format!(
+                            "the Buoyancy on {owner:?} names water {:?}, but that entity \
+                             has no Water component; a body floats on a Water surface, so \
+                             the name must be one",
+                            buoyancy.water
+                        ),
+                        &water_path,
+                    )
+                    .entity(owner)
+                    .component("Buoyancy")
+                    .field("water")
+                    .suggest_from(&buoyancy.water, water_names.iter().map(String::as_str)),
+                );
+            }
+        }
+
+        let dynamic = body_kinds.get(owner.as_str()) == Some(&crate::components::BodyKind::Dynamic);
+        let has_collider = collider_names.contains(owner.as_str());
+        if !dynamic || !has_collider {
+            let missing = match (dynamic, has_collider) {
+                (false, false) => "has neither a dynamic RigidBody nor a Collider",
+                (false, true) => "has no dynamic RigidBody",
+                (true, false) => "has no Collider",
+                (true, true) => unreachable!("guarded by the condition above"),
+            };
+            errors.push(
+                cx.err(
+                    codes::BUOYANCY_WITHOUT_BODY,
+                    format!(
+                        "the Buoyancy on {owner:?} {missing}; buoyancy is a force applied \
+                         to a dynamic body, and the shape it displaces water with is the \
+                         entity's own Collider, so without both the component can have no \
+                         effect at all"
+                    ),
+                    component_path,
+                )
+                .entity(owner)
+                .component("Buoyancy"),
+            );
+        }
+    }
+}
+
 /// Foot planting (M32): the ground a character stands on.
 pub(super) fn foot_planting(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
     let SceneFacts {

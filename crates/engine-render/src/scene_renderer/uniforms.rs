@@ -261,7 +261,8 @@ pub(crate) struct RoadUniform {
     pub(crate) shoulder: [f32; 4],
     /// rgb = embankment colour, w = 1 when a start line is painted.
     pub(crate) bank: [f32; 4],
-    /// x = where that line is, in metres along the centerline; rest padding.
+    /// x = where that line is, in metres along the centerline; y = grain
+    /// amount (0 = off), z = grain cell size in metres; w padding.
     pub(crate) start: [f32; 4],
     /// `(start_v, end_v, side, stripe)` per kerbed corner. Unused slots are
     /// zeroed and never read — the shader loops to the count.
@@ -523,7 +524,16 @@ pub(crate) fn road_uniform(item: &RoadItem) -> RoadUniform {
             .bank_color
             .extend(if markings.start_line { 1.0 } else { 0.0 })
             .to_array(),
-        start: [markings.start_line_at, 0.0, 0.0, 0.0],
+        // Grain rides in the start line's spare lanes (M40) rather than
+        // growing the struct: `RoadUniform`'s field order is a wire format
+        // matched positionally against the WGSL declaration, and a junction's
+        // patch reads the same uniform.
+        start: [
+            markings.start_line_at,
+            road.grain.clamp(0.0, 1.0),
+            road.grain_scale.max(1e-3),
+            0.0,
+        ],
         kerbs,
     }
 }

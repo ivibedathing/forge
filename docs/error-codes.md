@@ -73,6 +73,12 @@ build fails.
 | `duplicate_collider_part` | 1 | two parts of one SkinnedCollider report under the same name |
 | `too_many_collider_parts` | 1 | a SkinnedCollider lists more parts than the physics world builds |
 | `collider_part_shape_unsupported` | 1 | a SkinnedCollider part names a mesh shape, which a proxy cannot be |
+| `ragdoll_without_proxies` | 1 | a Ragdoll is on an entity with no SkinnedCollider; the bodies are the proxies |
+| `ragdoll_disconnected_parts` | 1 | a Ragdoll's parts form more than one tree, which is a ragdoll in pieces |
+| `ragdoll_unknown_joint` | 1 | a Ragdoll joint override names a joint no part of the SkinnedCollider rides |
+| `ragdoll_duplicate_joint` | 1 | two Ragdoll joint overrides name the same joint |
+| `ragdoll_bad_hinge` | 1 | a Ragdoll hinge axis is zero-length, or its range runs backwards |
+| `collider_part_fit_unsupported` | 1 | a sphere part asks to fit the bone, and a sphere has no length to solve |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |
@@ -87,6 +93,14 @@ build fails.
 | `road_corner_does_not_fit` | 1 | two corner radii need more of the edge between them than it has |
 | `road_corner_needs_radius` | 1 | a sharp corner turns too far to mitre; give it a radius |
 | `too_many_road_kerbs` | 1 | a Road kerbs more corners than the shader's span array holds |
+| `road_terrain_not_found` | 1 | a Road's "follow_terrain" names no entity in the scene |
+| `road_terrain_invalid` | 1 | a Road's "follow_terrain" must name an entity that has a Terrain component |
+| `junction_with_mesh` | 1 | a Junction entity owns its own surface; it may not also have a Mesh or a Material |
+| `junction_too_few_arms` | 1 | a Junction needs at least two arms to bound a patch |
+| `junction_road_not_found` | 1 | a Junction arm's "road" names no entity in the scene |
+| `junction_road_invalid` | 1 | a Junction arm's "road" must name an entity that has a Road component |
+| `junction_arm_closed` | 1 | a Junction arm names a closed road, which has no free end to meet |
+| `junction_duplicate_arm` | 1 | two Junction arms name the same end of the same road |
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |
@@ -108,6 +122,10 @@ build fails.
 | `meadow_terrain_invalid` | 1 | a Meadow's "terrain" must name an entity that has a Terrain component |
 | `meadow_stages_invalid` | 1 | a Meadow needs at least two life-cycle stages with strictly increasing "at" |
 | `too_many_growth_stages` | 1 | a Meadow has more life-cycle stages than the shader's table holds |
+| `buoyancy_water_missing` | 1 | a Buoyancy must name the Water entity it floats on |
+| `buoyancy_water_not_found` | 1 | a Buoyancy's "water" names no entity in the scene |
+| `buoyancy_water_invalid` | 1 | a Buoyancy's "water" must name an entity that has a Water component |
+| `buoyancy_without_body` | 1 | a Buoyancy needs a dynamic RigidBody and a Collider on the same entity |
 | `hud_parent_not_found` | 1 | a HUD element's "parent" names no entity in the scene |
 | `hud_parent_not_panel` | 1 | a HUD element's "parent" must name an entity that has a HudPanel |
 | `hud_parent_cycle` | 1 | a chain of HUD "parent" references loops back on itself |
@@ -123,6 +141,8 @@ build fails.
 | `unknown_collision_layer` | 1 | warning: collides_with names a layer no collider is a member of |
 | `daylight_overrides_sky` | 1 | warning: daylight computes the sky and ambient, so the authored ones are never read |
 | `collider_mesh_size_mismatch` | 1 | warning: a Collider is a very different size from the builtin mesh it sits on |
+| `road_pins_overlap` | 1 | warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly |
+| `road_follow_rotated` | 1 | warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed |
 | `scene_unreadable` | 1 | the scene file could not be read |
 | `scene_parse_desync` | 2 | internal bug: the scene passed validation but failed to parse |
 | `entity_not_found` | 1 | no entity has the requested name |

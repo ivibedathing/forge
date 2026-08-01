@@ -90,6 +90,23 @@ refuses the fixture at validation, because `shadow_cascades` is the field the mi
 exclusion is expected and is what the `ab-check` skill means by "a fixture using a component the
 base binary does not have".)
 
+**M40's A/B found none — 34 of 34 comparable artifacts byte-identical**, which is the first sweep in
+this history where the tour frames did not need a probe at all. They were not compared: the tour
+*scene* gained four entities and auto-banking in the same commit, so its six frames are excluded on
+content, not on flakiness, alongside the new `m40_track.png` that the base binary refuses at
+validation. What is left is every other artifact in the manifest, including `m23_road.png` — the
+fixture that drives `road.wgsl` end to end, and therefore the one that decides whether M40's shader
+edit is inert.
+
+That result is what settled an open question rather than merely confirming a hope. M40 wanted to
+perturb *roughness* as well as albedo with its grain, which meant turning `let roughness` into `var
+roughness` on a line sitting directly above the four lighting lines this repo pins byte for byte.
+The design's fallback was albedo-only if that moved a pixel. It moved none — because the whole grain
+term, roughness included, is behind `if road.start.y > 0.0` rather than multiplied by an amount that
+happens to be zero. **Guarding new work behind a uniform branch instead of an inert multiply is
+what makes "the default path is unchanged" a structural claim**, and it is cheaper to verify than to
+argue about.
+
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
 per artifact family and check the `checked` count in the summary line.
