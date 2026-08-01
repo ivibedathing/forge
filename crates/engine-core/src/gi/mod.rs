@@ -19,11 +19,13 @@
 //! irradiance(probe) = Σ_basis  transfer[probe][basis] · live_radiance[basis]
 //! ```
 //!
-//! The basis is M16's own sky model — the three bands `sky_gradient`
-//! interpolates and `apply_daylight` rewrites every frame — so GI tracks day and
-//! night exactly, with no extra machinery. The sun is deliberately *not* a basis
-//! source in M35 (design §5.3): it is the one source whose direction moves,
-//! which is what would cost N transfer vectors instead of one.
+//! The basis is M16's own fill model — the two bands `sky_ambient` mixes, which
+//! `apply_daylight` rewrites every frame — so GI tracks day and night exactly,
+//! with no extra machinery. Two rather than the three the design assumed; see
+//! [`SKY_BANDS`] for the measurement and why the difference matters. The sun is
+//! deliberately *not* a basis source in M35 (design §5.3): it is the one source
+//! whose direction moves, which is what would cost N transfer vectors instead
+//! of one.
 //!
 //! # The file is text, one probe per line
 //!
@@ -31,6 +33,8 @@
 //! so a `git diff` shows which probes moved rather than that the blob changed.
 //! Coefficients are quantized to [`QUANT_DECIMALS`] decimals, which is what
 //! makes the file both diffable and byte-reproducible.
+
+pub mod bake;
 
 use serde::{Deserialize, Serialize};
 
@@ -51,12 +55,35 @@ pub const CHANNELS: usize = 3;
 /// Numbers in one basis source's transfer vector: 4 coefficients × 3 channels.
 pub const NUMBERS_PER_BASIS: usize = SH_L1_COEFFS * CHANNELS;
 
-/// Sky basis sources, in the order they are stored: zenith, horizon, ground.
+/// Sky basis sources, in the order they are stored: **zenith, then ground**.
 ///
-/// These are not an approximation invented for GI. They are the three colours
-/// [`EnvironmentSettings`](crate::scene::EnvironmentSettings) already carries
-/// and `daylight` already animates, which is what lets a bake track the clock.
-pub const SKY_BANDS: usize = 3;
+/// Two, not three — and this corrects the design doc, which assumed three on
+/// the strength of `sky_gradient`. The distinction is the whole reason §3.1's
+/// guarantee survives:
+///
+/// * `sky_gradient` draws the sky **dome** and picks the fog colour, and it
+///   does interpolate three bands, easing horizon → zenith above the horizon
+///   and horizon → ground below it.
+/// * `sky_ambient` is the **fill term GI actually replaces**, and it mixes only
+///   `sky_ground` and `sky_zenith`, linearly in `n.y * 0.5 + 0.5`, normalized by
+///   their mean. `sky_horizon` never appears in it.
+///
+/// Baking a third band would let GI produce fill light the pre-M35 engine could
+/// not, so an open-sky probe would match `sky_ambient(n)` in total energy but
+/// not in shape — and §3.1 pinned exactly that equality, because it is what
+/// makes `AmbientLight.color`/`.intensity` keep predicting what they predict and
+/// what makes every visible difference attributable to geometry.
+///
+/// The cost, stated: a sunset's horizon colour does not tint GI. It does not
+/// tint the ambient fill today either, so nothing regresses — and widening
+/// `sky_ambient` to three bands would edit one of the four ULP-sensitive
+/// lighting lines, which is a different milestone.
+pub const SKY_BANDS: usize = 2;
+
+/// Index of the zenith band in a probe's `sky` array.
+pub const BAND_ZENITH: usize = 0;
+/// Index of the ground band in a probe's `sky` array.
+pub const BAND_GROUND: usize = 1;
 
 /// Decimals each coefficient is rounded to before it is written.
 ///
@@ -206,7 +233,10 @@ impl BakedGi {
     /// this whole format guards against is the one where everything runs and the
     /// picture is quietly wrong.
     pub fn parse(text: &str) -> Result<Self, BakeError> {
-        let mut lines = text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty());
+        let mut lines = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim().is_empty());
 
         let (header_line, header_text) = lines.next().ok_or_else(|| {
             BakeError::Malformed("the file is empty; it needs a header line".into())
@@ -452,7 +482,9 @@ mod tests {
                 grid: [2, 2, 2],
                 origin: [-1.0, 0.0, -1.0],
                 spacing: 2.0,
-                basis: [("sky".to_string(), SKY_BANDS as u32)].into_iter().collect(),
+                basis: [("sky".to_string(), SKY_BANDS as u32)]
+                    .into_iter()
+                    .collect(),
                 samples: 256,
                 bounces: 1,
                 relocated: 0,
@@ -481,11 +513,11 @@ mod tests {
         // picture is quietly wrong because half the volume is missing.
         let text = "{\"format\":\"forge-gi/1\",\"scene\":\"s.json\",\"entity\":\"L\",\
                     \"inputs_hash\":\"0\",\"grid\":[2,2,2],\"origin\":[0,0,0],\"spacing\":2.0,\
-                    \"basis\":{\"sky\":3},\"samples\":16,\"bounces\":1}\n\
-                    {\"p\":[0,0,0],\"sky\":[[0.0],[0.0],[0.0]]}\n";
+                    \"basis\":{\"sky\":2},\"samples\":16,\"bounces\":1}\n\
+                    {\"p\":[0,0,0],\"sky\":[[0.0],[0.0]]}\n";
         let err = BakedGi::parse(text).unwrap_err();
         assert!(
-            matches!(err, BakeError::Malformed(m) if m.contains("format is 3 of 12")),
+            matches!(err, BakeError::Malformed(m) if m.contains("format is 2 of 12")),
             "a short basis vector must be named, not padded"
         );
     }
@@ -494,7 +526,7 @@ mod tests {
     fn a_future_format_is_refused_rather_than_guessed() {
         let text = "{\"format\":\"forge-gi/2\",\"scene\":\"s.json\",\"entity\":\"L\",\
                     \"inputs_hash\":\"0\",\"grid\":[2,2,2],\"origin\":[0,0,0],\"spacing\":2.0,\
-                    \"basis\":{\"sky\":3},\"samples\":16,\"bounces\":1}\n";
+                    \"basis\":{\"sky\":2},\"samples\":16,\"bounces\":1}\n";
         assert!(matches!(
             BakedGi::parse(text).unwrap_err(),
             BakeError::Malformed(m) if m.contains("forge-gi/1")

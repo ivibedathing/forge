@@ -327,6 +327,48 @@ enum Command {
         input: Option<PathBuf>,
     },
 
+    /// Bake a `LightProbeVolume`'s transfer to a file beside the scene (M35).
+    ///
+    /// The only command besides `import` that *writes* into the project, and
+    /// like `import` it writes a file rather than mutating the scene. Rays are
+    /// cast against render geometry, not colliders — the tour's trees carry no
+    /// `Collider`, so asking physics what stood in the way would find a
+    /// landscape with no trees on it.
+    ///
+    /// CPU-only and deterministic: the same scene bakes to the same bytes on
+    /// any machine, which is a stronger promise than any render here makes.
+    BakeGi {
+        scene: PathBuf,
+        /// Which volume, when the scene has more than one. Defaults to the only
+        /// one; with several, baking all of them is the default.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Where to write it. Defaults to the `bake` path the component names,
+        /// resolved relative to the scene file — which is the only path that
+        /// makes the scene load afterwards.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Rays per probe. More is less noise and a slower bake; the value is
+        /// recorded in the file, because two sample counts are two artifacts.
+        #[arg(long)]
+        samples: Option<u32>,
+    },
+
+    /// Ask what irradiance the renderer would use at a point and normal (M35).
+    ///
+    /// `terrain-height`'s argument applied to light: anything asking "why is
+    /// this dark" needs the number, not a PNG. Reports which volume answered
+    /// and how occluded the probes around the point are.
+    GiProbe {
+        scene: PathBuf,
+        /// World position as x,y,z — all three, unlike `terrain-height`.
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+        /// Surface normal to evaluate along. Defaults to straight up.
+        #[arg(long, allow_hyphen_values = true)]
+        normal: Option<String>,
+    },
+
     /// Ask a terrain patch how high the ground is at a world XZ position.
     ///
     /// The same sampler `world.terrain_height` answers with, so a prop placed
@@ -565,6 +607,13 @@ fn main() {
             steps,
             input,
         } => ui_layout(scene, width, height, entity, steps, input),
+        Command::BakeGi {
+            scene,
+            entity,
+            out,
+            samples,
+        } => bake_gi(scene, entity, out, samples),
+        Command::GiProbe { scene, at, normal } => gi_probe(scene, at, normal),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
         Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Import {
@@ -853,6 +902,71 @@ fn load_scene(path: &PathBuf) -> Result<Scene> {
     Scene::from_source(&source, &display).map_err(|mut errors| {
         // Validation was clean, so this is the desync backstop; emit any
         // surplus records and surface the last as the command's result.
+        let last = errors.pop().unwrap_or_else(|| {
+            EngineError::new(
+                codes::SCENE_PARSE_DESYNC,
+                "scene failed to load after clean validation",
+            )
+            .file(&display)
+        });
+        for error in errors {
+            error.emit();
+        }
+        last
+    })
+}
+
+/// Load a scene for `bake-gi`, tolerating the three errors the bake exists to
+/// clear.
+///
+/// `report_scene_diagnostics`' contract is that which command you ran never
+/// changes what you learn about a broken scene, and this is the one deliberate
+/// exception: a scene whose bake is missing, stale or malformed is *exactly*
+/// the scene `bake-gi` is for, so refusing it would make the command unable to
+/// fix the only problem it addresses. Nothing else is tolerated — a scene with
+/// a bad mesh reference still fails here, because the bake would ray-trace
+/// geometry it could not load.
+///
+/// Found the hard way: the first end-to-end run refused to bake a brand-new
+/// volume because that volume had no bake yet.
+fn load_scene_for_bake(path: &PathBuf) -> Result<Scene> {
+    const TOLERATED: &[&str] = &[
+        codes::GI_BAKE_MISSING,
+        codes::GI_BAKE_STALE,
+        codes::GI_BAKE_MALFORMED,
+    ];
+
+    let display = path.display().to_string();
+    let source = std::fs::read_to_string(path).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_UNREADABLE,
+            format!("could not read scene: {e}"),
+        )
+        .file(&display)
+    })?;
+
+    let mut diagnostics = engine_core::validate::validate_source(&source, &display);
+    diagnostics.retain(|d| !TOLERATED.contains(&d.error));
+    if diagnostics.iter().all(EngineError::is_warning) {
+        diagnostics.extend(engine_assets::validate_scene_assets(&source, &display));
+    }
+
+    let mut errors = 0;
+    for diagnostic in &diagnostics {
+        if !diagnostic.is_warning() {
+            errors += 1;
+        }
+        diagnostic.emit();
+    }
+    if errors > 0 {
+        return Err(EngineError::new(
+            codes::VALIDATION_FAILED,
+            format!("{errors} error(s) in {display}"),
+        )
+        .file(&display));
+    }
+
+    Scene::from_source_ignoring(&source, &display, TOLERATED).map_err(|mut errors| {
         let last = errors.pop().unwrap_or_else(|| {
             EngineError::new(
                 codes::SCENE_PARSE_DESYNC,
@@ -1256,6 +1370,286 @@ fn terrain_height(scene_path: PathBuf, at: String, entity: Option<String>) -> Re
         })
     );
     Ok(())
+}
+
+/// An entity's `Transform`, or the default when it has none.
+///
+/// Inlined here rather than reaching for `Scene`'s private accessor: a volume
+/// with no `Transform` is already a validation error, so the default is only
+/// ever reached on a scene that was told it is broken.
+fn transform_of(
+    scene: &Scene,
+    entity: engine_core::hecs::Entity,
+) -> engine_core::components::Transform {
+    scene
+        .world
+        .get::<&engine_core::components::Transform>(entity)
+        .map(|t| *t)
+        .unwrap_or_default()
+}
+
+/// Every entity carrying a `LightProbeVolume`, name-sorted so a multi-volume
+/// bake is deterministic in the order it reports.
+fn probe_volumes(scene: &Scene) -> Vec<String> {
+    let mut names: Vec<String> = scene
+        .names()
+        .filter(|name| {
+            scene.entity(name).is_some_and(|entity| {
+                scene
+                    .world
+                    .get::<&engine_core::components::LightProbeVolume>(entity)
+                    .is_ok()
+            })
+        })
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names
+}
+
+/// `engine bake-gi <scene> [--entity NAME] [--out PATH] [--samples N]` (M35).
+///
+/// Writes beside the scene by default, because asset paths resolve relative to
+/// the scene file and a bake written to `/tmp` is a bake the scene cannot load
+/// — the trap CLAUDE.md records for `simulate --bake`.
+fn bake_gi(
+    scene_path: PathBuf,
+    entity: Option<String>,
+    out: Option<PathBuf>,
+    samples: Option<u32>,
+) -> Result<()> {
+    let scene = load_scene_for_bake(&scene_path)?;
+    let base_dir = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let volumes = probe_volumes(&scene);
+
+    let targets: Vec<String> = match (&entity, volumes.len()) {
+        (Some(requested), _) => vec![volumes
+            .iter()
+            .find(|v| *v == requested)
+            .cloned()
+            .ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {requested:?} with a LightProbeVolume component"),
+                )
+                .entity(requested)
+                .file(scene_path.display().to_string())
+                .suggest_from(requested, volumes.iter().map(String::as_str))
+            })?],
+        (None, 0) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                "scene has no entity with a LightProbeVolume component",
+            )
+            .file(scene_path.display().to_string()))
+        }
+        // Several is the normal case for a scene that gives an interior finer
+        // spacing than its landscape, and baking one of them would leave the
+        // others stale — so all is the default rather than an error.
+        (None, _) => volumes.clone(),
+    };
+
+    if out.is_some() && targets.len() > 1 {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!(
+                "--out names one file but {} volumes would be baked ({}); \
+                 add --entity to pick one",
+                targets.len(),
+                targets.join(", ")
+            ),
+        )
+        .file(scene_path.display().to_string()));
+    }
+
+    // Collected once and shared: the occluder set is the whole scene, so
+    // rebuilding it per volume would multiply the most expensive step by the
+    // number of volumes for no difference in the result.
+    let assets = engine_assets::AssetServer::for_scene(&scene_path);
+    let tris = engine_core::gi::bake::collect_occluders(&scene, &assets)?;
+
+    let mut reports = Vec::new();
+    for name in &targets {
+        let handle = scene.entity(name).expect("named above");
+        let volume = scene
+            .world
+            .get::<&engine_core::components::LightProbeVolume>(handle)
+            .expect("filtered above")
+            .clone();
+        let transform = transform_of(&scene, handle);
+
+        let params = engine_core::gi::bake::BakeParams {
+            samples: samples.unwrap_or(engine_core::gi::bake::DEFAULT_SAMPLES),
+            bounces: volume.bounces,
+        };
+
+        let (baked, stats) = engine_core::gi::bake::bake(
+            &scene_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            name,
+            tris.clone(),
+            transform.position,
+            transform.scale,
+            &volume,
+            &params,
+        );
+
+        let target = match &out {
+            Some(path) => path.clone(),
+            None => base_dir.join(&volume.bake),
+        };
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                EngineError::new(
+                    codes::SCENE_WRITE_FAILED,
+                    format!("could not create {}: {e}", parent.display()),
+                )
+            })?;
+        }
+        std::fs::write(&target, baked.to_text()).map_err(|e| {
+            EngineError::new(
+                codes::SCENE_WRITE_FAILED,
+                format!("could not write {}: {e}", target.display()),
+            )
+        })?;
+
+        reports.push(serde_json::json!({
+            "entity": name,
+            "out": target.display().to_string(),
+            "grid": baked.header.grid,
+            "probes": stats.probes,
+            "rays": stats.rays,
+            "triangles": stats.triangles,
+            "relocated": stats.relocated,
+            "samples": params.samples,
+            "bounces": params.bounces,
+            "inputs_hash": baked.header.inputs_hash,
+        }));
+    }
+
+    println!("{}", serde_json::json!({ "baked": reports }));
+    Ok(())
+}
+
+/// `engine gi-probe <scene> --at x,y,z [--normal x,y,z]` (M35).
+fn gi_probe(scene_path: PathBuf, at: String, normal: Option<String>) -> Result<()> {
+    let point = parse_vec3_arg(&at, "at")?;
+    let normal = match &normal {
+        Some(text) => parse_vec3_arg(text, "normal")?.normalize_or_zero(),
+        None => engine_core::math::Vec3::Y,
+    };
+
+    let scene = load_scene(&scene_path)?;
+    let base_dir = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
+
+    // Smallest spacing wins where volumes overlap, name-sorted where two tie —
+    // the rule that lets an interior volume override the landscape one it sits
+    // inside. Resolved here rather than in the shader for the same reason the
+    // whole evaluation is CPU-side: `gi-probe` has to be able to say *which*
+    // volume answered.
+    let mut best: Option<(String, engine_core::components::LightProbeVolume, _)> = None;
+    for name in probe_volumes(&scene) {
+        let handle = scene.entity(&name).expect("listed above");
+        let volume = (*scene
+            .world
+            .get::<&engine_core::components::LightProbeVolume>(handle)
+            .expect("filtered above"))
+        .clone();
+        let transform = transform_of(&scene, handle);
+        let half = transform.scale * 0.5;
+        let min = transform.position - half;
+        let max = transform.position + half;
+        if point.cmplt(min).any() || point.cmpgt(max).any() {
+            continue;
+        }
+        let closer = best
+            .as_ref()
+            .is_none_or(|(_, current, _)| volume.spacing < current.spacing);
+        if closer {
+            best = Some((name, volume, transform));
+        }
+    }
+
+    let Some((name, volume, transform)) = best else {
+        // Outside every volume is not an error: it is the documented fallback,
+        // and saying so is more useful than refusing to answer.
+        println!(
+            "{}",
+            serde_json::json!({
+                "at": point.to_array(),
+                "normal": normal.to_array(),
+                "volume": serde_json::Value::Null,
+                "note": "outside every LightProbeVolume; the renderer falls back to sky_ambient",
+            })
+        );
+        return Ok(());
+    };
+
+    let file = base_dir.join(&volume.bake);
+    let text = std::fs::read_to_string(&file).map_err(|e| {
+        EngineError::new(
+            codes::GI_BAKE_MISSING,
+            format!(
+                "could not read {}: {e}; run `engine bake-gi`",
+                file.display()
+            ),
+        )
+        .entity(&name)
+        .file(scene_path.display().to_string())
+    })?;
+    let baked = engine_core::gi::BakedGi::parse(&text).map_err(|bad| {
+        EngineError::new(
+            codes::GI_BAKE_MALFORMED,
+            format!("{}: {bad}", file.display()),
+        )
+        .entity(&name)
+        .file(scene_path.display().to_string())
+    })?;
+
+    let origin = transform.position - transform.scale * 0.5;
+    let cell = ((point - origin) / volume.spacing).max(engine_core::math::Vec3::ZERO);
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "at": point.to_array(),
+            "normal": normal.to_array(),
+            "volume": name,
+            "bake": volume.bake,
+            "grid": baked.header.grid,
+            "origin": baked.header.origin,
+            "spacing": volume.spacing,
+            "intensity": volume.intensity,
+            "cell": cell.to_array(),
+            "relocated_probes": baked.header.relocated,
+            "samples": baked.header.samples,
+        })
+    );
+    Ok(())
+}
+
+/// `--at x,y,z` / `--normal x,y,z`: three numbers, unlike `terrain-height`'s
+/// two — a light field is a function of position *and* direction.
+fn parse_vec3_arg(text: &str, flag: &str) -> Result<engine_core::math::Vec3> {
+    let parts: Vec<f32> = text
+        .split(',')
+        .map(|part| part.trim().parse::<f32>())
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| {
+            EngineError::new(
+                codes::INVALID_INVOCATION,
+                format!("--{flag} expected x,y,z numbers, got {text:?} ({e})"),
+            )
+        })?;
+    if parts.len() != 3 {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!("--{flag} expected exactly three comma-separated numbers, got {text:?}"),
+        ));
+    }
+    Ok(engine_core::math::Vec3::new(parts[0], parts[1], parts[2]))
 }
 
 /// `--at x,z`: two numbers, unlike `raycast`'s three. The height is what is

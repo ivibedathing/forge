@@ -1057,6 +1057,55 @@ pub(super) fn walk<'a>(
                 );
             }
 
+            // A bake taken before the volume was resized or re-tuned describes
+            // a grid that no longer exists, so the renderer would index it with
+            // coordinates it was never baked for. Cheap to catch: the header
+            // records the grid, the spacing and the bounces it was taken with,
+            // and all three are derivable from the component in front of us.
+            //
+            // This is the *component* half of staleness. The geometry half —
+            // "somebody moved a wall after baking" — is what `inputs_hash`
+            // exists for, and it is not checked here: reproducing that digest
+            // means collecting every occluder in the scene, which for the tour
+            // is around a million triangles, and `validate` is the ~0.02s gate
+            // the whole agent loop leans on. See the note for the open question.
+            let base_dir = std::path::Path::new(cx.file)
+                .parent()
+                .unwrap_or(std::path::Path::new(""));
+            let bake_file = base_dir.join(&volume.bake);
+            if let Ok(text) = std::fs::read_to_string(&bake_file) {
+                if let Ok(baked) = crate::gi::BakedGi::parse(&text) {
+                    if !baked.matches(volume, scale) {
+                        let want = crate::gi::grid_counts(scale, volume.spacing);
+                        errors.push(
+                            cx.err(
+                                codes::GI_BAKE_STALE,
+                                format!(
+                                    "entity {name:?} needs a {}×{}×{} grid at spacing {} \
+                                     with {} bounce(s), but {:?} was baked as {}×{}×{} at \
+                                     spacing {} with {}; re-run `engine bake-gi`",
+                                    want[0],
+                                    want[1],
+                                    want[2],
+                                    volume.spacing,
+                                    volume.bounces,
+                                    volume.bake,
+                                    baked.header.grid[0],
+                                    baked.header.grid[1],
+                                    baked.header.grid[2],
+                                    baked.header.spacing,
+                                    baked.header.bounces,
+                                ),
+                                path,
+                            )
+                            .entity(name)
+                            .component("LightProbeVolume")
+                            .field("bake"),
+                        );
+                    }
+                }
+            }
+
             // Refused before anything is allocated — `tree_too_complex`'s rule.
             // A hung bake that produces no output is the worst failure an agent
             // loop can hit, and the arithmetic predicting the count is exact.
