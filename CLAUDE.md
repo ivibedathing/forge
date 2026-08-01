@@ -143,7 +143,24 @@ invocation/environment is"). Every error code is a const in `engine-core/src/cod
 class; `docs/error-codes.md` mirrors it and a repo-contract test keeps them in lockstep — **codes
 are API**, never rename one casually.
 
-Per-component field checking is **schema-driven**: the walk in `validate.rs` reads the same
+**`validate/` is seven modules**, split out of one 5,716-line file as pure code motion (28 lines
+left it: ten `fn` → `pub(super) fn`, nine redundant borrows, one call site, and five rustfmt
+re-wraps). `mod.rs` is `validate_source` — now the preamble plus ten named pass calls —
+`Cx`/`Checked`/`ComponentSchemas`, and `validate_material_source`. `entity.rs` is the per-entity
+walk, `passes.rs` the ten **cross-entity** passes (camera, lights, daylight, point-light budget,
+collision layers, wheel, meadow, foot planting, HUD parent, animation), `component.rs`
+`check_component`, `walk.rs` the schema walk, `blocks.rs` the `physics`/`environment`/`daylight`
+blocks, and `tests.rs` the 2,000-line corpus that lives with the code.
+
+**The passes exist because a name may be authored after its use** — a wheel's chassis, a HUD
+element's parent — so anything naming another entity has to wait for every name to exist. The walk
+hands them a `SceneFacts` struct rather than sixteen positional values, and that is not tidiness:
+four of its fields are `Vec<(String, String)>` and three are `BTreeSet<String>`, so a swapped pair
+would type-check and validate the wrong thing. Field-init shorthand in and destructuring by name
+out makes the mapping name-identity end to end. (The `point_lights` pass is `point_light_budget`
+for the same reason — a function named for its field would shadow it.)
+
+Per-component field checking is **schema-driven**: the walk in `validate/walk.rs` reads the same
 schemars-generated schema `engine list-components` publishes (unknown/missing fields, JSON types,
 `minimum`/`exclusiveMinimum`-style ranges authored as `#[schemars(...)]` attributes), then serde
 parses the clean component as a final gate — `scene_parse_desync` firing means the walk and the
@@ -1720,9 +1737,6 @@ bar over an enemy's head is a *projection* question and wants `world.project(x, 
 
 **Housekeeping the M31 audit turned up and did not do**, in the order they are worth doing:
 
-- **`validate.rs` has outgrown its file** — 5,539 lines with `validate_source` at ~1,400. It is now
-  the largest file in the workspace, and unlike the renderer it is GPU-free and fully covered by
-  the corpus tests, so splitting it is ordinary work rather than a ULP question.
 - **25 of the 37 baselines are pinned by no test** (see Verification). The pile stopped growing at
   M32, whose fixture arrived with a CLI test that diff-renders it — which is the cheap thing that
   makes a baseline survive someone who does not run the sweep, and the thing every earlier fixture
@@ -1732,7 +1746,7 @@ bar over an enemy's head is a *projection* question and wants `world.project(x, 
 
 **The clippy warnings are cleared and CI's clippy step is blocking.** Six of the twenty-eight were
 not bugs to fix but the lint being wrong, and they carry a local `#[allow]` with the reason —
-**read it before deleting one**. Five are the `!(a > b)` comparisons in `validate.rs` and
+**read it before deleting one**. Five are the `!(a > b)` comparisons in `validate/component.rs` and
 `engine-script`, written negated *precisely so NaN fails*; clippy's suggested `a <= b` is false for
 NaN, so "fixing" them would let a NaN far plane, collider dimension, meadow stage or explosion
 radius validate clean. The sixth is `drop(write_object)` in `scene_renderer/mod.rs`, which releases the
