@@ -103,12 +103,35 @@ fn dist2(ax, ay, az, bx, by, bz) {
     dx * dx + dy * dy + dz * dz
 }
 
-// Which wave a drone belongs to. Waves are contiguous index ranges; the
-// generator prints these boundaries when it writes the scene.
-fn drone_wave(n) {
-    if n <= 4 { return 1; }
-    if n <= 7 { return 2; }
+// Which wave a drone belongs to, from its index *within its level* (1..10).
+// Waves are contiguous index ranges; the generator prints these boundaries
+// when it writes the scene.
+fn drone_wave(local) {
+    if local <= 4 { return 1; }
+    if local <= 7 { return 2; }
     3
+}
+
+// The first drone and the first barrel of a level, and how many barrels it has.
+// Every level owns a contiguous run of each, which is what lets one arithmetic
+// expression get from "level 3" to "Drone21..Drone30" — the generator prints
+// exactly these boundaries.
+fn drone_base(level, per_level) {
+    (level - 1) * per_level
+}
+
+fn barrels_in(level) {
+    if level == 1 { return 4; }
+    if level == 2 { return 3; }
+    if level == 3 { return 2; }
+    1
+}
+
+fn barrel_first(level) {
+    if level == 1 { return 1; }
+    if level == 2 { return 5; }
+    if level == 3 { return 8; }
+    10
 }
 
 // The first live drone the segment b->n reaches, as a 0-based index, or -1.
@@ -129,11 +152,11 @@ fn hit_drone(alive, dxs, dys, dzs, bx, by, bz, nx, ny, nz, r2) {
 }
 
 // The first unbroken barrel the segment reaches, 1-based, or -1.
-fn hit_barrel(world, count, bx, by, bz, nx, ny, nz, r2) {
+fn hit_barrel(world, first, count, bx, by, bz, nx, ny, nz, r2) {
     let found = -1;
     for j in 0..count {
         if found >= 0 { continue; }
-        let n = j + 1;
+        let n = first + j;
         let flag = world.state("k" + n.to_string() + "a", 1);
         if flag <= 0.5 { continue; }
         let name = barrel_name(n);
@@ -165,7 +188,7 @@ fn damage_drone(world, n, dmg, full_hp) {
 // deeper would want a worklist, and one link is enough for a cluster to go up
 // together). Returns the 0-based indices of the drones it killed, so the
 // caller can update the arrays it is iterating.
-fn detonate(world, n, barrel_count, alive, dxs, dys, dzs, r2, impulse) {
+fn detonate(world, n, first, barrel_count, base, alive, dxs, dys, dzs, r2, impulse) {
     let radius = r2.sqrt();
     let name = barrel_name(n);
     let bar = world.position(name);
@@ -185,7 +208,7 @@ fn detonate(world, n, barrel_count, alive, dxs, dys, dzs, r2, impulse) {
         let ez = dzs[k];
         let d2 = dist2(ex, ey, ez, ox, oy, oz);
         if d2 > r2 { continue; }
-        let m = k + 1;
+        let m = base + k + 1;
         let dname = drone_name(m);
         world.break_entity(dname);
         world.set_state("d" + m.to_string() + "a", 0);
@@ -193,7 +216,7 @@ fn detonate(world, n, barrel_count, alive, dxs, dys, dzs, r2, impulse) {
     }
 
     for k in 0..barrel_count {
-        let m = k + 1;
+        let m = first + k;
         if m == n { continue; }
         let flag = world.state("k" + m.to_string() + "a", 1);
         if flag <= 0.5 { continue; }
@@ -208,6 +231,30 @@ fn detonate(world, n, barrel_count, alive, dxs, dys, dzs, r2, impulse) {
         world.explode(qx, qy, qz, radius, impulse);
     }
     killed
+}
+
+// Bring every barrel that is in play down to rest height and keep it there.
+//
+// A barrel has `gravity_scale: 0` — it has to, or the ones waiting three levels
+// out would sag out of the sky — so nothing makes it fall on its own and
+// nothing makes it stay put after a blast shoves it. Both are this loop: drive
+// it down until it is at rest height, then hold it at zero velocity. A script
+// cannot move a dynamic body by writing its Transform (M11.5), so a drop is a
+// velocity or it is nothing.
+fn settle_barrels(world, first, count, rest) {
+    for j in 0..count {
+        let n = first + j;
+        let flag = world.state("k" + n.to_string() + "a", 1);
+        if flag <= 0.5 { continue; }
+        let name = barrel_name(n);
+        let at = world.position(name);
+        let gap = at[1] - rest;
+        let fall = 0.0;
+        // Eased so it lands rather than slamming: fast while it is high, down
+        // to a crawl over the last metre.
+        if gap > 0.03 { fall = clampf(gap * 4.0, 2.0, 22.0); }
+        world.set_linear_velocity(name, 0.0, -fall, 0.0);
+    }
 }
 
 // Fly one drone at the player, or hold it still if its wave has not started.
@@ -254,7 +301,6 @@ fn drive_drone(world, n, ex, ey, ez, px, py, pz, speed, hover, touch) {
 // menu answerable: `engine ui-layout` reports the button's rectangle without
 // running the game.
 fn show_menu(world, title, line, label) {
-    world.set_hud_visible("MenuVeil", true);
     world.set_hud_visible("MenuRoot", true);
     world.set_hud_text("MenuTitle", title);
     world.set_hud_text("MenuLine", line);
@@ -265,7 +311,6 @@ fn show_menu(world, title, line, label) {
 // Take the menu down: one boolean per subtree, since hiding a panel hides
 // everything parented to it.
 fn hide_menu(world) {
-    world.set_hud_visible("MenuVeil", false);
     world.set_hud_visible("MenuRoot", false);
 }
 
@@ -285,11 +330,12 @@ fn step(world, step) {
     let dt = world.dt();
 
     // --- constants, matching make_arena.py ---------------------------------
-    let DRONE_COUNT = 10;
+    let LEVELS = 4;              // the campaign; the file carries every level's
+    let DRONE_COUNT = 10;        // drones *per level* — 40 exist, 10 are in play
     let BULLET_COUNT = 14;
-    let BARREL_COUNT = 4;
     let ARENA_HALF = 28.0;
     let WAVES = 3;
+    let BARREL_REST = 0.62;      // m, where a dropped barrel comes to rest
 
     let MOVE_SPEED = 7.2;        // m/s
     let MOVE_ACCEL = 16.0;       // 1/s, how fast velocity reaches the target
@@ -304,13 +350,30 @@ fn step(world, step) {
     let MUZZLE_HEIGHT = 1.15;    // m above the player's origin
     let MUZZLE_FORWARD = 1.05;   // m
 
-    let DRONE_SPEED = 4.4;       // m/s
+    let DRONE_SPEED = 4.4;       // m/s, at level 1
     let DRONE_HOVER = 0.95;      // m, the altitude they hold
-    let DRONE_HP = 100.0;
-    let BULLET_DAMAGE = 34.0;    // three bolts to a kill
+    let DRONE_HP = 100.0;        // at level 1
+    let BULLET_DAMAGE = 34.0;    // three bolts to a kill, at level 1
     let TOUCH_RANGE = 1.3;       // m, where a drone starts hurting
-    let TOUCH_DPS = 26.0;
+    let TOUCH_DPS = 26.0;        // at level 1
     let DRONE_SCORE = 100;
+
+    // How a level gets harder. Three dials rather than one, because raising
+    // only hit points makes a level longer where raising speed and damage makes
+    // it tighter — and score follows difficulty, so a level-4 kill is worth
+    // more than a level-1 one.
+    //
+    // The numbers are picked against two ceilings rather than by feel. Hull
+    // steps so the bolts-to-a-kill count lands on 3, 4, 5, 6 — a fraction of a
+    // bolt either way is a magazine that runs out in a different place for no
+    // reason the player can see. And closing speed stays under MOVE_SPEED at
+    // level 4 (6.3 m/s against 7.2), because a drone that outruns the player
+    // cannot be kited and the arena stops being a place to move through.
+    let SPEED_STEP = 0.14;       // +14% closing speed per level
+    let HP_STEP = 0.33;          // +33% hull per level: 3, 4, 5 and 6 bolts
+    let DPS_STEP = 0.25;         // +25% contact damage per level
+    let SCORE_STEP = 0.50;       // +50% score per level
+    let HEAL_ON_LEVEL = 45.0;    // health handed back between levels
 
     let BLAST_R2 = 56.25;        // (7.5 m)^2
     let BLAST_IMPULSE = 260.0;
@@ -352,13 +415,21 @@ fn step(world, step) {
     let cur_x = world.cursor_x() * vw;
     let cur_y = world.cursor_y() * vh;
 
-    // --- mode: 0 title, 1 playing, 2 paused, 3 over -------------------------
+    // --- mode: 0 title, 1 playing, 2 paused, 3 over, 4 level cleared --------
     // Edges are the difference against what last step stored, which is the
     // whole reason the input API has no pressed/released query: two lines of
     // `world.state` per button, in the one script that wants them.
+    //
+    // Mode 4 is the one the campaign added, and it is the difference between a
+    // card that reports and a card that offers: a level ends, the arena stands
+    // still, and the button says NEXT LEVEL. Mode 3 is now only the two states
+    // nothing follows — the player died, or the last level is done.
     let mode = world.state("mode", 0).to_int();
+    let level = world.state("level", 1).to_int();
     let dead = world.state("dead", 0);
     let won = world.state("won", 0);
+    let cleared = world.state("cleared", 0);
+    if cleared > 0.5 { mode = 4; }
     if dead > 0.5 { mode = 3; }
     if won > 0.5 { mode = 3; }
 
@@ -383,8 +454,41 @@ fn step(world, step) {
     if mode == 1 && paused_now { next = 2; }
     if mode == 2 && paused_now { next = 1; }
     if mode == 2 && pressed_play { next = 1; }
+    if mode == 4 && pressed_play { next = 1; }
+    let advance = mode == 4 && pressed_play;
     mode = next;
     world.set_state("mode", mode);
+
+    // Starting the next level is bookkeeping and nothing else: its ten drones
+    // and its barrels are already in the file, parked at PARK_Y, and the wave
+    // machinery below flies them in exactly as it flies in a wave. Order
+    // matters — the wave counter and the magazine are read further down, so
+    // they are written here, before anything looks at them.
+    if advance {
+        level += 1;
+        world.set_state("level", level);
+        world.set_state("cleared", 0);
+        world.set_state("wave", 1);
+        world.set_state("ammo", MAG_SIZE);
+        world.set_state("reload", 0.0);
+    }
+    let base = drone_base(level, DRONE_COUNT);
+    // Every barrel up to and including this level's is in play — not just the
+    // ones this level brought. A barrel the player did not shoot last level is
+    // still standing in the arena, and an unarmed barrel that looks exactly
+    // like an armed one is the worst answer available; carrying them forward
+    // also means saving one is worth something. Barrels past this number are
+    // still parked in the sky and cannot be hit from the floor anyway.
+    let keg_live = barrel_first(level) + barrels_in(level) - 1;
+
+    // This level's dials. Level 1 is exactly the game that shipped: every step
+    // is a multiple of (level - 1), so the arithmetic is the identity there and
+    // nothing about the first fight changed.
+    let rung = (level - 1).to_float();
+    let drone_speed = DRONE_SPEED * (1.0 + SPEED_STEP * rung);
+    let drone_hp = DRONE_HP * (1.0 + HP_STEP * rung);
+    let touch_dps = TOUCH_DPS * (1.0 + DPS_STEP * rung);
+    let kill_score = DRONE_SCORE.to_float() * (1.0 + SCORE_STEP * rung);
 
     let playing = mode == 1;
     // The game's clock. Everything that moves reads `gdt`, so a menu freezes
@@ -540,6 +644,12 @@ fn step(world, step) {
     // Positions are read once into arrays: the bullet loop needs every drone,
     // and `world.position` on a broken entity is a runtime error, so reading
     // through the alive flags happens in exactly one place.
+    //
+    // The arrays hold *this level's* ten. `i` is the index within the level and
+    // `base + i + 1` is the entity's number, which is the only place the two
+    // ever have to be converted: everything downstream of here — the hit test,
+    // the blast, the wave counter — works in local indices, so the campaign
+    // costs those loops nothing.
     let wave = world.state("wave", 1).to_int();
     let alive = [];
     let dxs = [];
@@ -547,7 +657,7 @@ fn step(world, step) {
     let dzs = [];
     let live_count = 0;
     for i in 0..DRONE_COUNT {
-        let n = i + 1;
+        let n = base + i + 1;
         let flag = world.state("d" + n.to_string() + "a", 1);
         let is_alive = flag > 0.5;
         alive.push(is_alive);
@@ -599,21 +709,21 @@ fn step(world, step) {
             hit_x = dxs[j];
             hit_y = dys[j];
             hit_z = dzs[j];
-            let n = j + 1;
-            let died = damage_drone(world, n, BULLET_DAMAGE, DRONE_HP);
+            let n = base + j + 1;
+            let died = damage_drone(world, n, BULLET_DAMAGE, drone_hp);
             if died > 0 {
                 alive[j] = false;
                 dys[j] = -999.0;
                 live_count -= 1;
                 kills += 1;
-                score += DRONE_SCORE;
+                score += kill_score.to_int();
             }
         }
 
         // Then barrels. A hit opens one, and the blast does the rest.
         let bnum = -1;
         if !spent {
-            bnum = hit_barrel(world, BARREL_COUNT, bx, by, bz, nx, ny, nz, BARREL_R2);
+            bnum = hit_barrel(world, 1, keg_live, bx, by, bz, nx, ny, nz, BARREL_R2);
         }
         if bnum > 0 {
             spent = true;
@@ -623,7 +733,8 @@ fn step(world, step) {
             blast_y = bar[1];
             blast_z = bar[2];
             let killed = detonate(
-                world, bnum, BARREL_COUNT, alive, dxs, dys, dzs, BLAST_R2, BLAST_IMPULSE
+                world, bnum, 1, keg_live, base,
+                alive, dxs, dys, dzs, BLAST_R2, BLAST_IMPULSE
             );
             for idx in killed {
                 alive[idx] = false;
@@ -632,7 +743,7 @@ fn step(world, step) {
             let n_killed = killed.len();
             live_count -= n_killed;
             kills += n_killed;
-            score += DRONE_SCORE * n_killed;
+            score += kill_score.to_int() * n_killed;
             score += BARREL_SCORE;
         }
 
@@ -668,11 +779,15 @@ fn step(world, step) {
 
     // --- drone behaviour ----------------------------------------------------
     let hp = world.state("hp", 100.0);
+    // Clearing a level hands back health rather than all of it: a campaign that
+    // heals you to full has three independent fights in it, and one that heals
+    // you not at all is decided by level 1.
+    if advance { hp = clampf(hp + HEAL_ON_LEVEL, 0.0, 100.0); }
     let contact = false;
     for i in 0..DRONE_COUNT {
         if !alive[i] { continue; }
-        let n = i + 1;
-        let dormant = drone_wave(n) > wave;
+        let n = base + i + 1;
+        let dormant = drone_wave(i + 1) > wave;
         if !playing { dormant = true; }
         if dormant {
             world.set_linear_velocity(drone_name(n), 0.0, 0.0, 0.0);
@@ -682,14 +797,14 @@ fn step(world, step) {
         let ey = dys[i];
         let ez = dzs[i];
         let touched = drive_drone(
-            world, n, ex, ey, ez, px, py, pz, DRONE_SPEED, DRONE_HOVER, TOUCH_RANGE
+            world, n, ex, ey, ez, px, py, pz, drone_speed, DRONE_HOVER, TOUCH_RANGE
         );
         if touched > 0 { contact = true; }
     }
 
     if !playing { contact = false; }
     if contact {
-        hp -= TOUCH_DPS * gdt;
+        hp -= touch_dps * gdt;
         if hp <= 0.0 {
             hp = 0.0;
             world.set_state("dead", 1);
@@ -702,16 +817,22 @@ fn step(world, step) {
     let wave_clear = true;
     for i in 0..DRONE_COUNT {
         if !alive[i] { continue; }
-        let n = i + 1;
-        if drone_wave(n) <= wave { wave_clear = false; }
+        if drone_wave(i + 1) <= wave { wave_clear = false; }
     }
     if !playing { wave_clear = false; }
     if wave_clear {
-        // Nothing left anywhere ends the run; otherwise the next wave wakes
+        // Nothing left in this level ends it; otherwise the next wave wakes
         // up. Checked in that order so a blast that takes every drone at once
-        // wins on the wave it happened on, instead of advancing the counter
-        // past waves that will never arrive.
-        if live_count == 0 {
+        // ends the level on the wave it happened on, instead of advancing the
+        // counter past waves that will never arrive.
+        //
+        // What "ends it" means is the campaign's one branch: another level to
+        // fly in, or the end of the run. `cleared` opens the NEXT LEVEL card;
+        // `won` is the last level and has nothing after it.
+        let more = level < LEVELS;
+        if live_count == 0 && more {
+            world.set_state("cleared", 1);
+        } else if live_count == 0 {
             world.set_state("won", 1);
         } else if wave < WAVES {
             wave += 1;
@@ -719,17 +840,32 @@ fn step(world, step) {
     }
     world.set_state("wave", wave);
 
+    // This level's barrels come down and stay down. Not gated on `playing`,
+    // deliberately: a barrel dropping mid-flight when the player pauses would
+    // hang in the air, and holding one at rest costs the same call either way.
+    settle_barrels(world, 1, keg_live, BARREL_REST);
+
     // The wave announcement. `shown` is the wave the banner last named, so a
     // wave that starts — including the first, when the run begins on wave 1 —
     // is exactly "the counter moved since the banner last spoke".
     let banner = world.state("banner", 0.0) - gdt;
     let shown = world.state("shown", 0).to_int();
+    let told = world.state("told", 0).to_int();
     let announce = playing && wave != shown;
+    // A new level outranks a new wave: they happen on the same step, and
+    // "LEVEL 2" is the thing the player needs to read.
     if announce {
         world.set_hud_text("WaveBanner", "WAVE " + wave.to_string());
         banner = BANNER_TIME;
         shown = wave;
     }
+    if playing && level != told {
+        world.set_hud_text("WaveBanner", "LEVEL " + level.to_string());
+        banner = BANNER_TIME;
+        shown = wave;
+        told = level;
+    }
+    world.set_state("told", told);
     let show_banner = banner > 0.0;
     if !playing { show_banner = false; }
     world.set_hud_visible("WaveBanner", show_banner);
@@ -749,6 +885,11 @@ fn step(world, step) {
     smoke = clampf(smoke - gdt, 0.0, 1.0);
     let smoke_rate = 0.0;
     if smoke > 0.0 { smoke_rate = 150.0; }
+    // A frozen clock never runs an effect timer down, so an emitter caught
+    // mid-puff by a pause or an end card would spray at full rate for as long
+    // as the card is up. Cheap to prevent, and it is the difference between a
+    // still frame and one quietly burning particles behind a menu.
+    if !playing { smoke_rate = 0.0; }
     world.set_particle_rate("MuzzleSmoke", smoke_rate);
     world.set_state("smoke", smoke);
 
@@ -760,6 +901,7 @@ fn step(world, step) {
     spark = clampf(spark - gdt, 0.0, 1.0);
     let spark_rate = 0.0;
     if spark > 0.0 { spark_rate = 500.0; }
+    if !playing { spark_rate = 0.0; }
     world.set_particle_rate("Sparks", spark_rate);
     world.set_state("spark", spark);
 
@@ -776,6 +918,7 @@ fn step(world, step) {
     boom = clampf(boom - gdt, 0.0, 1.0);
     let boom_rate = 0.0;
     if boom > 0.0 { boom_rate = 620.0; }
+    if !playing { boom_rate = 0.0; }
     world.set_particle_rate("Blast", boom_rate);
     let light_decay = boomlight * gdt * 6.0 + gdt * 8.0;
     boomlight = clampf(boomlight - light_decay, 0.0, 400.0);
@@ -806,11 +949,14 @@ fn step(world, step) {
     // hiding is now `visible`, where it used to be an empty string for a text
     // and a zero size for a rect, two spellings of one idea.
     let started = mode > 0;
-    world.set_hud_visible("ScoreText", started);
+    world.set_hud_visible("ScoreGroup", started);
     world.set_hud_visible("WaveText", started);
     world.set_hud_visible("HealthGroup", started);
     world.set_hud_visible("AmmoText", started);
 
+    let level_line = "LEVEL " + level.to_string();
+    level_line += " OF " + LEVELS.to_string();
+    world.set_hud_text("LevelText", level_line);
     world.set_hud_text("ScoreText", "SCORE " + score.to_string());
 
     let wave_line = "WAVE " + wave.to_string();
@@ -866,13 +1012,28 @@ fn step(world, step) {
     if mode == 2 {
         show_menu(world, "PAUSED", "ESC RESUMES TOO", "RESUME");
     }
+    // Between levels: the arena stands still and the card offers the next one.
+    // The drones and barrels it will fly in are already in the file, parked at
+    // PARK_Y — which is the only reason this button can exist at all.
+    if mode == 4 {
+        let done_line = "SCORE " + score.to_string();
+        done_line += "   NEXT: FASTER, TOUGHER, LESS COVER";
+        show_menu(
+            world, "LEVEL " + level.to_string() + " CLEARED", done_line, "NEXT LEVEL"
+        );
+    }
     if mode == 3 {
         let over_title = "ARENA CLEARED";
         if dead > 0.5 { over_title = "GAME OVER"; }
-        // No button: the engine cannot spawn entities, so a cleared arena
-        // stays cleared and there is nothing honest to offer here. An empty
-        // label hides the panel, and the card closes up around the gap.
-        show_menu(world, over_title, "SCORE " + score.to_string(), "");
+        let over_line = "LEVEL " + level.to_string();
+        over_line += " OF " + LEVELS.to_string();
+        over_line += "   SCORE " + score.to_string();
+        // No button, and now for a reason that survives the campaign: this is
+        // either the last level cleared or the player dead, and both want the
+        // ten broken drones and the spent barrels back — which the engine
+        // cannot do. An empty label hides the panel, and the card closes up
+        // around the gap.
+        show_menu(world, over_title, over_line, "");
     }
 
     // The reticle rides the cursor while the game is running, and is put away

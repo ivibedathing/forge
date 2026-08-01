@@ -1329,7 +1329,16 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
   reticle is four reticles. Its demo timeline is authored by a closed-loop director,
   `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a drone at step 431, and
   M31's **press capture** means that director now writes the release on the button too. Four
-  `Meadow` strips ring the plateau since the same pass).
+  `Meadow` strips ring the plateau since the same pass, and it now runs a **four-level campaign**
+  whose shape is dictated by two engine rules — a scene cannot spawn entities, and a script cannot
+  move a *dynamic* body by writing its Transform — so every level's drones and barrels are authored
+  parked above the arena and fly or drop in when their level starts, each level four metres above
+  the last because they reuse each other's positions and a shared park altitude has physics shoving
+  two bodies apart all run. **The performance bug it fixed is worth knowing outside the arena: a
+  full-frame `HudRect` defeats M15's scissored HUD rasterizer** and puts the frame back to filling a
+  window-sized CPU canvas — measured at 1920×1080, six frames went 13.1 s with a full-screen menu
+  veil against 5.7 s with a card-sized backdrop, which in a debug viewer stepping physics through a
+  wall-clock accumulator reads as a game that has stopped responding).
   The crate texture is a *framed* panel with a centre batten for that reason: a border is invariant
   under it. `Tree` tubes are the well-behaved case (`u` around the ring, `v` along the branch), which
   is also why bark fissures must vary in `u` — transposed, a trunk wears tyre tread.
