@@ -48,12 +48,25 @@
 //!   `clamp_shadow_elevation`, which is why a sun on the horizon does not cast
 //!   shadows of unbounded length.
 //!
-//! What stayed here is the part that could not be moved without rewriting it:
-//! the `SceneRenderer` struct, [`ScenePass`], and `draw` with its per-pass
-//! helpers. `draw` is deliberately still one function — breaking it into
-//! passes re-scopes borrows in the hot path, which is the exact shape of edit
-//! that has moved pixels in this repo before, so it wants its own change and
-//! its own A/B rather than riding along with a file split.
+//! What stayed here is the `SceneRenderer` struct, [`ScenePass`], and the
+//! frame itself: `draw` and the five functions it orchestrates.
+//!
+//! **`draw` splits on the borrow, not on the passes.** `prepare` is the half
+//! that needs `&mut self` — it uploads geometry, packs every uniform, and
+//! maintains the caches — and it hands the recording half a [`FramePlan`];
+//! `record_shadows`, `record_scene` and `record_hud` need only `&self` and an
+//! encoder. `prepare_frame_targets` sits between the first two because it
+//! both decides the frame's attachments and *allocates* the copies that
+//! decision needs, and it must keep its position: the order these run in is
+//! the order the GPU sees, and the caster pass runs before anything is shaded
+//! because the mesh pass samples what it writes.
+//!
+//! [`FramePlan`] exists so those two halves can be separate functions without
+//! an argument list nobody can check — it is built with field-init shorthand
+//! and destructured by name at every use, so a field cannot be wired to the
+//! wrong local. That is not tidiness: several of its fields are the same type,
+//! and a swapped pair of `Vec<usize>` keys is the one error class here that
+//! compiles clean and renders wrong.
 //!
 //! Submodules are children of this one, so they see its private items without
 //! ceremony; what they define is `pub(crate)` and glob-imported back here, so
@@ -90,6 +103,7 @@ use engine_core::water::MAX_WAVES;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Everything one scene render needs beyond the device and queue.
+#[derive(Clone, Copy)]
 pub struct ScenePass<'a> {
     /// Where the finished, single-sampled image lands. With MSAA on this is
     /// the resolve target rather than the thing drawn into.
@@ -290,6 +304,45 @@ pub struct SceneRenderer {
     frame_index: u64,
 }
 
+/// Everything `prepare` computed that the recording half then reads.
+///
+/// This exists so the two halves can be separate functions without an argument
+/// list nobody can check. Construction is field-init shorthand and every
+/// consumer destructures by name, so a field cannot be wired to the wrong
+/// local — which matters because several of these are the same type, and a
+/// swapped pair of `Vec<usize>` keys would compile clean and render wrong.
+struct FramePlan<'a> {
+    opaque: Vec<usize>,
+    blended: Vec<Blended>,
+    keys: Vec<usize>,
+    material_keys: Vec<Option<[usize; 4]>>,
+    skin_slots: Vec<Option<usize>>,
+    cutout: Vec<bool>,
+    road_keys: Vec<usize>,
+    water_keys: Vec<usize>,
+    cloud_keys: Vec<usize>,
+    meadow_keys: Vec<usize>,
+    particle_count: u32,
+    alpha_particles: u32,
+    hud_canvases: Vec<&'a crate::hud::HudCanvas>,
+}
+
+/// The frame's attachment choices and pass-split decisions.
+///
+/// Computed after the caster pass and before the scene pass, in that order,
+/// because it also *allocates*: the colour copy, the depth copy and the
+/// depth-resolve bind group. Keeping that order is what keeps the recorded
+/// command stream identical to the one this was split out of.
+struct FrameTargets<'a> {
+    color_view: &'a wgpu::TextureView,
+    resolve_target: Option<&'a wgpu::TextureView>,
+    water_present: bool,
+    refracting: Vec<bool>,
+    refracting_water: Vec<bool>,
+    refraction_present: bool,
+    split_pass: bool,
+}
+
 impl SceneRenderer {
     /// A renderer for single-sampled targets — the pre-MSAA constructor, kept
     /// because most callers (tests, the editor viewport) have no scene to ask.
@@ -313,12 +366,48 @@ impl SceneRenderer {
     /// `Arc<MeshData>`, and this keeps the GPU buffers for each one alive
     /// across frames (see the module doc). Per-frame work is one uniform
     /// write per pass plus the draw calls themselves.
+    /// Record and submit one frame.
+    ///
+    /// Two halves, and the split is the borrow: `prepare` needs `&mut self` to
+    /// upload geometry, pack uniforms and maintain the caches, and hands the
+    /// recording half a [`FramePlan`]; the recorders need only `&self` and an
+    /// encoder. The order below is the order the GPU sees it, and it is
+    /// load-bearing — the caster pass runs before anything is shaded because
+    /// the mesh pass samples what it writes.
     pub fn draw(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pass: ScenePass<'_>) {
+        self.frame_index += 1;
+
+        let plan = self.prepare(device, queue, &pass);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("scene-encoder"),
+        });
+
+        self.record_shadows(&mut encoder, &pass, &plan);
+        let targets = self.prepare_frame_targets(device, &pass);
+        self.record_scene(&mut encoder, &pass, &plan, &targets);
+        self.record_hud(&mut encoder, &pass, &plan);
+
+        queue.submit(Some(encoder.finish()));
+
+        let frame_index = self.frame_index;
+        self.meshes
+            .retain(|_, mesh| frame_index - mesh.last_used < MESH_CACHE_LIFETIME);
+        self.materials
+            .retain(|_, material| frame_index - material.last_used < MESH_CACHE_LIFETIME);
+        self.textures
+            .retain(|_, texture| frame_index - texture.last_used < MESH_CACHE_LIFETIME);
+    }
+
+    /// Upload, pack and sort everything this frame needs, and return what the
+    /// recording half reads back out. The `&mut self` half of [`Self::draw`].
+    fn prepare<'a>(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pass: &ScenePass<'a>,
+    ) -> FramePlan<'a> {
         let ScenePass {
-            target,
-            msaa,
-            depth,
-            target_size,
             items,
             water,
             clouds,
@@ -332,11 +421,9 @@ impl SceneRenderer {
             lights,
             environment,
             time,
-            clear,
             hud,
-        } = pass;
-
-        self.frame_index += 1;
+            ..
+        } = *pass;
 
         // Shadows need a real map; allocate it the first time any scene asks.
         if environment.shadows && self.shadow_map.is_none() {
@@ -826,9 +913,45 @@ impl SceneRenderer {
             );
         }
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("scene-encoder"),
-        });
+        FramePlan {
+            opaque,
+            blended,
+            keys,
+            material_keys,
+            skin_slots,
+            cutout,
+            road_keys,
+            water_keys,
+            cloud_keys,
+            meadow_keys,
+            particle_count,
+            alpha_particles,
+            hud_canvases,
+        }
+    }
+
+    /// The caster pass, before anything is shaded.
+    fn record_shadows(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pass: &ScenePass<'_>,
+        plan: &FramePlan<'_>,
+    ) {
+        let ScenePass {
+            items,
+            roads,
+            environment,
+            ..
+        } = *pass;
+        let FramePlan {
+            opaque,
+            keys,
+            material_keys,
+            skin_slots,
+            cutout,
+            road_keys,
+            ..
+        } = plan;
 
         // The caster pass, before anything is shaded: the mesh pass samples
         // what it writes. Only opaque geometry casts — a transparent surface
@@ -865,7 +988,7 @@ impl SceneRenderer {
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 };
-                for &index in &opaque {
+                for &index in opaque {
                     if cutout[index] || skin_slots[index].is_some() {
                         continue;
                     }
@@ -875,7 +998,7 @@ impl SceneRenderer {
                 // costs one pipeline change a frame, and a scene with no
                 // `alpha_cutoff` never enters this loop.
                 let mut switched = false;
-                for &index in &opaque {
+                for &index in opaque {
                     if !cutout[index] || skin_slots[index].is_some() {
                         continue;
                     }
@@ -906,7 +1029,7 @@ impl SceneRenderer {
                 if let (Some(skinned), Some(skin_objects)) = (&self.skinned, &self.skinned_objects)
                 {
                     let mut solid = false;
-                    for &index in &opaque {
+                    for &index in opaque {
                         let Some(slot) = skin_slots[index] else {
                             continue;
                         };
@@ -928,7 +1051,7 @@ impl SceneRenderer {
                         );
                     }
                     let mut cut = false;
-                    for &index in &opaque {
+                    for &index in opaque {
                         let Some(slot) = skin_slots[index] else {
                             continue;
                         };
@@ -970,6 +1093,25 @@ impl SceneRenderer {
                 }
             }
         }
+    }
+
+    /// Choose the frame's attachments and decide whether the pass splits,
+    /// allocating the copies that decision needs.
+    fn prepare_frame_targets<'a>(
+        &mut self,
+        device: &wgpu::Device,
+        pass: &ScenePass<'a>,
+    ) -> FrameTargets<'a> {
+        let ScenePass {
+            target,
+            msaa,
+            depth,
+            target_size,
+            items,
+            water,
+            environment,
+            ..
+        } = *pass;
 
         // With MSAA the multisampled texture is what gets drawn into and
         // `target` receives the resolve; without it, `target` is drawn into
@@ -1033,6 +1175,68 @@ impl SceneRenderer {
         // Group 2 for every lit pipeline, rebuilt only when one of its textures
         // was — allocating the shadow map, or a resize reallocating a copy.
         self.ensure_frame_textures(device, environment.shadows);
+
+        FrameTargets {
+            color_view,
+            resolve_target,
+            water_present,
+            refracting,
+            refracting_water,
+            refraction_present,
+            split_pass,
+        }
+    }
+
+    /// The scene pass: sky, opaque geometry, the depth and colour copies, the
+    /// back-to-front blended run, and particles.
+    fn record_scene(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pass: &ScenePass<'_>,
+        plan: &FramePlan<'_>,
+        targets: &FrameTargets<'_>,
+    ) {
+        let ScenePass {
+            msaa,
+            depth,
+            items,
+            roads,
+            meadows,
+            environment,
+            clear,
+            ..
+        } = *pass;
+        let FramePlan {
+            opaque,
+            blended,
+            keys,
+            material_keys,
+            skin_slots,
+            road_keys,
+            water_keys,
+            cloud_keys,
+            meadow_keys,
+            particle_count,
+            alpha_particles,
+            ..
+        } = plan;
+        let FrameTargets {
+            color_view,
+            resolve_target,
+            water_present,
+            refracting,
+            refracting_water,
+            refraction_present,
+            split_pass,
+            ..
+        } = targets;
+        // Destructuring a reference yields references; the `Copy` scalars
+        // are taken by value so the body below reads as it always did.
+        let (particle_count, alpha_particles) = (*particle_count, *alpha_particles);
+        let (color_view, resolve_target) = (*color_view, *resolve_target);
+        let (water_present, refraction_present, split_pass) =
+            (*water_present, *refraction_present, *split_pass);
+
         let held = self.frame_textures.as_ref().expect("just ensured");
         let frame_textures = &held.bind_group;
         let opaque_frame_textures = &held.opaque_bind_group;
@@ -1134,7 +1338,7 @@ impl SceneRenderer {
                 // --filter showcase` run repeatedly, or by rendering one file
                 // 20 times and `md5`-ing the PNGs.
                 let mut switched = false;
-                for &index in &opaque {
+                for &index in opaque {
                     if items[index].terrain.is_some() {
                         if !switched {
                             pass.set_pipeline(&self.terrain_pipeline);
@@ -1146,7 +1350,7 @@ impl SceneRenderer {
                 if switched {
                     pass.set_pipeline(&self.pipeline);
                 }
-                for &index in &opaque {
+                for &index in opaque {
                     if items[index].terrain.is_none()
                         && material_keys[index].is_none()
                         && skin_slots[index].is_none()
@@ -1162,7 +1366,7 @@ impl SceneRenderer {
                 // leaves `self.pipeline` — which is what keeps every baseline
                 // blessed before M26 issuing exactly the draws it always did.
                 let mut textured = false;
-                for &index in &opaque {
+                for &index in opaque {
                     let Some(key) = material_keys[index] else {
                         continue;
                     };
@@ -1193,7 +1397,7 @@ impl SceneRenderer {
                 // built.
                 if let (Some(skinned), Some(objects)) = (&self.skinned, &self.skinned_objects) {
                     let mut plain = false;
-                    for &index in &opaque {
+                    for &index in opaque {
                         let Some(slot) = skin_slots[index] else {
                             continue;
                         };
@@ -1214,7 +1418,7 @@ impl SceneRenderer {
                         );
                     }
                     let mut mapped = false;
-                    for &index in &opaque {
+                    for &index in opaque {
                         let Some(slot) = skin_slots[index] else {
                             continue;
                         };
@@ -1314,14 +1518,14 @@ impl SceneRenderer {
             if !split_pass {
                 self.draw_blended(
                     &mut pass,
-                    &blended,
-                    &keys,
-                    &water_keys,
-                    &cloud_keys,
-                    &material_keys,
-                    &refracting,
-                    &skin_slots,
-                    &refracting_water,
+                    blended,
+                    keys,
+                    water_keys,
+                    cloud_keys,
+                    material_keys,
+                    refracting,
+                    skin_slots,
+                    refracting_water,
                     opaque_frame_textures,
                 );
                 self.draw_particles(&mut pass, particle_count, alpha_particles);
@@ -1404,18 +1608,29 @@ impl SceneRenderer {
 
             self.draw_blended(
                 &mut pass,
-                &blended,
-                &keys,
-                &water_keys,
-                &cloud_keys,
-                &material_keys,
-                &refracting,
-                &skin_slots,
-                &refracting_water,
+                blended,
+                keys,
+                water_keys,
+                cloud_keys,
+                material_keys,
+                refracting,
+                skin_slots,
+                refracting_water,
                 frame_textures,
             );
             self.draw_particles(&mut pass, particle_count, alpha_particles);
         }
+    }
+
+    /// The overlay, composited last onto the resolved target.
+    fn record_hud(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pass: &ScenePass<'_>,
+        plan: &FramePlan<'_>,
+    ) {
+        let ScenePass { target, .. } = *pass;
+        let FramePlan { hud_canvases, .. } = plan;
 
         if !hud_canvases.is_empty() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1448,16 +1663,6 @@ impl SceneRenderer {
                 pass.draw(0..3, 0..1);
             }
         }
-
-        queue.submit(Some(encoder.finish()));
-
-        let frame_index = self.frame_index;
-        self.meshes
-            .retain(|_, mesh| frame_index - mesh.last_used < MESH_CACHE_LIFETIME);
-        self.materials
-            .retain(|_, material| frame_index - material.last_used < MESH_CACHE_LIFETIME);
-        self.textures
-            .retain(|_, texture| frame_index - texture.last_used < MESH_CACHE_LIFETIME);
     }
 
     /// Build group 2 — the shadow map, the depth copy, the colour copy — if it

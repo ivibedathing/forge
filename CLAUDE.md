@@ -844,10 +844,13 @@ is what drawing the object second under `Less` gives.
 
 Residue, recorded rather than hidden: `showcase_646.png`, the blast frame, still comes back as two
 images ~100 pixels apart (delta ≤ 18) in the distant tree canopy. It is the only baseline with a
-`diff_args` tolerance in `baselines.json` (`--threshold 24`). `showcase_810.png` has since been
-seen to flake the same way **once** — 29 pixels at a channel delta of 1, along the treeline, clean on
-the next three runs — so it is the same residue and not a second bug; it is left without a tolerance
-deliberately, since one flake in four sweeps is worth re-running rather than blessing away.
+`diff_args` tolerance in `baselines.json` (`--threshold 24`). `showcase_810.png` was first seen to
+flake the same way **once** — 29 pixels at a channel delta of 1, along the treeline, clean on the
+next three runs — and read at the time as a one-off worth re-running rather than blessing away. The
+M31 `draw` split then measured it directly and it is **not** a one-off: 3 distinct renders of 6, on
+`main`'s binary as much as the new one (see Verification). Since M29 all six tour frames carry the
+same tolerance anyway, so nothing needs re-blessing; what changes is the reading — 810 is in the
+class rather than an exception to it.
 M27 saw the same signature on **`showcase_450` (22 px) and `showcase_585` (24 px), both at delta 1**,
 in one of seven consecutive full sweeps, the other six clean. Same residue, same verdict, no
 tolerance: **the whole tour is in this class, not three named frames**, so a failure on any
@@ -1468,6 +1471,13 @@ itself on either, so the difference is the adapter and not the change. **This is
 `md5`-it-N-times step is not optional**: a two-artifact A/B failure looks damning and here meant
 nothing.
 
+The `draw` split then found **three** — 585, 646 and **`showcase_810`** — and the probe settled 810
+the same way: **3 distinct of 6 on both binaries**, `main`'s included. That retires the older note
+that 810 had "been seen to flake once"; it is measurably in the class, not a one-off, which is what
+the section above already predicted when it said the whole tour is. Three sweeps have now each
+picked a different subset of the six tour frames, so **which** of them differ carries no
+information — only whether the differing frame is stable under repetition does.
+
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
 per artifact family and check the `checked` count in the summary line.
@@ -1513,11 +1523,20 @@ order there is a wire format**, matching a WGSL declaration positionally. `shade
 assembly seam (`with_surface`, the `Producer`s, the anchors, and the `seam_tests` that pin every
 substitution actually landing). `pipelines.rs` is `with_samples` and the per-pass constructors;
 `resources.rs` the caches and frame-scoped GPU resources; `shadow.rs` the shadow map and its
-matrix math. `mod.rs` keeps `SceneRenderer`, `ScenePass` and `draw`. **`draw` is deliberately still
-one function** — breaking it into passes re-scopes borrows in the hot path, which is the shape of
-edit that has moved pixels here before, so it wants its own change and its own A/B. Submodules are
-children and see the parent's private items; what they define is `pub(crate)` and glob-imported
-back, so call sites read as they did when it was one file.
+matrix math. Submodules are children and see the parent's private items; what they define is
+`pub(crate)` and glob-imported back, so call sites read as they did when it was one file.
+
+`mod.rs` keeps `SceneRenderer`, `ScenePass`, and the frame. **`draw` splits on the borrow, not on
+the passes**: `prepare` is the `&mut self` half (uploads, uniform packing, cache maintenance) and
+hands `record_shadows`/`record_scene`/`record_hud` — which need only `&self` and an encoder — a
+`FramePlan`. `prepare_frame_targets` sits between the first two and **must keep that position**: it
+both decides the frame's attachments and allocates the copies that decision needs, and the order
+these run in is the order the GPU sees. `FramePlan` is built with field-init shorthand and
+destructured by name everywhere, which is load-bearing rather than tidy — several of its fields are
+the same type, and **a swapped pair of `Vec<usize>` keys is the one error class here that compiles
+clean and renders wrong**. The split moved no expression: the only edits inside the moved bodies
+were 25 `&x` → `x` borrows, forced because destructuring a reference yields references, and each
+one is compiler-checked.
 
 Plus `engine-physics`, `engine-script`, `engine-editor`. Supporting:
 `schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`, and
