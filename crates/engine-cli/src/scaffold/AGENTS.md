@@ -193,6 +193,21 @@ relative to the scene:
 builtin:cube  builtin:sphere  builtin:cylinder  builtin:plane  builtin:triangle
 ```
 
+**Each of them is one metre across at scale 1**, centred on the origin — a cube
+spans −0.5..0.5, a sphere is 0.5 in radius, a cylinder is 1 m tall and 1 m
+wide, a plane is a 1 m square. So `Transform.scale` reads directly as a size in
+metres: `"scale": [1.7, 0.7, 3.6]` on a cube is a car-sized box. (`builtin:triangle`
+is the original stack-proof triangle and is the one shape that is not on this
+grid.)
+
+That matters most where a `Collider` sits on the same entity, because collider
+dimensions are in the entity's **own** units and `Transform.scale` multiplies
+them too. A cuboid matching a builtin mesh is always `"half_extents": [0.5,
+0.5, 0.5]` and a sphere is always `"radius": 0.5`, whatever the scale — write
+the world measurement into either and you get a shape scaled twice, which draws
+at one size and collides at another. `engine validate` warns
+(`collider_mesh_size_mismatch`) when the two disagree by more than a quarter.
+
 Several components own their geometry instead of referencing a mesh, and having
 both is a validation error: `Terrain`, `Water`, `Road`, `Tree`, and `Cloud` are
 recipes the engine grows on load. A `Terrain` or `Road` entity carries no `Mesh`

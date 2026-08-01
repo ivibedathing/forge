@@ -901,6 +901,80 @@ fn warns_about_a_zero_scale_axis() {
     );
 }
 
+/// The two ways a collider stops describing the mesh it sits on, both of
+/// which used to render as a half-buried object and nothing else.
+#[test]
+fn warns_when_a_collider_is_a_different_size_from_its_builtin_mesh() {
+    // A radius authored against the pre-M34 two-metre sphere.
+    let doubled = r#"{"name":"s","entities":[
+        {"name":"Ball","components":[
+            {"type":"Transform","position":[0.0,3.0,0.0]},
+            {"type":"Mesh","asset":"builtin:sphere"},
+            {"type":"Collider","shape":"sphere","radius":1.0}
+        ]}
+    ]}"#;
+    let errors = validate_source(doubled, "test.json");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].error, "collider_mesh_size_mismatch");
+    assert!(errors[0].is_warning());
+    assert_eq!(
+        errors[0].context().unwrap().field.as_deref(),
+        Some("radius")
+    );
+
+    // A radius written as a world measurement, which Transform.scale then
+    // multiplies a second time.
+    let scaled_twice = r#"{"name":"s","entities":[
+        {"name":"Ball","components":[
+            {"type":"Transform","scale":[0.7,0.7,0.7]},
+            {"type":"Mesh","asset":"builtin:sphere"},
+            {"type":"Collider","shape":"sphere","radius":0.7}
+        ]}
+    ]}"#;
+    let errors = validate_source(scaled_twice, "test.json");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].error, "collider_mesh_size_mismatch");
+}
+
+/// A proxy collider is ordinary authoring, and a warning that fires on it
+/// would be noise rather than a check.
+#[test]
+fn a_collider_that_merely_approximates_its_mesh_is_not_a_warning() {
+    // A floor: `builtin:plane` is flat, and its collider must have thickness.
+    let floor = r#"{"name":"s","entities":[
+        {"name":"Floor","components":[
+            {"type":"Transform","scale":[20.0,1.0,20.0]},
+            {"type":"Mesh","asset":"builtin:plane"},
+            {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.05,0.5]}
+        ]}
+    ]}"#;
+    let errors = validate_source(floor, "test.json");
+    assert!(errors.is_empty(), "{errors:?}");
+
+    // A box slightly inset from the mesh it stands in for.
+    let inset = r#"{"name":"s","entities":[
+        {"name":"Crate","components":[
+            {"type":"Transform","scale":[2.0,2.0,2.0]},
+            {"type":"Mesh","asset":"builtin:cube"},
+            {"type":"Collider","shape":"cuboid","half_extents":[0.45,0.5,0.45]}
+        ]}
+    ]}"#;
+    let errors = validate_source(inset, "test.json");
+    assert!(errors.is_empty(), "{errors:?}");
+
+    // A cuboid standing in for a sphere: its bounding box is the right size,
+    // which is exactly what the tour's critters author.
+    let boxed_ball = r#"{"name":"s","entities":[
+        {"name":"Critter","components":[
+            {"type":"Transform","scale":[0.6,0.5,0.9]},
+            {"type":"Mesh","asset":"builtin:sphere"},
+            {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.5,0.5]}
+        ]}
+    ]}"#;
+    let errors = validate_source(boxed_ball, "test.json");
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
 #[test]
 fn warnings_do_not_hide_errors_and_vice_versa() {
     let source = r#"{"name":"s","entities":[

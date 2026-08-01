@@ -673,3 +673,69 @@ fn the_scene_format_doc_example_validates() {
         );
     }
 }
+
+/// No committed scene draws one size and collides at another.
+///
+/// Six did before M34 — five of them because `builtin:sphere` was two metres
+/// across while every other primitive was one, so a collider authored to match
+/// the drawn ball had to be written at twice its visible radius, and the sixth
+/// because a radius was written as a world measurement that `Transform.scale`
+/// then multiplied again. Both render as an object half-buried in the floor,
+/// which reads as an engine bug.
+///
+/// The starter scene `engine init` scaffolds is in here deliberately: it was
+/// one of the six, and it is the first thing anyone copies.
+#[test]
+fn no_committed_scene_disagrees_with_itself_about_how_big_something_is() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let Ok(listing) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", "examples", "crates/engine-cli/src/scaffold"])
+        .output()
+    else {
+        eprintln!("skipping: no git on this machine");
+        return;
+    };
+    if !listing.status.success() {
+        eprintln!("skipping: not a git checkout");
+        return;
+    }
+
+    let mut offenders: Vec<String> = Vec::new();
+    let mut scenes = 0;
+    for scene in String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .filter(|p| {
+            p.ends_with(".json")
+            && !p.contains("baselines")
+            // Committed broken on purpose; its pass condition is elsewhere.
+            && !p.ends_with("m5_broken.json")
+        })
+    {
+        let Ok(source) = std::fs::read_to_string(root.join(scene)) else {
+            continue;
+        };
+        // Materials, animation clips and the baseline manifest live under the
+        // same globs and are not scenes.
+        if !serde_json::from_str::<serde_json::Value>(&source)
+            .is_ok_and(|v| v.get("entities").is_some())
+        {
+            continue;
+        }
+        scenes += 1;
+        offenders.extend(
+            engine_core::validate::validate_source(&source, scene)
+                .iter()
+                .filter(|e| e.error == engine_core::codes::COLLIDER_MESH_SIZE_MISMATCH)
+                .map(|e| e.to_json()),
+        );
+    }
+
+    assert!(scenes > 20, "found only {scenes} scenes; the glob is wrong");
+    assert!(
+        offenders.is_empty(),
+        "a committed scene draws one size and collides at another:\n{}",
+        offenders.join("\n")
+    );
+}

@@ -9,8 +9,10 @@
 use serde_json::Value;
 
 use crate::codes;
-use crate::components::ComponentData;
+use crate::components::{Collider, ColliderShapeKind, ComponentData};
 use crate::error::EngineError;
+use crate::mesh::BuiltinMesh;
+use glam::Vec3;
 
 use super::{check_component, kind_of, ComponentSchemas, Cx};
 
@@ -599,6 +601,23 @@ pub(super) fn walk<'a>(
                 );
             }
 
+            // A builtin primitive is one metre across at scale 1, so both the
+            // drawn size and the simulated size are readable straight out of
+            // the file — and nothing else reports it when they disagree. The
+            // symptom is a ball resting half-buried in the floor, or a crate
+            // whose corner is hit before it is reached, and both look like
+            // engine bugs.
+            if let Some(Ok(builtin)) = mesh_asset.as_deref().and_then(BuiltinMesh::parse) {
+                errors.extend(check_collider_matches_mesh(
+                    cx,
+                    name,
+                    builtin,
+                    scale,
+                    collider_data,
+                    path,
+                ));
+            }
+
             // Collect layer names for the scene-level checks below.
             let mut note_distinct = |layer: &str, path: &str| {
                 if !distinct_layers.iter().any(|(l, _)| l == layer) {
@@ -1068,4 +1087,67 @@ pub(super) fn walk<'a>(
         hud_elements,
         hud_panel_names,
     }
+}
+
+/// How far a collider may differ from the builtin mesh it sits on before the
+/// difference is more likely a mistake than a decision.
+///
+/// A proxy collider is legitimate — a box around a barrel, a slightly inset
+/// hull — so this is deliberately loose. What it is sized to catch is the
+/// error class that has no other symptom: a factor of two (a `builtin:sphere`
+/// was radius 1 until M34, so a collider matching the drawn ball was authored
+/// at twice its visible size) and a `Transform.scale` applied twice (a radius
+/// written as a world measurement, then scaled again by the engine).
+const COLLIDER_SIZE_TOLERANCE: f32 = 1.25;
+
+/// Compare a `sphere` or `cuboid` collider against the builtin mesh on the
+/// same entity, both in world units.
+///
+/// Only the two shapes whose extent is a plain function of their fields: a
+/// `capsule`'s half-height means something else, and the mesh shapes *are* the
+/// mesh and cannot disagree with it. Axes the mesh is flat in are skipped —
+/// a `builtin:plane` floor needs a collider with thickness, and that is the
+/// normal authoring, not a mistake.
+fn check_collider_matches_mesh(
+    cx: &Cx,
+    entity: &str,
+    builtin: BuiltinMesh,
+    scale: Vec3,
+    collider: &Collider,
+    path: &str,
+) -> Option<EngineError> {
+    let drawn = builtin.half_extents() * scale.abs();
+    let (simulated, field) = match collider.shape {
+        // Round shapes take their radius from x; validation elsewhere refuses
+        // a non-uniform scale on them, so this is the whole story.
+        ColliderShapeKind::Sphere => (Vec3::splat(collider.radius?) * scale.x.abs(), "radius"),
+        ColliderShapeKind::Cuboid => (collider.half_extents? * scale.abs(), "half_extents"),
+        _ => return None,
+    };
+
+    let off = (0..3).find(|&axis| {
+        let (a, b) = (drawn[axis], simulated[axis]);
+        a > 1e-6 && b > 1e-6 && (a / b > COLLIDER_SIZE_TOLERANCE || b / a > COLLIDER_SIZE_TOLERANCE)
+    })?;
+
+    let axis = ["x", "y", "z"][off];
+    Some(
+        cx.err(
+            codes::COLLIDER_MESH_SIZE_MISMATCH,
+            format!(
+                "entity {entity:?} draws {asset} {drawn_m:.3} m across on {axis} but \
+                 collides as {sim_m:.3} m; a builtin mesh is 1 m across at scale 1, so \
+                 Collider.{field} is in the entity's own units and Transform.scale \
+                 multiplies it too",
+                asset = builtin.asset(),
+                drawn_m = drawn[off] * 2.0,
+                sim_m = simulated[off] * 2.0,
+            ),
+            path,
+        )
+        .entity(entity)
+        .component("Collider")
+        .field(field)
+        .warning(),
+    )
 }

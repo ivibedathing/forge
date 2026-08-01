@@ -117,6 +117,15 @@ or in the name of the entity.
 - **Distances are metres, mass is kilograms, time is seconds.** Angular
   velocity is degrees per second in the file and converted at the physics
   boundary.
+- **Every `builtin:` primitive is one metre across at scale 1**, centred on the
+  origin, so `Transform.scale` reads as a size in metres. `builtin:triangle` is
+  the exception — it is the original stack proof, not a modelling shape.
+- **`Collider` dimensions are in the entity's own units**, and `Transform.scale`
+  multiplies them the same way it multiplies the mesh. A collider matching a
+  builtin is therefore written `"half_extents": [0.5, 0.5, 0.5]` or
+  `"radius": 0.5` at *every* scale. `Collider.density` is kg/m³ and its default
+  of `1.0` is not a plausible material — mass is `density × shape volume`, so
+  anything meant to be pushed by forces wants a real one.
 
 ## Checking a file
 

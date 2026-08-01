@@ -30,7 +30,9 @@ fn step(world, step) {
     // only way a script can make a *surface* look hotter, since materials are
     // not in the curated API. What is new (M17) is that the fire now also
     // lights everything around it, below.
-    let s = 0.74 + flick * 0.06;
+    // A `builtin:sphere` diameter, not a radius: a builtin is one metre across
+    // at scale 1 (M34), so the bed is 1.48 m wide and swells by 0.12.
+    let s = 1.48 + flick * 0.12;
     world.set_scale("FireCore", s, s * 0.30, s);
 
     // One signal, four consumers: the flame's three layers and the embers.
