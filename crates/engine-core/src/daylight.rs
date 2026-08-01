@@ -322,6 +322,12 @@ impl DaylightSettings {
     /// really is dim and red, and it is also what keeps the sun/moon direction
     /// handoff invisible.
     pub fn builtin_palette() -> &'static [DaylightKeyframe] {
+        // Nine parameters because a keyframe *has* nine fields, all of them
+        // required (a half-specified keyframe fading to black is worse than an
+        // error). This is a positional constructor for a literal table below;
+        // taking the struct itself would mean spelling out eight field names
+        // per row and turn a readable palette into three screens of noise.
+        #[allow(clippy::too_many_arguments)]
         const fn kf(
             hour: f32,
             sun_color: [f32; 3],

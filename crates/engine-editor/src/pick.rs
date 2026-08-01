@@ -20,7 +20,7 @@ pub fn ray_through(view_projection: Mat4, size: Vec2, pixel: Vec2) -> (Vec3, Vec
 }
 
 /// The entity whose mesh the ray hits first, if any.
-pub fn pick<'a>(items: &'a [RenderItem], origin: Vec3, direction: Vec3) -> Option<&'a str> {
+pub fn pick(items: &[RenderItem], origin: Vec3, direction: Vec3) -> Option<&str> {
     let mut best: Option<(f32, &str)> = None;
     for item in items {
         if let Some(t) = ray_aabb(origin, direction, world_aabb(item)) {

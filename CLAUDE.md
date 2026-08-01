@@ -1452,6 +1452,14 @@ the *unchanged* pre-M31 scene, `showcase_585` came back as **5 distinct images f
 the M31 binary and **3 from 6** on `main`'s. A frame that disagrees with itself on both sides of a
 change is the adapter; `cmp`-ing one render against one render would have called that a regression.
 
+The clippy cleanup re-measured it on **two** frames and got the same answer, which is worth knowing
+before anyone reads an A/B result as a regression: `showcase_585` came back **6 distinct of 6** on
+the new binary and **5 of 6** on `main`'s, and `showcase_646` **3 of 6** and **4 of 6**. Its A/B
+found exactly those two frames differing out of 36 artifacts — and neither binary agrees with
+itself on either, so the difference is the adapter and not the change. **This is the reason the
+`md5`-it-N-times step is not optional**: a two-artifact A/B failure looks damning and here meant
+nothing.
+
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
 per artifact family and check the `checked` count in the summary line.
@@ -1592,16 +1600,25 @@ bar over an enemy's head is a *projection* question and wants `world.project(x, 
   `validate_source` at ~1,400. Splitting them is the one real structural debt in the workspace, and
   `draw` is exactly the ULP-sensitive path this file keeps warning about — so it wants its own
   change with its own A/B between binaries, never a drive-by while doing something else.
-- **28 clippy warnings** across engine-core, engine-render, engine-physics, engine-script,
-  engine-assets and engine-editor — mostly `map_or`→`is_none_or`, `manual_flatten`,
-  `needless_range_loop`, `too_many_arguments`, and two `large_enum_variant` in `engine-cli/src/app.rs`.
-  Several touch geometry and validation code, so this is an A/B-gated change too, not a `--fix` run.
-  Clearing them is what lets CI's clippy step stop being `continue-on-error`.
 - **25 of the 36 baselines are pinned by no test** (see Verification). Each new fixture has been
   adding to that pile; a CLI test that diff-renders the fixture is cheap and is what makes a
   baseline survive someone who does not run the sweep.
 - **`docs/scene-format.md` and `docs/component-reference.md`** are sketched in the design doc §4 and
   were never written. If either lands it must be generated and pinned like `error-codes.md`.
+
+**The clippy warnings are cleared and CI's clippy step is blocking.** Six of the twenty-eight were
+not bugs to fix but the lint being wrong, and they carry a local `#[allow]` with the reason —
+**read it before deleting one**. Five are the `!(a > b)` comparisons in `validate.rs` and
+`engine-script`, written negated *precisely so NaN fails*; clippy's suggested `a <= b` is false for
+NaN, so "fixing" them would let a NaN far plane, collider dimension, meadow stage or explosion
+radius validate clean. The sixth is `drop(write_object)` in `scene_renderer.rs`, which releases the
+closure's mutable borrow of `object_bytes` — deleting it does not compile. Four
+`too_many_arguments` allows carry their own rationale (a nine-field keyframe constructor, a
+recursive validation walk threading a JSON location, a collider builder naming four geometry
+sources, and eleven index-aligned slices on the blended draw path). One genuine defect fell out of
+it: the editor cloned `ResolvedLights` under a comment claiming M17 had made it non-`Copy`, when
+M17 had deliberately kept it `Copy` with a fixed-size point-light array — the comment asserted the
+opposite of the design it cited.
 
 ## Out of scope for v1
 

@@ -297,22 +297,23 @@ fn write_material(
     materials_dir: &str,
 ) -> Result<()> {
     let mut material = material.clone();
-    for map in [
+    for reference in [
         &mut material.albedo_map,
         &mut material.orm_map,
         &mut material.normal_map,
         &mut material.emissive_map,
-    ] {
-        if let Some(reference) = map {
-            *reference = reference.replacen(
-                &format!("{textures_dir}/"),
-                &format!(
-                    "{}{textures_dir}/",
-                    "../".repeat(materials_dir.split('/').count())
-                ),
-                1,
-            );
-        }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        *reference = reference.replacen(
+            &format!("{textures_dir}/"),
+            &format!(
+                "{}{textures_dir}/",
+                "../".repeat(materials_dir.split('/').count())
+            ),
+            1,
+        );
     }
 
     if let Some(parent) = path.parent() {
