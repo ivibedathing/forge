@@ -136,5 +136,6 @@ shore-foam contour reads the drawn surface back as a number, and it agrees to 1.
    and was honoured: it shipped with a raft, a buoy and a stone in its fixture, and a floating raft
    in the tour.
 
-Outside this list, the strongest rendering pick remains **shadow cascades**: one cascade is the
-current limit (`m16-environment.md`), and cloud shadows come free with it.
+Outside this list, the strongest rendering pick was **shadow cascades** — built as M38 by a
+parallel session, which is also why buoyancy landed as M40. Cloud shadows were the thing that came
+free with it.
