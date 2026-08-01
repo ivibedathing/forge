@@ -1,14 +1,16 @@
-# M33 — Global Illumination: Design
+# M35 — Global Illumination: Design
 
 *Status: design agreed, not yet built. §12 records what was settled with the user
-and what is still open; §13 is the build order. Milestone number is provisional —
-parallel sessions claim numbers at merge time, not at branch time.*
+and what is still open; §13 is the build order. Drafted as M33 and renumbered to
+M35 at merge, since skinned collider proxies took M33 and a units pass took M34
+while this was open — numbers are claimed at merge time here, not at branch
+time.*
 
 `CLAUDE.md` lists "advanced rendering (GI, ray tracing)" as out of scope for v1.
 **This reverses the GI half of that one item and nothing else** — ray tracing
 stays out, and §2 rejects the ray-traced approach on its own merits. The
 precedent for reading a scope line as reversible when the user asks for the thing
-is M28, which reversed `input-design.md` §7's "no mouse".
+is M28, which reversed M11's input design §7, "no mouse".
 
 ---
 
@@ -173,13 +175,13 @@ unit box scaled and positioned, non-uniform scale being the normal case.
 - **`bake`** is a relative path (invariant 3), the file §6 describes.
 - **`intensity`** scales the whole effect, which exists so an authoring pass can
   dial GI back without re-baking and so `0.0` is a one-field A/B against the
-  pre-M33 look.
+  pre-M35 look.
 - **`bounces`** is 1 or 2 (§5.4).
 
 Multiple volumes are allowed and are how a scene gives an interior finer spacing
 than the landscape it sits in; overlapping volumes resolve by **smallest spacing
 wins**, name-sorted for determinism where two tie. A pixel outside every volume
-falls back to `sky_ambient` — which is exactly the pre-M33 path, so the boundary
+falls back to `sky_ambient` — which is exactly the pre-M35 path, so the boundary
 of a volume is a fade, not a step (`blend`, in metres, at the volume's edge).
 
 Rejected: a scene-level `gi` block beside `physics`/`environment`/`daylight`.
@@ -221,13 +223,13 @@ compares. This is a stronger promise than any render in the repo makes, and it i
 available only because the bake never touches a GPU — the `daylight.rs` dividend
 again.
 
-### 5.3 The sun is not a basis source in M33 — and how it will be
+### 5.3 The sun is not a basis source in M35 — and how it will be
 
 **Decided scope: sky only.** The sun stays a direct light with a shadow map and
 contributes no bounce, which keeps the bake to three transfer vectors per probe,
 keeps it independent of the `daylight` arc, and still delivers contact darkening
 and sky-coloured fill — the majority of what §0 is about. What it does *not*
-deliver is the postcard case: a red wall reddening a white one. That is M34, and
+deliver is the postcard case: a red wall reddening a white one. That is M36, and
 this section is its design so the decision does not have to be made twice.
 
 The sun is the one basis source whose *direction* moves, and a transfer vector
@@ -250,7 +252,7 @@ the arc is in the scene file. The cost is written down: **changing
 `sun_elevation` or `sun_azimuth` would invalidate the bake**, and §6's hash
 catches that rather than letting it render wrong.
 
-Nothing in M33's file format has to change to accept it: `basis` is already a
+Nothing in M35's file format has to change to accept it: `basis` is already a
 named map in the header, and a reader that finds a `sun` entry beside `sky` adds
 terms to the same sum.
 
@@ -415,7 +417,7 @@ animate freely, which is how a scene fades GI in.
 
 ## 11. Verification
 
-**Fixture** `verify/m33_gi.json`, aimed at its subject with no terrain in frame,
+**Fixture** `verify/m35_gi.json`, aimed at its subject with no terrain in frame,
 per M22's rule, so it can carry a hard bit-exact pin: a white floor and ceiling
 between a strongly red wall and a strongly green one, lit by a sky, with **two
 identical white spheres** — one in the open, one under an overhang. The two
@@ -453,7 +455,7 @@ Settled with the user before implementation began:
 
 1. **The component is `LightProbeVolume`** — it says what the thing is made of,
    which is also what `bake-gi` and `gi-probe` talk about.
-2. **Sky basis only in M33.** §5.3 carries the sun's design forward to M34 rather
+2. **Sky basis only in M35.** §5.3 carries the sun's design forward to M36 rather
    than deleting it, and the file format accepts it without a version bump.
 3. **The tour gets a real volume**, not a token one, which re-blesses all six
    showcase baselines. They already carry M29's `--threshold 24
@@ -492,7 +494,7 @@ change is not free.
 
 - **Bounced sunlight**, §5.3 — the largest deferral and the one a viewer will
   notice, since it is what makes a coloured wall tint its neighbour under a sun
-  rather than only under the sky. The design is written; M34 is the build.
+  rather than only under the sky. The design is written; M36 is the build.
 - **Specular GI.** The sky reflection stays M16's roughness-lerped gradient. A
   probe volume can hold a prefiltered radiance cube, and that is what IBL means
   here; it is a milestone of its own and the deferred-work list already names it.
