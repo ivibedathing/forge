@@ -65,7 +65,7 @@ pub(super) fn check_environment_block(
 ) {
     const COLORS: [&str; 3] = ["sky_zenith", "sky_horizon", "sky_ground"];
     const FLAGS: [&str; 2] = ["sky", "shadows"];
-    const KNOWN: [&str; 8] = [
+    const KNOWN: [&str; 9] = [
         "sky",
         "sky_zenith",
         "sky_horizon",
@@ -73,6 +73,7 @@ pub(super) fn check_environment_block(
         "fog_density",
         "shadows",
         "shadow_distance",
+        "shadow_cascades",
         "samples",
     ];
 
@@ -146,6 +147,25 @@ pub(super) fn check_environment_block(
                     "/environment/shadow_distance",
                 )
                 .field("shadow_distance"),
+            );
+        }
+    }
+
+    // Capped at 4 because each cascade is a full 2048² depth layer that the
+    // caster pass draws into: a scene asking for 16 would be asking for 256 MB
+    // of shadow map and sixteen passes over its casters (M38).
+    if let Some(cascades) = object.get("shadow_cascades") {
+        let valid = cascades.as_u64().is_some_and(|v| (1..=4).contains(&v));
+        if !valid {
+            errors.push(
+                cx.err(
+                    codes::INVALID_ENVIRONMENT_VALUE,
+                    format!(
+                        "environment.shadow_cascades is {cascades}; it must be a whole number from 1 to 4"
+                    ),
+                    "/environment/shadow_cascades",
+                )
+                .field("shadow_cascades"),
             );
         }
     }

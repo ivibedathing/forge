@@ -536,6 +536,15 @@
       "pinned_by": "cli.rs"
     },
     {
+      "baseline": "examples/scenes/verify/baselines/m38_shadow_cascades.png",
+      "scene": "examples/scenes/verify/m38_shadow_cascades.json",
+      "args": [],
+      "width": 640,
+      "height": 360,
+      "milestone": "M38",
+      "pinned_by": "hand"
+    },
+    {
       "baseline": "examples/scenes/verify/baselines/m40_buoyancy.png",
       "scene": "examples/scenes/verify/m40_buoyancy.json",
       "args": [

@@ -959,6 +959,24 @@ fn curated_engine() -> rhai::Engine {
             Ok(())
         },
     );
+    engine.register_fn("shadow_cascades", |w: &mut WorldApi| {
+        w.environment.borrow().shadow_cascades as i64
+    });
+    engine.register_fn(
+        "set_shadow_cascades",
+        |w: &mut WorldApi, cascades: i64| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Same terms as `set_samples`, and for the same reason: changing it
+            // rebuilds every pipeline (M38 §4), so a settings screen offering it
+            // is offering a deliberate action, not a slider.
+            if !(1..=4).contains(&cascades) {
+                return Err(runtime(format!(
+                    "shadow cascades must be 1 to 4, got {cascades}"
+                )));
+            }
+            w.environment.borrow_mut().shadow_cascades = cascades as u32;
+            Ok(())
+        },
+    );
 
     engine.register_fn(
         "break_entity",

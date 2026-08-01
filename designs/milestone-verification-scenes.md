@@ -1312,6 +1312,31 @@ whole-stage replacement of the vertex stage into an assembly from per-producer c
 **29 of 29** committed render artifacts rendered byte for byte as they did at `main`, and the
 producer-less assembly is asserted equal to the stage in `mesh.wgsl` character for character.
 
+## M38 — Shadow cascades: `verify/m38_shadow_cascades.json`
+
+A fence of 22 posts and one 176 m rail receding from the camera to 168 m, plus three blocks at
+5 m, 32 m and 88 m, on flat ground under three nested cascades at `shadow_distance: 240`.
+
+**One object spans all three cascades**, which is the assertion: the rail is a single caster whose
+shadow runs from the near cascade to the far one, so the sharpness gradient shows up *along* it and
+a cascade that failed to render, or that was selected in the wrong order, breaks the line rather
+than dimming the scene. Rendering the same file at `shadow_cascades: 1` is the comparison: the near
+post's shadow goes from a crisp line to a grey smear, which is the 11.7 cm texel a single 240 m map
+can afford.
+
+Flat ground, no `Terrain` in frame, `samples: 1` — CLAUDE.md's reproducibility rule — so it carries
+a hard bit-exact pin (`the_m38_cascade_fixture_matches_its_baseline`). Three consecutive renders
+came back as one image, measured rather than assumed.
+
+What it covers: the nested split distances, the array shadow map and its per-layer caster passes,
+the per-cascade frame uniform the casters bind, the group-2 cascade matrices, and the cascaded
+lookup spliced into `mesh.wgsl`. Not covered by the fixture and covered by tests instead: water,
+road and meadow receivers under cascades, and the fade between two cascades at the band edge.
+
+**The bit-exactness half** is the A/B between binaries, and it is the whole design's load-bearing
+claim: at `shadow_cascades: 1` every shader compiles the source that sits on disk, so all 40
+committed baselines must render byte for byte as they do at `main`.
+
 ---
 
 ## Cumulative matrix

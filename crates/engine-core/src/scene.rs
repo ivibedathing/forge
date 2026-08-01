@@ -107,6 +107,14 @@ pub struct EnvironmentSettings {
     #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub shadow_distance: f32,
 
+    /// How many nested shadow maps the sun renders (M38): `1`–`4`, default
+    /// `1`. Each cascade covers a third the extent of the one outside it and
+    /// is therefore three times sharper, so `3` at a `shadow_distance` of
+    /// 240 m gives 1.3 cm texels near the camera where 11.7 cm is all a single
+    /// map can offer. Costs one caster pass and 16 MB per cascade.
+    #[schemars(range(min = 1, max = 4))]
+    pub shadow_cascades: u32,
+
     /// Multisample count for the scene pass: `1` (off) or `4`. The HUD is
     /// composited after the resolve and is never multisampled, so text stays
     /// pixel-exact either way.
@@ -125,6 +133,8 @@ impl Default for EnvironmentSettings {
             fog_density: 0.0,
             shadows: false,
             shadow_distance: 60.0,
+            // One, so the sun renders exactly the map M16 shipped.
+            shadow_cascades: 1,
             samples: 1,
         }
     }

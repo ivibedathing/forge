@@ -68,21 +68,22 @@ actually says.
 materials only: the entity's `Material` is its bark.
 
 **Scene-level blocks**, siblings of `entities`: `physics` (gravity, `timestep_hz`), `environment`
-(sky, fog, shadows, MSAA — `m16-environment.md`, **script-writable since M36**), and `daylight`
-(the clock-driven sun, moon and sky palette — `m21-daylight.md`).
+(sky, fog, shadows and their cascades, MSAA — `m16-environment.md`, `m38-shadow-cascades.md`,
+**script-writable since M36**), and `daylight` (the clock-driven sun, moon and sky palette —
+`m21-daylight.md`).
 
 **System order per fixed step**: animations → scripts → physics → particles → render.
 
 ## Current state
 
-**M0–M40 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M36, M38 and M40 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
-planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M40 buoyancy. (M35 is a
-design doc only — global illumination, not built. M7 editor at scope E0–E2 + validation panel +
-`--watch`.)
+planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M38 shadow cascades,
+M40 buoyancy. (M35 is a design doc only — global illumination, not built. M7 editor at scope
+E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -167,6 +168,12 @@ The cross-cutting ones. Per-system traps are in each note.
 - **Grep the `.rhai` files for `set_scale` before believing a scale-space change is complete.** Two
   scripts drive scale every step from a hard-coded constant, so editing the scene file achieved
   nothing and the coals rendered at half size (M34).
+- **Four shaders sample the shadow map, and they do not declare the same frame uniform.**
+  `mesh.wgsl`, `water.wgsl`, `road.wgsl` and `meadow.wgsl` each carry their own near-copy of the
+  lookup, so anything that changes the map's *binding type* changes all four together or fails at
+  pipeline creation. And `water.wgsl`'s `FrameUniform` stops at `params`: uniform field offsets are
+  positional, so a field appended after `point_lights` is unreachable from water without giving it
+  an eight-light array it never reads. **Check all four before appending to a shared uniform** (M38).
 - **`builtin:cube`'s faces disagree on which way `u` runs, in pairs rather than in axes.** Anything
   strongly directional on a cube draws differently on all four sides. `builtin:plane`'s UVs are not
   the intuitive ones either — fixing both is deferred as its own change with its own A/B (M26).
@@ -205,20 +212,20 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**33 of the 39 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**34 of the 40 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02` in the manifest and stay the sweep's job; `cli.rs` says so
 where someone would go to add them. The pixel *allowance* is there rather than a wider threshold
 because the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held
-for eight consecutive full sweeps. **The other 30 entries carry no `diff_args` at all — they are
+for eight consecutive full sweeps. **The other 31 entries carry no `diff_args` at all — they are
 bit-exact, and a failure there is real.**
 
 **Which tour frames flake carries no information; whether one is stable under repetition does.**
-Four separate sweeps each picked a different subset of the six, M36's A/B included. Every time, the
-differing frame had a binary disagreeing with **itself** — which is why the `md5`-it-N-times step is
-not optional. Four measurements, four times the answer was the adapter.
+Five separate sweeps each picked a different subset of the six, M36's and M38's A/Bs included.
+Every time, the differing frame had a binary disagreeing with **itself** — which is why the
+`md5`-it-N-times step is not optional. Five measurements, five times the answer was the adapter.
 
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
@@ -324,6 +331,9 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
 
 - **Environment (M16)** → `m16-environment.md`. Sky, fog, shadows, MSAA and transparency through one
   `environment` block. Every one of them defaults to off.
+- **Shadow cascades (M38)** → `m38-shadow-cascades.md`. `shadow_cascades` renders the sun's map
+  more than once, over **nested** slabs of the view, so the outermost cascade *is* M16's map and
+  the default of 1 is M16 unchanged. Four shaders sample that map and all four splice together.
 - **Point lights (M17)** → `m17-point-lights.md`. Local lamps with a hard `range` horizon, ≤8 per
   scene, no shadows.
 - **Day and night (M21)** → `m21-daylight.md`. A pure CPU function mapping the clock to sun, moon,
@@ -526,9 +536,11 @@ demo today. (The fourth, a CPU wave evaluator, was M40.) The rest, by area:
 - **Editor**: E3 (structure edits), E4 (undo); picking against the *posed* mesh (CPU ray picking
   hits the rest pose).
 - **M5-era**: `--fix`, watch mode.
-- **Rendering**: planar reflections, shadow cascades (which is also what cloud shadows need),
-  shadows from point lights, spot lights, a light on the tour's explosion, a sky-dome cloud layer
-  for cirrus and overcast, tree LOD and wind. **Alpha-cut leaves are a missing feature**, not an
+- **Rendering**: planar reflections, cloud shadows (M38 was their prerequisite; a `Cloud` casting
+  wants M16's "transparent geometry does not cast" answered), per-cascade resolution, shadows from
+  point lights, spot lights, a light on the tour's explosion, a sky-dome cloud layer for cirrus and
+  overcast, tree LOD and wind. The showcase tour still renders at one cascade, deliberately —
+  see `m38-shadow-cascades.md`. **Alpha-cut leaves are a missing feature**, not an
   authoring job: `Tree::leaf_material` synthesizes a `Material` from `leaf_color`/`leaf_roughness`
   alone, so leaf maps mean new `Tree` fields, a schema regeneration, and a validation pass.
 - **Water** (after M40): wave-driven drift (a Gerstner wave's orbital velocity would carry a float

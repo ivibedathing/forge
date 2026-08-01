@@ -316,9 +316,12 @@ anywhere; slots are `0..9`, and an empty one reads as `false` rather than
 failing, because "is there a save?" is a menu's first question. `quit()` closes
 the viewer's window, and headlessly stops the run and reports `quit_at_step`.
 The `environment` block is writable through `shadows` / `set_shadows`,
-`sky` / `set_sky`, `fog` / `set_fog` and `samples` / `set_samples`, which is
-what a graphics-settings screen drives; `set_samples` takes 1 or 4 and errors
-at the call on anything else. And `animation_clip` / `set_animation_clip`
+`sky` / `set_sky`, `fog` / `set_fog`, `samples` / `set_samples` and
+`shadow_cascades` / `set_shadow_cascades`, which is what a graphics-settings
+screen drives; `set_samples` takes 1 or 4 and `set_shadow_cascades` takes 1 to
+4, both erroring at the call on anything else. Those two rebuild every pipeline
+when they change, so they are a settings screen's deliberate actions rather
+than sliders. And `animation_clip` / `set_animation_clip`
 switches a skinned character between clips as a **hard cut** — blending is a
 standing non-goal, so a change of gait is a change of clip, and the cut resets
 `phase` because two clips do not share a cycle.

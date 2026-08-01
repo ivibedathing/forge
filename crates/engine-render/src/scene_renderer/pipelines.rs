@@ -79,14 +79,39 @@ impl super::SceneRenderer {
     /// renderer rather than to a frame: a scene that changes `samples` gets a
     /// new `SceneRenderer`, which is what the viewer's reload path does.
     pub fn with_samples(device: &wgpu::Device, format: wgpu::TextureFormat, samples: u32) -> Self {
+        Self::configured(device, format, samples, 1)
+    }
+
+    /// A renderer built for `samples`-way MSAA and `cascades` shadow maps.
+    ///
+    /// Both are baked into every pipeline, and for the same reason: the sample
+    /// count is pipeline state, and the cascade count decides whether the shadow
+    /// map is bound as a `texture_depth_2d` or a `texture_depth_2d_array` —
+    /// which is a bind group *layout*, not a uniform. A scene that changes
+    /// either gets a new `SceneRenderer`, which is what the viewer's reload path
+    /// does.
+    ///
+    /// At one cascade every pipeline here compiles the shader source that sits
+    /// on disk, unmodified. That is the property every committed baseline rests
+    /// on — see M38 §4.
+    pub fn configured(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        samples: u32,
+        cascades: u32,
+    ) -> Self {
         let samples = samples.max(1);
+        let cascades = cascades.clamp(1, MAX_SHADOW_CASCADES);
         let multisample = wgpu::MultisampleState {
             count: samples,
             ..Default::default()
         };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("../shaders/mesh.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(
+                include_str!("../shaders/mesh.wgsl"),
+                cascades,
+            ))),
         });
 
         let uniform_layout = |label: &str, binding_size: Option<u64>| {
@@ -169,16 +194,20 @@ impl super::SceneRenderer {
         // Merging these was a bind-group-budget decision, not a tidiness one:
         // `downlevel_defaults` caps `max_bind_groups` at 4, and three of them
         // spent on frame-scoped textures left nowhere for a material.
-        let frame_textures_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("frame-textures"),
-                entries: &[
+        let mut frame_texture_entries = vec![
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Depth,
-                            view_dimension: wgpu::TextureViewDimension::D2,
+                            // One cascade is a plain 2D map, exactly as it has
+                            // been since M16; beyond one it is an array, and the
+                            // four receivers are spliced to match (M38).
+                            view_dimension: if cascades == 1 {
+                                wgpu::TextureViewDimension::D2
+                            } else {
+                                wgpu::TextureViewDimension::D2Array
+                            },
                             multisampled: false,
                         },
                         count: None,
@@ -217,7 +246,28 @@ impl super::SceneRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
-                ],
+        ];
+        // The cascade matrices, beside the map they address (M38). Present only
+        // in the cascaded layout: at one cascade the group is the one M26 left,
+        // entry for entry, and the four receivers declare what they always did.
+        if cascades > 1 {
+            frame_texture_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: std::num::NonZeroU64::new(
+                        std::mem::size_of::<CascadeUniform>() as u64,
+                    ),
+                },
+                count: None,
+            });
+        }
+        let frame_textures_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("frame-textures"),
+                entries: &frame_texture_entries,
             });
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -367,7 +417,7 @@ impl super::SceneRenderer {
         // by construction rather than by hoping.
         let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terrain-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_terrain())),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(&with_terrain(), cascades))),
         });
         let terrain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("terrain-pipeline"),
@@ -411,11 +461,14 @@ impl super::SceneRenderer {
         // for the maps and a third vertex slot for the UVs they are read at.
         let textured_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("textured-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_textures())),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(&with_textures(), cascades))),
         });
         let textured_blended_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("textured-blended-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_textures_and_refraction())),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(
+                &with_textures_and_refraction(),
+                cascades,
+            ))),
         });
         let textured_pipeline_for = |label: &str,
                                      module: &wgpu::ShaderModule,
@@ -525,7 +578,7 @@ impl super::SceneRenderer {
         // asks to bend light pays for a second shader.
         let refractive_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh-refractive-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_refraction())),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(&with_refraction(), cascades))),
         });
         let refractive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("mesh-refractive-pipeline"),
@@ -592,7 +645,7 @@ impl super::SceneRenderer {
             &vertex_layouts[..1],
             format,
             multisample,
-            std::borrow::Cow::Borrowed(include_str!("../shaders/water.wgsl")),
+            with_cascades(include_str!("../shaders/water.wgsl"), cascades),
         );
         // The same again with refraction spliced in (M27), for the surfaces
         // that bend what is behind them. A second pipeline rather than a
@@ -608,7 +661,7 @@ impl super::SceneRenderer {
             &vertex_layouts[..1],
             format,
             multisample,
-            with_water_refraction(),
+            with_cascades(&with_water_refraction(), cascades).into_owned().into(),
         );
         // Clouds (M20). Its own uniform and shader, the mesh pass's frame
         // binding, and nothing else: no shadow map (the engine has one cascade
@@ -635,6 +688,7 @@ impl super::SceneRenderer {
             Some(std::mem::size_of::<RoadUniform>() as u64),
         );
         let road_pipeline = Self::road_pipeline(
+            cascades,
             device,
             &object_layout,
             &frame_layout,
@@ -652,6 +706,7 @@ impl super::SceneRenderer {
             Some(std::mem::size_of::<MeadowUniform>() as u64),
         );
         let meadow_pipeline = Self::meadow_pipeline(
+            cascades,
             device,
             &meadow_layout,
             &frame_layout,
@@ -839,7 +894,7 @@ impl super::SceneRenderer {
         let object_stride =
             std::mem::size_of::<ObjectUniform>().next_multiple_of(alignment as usize) as u64;
 
-        let shadow_placeholder = ShadowMap::new(device, 1);
+        let shadow_placeholder = ShadowMap::new(device, 1, cascades);
         let depth_placeholder = placeholder_texture(
             device,
             "scene-depth-placeholder",
@@ -877,6 +932,10 @@ impl super::SceneRenderer {
             std::mem::size_of::<JointPaletteUniform>().next_multiple_of(alignment as usize) as u64;
         let meadow_stride =
             std::mem::size_of::<MeadowUniform>().next_multiple_of(alignment as usize) as u64;
+
+        // Before the struct literal, which moves `frame_layout` into it.
+        let cascade_resources =
+            (cascades > 1).then(|| CascadeResources::new(device, &frame_layout, cascades));
 
         Self {
             pipeline,
@@ -922,6 +981,8 @@ impl super::SceneRenderer {
             scene_sampler,
             format,
             samples,
+            cascades,
+            cascade_resources,
             shadow_placeholder,
             depth_placeholder,
             color_placeholder,
@@ -964,7 +1025,10 @@ impl super::SceneRenderer {
         let module = |label: &str, source: std::borrow::Cow<'static, str>| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(with_sky_common(&source)),
+                source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(
+                    &source,
+                    self.cascades,
+                ))),
             })
         };
         let plain = module("skinned-shader", with_surface(&[skin_producer()]));
@@ -1579,6 +1643,7 @@ impl super::SceneRenderer {
     /// sake, not the state's.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn road_pipeline(
+        cascades: u32,
         device: &wgpu::Device,
         object_layout: &wgpu::BindGroupLayout,
         frame_layout: &wgpu::BindGroupLayout,
@@ -1590,7 +1655,10 @@ impl super::SceneRenderer {
     ) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("road-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("../shaders/road.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(
+                include_str!("../shaders/road.wgsl"),
+                cascades,
+            ))),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("road-pipeline-layout"),
@@ -1658,6 +1726,7 @@ impl super::SceneRenderer {
     ///
     /// There is no shadow-caster twin. See `meadow.wgsl`'s header.
     pub(crate) fn meadow_pipeline(
+        cascades: u32,
         device: &wgpu::Device,
         meadow_layout: &wgpu::BindGroupLayout,
         frame_layout: &wgpu::BindGroupLayout,
@@ -1667,8 +1736,9 @@ impl super::SceneRenderer {
     ) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("meadow-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!(
-                "../shaders/meadow.wgsl"
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(
+                include_str!("../shaders/meadow.wgsl"),
+                cascades,
             ))),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
