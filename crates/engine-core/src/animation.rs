@@ -592,7 +592,9 @@ pub fn set_field(
                 // Appearance only. The shape fields are listed in
                 // `NOT_ANIMATABLE` and never reach here — regenerating the
                 // surface every frame is not something a clip should be able to
-                // ask for by accident.
+                // ask for by accident. `basins` (M42) needs no entry there for
+                // `Water.waves`' reason: an array of objects is not a shape a
+                // numeric clip can express, so it never arrives at all.
                 "texture_scale" => c.texture_scale = scalar,
                 "color_variation" => c.color_variation = scalar,
                 "bump" => c.bump = scalar,

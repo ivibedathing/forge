@@ -222,6 +222,12 @@ registry! {
         "a Terrain entity owns its own surface; it may not also have a Mesh or a Material";
     TERRAIN_LAYER_RANGE_INVERTED = "terrain_layer_range_inverted", Input,
         "a Terrain layer's height or slope range runs backwards, so it covers nothing";
+    // ── Terrain basins (M42) ───────────────────────────────────────────
+    TERRAIN_BASIN_NO_EFFECT = "terrain_basin_no_effect", Input,
+        "a Terrain basin has no depth or no footprint, so it cuts nothing (warning)";
+    TERRAIN_BASIN_OUTSIDE_PATCH = "terrain_basin_outside_patch", Input,
+        "a Terrain basin's footprint misses the patch entirely, usually a center \
+         written in local rather than world XZ (warning)";
     // ── Roads (M23) ────────────────────────────────────────────────────
     ROAD_WITH_MESH = "road_with_mesh", Input,
         "a Road entity owns its own surface; it may not also have a Mesh or a Material";

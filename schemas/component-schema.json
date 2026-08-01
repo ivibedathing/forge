@@ -674,6 +674,48 @@
         },
         "type": "object"
       },
+      "TerrainBasin": {
+        "additionalProperties": false,
+        "description": "One circular depression a [`Terrain`] cuts into its height field (M42): a\nflat floor, a smoothstepped wall, and how far down the floor sits.\n\nThe shape is `radius` metres of floor surrounded by `falloff` metres of wall,\nso the whole footprint is `radius + falloff` and the shoreline of any water\nput here lands somewhere on the wall. **Two numbers rather than one**: a\nsingle radius with a falloff to nothing gives a dish, and a dish deep enough\nto hold water has walls gentle enough that the waterline creeps far past\nwhere it was authored.\n\n**Overlapping basins take the deepest, not the sum.** Overlapping circles are\nhow anything that is not a circle gets authored — a lake is three of them, a\nchannel a line of them — and under a sum every overlap digs to twice the\ndepth, turning a lake into a ring of pits. The cost is a faint crease where\ntwo basins are equally deep, which is under the water in every use this was\nbuilt for.",
+        "properties": {
+          "center": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Where the basin is centred, in **world** XZ metres — the same space\neverything else about a terrain is sampled in, and the same numbers the\n`Water` entity's `Transform.position` is written in.\n\nWorld rather than the patch's local space for M22's reason: heights are\na function of world position, which is what lets two patches sharing one\ndescription meet seamlessly. A basin in local space would be dragged\naround by its patch and would break that.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "depth": {
+            "default": 0.0,
+            "description": "Metres the floor drops below the surrounding field, `>= 0`.\n\nIn the same space as [`Terrain::height`] — metres of relief at\n`Transform.scale.y` 1, so the patch's vertical scale multiplies a basin\nexactly as it multiplies the hills. A second convention here would make\na patch at `scale.y: 2` disagree with itself about which of its numbers\nare metres.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "falloff": {
+            "default": 4.0,
+            "description": "Metres of wall between the floor's edge and the untouched field, `>= 0`.\n\nSmoothstepped, with the interpolant the value noise already uses, so the\nwall meets the surrounding ground with a zero derivative and the rim has\nno crease. 0 is a vertical wall, which reads as a quarry rather than a\npond and is occasionally what is wanted.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "radius": {
+            "default": 0.0,
+            "description": "Metres of flat floor at the centre, `>= 0`. 0 is legitimate and makes\nthe basin a smooth conical hollow of `falloff` metres.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
       "TerrainLayer": {
         "additionalProperties": false,
         "description": "One material a [`Terrain`] paints itself with, claiming a band of height and\na band of slope.\n\nA pixel's surface is the weighted average of every layer whose bands it falls\ninside; a layer that leaves both at their defaults covers everything and is\nthe base coat.\n\n**Slope does the heavy lifting.** Height alone gives horizontal stripes — a\ncontour map, and unmistakably so once the camera moves. What separates rock\nfrom grass in the world is that soil cannot cling to a steep face, so\n`slope_range` is the selector that reads as real and `height_range` adds\nbands of climate on top of it.",
@@ -2882,6 +2924,14 @@
         "additionalProperties": false,
         "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M22).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
         "properties": {
+          "basins": {
+            "default": [],
+            "description": "Circular depressions cut into the height field, in **world** XZ (M42).\n\nEmpty (the default) is M22's landscape exactly — the noise is the whole\nanswer. This is the only way to say \"the ground dips *here*\": everything\nelse about a patch describes a texture of relief rather than a place, and\na body of water needs a place.\n\nCut inside [`height_at`](crate::terrain::height_at), so the drawn\nsurface, its normals, the `trimesh` collider standing on it,\n`world.terrain_height`, a `Road` that follows this patch and a `Meadow`\ngrowing on it all follow from the one implementation.",
+            "items": {
+              "$ref": "#/$defs/TerrainBasin"
+            },
+            "type": "array"
+          },
           "bump": {
             "default": 0.30000001192092896,
             "description": "Per-pixel normal perturbation from the detail noise, `[0, 1]`.\n\nBumpiness with no displacement behind it — nothing physical may depend on\nit, which is what allows detail far finer than the grid or the collider.\nIt fades with view distance, because sub-pixel normal variation aliases\ninto sparkle that reads as broken rather than as low quality (the lesson\nwater's detail ripples already paid for).",
@@ -6061,6 +6111,14 @@
             "additionalProperties": false,
             "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M22).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
             "properties": {
+              "basins": {
+                "default": [],
+                "description": "Circular depressions cut into the height field, in **world** XZ (M42).\n\nEmpty (the default) is M22's landscape exactly — the noise is the whole\nanswer. This is the only way to say \"the ground dips *here*\": everything\nelse about a patch describes a texture of relief rather than a place, and\na body of water needs a place.\n\nCut inside [`height_at`](crate::terrain::height_at), so the drawn\nsurface, its normals, the `trimesh` collider standing on it,\n`world.terrain_height`, a `Road` that follows this patch and a `Meadow`\ngrowing on it all follow from the one implementation.",
+                "items": {
+                  "$ref": "#/$defs/TerrainBasin"
+                },
+                "type": "array"
+              },
               "bump": {
                 "default": 0.30000001192092896,
                 "description": "Per-pixel normal perturbation from the detail noise, `[0, 1]`.\n\nBumpiness with no displacement behind it — nothing physical may depend on\nit, which is what allows detail far finer than the grid or the collider.\nIt fades with view distance, because sub-pixel normal variation aliases\ninto sparkle that reads as broken rather than as low quality (the lesson\nwater's detail ripples already paid for).",
@@ -7888,6 +7946,48 @@
         "required": [
           "name"
         ],
+        "type": "object"
+      },
+      "TerrainBasin": {
+        "additionalProperties": false,
+        "description": "One circular depression a [`Terrain`] cuts into its height field (M42): a\nflat floor, a smoothstepped wall, and how far down the floor sits.\n\nThe shape is `radius` metres of floor surrounded by `falloff` metres of wall,\nso the whole footprint is `radius + falloff` and the shoreline of any water\nput here lands somewhere on the wall. **Two numbers rather than one**: a\nsingle radius with a falloff to nothing gives a dish, and a dish deep enough\nto hold water has walls gentle enough that the waterline creeps far past\nwhere it was authored.\n\n**Overlapping basins take the deepest, not the sum.** Overlapping circles are\nhow anything that is not a circle gets authored — a lake is three of them, a\nchannel a line of them — and under a sum every overlap digs to twice the\ndepth, turning a lake into a ring of pits. The cost is a faint crease where\ntwo basins are equally deep, which is under the water in every use this was\nbuilt for.",
+        "properties": {
+          "center": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Where the basin is centred, in **world** XZ metres — the same space\neverything else about a terrain is sampled in, and the same numbers the\n`Water` entity's `Transform.position` is written in.\n\nWorld rather than the patch's local space for M22's reason: heights are\na function of world position, which is what lets two patches sharing one\ndescription meet seamlessly. A basin in local space would be dragged\naround by its patch and would break that.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "depth": {
+            "default": 0.0,
+            "description": "Metres the floor drops below the surrounding field, `>= 0`.\n\nIn the same space as [`Terrain::height`] — metres of relief at\n`Transform.scale.y` 1, so the patch's vertical scale multiplies a basin\nexactly as it multiplies the hills. A second convention here would make\na patch at `scale.y: 2` disagree with itself about which of its numbers\nare metres.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "falloff": {
+            "default": 4.0,
+            "description": "Metres of wall between the floor's edge and the untouched field, `>= 0`.\n\nSmoothstepped, with the interpolant the value noise already uses, so the\nwall meets the surrounding ground with a zero derivative and the rim has\nno crease. 0 is a vertical wall, which reads as a quarry rather than a\npond and is occasionally what is wanted.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "radius": {
+            "default": 0.0,
+            "description": "Metres of flat floor at the centre, `>= 0`. 0 is legitimate and makes\nthe basin a smooth conical hollow of `falloff` metres.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
         "type": "object"
       },
       "TerrainLayer": {

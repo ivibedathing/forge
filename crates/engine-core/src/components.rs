@@ -2406,6 +2406,19 @@ pub struct Terrain {
     /// water's detail ripples already paid for).
     #[schemars(range(min = 0.0, max = 1.0))]
     pub bump: f32,
+
+    /// Circular depressions cut into the height field, in **world** XZ (M42).
+    ///
+    /// Empty (the default) is M22's landscape exactly — the noise is the whole
+    /// answer. This is the only way to say "the ground dips *here*": everything
+    /// else about a patch describes a texture of relief rather than a place, and
+    /// a body of water needs a place.
+    ///
+    /// Cut inside [`height_at`](crate::terrain::height_at), so the drawn
+    /// surface, its normals, the `trimesh` collider standing on it,
+    /// `world.terrain_height`, a `Road` that follows this patch and a `Meadow`
+    /// growing on it all follow from the one implementation.
+    pub basins: Vec<TerrainBasin>,
 }
 
 impl Default for Terrain {
@@ -2422,6 +2435,76 @@ impl Default for Terrain {
             texture_scale: 4.0,
             color_variation: 0.25,
             bump: 0.3,
+            basins: Vec::new(),
+        }
+    }
+}
+
+/// One circular depression a [`Terrain`] cuts into its height field (M42): a
+/// flat floor, a smoothstepped wall, and how far down the floor sits.
+///
+/// The shape is `radius` metres of floor surrounded by `falloff` metres of wall,
+/// so the whole footprint is `radius + falloff` and the shoreline of any water
+/// put here lands somewhere on the wall. **Two numbers rather than one**: a
+/// single radius with a falloff to nothing gives a dish, and a dish deep enough
+/// to hold water has walls gentle enough that the waterline creeps far past
+/// where it was authored.
+///
+/// **Overlapping basins take the deepest, not the sum.** Overlapping circles are
+/// how anything that is not a circle gets authored — a lake is three of them, a
+/// channel a line of them — and under a sum every overlap digs to twice the
+/// depth, turning a lake into a ring of pits. The cost is a faint crease where
+/// two basins are equally deep, which is under the water in every use this was
+/// built for.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerrainBasin {
+    /// Where the basin is centred, in **world** XZ metres — the same space
+    /// everything else about a terrain is sampled in, and the same numbers the
+    /// `Water` entity's `Transform.position` is written in.
+    ///
+    /// World rather than the patch's local space for M22's reason: heights are
+    /// a function of world position, which is what lets two patches sharing one
+    /// description meet seamlessly. A basin in local space would be dragged
+    /// around by its patch and would break that.
+    #[schemars(with = "[f32; 2]")]
+    pub center: [f32; 2],
+
+    /// Metres of flat floor at the centre, `>= 0`. 0 is legitimate and makes
+    /// the basin a smooth conical hollow of `falloff` metres.
+    #[schemars(range(min = 0.0))]
+    pub radius: f32,
+
+    /// Metres the floor drops below the surrounding field, `>= 0`.
+    ///
+    /// In the same space as [`Terrain::height`] — metres of relief at
+    /// `Transform.scale.y` 1, so the patch's vertical scale multiplies a basin
+    /// exactly as it multiplies the hills. A second convention here would make
+    /// a patch at `scale.y: 2` disagree with itself about which of its numbers
+    /// are metres.
+    #[schemars(range(min = 0.0))]
+    pub depth: f32,
+
+    /// Metres of wall between the floor's edge and the untouched field, `>= 0`.
+    ///
+    /// Smoothstepped, with the interpolant the value noise already uses, so the
+    /// wall meets the surrounding ground with a zero derivative and the rim has
+    /// no crease. 0 is a vertical wall, which reads as a quarry rather than a
+    /// pond and is occasionally what is wanted.
+    #[schemars(range(min = 0.0))]
+    pub falloff: f32,
+}
+
+impl Default for TerrainBasin {
+    fn default() -> Self {
+        Self {
+            center: [0.0, 0.0],
+            radius: 0.0,
+            depth: 0.0,
+            // A bare `{}` cuts nothing whatever this is, and validation says so
+            // (`terrain_basin_no_effect`); a plausible wall is still the more
+            // useful default the moment a depth is filled in.
+            falloff: 4.0,
         }
     }
 }

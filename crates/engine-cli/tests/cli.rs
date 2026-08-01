@@ -6707,6 +6707,90 @@ fn the_buoyancy_fixture_matches_its_baseline() {
     assert_eq!(report["pass"], true, "{report}");
 }
 
+/// The fixture: three basins, two of them holding water (M42).
+///
+/// **The picture is the assertion that the height field and the collider are the
+/// same surface.** A raft floats in a dug pool, a boulder and a pebble rest on
+/// the floor of a dry crater 1.2 m below the field around it, and two
+/// overlapping circles read as one oblong pond — which is `max`-not-sum drawn
+/// rather than argued. Pinned bit-exactly: three renders came back as one image,
+/// because the scene renders at `samples: 1` and the camera holds no horizon.
+#[test]
+fn the_basin_fixture_matches_its_baseline() {
+    let scene = repo_path("examples/scenes/verify/m42_basins.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m42_basins.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("180")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+}
+
+/// `engine terrain-height` reports the basined ground, not the plain noise.
+///
+/// The GPU-free half of the fixture, and the one that would catch a basin
+/// applied in the mesh generator alone: the query, the collider and the drawn
+/// surface are one function, so the query is allowed to stand in for all three.
+#[test]
+fn terrain_height_reports_the_basin_floor() {
+    let scene = repo_path("examples/scenes/verify/m42_basins.json");
+    let height_at = |x: f32, z: f32| -> f64 {
+        let out = engine()
+            .arg("terrain-height")
+            .arg(&scene)
+            .arg("--at")
+            .arg(format!("{x},{z}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&out).trim()).unwrap();
+        report["height"].as_f64().unwrap()
+    };
+
+    // The pool's floor is its patch of noise minus 2.1 m. Both points sampled
+    // here are on the same gentle rise, so the *difference* is the basin and
+    // not the landscape — which is why the check is a range rather than an
+    // equality: `depth` is a subtraction from a field that is still varying
+    // underneath it, deliberately, so a basin on a hillside stays on the
+    // hillside.
+    let floor = height_at(-6.0, -8.0);
+    let beyond_the_rim = height_at(-6.0, -2.0);
+    assert!(
+        floor < -1.9,
+        "the pool floor is at {floor}, expected below -1.9"
+    );
+    assert!(
+        (1.7..2.5).contains(&(beyond_the_rim - floor)),
+        "the pool sits {} m below the ground outside it, expected about 2.1",
+        beyond_the_rim - floor
+    );
+
+    // `falloff: 0` is a wall, not a slope: 0.2 m apart across the crater's rim
+    // is the whole 1.2 m drop.
+    let inside_rim = height_at(-8.0, 9.4);
+    let outside_rim = height_at(-8.0, 9.7);
+    assert!(
+        outside_rim - inside_rim > 1.1,
+        "a zero falloff should be a cliff, but 0.3 m across it drops {} m",
+        outside_rim - inside_rim
+    );
+}
+
 /// A `Buoyancy` that names nothing, names the wrong thing, or sits on something
 /// that cannot be pushed — all at once, because validation reports everything at
 /// once (M5) and a scene with three mistakes should need one run to find them.

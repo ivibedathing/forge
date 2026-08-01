@@ -53,7 +53,7 @@ actually says.
 | `Breakable` | Lists pre-authored fragments and the impulse that shatters the entity into them. | `m14-breaking.md` |
 | `Wheel` | One raycast-suspension wheel on its own *visual* entity, naming the chassis it drives. | `m11_5-vehicles-and-wheels.md` |
 | `Water` | A body of water that **owns its surface** — Gerstner waves, depth colouring, foam, refraction. Since M41 it also carries the fluid's `density`, the one field nothing renders. | `m18-water.md`, `m27-water-refraction.md`, `m41-buoyancy.md` |
-| `Terrain` | A height-field patch that **owns its grid**, painted by height/slope layers; the ground everything stands on. | `m22-terrain.md` |
+| `Terrain` | A height-field patch that **owns its grid**, painted by height/slope layers; the ground everything stands on. Since M42 its `basins` cut authored hollows into the noise. | `m22-terrain.md`, `m42-terrain-basins.md` |
 | `Road` | A drivable ribbon from a polygon centerline with corner radii; markings are drawn per pixel. Since M40 it can widen per point, bank, and ride a `Terrain`. | `m23-roads.md`, `m40-road-authoring.md` |
 | `Junction` | The patch of asphalt where roads meet, bounded by the mouths of the roads that name it. **Owns its geometry**, and is drawn by the road shader. | `m40-road-authoring.md` |
 | `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. | `m19-trees.md` |
@@ -79,13 +79,13 @@ script spawns at runtime — `m37-entity-spawning.md`).
 
 ## Current state
 
-**M0–M41 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M42 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
-M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy.
+M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins.
 (M35 is a design doc only — global illumination, not built. M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
@@ -209,6 +209,13 @@ The cross-cutting ones. Per-system traps are in each note.
   *hole* in a wide road on sloping ground, because the uphill edge ends up buried and the engine
   does not carve terrain. This is why `width_scales` is computed **before** `followed_heights` in
   `road::build`; swapping them back samples the ground at the wrong offsets on any road that widens.
+- **A `Water` patch's rectangle must be *wider* than its basin's shoreline, not narrower** (M42).
+  Every boundary point of the sheet has to land on ground above its own surface or the water ends
+  in a straight cut, and the binding points are the rectangle's **edge midpoints** — they sit
+  closest to the basin's centre, where the wall has risen least. The instinct is to shrink the
+  sheet to fit the pool, and shrinking it is exactly what exposes the edge. Check it with
+  `engine terrain-height` around the rectangle rather than by rendering: the tour's clearance is
+  0.20 m at its worst corner, and a first pass left less headroom than the pond's own waves.
 - **A junction's shoulder quad across a mouth is degenerate and must stay skipped** (M40): all four
   of its corners lie on the mouth line, so the quad has zero area and a `NaN` normal. `mouth_of` is
   what excludes it, and nothing is lost — the shoulder there is the road's own.
@@ -250,14 +257,14 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**38 of the 44 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**39 of the 45 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02` in the manifest and stay the sweep's job; `cli.rs` says so
 where someone would go to add them. The pixel *allowance* is there rather than a wider threshold
 because the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held
-for eight consecutive full sweeps. **The other 38 entries carry no `diff_args` at all — they are
+for eight consecutive full sweeps. **The other 39 entries carry no `diff_args` at all — they are
 bit-exact, and a failure there is real.**
 
 **Which tour frames flake carries no information; whether one is stable under repetition does.**
@@ -370,6 +377,11 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
 - **Clouds (M20)** → `m20-clouds.md`. Drifting clusters of interpenetrating lobes.
 - **Terrain (M22)** → `m22-terrain.md`. A CPU height-field patch painted by height and slope layers;
   the ground everything else stands on.
+- **Terrain basins (M42)** → `m42-terrain-basins.md`, design in `designs/terrain-basins-design.md`.
+  `Terrain.basins` — circular hollows in world XZ, subtracted inside `height_at`, so the render, the
+  `trimesh` collider, roads, meadows, foot planting and every query follow from the one
+  implementation and **no shader is edited**. The only way to say "the ground dips *here*", and
+  therefore the first way to put a pond somewhere the ground holds it.
 - **Roads (M23)** → `m23-roads.md`. A drivable ribbon from a polygon centerline with corner radii,
   its markings drawn per pixel.
 - **Road authoring (M40)** → `m40-road-authoring.md`, design in `designs/road-authoring-design.md`.
@@ -598,10 +610,16 @@ original four, entity spawning was M37 and a CPU wave evaluator was M41.) The re
   along with it, and wants its own answer to whether a raft eventually crosses the pond), drag on a
   submerged swimmer as distinct from a floating hull, and waves that respond to the body — which the
   purity of (file, time) currently forbids, and which is what the CPU/GPU agreement rests on.
+- **Terrain** (after M42): mounds (a signed `depth`, which is a rename of `basins` rather than a
+  relaxed bound), elliptical and polygonal basins, and rim noise — a basin's wall is a clean
+  iso-circle, and M22 already learned that a clean curve reads as artificial; the fix belongs at
+  the field level, not as seven more fields per basin.
 - **Roads** (after M40, which built all five of M23's deferred items): **carving** — a road cutting
   a shelf into the `Terrain` it follows, which M40 rejected because `Terrain` owns its grid and a
   second recipe mutating it makes the ground a function of which other entities exist; it needs its
-  own answer to where the height field then lives. Also junction markings (stop bars, turn arrows —
+  own answer to where the height field then lives. M42 does not change that answer, but it does
+  establish that an authored subtraction inside `height_at` works and that everything downstream
+  follows — one of the two things carving needs. Also junction markings (stop bars, turn arrows —
   they want a lane model), roads whose *shoulder* width is authored apart from the asphalt (which
   wants the third vertex channel M40 declined to add), per-point `segment_length`, and pinned
   heights closer together than `follow_blend`, which today warn rather than compose.
