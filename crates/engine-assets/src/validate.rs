@@ -47,6 +47,14 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
     > = HashMap::new();
 
     for (entity_index, entity) in file.entities.iter().enumerate() {
+        // The entity's own mesh, resolved once: a `FootPlant` names joints,
+        // and the rig those joints have to be in is the one its `Mesh` owns
+        // (M30's rule — a skin is a property of the asset).
+        let entity_mesh = entity.components.iter().find_map(|c| match c {
+            ComponentData::Mesh(mesh) => Some(mesh.asset.clone()),
+            _ => None,
+        });
+
         for (component_index, component) in entity.components.iter().enumerate() {
             let component_path = format!("/entities/{entity_index}/components/{component_index}");
 
@@ -132,6 +140,29 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                 }
             }
 
+            // A FootPlant (M32). The ground reference is engine-core's (it is
+            // another entity, not a file); what needs this crate is whether
+            // the joints it names are in the rig at all — a mistyped ankle
+            // otherwise plants nothing, silently, which is exactly the failure
+            // class `did_you_mean` exists for.
+            if let ComponentData::FootPlant(plant) = component {
+                for mut error in check_plant(plant, entity_mesh.as_deref(), base_dir) {
+                    let json_path = error
+                        .context()
+                        .and_then(|c| c.field.clone())
+                        .map(|field| format!("{component_path}/{field}"))
+                        .unwrap_or_else(|| component_path.clone());
+                    error = error
+                        .file(path)
+                        .entity(entity.name.clone())
+                        .component("FootPlant");
+                    if let Some(line) = index.line_of_or_parent(&json_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(json_path));
+                }
+            }
+
             // Every mesh reference this component holds: a Mesh's `asset`,
             // a Collider's mesh-collider `asset` (M12), or each fragment
             // `mesh` of a Breakable (M14).
@@ -203,6 +234,107 @@ fn check_asset(asset: &str, base_dir: &Path) -> Option<EngineError> {
 
 /// Open a skeletal player's glTF and check what only the file can answer.
 ///
+/// Every joint a `FootPlant` names, against the rig its entity's `Mesh` owns
+/// (M32).
+///
+/// The verdicts carry a `field` naming where in the component the problem is,
+/// which the caller turns into a JSON pointer — a foot list is the first thing
+/// in this engine where "which one of them" needs an index in the path.
+fn check_plant(
+    plant: &engine_core::components::FootPlant,
+    mesh: Option<&str>,
+    base_dir: &Path,
+) -> Vec<EngineError> {
+    // No `Mesh` at all is engine-core's `foot_plant_without_skin`; saying it
+    // twice would be two errors for one mistake.
+    let Some(asset) = mesh else {
+        return Vec::new();
+    };
+    let path = match MeshAsset::resolve(asset, base_dir) {
+        Ok(MeshAsset::Builtin(_)) => {
+            return vec![EngineError::new(
+                engine_core::codes::FOOT_PLANT_WITHOUT_SKIN,
+                format!(
+                    "this FootPlant is on an entity whose Mesh is the builtin \
+                     primitive {asset:?}, which has no skeleton to plant"
+                ),
+            )]
+        }
+        Ok(MeshAsset::File(path)) => path,
+        Err(_) => return Vec::new(),
+    };
+    let Ok(rig) = crate::gltf_skin::load_rig(&path) else {
+        return Vec::new();
+    };
+    let Some(skin) = &rig.skin else {
+        return vec![EngineError::new(
+            engine_core::codes::FOOT_PLANT_WITHOUT_SKIN,
+            format!(
+                "this FootPlant is on an entity whose Mesh {asset:?} carries no skin; \
+                 there are no joints in it to plant"
+            ),
+        )];
+    };
+
+    let names: Vec<&str> = skin.joints.iter().map(|j| j.name.as_str()).collect();
+    let mut errors = Vec::new();
+
+    let mut named = |joint: &str, field: String| match skin.joint_named(joint) {
+        Some(index) => Some(index),
+        None => {
+            errors.push(
+                EngineError::new(
+                    engine_core::codes::UNKNOWN_JOINT,
+                    format!(
+                        "the rig in {asset:?} has no joint named {joint:?} (engine \
+                         list-joints {asset} lists them)"
+                    ),
+                )
+                .field(field)
+                .suggest_from(joint, names.iter().copied()),
+            );
+            None
+        }
+    };
+
+    let mut ankles = Vec::new();
+    for (i, foot) in plant.feet.iter().enumerate() {
+        if let Some(index) = named(&foot.ankle, format!("feet/{i}/ankle")) {
+            ankles.push((i, index, foot.chain));
+        }
+    }
+    if let Some(hips) = &plant.hips {
+        named(hips, "hips".to_string());
+    }
+
+    // A chain that reaches past the root would solve with fewer joints than
+    // the file asked for — a leg that bends at one place instead of two, which
+    // looks like the solver failing rather than like a mis-authored chain.
+    for (i, ankle, chain) in ankles {
+        let mut joint = ankle;
+        let mut available = 0;
+        while let Some(parent) = skin.joints[joint].parent {
+            available += 1;
+            joint = parent;
+        }
+        if available < chain {
+            errors.push(
+                EngineError::new(
+                    engine_core::codes::FOOT_PLANT_CHAIN_TOO_LONG,
+                    format!(
+                        "foot {:?} asks for a chain of {chain}, but {:?} has only \
+                         {available} joint(s) above it in the rig",
+                        plant.feet[i].ankle, plant.feet[i].ankle
+                    ),
+                )
+                .field(format!("feet/{i}/chain")),
+            );
+        }
+    }
+
+    errors
+}
+
 /// Returns templates: location context is attached by the caller, the way
 /// every other verdict in this pass is.
 fn check_rig(asset: &str, clip: &str, base_dir: &Path) -> Vec<EngineError> {

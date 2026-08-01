@@ -508,7 +508,16 @@ pub fn local_pose(skin: &SkinData, clip: Option<&SkeletalClip>, t: f32) -> Vec<T
 /// ignored, so the engine's `Transform` on the entity is what places the
 /// character — never a node transform out of the file.
 pub fn joint_globals(skin: &SkinData, clip: Option<&SkeletalClip>, t: f32) -> Vec<Mat4> {
-    let pose = local_pose(skin, clip, t);
+    globals_from(skin, &local_pose(skin, clip, t))
+}
+
+/// The hierarchy walk on its own, over a local pose someone else produced.
+///
+/// Separate from [`joint_globals`] because foot planting (M32) edits locals and
+/// has to re-derive globals two or three times per frame — and the walk
+/// resolves parents rather than assuming an order, which is a property worth
+/// having in exactly one place.
+pub fn globals_from(skin: &SkinData, pose: &[Trs]) -> Vec<Mat4> {
     let mut globals = vec![Mat4::IDENTITY; skin.joints.len()];
 
     // Parents before children. The loader emits joints in the skin's own
@@ -558,6 +567,10 @@ pub fn palette(skin: &SkinData, clip: Option<&SkeletalClip>, t: f32) -> Vec<Mat4
 /// clip its `AnimationPlayer` selects.
 pub struct SkinnedEntity {
     pub name: String,
+    /// The hecs handle, so a caller can reach the entity's other components —
+    /// which is what `engine list-joints` needs to pose the rig through M32's
+    /// shared seam rather than re-deriving the pose beside it.
+    pub entity: hecs::Entity,
     /// The entity's `Mesh.asset` — the file the skin came out of.
     pub asset: String,
     pub rig: Arc<Rig>,
@@ -634,6 +647,7 @@ pub fn skinned_entities(scene: &crate::Scene, rigs: &dyn RigSource) -> Result<Ve
 
         found.push(SkinnedEntity {
             name,
+            entity,
             asset: mesh.asset.clone(),
             rig,
             clip,

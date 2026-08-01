@@ -183,6 +183,16 @@ enum Command {
         /// Pose the rig at this scene time instead of reporting the rest pose.
         #[arg(long, allow_hyphen_values = true)]
         time: Option<f32>,
+        /// Run the scene this many fixed steps first, then report where the
+        /// rig ended up.
+        ///
+        /// Needed by anything the *simulation* moves — a stride-driven clip's
+        /// phase is advanced by the ground its entity covers (M32), so `--time`
+        /// alone reports the pose the file was authored at rather than the one
+        /// the run reached. Absent, nothing is stepped and the report stays the
+        /// pure function of (files, time) it has always been.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
         /// Which clip to pose with, when reading a .gltf/.glb directly. In a
         /// scene the entity's AnimationPlayer already says.
         #[arg(long)]
@@ -469,8 +479,9 @@ fn main() {
             path,
             entity,
             time,
+            steps,
             clip,
-        } => list_joints(path, entity, time, clip),
+        } => list_joints(path, entity, time, steps, clip),
         Command::Edit {
             scene,
             watch,
@@ -1838,6 +1849,7 @@ fn list_joints(
     path: PathBuf,
     entity: Option<String>,
     time: Option<f32>,
+    steps: u32,
     clip: Option<String>,
 ) -> Result<()> {
     let display = path.display().to_string();
@@ -1864,7 +1876,13 @@ fn list_joints(
             })?),
             None => None,
         };
-        // No player, so scene time and clip time are the same thing.
+        // No player, so scene time and clip time are the same thing — and no
+        // scene, so no `FootPlant` and nothing to plant against.
+        let globals = engine_core::skeleton::joint_globals(
+            skin,
+            selected.filter(|_| time.is_some()),
+            time.unwrap_or(0.0),
+        );
         vec![joint_report(
             &display,
             None,
@@ -1873,9 +1891,27 @@ fn list_joints(
             time,
             time,
             engine_core::components::Transform::default(),
+            globals,
+            None,
         )]
     } else {
-        let scene = load_scene(&path)?;
+        let mut scene = load_scene(&path)?;
+        // Stepping first, when asked: a stride-driven player's phase lives in
+        // the world the run leaves behind, so a report that never stepped
+        // would describe the file rather than the run.
+        let time = if steps > 0 {
+            simulate::run(
+                &mut scene,
+                &path,
+                steps,
+                None,
+                &engine_core::input::Viewport::DEFAULT,
+                None,
+            )?;
+            Some(scene_time(time.unwrap_or(0.0), steps, &scene))
+        } else {
+            time
+        };
         let assets = engine_assets::AssetServer::for_scene(&path);
         let skinned = engine_core::skeleton::skinned_entities(&scene, &assets)?;
 
@@ -1889,11 +1925,11 @@ fn list_joints(
                 .entity(wanted)
                 .suggest_from(wanted, skinned.iter().map(|s| s.name.as_str()))
             })?;
-            vec![entity_joint_report(found, time)]
+            vec![entity_joint_report(&scene, found, time)]
         } else {
             skinned
                 .iter()
-                .map(|found| entity_joint_report(found, time))
+                .map(|found| entity_joint_report(&scene, found, time))
                 .collect()
         }
     };
@@ -1903,6 +1939,7 @@ fn list_joints(
 }
 
 fn entity_joint_report(
+    scene: &engine_core::Scene,
     skinned: &engine_core::skeleton::SkinnedEntity,
     time: Option<f32>,
 ) -> serde_json::Value {
@@ -1911,18 +1948,55 @@ fn entity_joint_report(
         .skin
         .as_ref()
         .expect("skinned_entities filtered");
+    let clip = skinned.selected_clip();
+    // The player's speed, offset and looping map scene time onto clip time, so
+    // `--time` here means what it means everywhere else — and the report
+    // carries both, because "why is the pose the same at 0 and at 1" is
+    // answered by the wrap, not by the joints.
+    let clip_time = time.map(|t| skinned.local_time(t));
+    // Through the same seam the renderer poses with (M32), so a planted foot
+    // is reported where it is drawn.
+    let globals = scene.posed_globals(
+        skinned.entity,
+        skin,
+        clip.filter(|_| clip_time.is_some()),
+        clip_time.unwrap_or(0.0),
+    );
+
+    // The stride this clip actually covers, when the entity names its feet.
+    // This is the number `AnimationPlayer.stride` wants, and measuring it is
+    // the alternative to tuning it against a filmstrip.
+    let stride = clip.and_then(|clip| {
+        let plant = scene.foot_plant_of(skinned.entity)?;
+        let feet: Vec<usize> = plant
+            .feet
+            .iter()
+            .filter_map(|foot| skin.joint_named(&foot.ankle))
+            .collect();
+        let metres = engine_core::locomotion::measure_stride(
+            skin,
+            clip,
+            &feet,
+            engine_core::locomotion::STRIDE_SAMPLES,
+        )?;
+        let names: Vec<&str> = plant.feet.iter().map(|f| f.ankle.as_str()).collect();
+        Some(serde_json::json!({
+            "measured": metres as f64,
+            "feet": names,
+            "samples": engine_core::locomotion::STRIDE_SAMPLES,
+        }))
+    });
+
     joint_report(
         &skinned.asset,
         Some(&skinned.name),
         skin,
-        skinned.selected_clip(),
+        clip,
         time,
-        // The player's speed, offset and looping map scene time onto clip
-        // time, so `--time` here means what it means everywhere else — and
-        // the report carries both, because "why is the pose the same at 0 and
-        // at 1" is answered by the wrap, not by the joints.
-        time.map(|t| skinned.local_time(t)),
+        clip_time,
         skinned.transform,
+        globals,
+        stride,
     )
 }
 
@@ -1931,6 +2005,7 @@ fn entity_joint_report(
 /// Order is the skin's, never sorted — a joint's index is written into the
 /// vertex data, so it is a fact about the asset rather than a presentation
 /// choice, and carrying `index` is how the report says so.
+#[allow(clippy::too_many_arguments)]
 fn joint_report(
     asset: &str,
     entity: Option<&str>,
@@ -1939,13 +2014,11 @@ fn joint_report(
     time: Option<f32>,
     clip_time: Option<f32>,
     transform: engine_core::components::Transform,
+    // Posed by the caller — without `--time`, the rest pose; with it, the pose
+    // at that moment, planted when the entity asks for it (M32).
+    globals: Vec<glam::Mat4>,
+    stride: Option<serde_json::Value>,
 ) -> serde_json::Value {
-    // Without `--time`, the rest pose; with it, the pose at that moment.
-    let globals = engine_core::skeleton::joint_globals(
-        skin,
-        clip.filter(|_| clip_time.is_some()),
-        clip_time.unwrap_or(0.0),
-    );
     // glTF ignores the skinned mesh node's own transform, so the entity's
     // `Transform` is what puts the rig in the world — and world coordinates
     // are what a caller assigns to something they want in that hand.
@@ -1995,6 +2068,9 @@ fn joint_report(
     }
     if let Some(clip_time) = clip_time {
         report["clip_time"] = serde_json::json!(clip_time as f64);
+    }
+    if let Some(stride) = stride {
+        report["stride"] = stride;
     }
     report
 }

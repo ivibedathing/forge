@@ -801,7 +801,33 @@ impl Scene {
             // whose rest pose is not exactly its bind pose.
             _ => 0.0,
         };
-        Ok(crate::skeleton::palette(skin, time.and(clip), local))
+        let globals = self.posed_globals(entity, skin, time.and(clip), local);
+        Ok(globals
+            .into_iter()
+            .zip(&skin.joints)
+            .map(|(global, joint)| global * joint.inverse_bind)
+            .collect())
+    }
+
+    /// One skinned entity's joints in skin space at clip time `local`, with
+    /// M32's foot planting applied when the entity asks for it.
+    pub fn posed_globals(
+        &self,
+        entity: Entity,
+        skin: &crate::skeleton::SkinData,
+        clip: Option<&crate::skeleton::SkeletalClip>,
+        local: f32,
+    ) -> Vec<glam::Mat4> {
+        crate::locomotion::posed_globals(&self.world, entity, skin, clip, local)
+    }
+
+    /// An entity's `FootPlant`, for callers that need to know which joints are
+    /// feet — `engine list-joints` measuring a clip's stride, chiefly.
+    pub fn foot_plant_of(&self, entity: Entity) -> Option<crate::components::FootPlant> {
+        self.world
+            .get::<&crate::components::FootPlant>(entity)
+            .ok()
+            .map(|p| (*p).clone())
     }
 
     /// Terrain patches, as draw items with their surfaces generated (M22).

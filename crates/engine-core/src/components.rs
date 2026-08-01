@@ -687,18 +687,25 @@ fn half() -> f32 {
     0.5
 }
 
-/// Plays an animation clip against scene time (M9).
+/// Plays an animation clip against scene time (M9), or against ground
+/// covered (M32).
 ///
-/// `clip` is a relative path to a property clip (`*.anim.json`); a
-/// `path#ClipName` glTF fragment is reserved for skeletal clips (not yet
-/// supported). A player in the file is playing — there is no play/pause
-/// runtime state, because pose is a pure function of (files, time).
+/// `clip` is a relative path to a property clip (`*.anim.json`), or a
+/// `path#ClipName` glTF fragment naming a skeletal clip in the entity's own
+/// mesh file (M30). A player in the file is playing — there is no play/pause
+/// runtime state.
+///
+/// The clock is scene time by default, which keeps the pose a pure function
+/// of (files, time). Setting `stride` swaps that clock for **distance
+/// travelled**, and `phase` is where the clip has got to: still a field in
+/// the file, so nothing moves into hidden state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AnimationPlayer {
     pub clip: String,
 
-    /// Time multiplier; local time = `t * speed + start_offset`.
+    /// Time multiplier; local time = `t * speed + start_offset`, or
+    /// `phase * speed + start_offset` when `stride` is set.
     #[serde(default = "one")]
     pub speed: f32,
 
@@ -708,6 +715,31 @@ pub struct AnimationPlayer {
 
     #[serde(default)]
     pub start_offset: f32,
+
+    /// Metres of ground one **cycle** of this clip covers (M32).
+    ///
+    /// `0` — the default — is the M9 behaviour: scene time drives the clip.
+    /// Above zero the clip is driven by the entity's horizontal displacement
+    /// instead, advancing `distance / stride` cycles per fixed step, which is
+    /// what stops a walk cycle sliding when the character's speed changes.
+    /// `engine list-joints` measures the right value off the clip itself.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub stride: f32,
+
+    /// How far this player has got, in **cycles** of its clip, when `stride`
+    /// drives it (M32). Ignored otherwise.
+    ///
+    /// Cycles rather than seconds so the locomotion system needs no clip
+    /// duration to advance it: one step covering `d` metres adds `d / stride`,
+    /// and nothing has to open the clip file to know that. The engine writes
+    /// it back every fixed step and the change-based bake splices it, so where
+    /// a character is in its stride survives a bake the same way where it is
+    /// standing does. A looping player's phase is reduced into `[0, 1)` as it
+    /// is stored.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub phase: f32,
 }
 
 /// Where a HUD element attaches on screen (M12).
@@ -2955,6 +2987,95 @@ impl Meadow {
     }
 }
 
+/// The most feet one solver run plants, and the ceiling on `FootPlant.feet`.
+///
+/// Bounded for the reason `MAX_POINT_LIGHTS` and `MAX_ROAD_KERBS` are: a fixed
+/// small number is a budget an agent can be told about, and the alternative to
+/// refusing the fifth foot is a rig that plants four and silently ignores the
+/// rest. Four covers a quadruped, which is the most legs anything in this
+/// engine has.
+pub const MAX_PLANTED_FEET: usize = 4;
+
+/// One foot of a [`FootPlant`]: which joint it is, and how far up the chain
+/// the solver may rotate to reach the ground.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlantedFoot {
+    /// The ankle joint — the end of the chain, the thing put on the ground.
+    pub ankle: String,
+
+    /// How many joints **above** the ankle rotate to reach the target. `2` is
+    /// the ordinary leg (knee and hip) and is what the two-bone solve means;
+    /// `1` bends a single hinge and is what a stubby prop leg wants.
+    #[serde(default = "two")]
+    #[schemars(range(min = 1, max = 2))]
+    pub chain: u32,
+
+    /// Metres from the ankle joint down to the bottom of the foot, so the sole
+    /// meets the ground rather than the joint being buried in it.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub sole: f32,
+}
+
+fn two() -> u32 {
+    2
+}
+
+/// Puts a skinned character's feet on the terrain under them (M32).
+///
+/// A post-pass over the posed skeleton: each named ankle is moved to the
+/// ground beneath where the clip put it, the joints above it rotate to follow
+/// (two-bone IK), the hips drop when a leg cannot reach, and the sole tilts to
+/// the slope. It runs wherever the pose does, so `engine list-joints --time`
+/// reports the planted rig and the render draws it — one answer, not two.
+///
+/// The ground is a `Terrain` entity named in `ground`, and that is a purity
+/// decision rather than a convenience: planting against the *physics* world
+/// would make the pose a function of the simulation, and the pose being a pure
+/// function of (files, time) is what lets `list-joints` answer at all. The cost
+/// is that a character cannot stand on a crate — see
+/// `designs/locomotion-design.md` §5.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FootPlant {
+    /// The feet to plant, at most [`MAX_PLANTED_FEET`].
+    pub feet: Vec<PlantedFoot>,
+
+    /// The entity carrying the `Terrain` these feet stand on.
+    pub ground: String,
+
+    /// The joint lowered when a leg cannot reach its target — the pelvis, in
+    /// a humanoid. Absent, the deficit is simply clamped: one foot plants and
+    /// the other stretches, which is bounded but reads as wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hips: Option<String>,
+
+    /// How far below the animated ankle a target may be, in metres. This is
+    /// what keeps a foot in mid-swing from being dragged to the floor:
+    /// planting is a *correction*, and a correction with no ceiling is a
+    /// different animation.
+    #[serde(default = "half")]
+    #[schemars(range(min = 0.0))]
+    pub max_drop: f32,
+
+    /// And how far above it.
+    #[serde(default = "half")]
+    #[schemars(range(min = 0.0))]
+    pub max_lift: f32,
+
+    /// Degrees the sole may tilt to meet the ground's normal. `0` leaves the
+    /// foot's animated orientation alone, which is right for a character that
+    /// only ever walks on the flat.
+    #[serde(default = "thirty")]
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub align: f32,
+}
+
+fn thirty() -> f32 {
+    30.0
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -3034,6 +3155,7 @@ components!(
     Terrain,
     Road,
     Meadow,
+    FootPlant,
 );
 
 #[cfg(test)]
@@ -3134,7 +3256,8 @@ mod tests {
                 "Cloud",
                 "Terrain",
                 "Road",
-                "Meadow"
+                "Meadow",
+                "FootPlant"
             ]
         );
     }

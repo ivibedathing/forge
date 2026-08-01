@@ -40,7 +40,7 @@ engine terrain-height <scene.json> --at x,z [--entity Name]   # where the ground
 engine inspect <scene.json> [--entity Name]       # every field, with the defaults filled in
 engine list-components [--component Name]         # the scene + component JSON Schemas
 engine list-animations <scene-or-clip-or-gltf> [--schema]
-engine list-joints <scene-or-gltf> [--entity Name] [--time T]  # where every joint is
+engine list-joints <scene-or-gltf> [--entity Name] [--time T] [--steps N]  # where every joint is
 engine import <model.glb> [--into scene.json]     # a model's materials, as files
 engine run-scene <scene.json> [--record-input f]  # windowed viewer; keyboard reaches scripts
 engine edit <scene.json> [--watch]                # GUI editor: a live view onto the file
@@ -160,7 +160,13 @@ file and the viewport, so the answer is stable and needs no GPU.
 an animation without reading pixels: a filmstrip shows that *something* moved
 and never that the hand reached the doorknob. Without `--time` it reports the
 rig — name, parent, index, rest transform; with it, each joint's posed world
-transform at that moment. It needs no GPU. Scripts ask the same question with
+transform at that moment. It needs no GPU. Use `--steps N` instead when the
+clip is driven by the *simulation* rather than by the clock — a walk cycle whose
+`AnimationPlayer.stride` is set advances with the ground its entity covers, so
+its phase is something the run reached rather than something the file says. On
+an entity that also has a `FootPlant`, the report carries the `stride` the clip
+itself measures, which is the number that field wants. Scripts ask the same
+question with
 `world.joint_position(entity, joint)`, which is how you hang a prop off a hand:
 there is no way to *move* a joint, deliberately, so a character's pose stays a
 function of its files and the clock.

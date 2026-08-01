@@ -405,7 +405,10 @@ impl WorldApi {
             .get::<&Transform>(entity)
             .map(|t| *t)
             .unwrap_or_default();
-        let globals = skeleton::joint_globals(skin, clip, local);
+        // Through M32's shared seam, so a prop hung off a *planted* foot lands
+        // where the render draws that foot rather than where the clip alone
+        // put it.
+        let globals = engine_core::locomotion::posed_globals(&world, entity, skin, clip, local);
         Ok(transform.matrix() * globals[index])
     }
 
@@ -1196,6 +1199,63 @@ fn curated_engine() -> rhai::Engine {
             .iter()
             .map(|v| Dynamic::from(f64::from(*v)))
             .collect())
+        },
+    );
+
+    // Locomotion (M32): where the clip has got to, and how much ground a
+    // cycle of it covers. Unlike the joints above these *are* settable, and
+    // the distinction is where the number lives — a joint is derived from the
+    // clip and would be hidden state, while `phase` and `stride` are ordinary
+    // component fields that the file carries and the bake splices. A game with
+    // its own idea of locomotion (a phase that freezes mid-air, a gait that
+    // changes with terrain) drives it through these rather than through a
+    // second system in the engine.
+    engine.register_fn(
+        "animation_phase",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| f64::from(p.phase))
+        },
+    );
+    engine.register_fn(
+        "set_animation_phase",
+        |w: &mut WorldApi, name: &str, phase: f64| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Validated at the call, like `set_particle_rate` and for the same
+            // reason: this field bakes, so a bad value has to be a located
+            // script error rather than a scene file that no longer validates.
+            let stored = phase as f32;
+            if !stored.is_finite() || stored < 0.0 {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("animation phase must be a finite number >= 0, got {phase}").into(),
+                    Position::NONE,
+                )));
+            }
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| {
+                p.phase = stored;
+            })
+        },
+    );
+    engine.register_fn(
+        "animation_stride",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| f64::from(p.stride))
+        },
+    );
+    engine.register_fn(
+        "set_animation_stride",
+        |w: &mut WorldApi,
+         name: &str,
+         stride: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            let stored = stride as f32;
+            if !stored.is_finite() || stored < 0.0 {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("animation stride must be a finite number >= 0, got {stride}").into(),
+                    Position::NONE,
+                )));
+            }
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| {
+                p.stride = stored;
+            })
         },
     );
 

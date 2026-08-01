@@ -229,6 +229,35 @@
         ],
         "type": "string"
       },
+      "PlantedFoot": {
+        "additionalProperties": false,
+        "description": "One foot of a [`FootPlant`]: which joint it is, and how far up the chain\nthe solver may rotate to reach the ground.",
+        "properties": {
+          "ankle": {
+            "description": "The ankle joint — the end of the chain, the thing put on the ground.",
+            "type": "string"
+          },
+          "chain": {
+            "default": 2,
+            "description": "How many joints **above** the ankle rotate to reach the target. `2` is\nthe ordinary leg (knee and hip) and is what the two-bone solve means;\n`1` bends a single hinge and is what a stubby prop leg wants.",
+            "format": "uint32",
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sole": {
+            "default": 0.0,
+            "description": "Metres from the ankle joint down to the bottom of the foot, so the sole\nmeets the ground rather than the joint being buried in it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "ankle"
+        ],
+        "type": "object"
+      },
       "RoadMarkings": {
         "additionalProperties": false,
         "description": "What is painted on a road, and where.\n\nEvery marking is computed per pixel from the road's surface coordinates —\n`u`, metres from the centerline across the road, and `v`, metres along it —\nrather than built as geometry laid on the asphalt. That is what makes a line\nfollow every curve and grade for free, keeps a dash the same length in\nmetres through a hairpin as on a straight, and means paint can never\nz-fight: it is not a surface on a surface, it is the same pixel shaded\ndifferently.",
@@ -1181,7 +1210,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Plays an animation clip against scene time (M9).\n\n`clip` is a relative path to a property clip (`*.anim.json`); a\n`path#ClipName` glTF fragment is reserved for skeletal clips (not yet\nsupported). A player in the file is playing — there is no play/pause\nruntime state, because pose is a pure function of (files, time).",
+        "description": "Plays an animation clip against scene time (M9), or against ground\ncovered (M32).\n\n`clip` is a relative path to a property clip (`*.anim.json`), or a\n`path#ClipName` glTF fragment naming a skeletal clip in the entity's own\nmesh file (M30). A player in the file is playing — there is no play/pause\nruntime state.\n\nThe clock is scene time by default, which keeps the pose a pure function\nof (files, time). Setting `stride` swaps that clock for **distance\ntravelled**, and `phase` is where the clip has got to: still a field in\nthe file, so nothing moves into hidden state.",
         "properties": {
           "clip": {
             "type": "string"
@@ -1191,15 +1220,29 @@
             "description": "Wrap by clip duration; when false, clamp to the final pose.",
             "type": "boolean"
           },
+          "phase": {
+            "default": 0.0,
+            "description": "How far this player has got, in **cycles** of its clip, when `stride`\ndrives it (M32). Ignored otherwise.\n\nCycles rather than seconds so the locomotion system needs no clip\nduration to advance it: one step covering `d` metres adds `d / stride`,\nand nothing has to open the clip file to know that. The engine writes\nit back every fixed step and the change-based bake splices it, so where\na character is in its stride survives a bake the same way where it is\nstanding does. A looping player's phase is reduced into `[0, 1)` as it\nis stored.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
           "speed": {
             "default": 1.0,
-            "description": "Time multiplier; local time = `t * speed + start_offset`.",
+            "description": "Time multiplier; local time = `t * speed + start_offset`, or\n`phase * speed + start_offset` when `stride` is set.",
             "format": "float",
             "type": "number"
           },
           "start_offset": {
             "default": 0.0,
             "format": "float",
+            "type": "number"
+          },
+          "stride": {
+            "default": 0.0,
+            "description": "Metres of ground one **cycle** of this clip covers (M32).\n\n`0` — the default — is the M9 behaviour: scene time drives the clip.\nAbove zero the clip is driven by the entity's horizontal displacement\ninstead, advancing `distance / stride` cycles per fixed step, which is\nwhat stops a walk cycle sliding when the character's speed changes.\n`engine list-joints` measures the right value off the clip itself.",
+            "format": "float",
+            "minimum": 0.0,
             "type": "number"
           },
           "type": {
@@ -3087,6 +3130,62 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Puts a skinned character's feet on the terrain under them (M32).\n\nA post-pass over the posed skeleton: each named ankle is moved to the\nground beneath where the clip put it, the joints above it rotate to follow\n(two-bone IK), the hips drop when a leg cannot reach, and the sole tilts to\nthe slope. It runs wherever the pose does, so `engine list-joints --time`\nreports the planted rig and the render draws it — one answer, not two.\n\nThe ground is a `Terrain` entity named in `ground`, and that is a purity\ndecision rather than a convenience: planting against the *physics* world\nwould make the pose a function of the simulation, and the pose being a pure\nfunction of (files, time) is what lets `list-joints` answer at all. The cost\nis that a character cannot stand on a crate — see\n`designs/locomotion-design.md` §5.",
+        "properties": {
+          "align": {
+            "default": 30.0,
+            "description": "Degrees the sole may tilt to meet the ground's normal. `0` leaves the\nfoot's animated orientation alone, which is right for a character that\nonly ever walks on the flat.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "feet": {
+            "description": "The feet to plant, at most [`MAX_PLANTED_FEET`].",
+            "items": {
+              "$ref": "#/$defs/PlantedFoot"
+            },
+            "type": "array"
+          },
+          "ground": {
+            "description": "The entity carrying the `Terrain` these feet stand on.",
+            "type": "string"
+          },
+          "hips": {
+            "description": "The joint lowered when a leg cannot reach its target — the pelvis, in\na humanoid. Absent, the deficit is simply clamped: one foot plants and\nthe other stretches, which is bounded but reads as wrong.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_drop": {
+            "default": 0.5,
+            "description": "How far below the animated ankle a target may be, in metres. This is\nwhat keeps a foot in mid-swing from being dragged to the floor:\nplanting is a *correction*, and a correction with no ceiling is a\ndifferent animation.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "max_lift": {
+            "default": 0.5,
+            "description": "And how far above it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": {
+            "const": "FootPlant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "feet",
+          "ground"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -3116,7 +3215,8 @@
     "Cloud",
     "Terrain",
     "Road",
-    "Meadow"
+    "Meadow",
+    "FootPlant"
   ],
   "scene": {
     "$defs": {
@@ -3822,7 +3922,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Plays an animation clip against scene time (M9).\n\n`clip` is a relative path to a property clip (`*.anim.json`); a\n`path#ClipName` glTF fragment is reserved for skeletal clips (not yet\nsupported). A player in the file is playing — there is no play/pause\nruntime state, because pose is a pure function of (files, time).",
+            "description": "Plays an animation clip against scene time (M9), or against ground\ncovered (M32).\n\n`clip` is a relative path to a property clip (`*.anim.json`), or a\n`path#ClipName` glTF fragment naming a skeletal clip in the entity's own\nmesh file (M30). A player in the file is playing — there is no play/pause\nruntime state.\n\nThe clock is scene time by default, which keeps the pose a pure function\nof (files, time). Setting `stride` swaps that clock for **distance\ntravelled**, and `phase` is where the clip has got to: still a field in\nthe file, so nothing moves into hidden state.",
             "properties": {
               "clip": {
                 "type": "string"
@@ -3832,15 +3932,29 @@
                 "description": "Wrap by clip duration; when false, clamp to the final pose.",
                 "type": "boolean"
               },
+              "phase": {
+                "default": 0.0,
+                "description": "How far this player has got, in **cycles** of its clip, when `stride`\ndrives it (M32). Ignored otherwise.\n\nCycles rather than seconds so the locomotion system needs no clip\nduration to advance it: one step covering `d` metres adds `d / stride`,\nand nothing has to open the clip file to know that. The engine writes\nit back every fixed step and the change-based bake splices it, so where\na character is in its stride survives a bake the same way where it is\nstanding does. A looping player's phase is reduced into `[0, 1)` as it\nis stored.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
               "speed": {
                 "default": 1.0,
-                "description": "Time multiplier; local time = `t * speed + start_offset`.",
+                "description": "Time multiplier; local time = `t * speed + start_offset`, or\n`phase * speed + start_offset` when `stride` is set.",
                 "format": "float",
                 "type": "number"
               },
               "start_offset": {
                 "default": 0.0,
                 "format": "float",
+                "type": "number"
+              },
+              "stride": {
+                "default": 0.0,
+                "description": "Metres of ground one **cycle** of this clip covers (M32).\n\n`0` — the default — is the M9 behaviour: scene time drives the clip.\nAbove zero the clip is driven by the entity's horizontal displacement\ninstead, advancing `distance / stride` cycles per fixed step, which is\nwhat stops a walk cycle sliding when the character's speed changes.\n`engine list-joints` measures the right value off the clip itself.",
+                "format": "float",
+                "minimum": 0.0,
                 "type": "number"
               },
               "type": {
@@ -5728,6 +5842,62 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Puts a skinned character's feet on the terrain under them (M32).\n\nA post-pass over the posed skeleton: each named ankle is moved to the\nground beneath where the clip put it, the joints above it rotate to follow\n(two-bone IK), the hips drop when a leg cannot reach, and the sole tilts to\nthe slope. It runs wherever the pose does, so `engine list-joints --time`\nreports the planted rig and the render draws it — one answer, not two.\n\nThe ground is a `Terrain` entity named in `ground`, and that is a purity\ndecision rather than a convenience: planting against the *physics* world\nwould make the pose a function of the simulation, and the pose being a pure\nfunction of (files, time) is what lets `list-joints` answer at all. The cost\nis that a character cannot stand on a crate — see\n`designs/locomotion-design.md` §5.",
+            "properties": {
+              "align": {
+                "default": 30.0,
+                "description": "Degrees the sole may tilt to meet the ground's normal. `0` leaves the\nfoot's animated orientation alone, which is right for a character that\nonly ever walks on the flat.",
+                "format": "float",
+                "maximum": 90.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "feet": {
+                "description": "The feet to plant, at most [`MAX_PLANTED_FEET`].",
+                "items": {
+                  "$ref": "#/$defs/PlantedFoot"
+                },
+                "type": "array"
+              },
+              "ground": {
+                "description": "The entity carrying the `Terrain` these feet stand on.",
+                "type": "string"
+              },
+              "hips": {
+                "description": "The joint lowered when a leg cannot reach its target — the pelvis, in\na humanoid. Absent, the deficit is simply clamped: one foot plants and\nthe other stretches, which is bounded but reads as wrong.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_drop": {
+                "default": 0.5,
+                "description": "How far below the animated ankle a target may be, in metres. This is\nwhat keeps a foot in mid-swing from being dragged to the floor:\nplanting is a *correction*, and a correction with no ceiling is a\ndifferent animation.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "max_lift": {
+                "default": 0.5,
+                "description": "And how far above it.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "type": {
+                "const": "FootPlant",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "feet",
+              "ground"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -6250,6 +6420,35 @@
             "type": "integer"
           }
         },
+        "type": "object"
+      },
+      "PlantedFoot": {
+        "additionalProperties": false,
+        "description": "One foot of a [`FootPlant`]: which joint it is, and how far up the chain\nthe solver may rotate to reach the ground.",
+        "properties": {
+          "ankle": {
+            "description": "The ankle joint — the end of the chain, the thing put on the ground.",
+            "type": "string"
+          },
+          "chain": {
+            "default": 2,
+            "description": "How many joints **above** the ankle rotate to reach the target. `2` is\nthe ordinary leg (knee and hip) and is what the two-bone solve means;\n`1` bends a single hinge and is what a stubby prop leg wants.",
+            "format": "uint32",
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sole": {
+            "default": 0.0,
+            "description": "Metres from the ankle joint down to the bottom of the foot, so the sole\nmeets the ground rather than the joint being buried in it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "ankle"
+        ],
         "type": "object"
       },
       "RoadMarkings": {
