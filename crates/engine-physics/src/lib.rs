@@ -22,8 +22,8 @@ use engine_core::components::{
     Wheel as WheelData,
 };
 use engine_core::mesh::{MeshSource, PhysicsAssets};
-use engine_core::skeleton::Rig;
 use engine_core::scene::PhysicsSettings;
+use engine_core::skeleton::Rig;
 use engine_core::{codes, EngineError, Result};
 use glam::{Quat, Vec3};
 use hecs::{Entity, World};
@@ -523,8 +523,7 @@ impl PhysicsWorld {
             // Uniform by validation, so any axis is *the* scale.
             let scale = transform.scale.x;
             let model = transform.matrix();
-            let globals =
-                engine_core::locomotion::posed_globals_at(world, entity, &rig, Some(0.0));
+            let globals = engine_core::locomotion::posed_globals_at(world, entity, &rig, Some(0.0));
 
             for part in &proxies.parts {
                 let Some(joint) = skin.joint_named(&part.joint) else {
@@ -561,9 +560,11 @@ impl PhysicsWorld {
 
                 // Kinematic, and that is the milestone's whole invariant: the
                 // pose drives the proxy and nothing writes back to the pose.
-                let body = physics
-                    .bodies
-                    .insert(RigidBodyBuilder::kinematic_position_based().pose(pose).build());
+                let body = physics.bodies.insert(
+                    RigidBodyBuilder::kinematic_position_based()
+                        .pose(pose)
+                        .build(),
+                );
 
                 let built = ColliderBuilder::new(shape)
                     .friction(proxies.friction)
@@ -1167,13 +1168,8 @@ impl PhysicsWorld {
             })
             .collect();
         events.sort_by(|x, y| {
-            (&x.a, &x.b, &x.a_part, &x.b_part, x.started).cmp(&(
-                &y.a,
-                &y.b,
-                &y.a_part,
-                &y.b_part,
-                y.started,
-            ))
+            (&x.a, &x.b, &x.a_part, &x.b_part, x.started)
+                .cmp(&(&y.a, &y.b, &y.a_part, &y.b_part, y.started))
         });
         events
     }

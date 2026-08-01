@@ -5477,7 +5477,10 @@ fn list_colliders_and_list_joints_agree_about_where_a_part_is() {
         .filter_map(|c| c["part"].as_str())
         .collect();
     assert_eq!(parts.len(), 11, "{colliders}");
-    assert!(parts.contains(&"Head") && parts.contains(&"FootR"), "{parts:?}");
+    assert!(
+        parts.contains(&"Head") && parts.contains(&"FootR"),
+        "{parts:?}"
+    );
 }
 
 /// A shot to the head reports the head. The entity name stays an entity name —
@@ -5540,7 +5543,11 @@ fn list_colliders_reports_component_colliders_with_no_part() {
         .find(|row| row["entity"] == "DropCube")
         .unwrap_or_else(|| panic!("no DropCube in {report}"));
     assert_eq!(cube["shape"], "cuboid", "{cube}");
-    assert_eq!(cube["dimensions"], serde_json::json!([0.5, 0.5, 0.5]), "{cube}");
+    assert_eq!(
+        cube["dimensions"],
+        serde_json::json!([0.5, 0.5, 0.5]),
+        "{cube}"
+    );
 }
 
 /// A proxy on a joint the rig does not have is refused before a device or a

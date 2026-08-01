@@ -709,7 +709,11 @@ pub(super) fn check_component(
 
                 // `Collider`'s per-shape rule, applied per part.
                 let fields: [(&str, bool, bool); 3] = [
-                    ("half_extents", part.half_extents.is_some(), part.shape == Cuboid),
+                    (
+                        "half_extents",
+                        part.half_extents.is_some(),
+                        part.shape == Cuboid,
+                    ),
                     (
                         "radius",
                         part.radius.is_some(),
@@ -787,7 +791,11 @@ pub(super) fn check_component(
                     dimension("radius", format!("parts[{i}].radius"), radius);
                 }
                 if let Some(half_height) = part.half_height {
-                    dimension("half_height", format!("parts[{i}].half_height"), half_height);
+                    dimension(
+                        "half_height",
+                        format!("parts[{i}].half_height"),
+                        half_height,
+                    );
                 }
             }
 

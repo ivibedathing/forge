@@ -36,7 +36,7 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # winit and eframe link against X11, Wayland and GL on Linux. The
       # released binary's glibc floor is this runner's, which is why it is
@@ -86,7 +86,7 @@ jobs:
           (cd dist && 7z a "$name.zip" "$name" >/dev/null)
           (cd dist && sha256sum "$name.zip" > "$name.zip.sha256")
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: |
@@ -98,7 +98,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -106,7 +106,7 @@ jobs:
       - name: Collect checksums
         run: cat dist/*.sha256 > dist/SHA256SUMS && rm dist/*.sha256
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.tar.gz

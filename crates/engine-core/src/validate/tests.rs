@@ -48,9 +48,7 @@ fn accepts_a_skinned_collider() {
 #[test]
 fn a_proxy_set_has_a_budget() {
     let parts = (0..crate::components::MAX_COLLIDER_PARTS + 1)
-        .map(|i| {
-            format!(r#"{{ "joint": "J{i}", "shape": "sphere", "radius": 0.1 }}"#)
-        })
+        .map(|i| format!(r#"{{ "joint": "J{i}", "shape": "sphere", "radius": 0.1 }}"#))
         .collect::<Vec<_>>()
         .join(",");
     let source = format!(

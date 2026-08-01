@@ -330,7 +330,10 @@ pub fn posed_globals_at(
     // rather than the guard — `.cloned()` does not apply and clippy's
     // `map_clone` suggestion does not compile here.
     #[allow(clippy::map_clone)]
-    let player = world.get::<&AnimationPlayer>(entity).ok().map(|p| p.clone());
+    let player = world
+        .get::<&AnimationPlayer>(entity)
+        .ok()
+        .map(|p| p.clone());
     // A property clip on a skinned entity is legal: it animates components,
     // not joints, and the rig stays at rest.
     let clip = player
