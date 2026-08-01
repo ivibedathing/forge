@@ -24,7 +24,7 @@ fn step(world, step) {
     // The coal bed swells a little — an emissive surface is still the only way
     // a script can make geometry look hotter.
     // These are `builtin:sphere` diameters, not radii: a builtin is one metre
-    // across at scale 1 (M35), so the bed is 0.88 m wide and swells by 0.08.
+    // across at scale 1 (M34), so the bed is 0.88 m wide and swells by 0.08.
     let s = 0.88 + flick * 0.08;
     world.set_scale("Coals", s, s * 0.30, s);
 

@@ -31,7 +31,7 @@ fn step(world, step) {
     // not in the curated API. What is new (M17) is that the fire now also
     // lights everything around it, below.
     // A `builtin:sphere` diameter, not a radius: a builtin is one metre across
-    // at scale 1 (M35), so the bed is 1.48 m wide and swells by 0.12.
+    // at scale 1 (M34), so the bed is 1.48 m wide and swells by 0.12.
     let s = 1.48 + flick * 0.12;
     world.set_scale("FireCore", s, s * 0.30, s);
 

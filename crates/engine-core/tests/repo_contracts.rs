@@ -676,7 +676,7 @@ fn the_scene_format_doc_example_validates() {
 
 /// No committed scene draws one size and collides at another.
 ///
-/// Six did before M35 — five of them because `builtin:sphere` was two metres
+/// Six did before M34 — five of them because `builtin:sphere` was two metres
 /// across while every other primitive was one, so a collider authored to match
 /// the drawn ball had to be written at twice its visible radius, and the sixth
 /// because a radius was written as a world measurement that `Transform.scale`

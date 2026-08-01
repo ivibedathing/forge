@@ -1027,7 +1027,7 @@ pub(super) fn walk<'a>(
 /// A proxy collider is legitimate — a box around a barrel, a slightly inset
 /// hull — so this is deliberately loose. What it is sized to catch is the
 /// error class that has no other symptom: a factor of two (a `builtin:sphere`
-/// was radius 1 until M35, so a collider matching the drawn ball was authored
+/// was radius 1 until M34, so a collider matching the drawn ball was authored
 /// at twice its visible size) and a `Transform.scale` applied twice (a radius
 /// written as a world measurement, then scaled again by the engine).
 const COLLIDER_SIZE_TOLERANCE: f32 = 1.25;

@@ -400,7 +400,7 @@ fn plane() -> MeshData {
 ///
 /// Like the cube and the cylinder it fits the unit extent, so
 /// `Transform.scale` means the same thing on all four and reads as a size in
-/// metres. **It was radius 1 until M35**, alone among the primitives, and that
+/// metres. **It was radius 1 until M34**, alone among the primitives, and that
 /// cost five of the six sphere-plus-collider pairs in this repo their agreement
 /// between what was drawn and what was simulated — a `Collider` radius is
 /// scaled by the same `Transform.scale`, so authoring one to match the mesh

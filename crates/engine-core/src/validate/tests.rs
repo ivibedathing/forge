@@ -748,7 +748,7 @@ fn warns_about_a_zero_scale_axis() {
 /// which used to render as a half-buried object and nothing else.
 #[test]
 fn warns_when_a_collider_is_a_different_size_from_its_builtin_mesh() {
-    // A radius authored against the pre-M35 two-metre sphere.
+    // A radius authored against the pre-M34 two-metre sphere.
     let doubled = r#"{"name":"s","entities":[
         {"name":"Ball","components":[
             {"type":"Transform","position":[0.0,3.0,0.0]},

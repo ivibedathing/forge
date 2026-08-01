@@ -20,7 +20,7 @@ dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, 
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
-planting, M35 the metre. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
+planting, M34 the metre. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -123,7 +123,7 @@ report prints on both pass and fail (a documented stdout exception).
 
 `Mesh.asset` is `builtin:cube` / `builtin:cylinder` / `builtin:plane` / `builtin:sphere` /
 `builtin:triangle`, or a `.gltf`/`.glb` path relative to the scene file. **Every builtin but the
-triangle is one metre across at scale 1** (M35), so `Transform.scale` reads as a size in metres and
+triangle is one metre across at scale 1** (M34), so `Transform.scale` reads as a size in metres and
 a `Collider` matching one is always `half_extents: [0.5, 0.5, 0.5]` or `radius: 0.5`. Reference checks (existence,
 extension, absolute-path rejection) live in `engine-core/src/mesh.rs` (`MeshAsset::resolve`); actual
 file parsing lives in `engine-assets` — the only crate that opens asset files (glTF meshes plus
@@ -1378,7 +1378,7 @@ is no third owner), planting on physics colliders, arm/hand IK and authored pole
 joints.
 
 
-## One unit is one metre (M35)
+## One unit is one metre (M34)
 
 **The convention was already true everywhere except one primitive, and that one exception had
 quietly produced wrong content in six committed scenes.** Free fall measures `-9.810 m/s` after a
@@ -1440,7 +1440,9 @@ Not here: changing `builtin:triangle`, and fixing `builtin:plane`/`builtin:cube`
 M26 already deferred as its own change with its own A/B.
 
 **Numbering**: two parallel sessions were holding `m33-gi` and `m33-skinned-colliders` when this
-started, so it took M35 to stay clear. If it lands before either, renumber.
+started. Skinned colliders landed as M33 while this was building, so this took M34 on the way in —
+the repo's rule that the later session renumbers, applied at merge rather than at branch. A
+global-illumination branch is still out there and is the next number.
 
 ## Showcase tour (`designs/showcase-tour.md`)
 
