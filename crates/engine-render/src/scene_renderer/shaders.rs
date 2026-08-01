@@ -72,11 +72,20 @@ pub(crate) mod anchor {
                                 \x20   let emissive = object.emissive_roughness.rgb;\n";
     pub const NORMAL: &str = "    let n = normalize(in.normal);\n";
     pub const ROUGHNESS: &str = "    let roughness = max(object.emissive_roughness.w, 0.045);\n";
-    /// One of M16's four untouchable lines. A variant may replace it —
-    /// the plain pipeline still compiles the file as it sits on disk — and
-    /// occlusion is the only thing that has ever needed to.
+    /// One of M16's four untouchable lines.
+    ///
+    /// Like [`VERTEX_STAGE`], and since M35 for the same reason, this is not
+    /// *replaced* by a producer but **reassembled** from their
+    /// [`FillContribution`](super::FillContribution)s: texturing multiplies it
+    /// by an occlusion map and GI replaces the constant sky term with a probe
+    /// lookup, and a textured surface inside a probe volume is precisely the
+    /// case that has to compose. `with_surface` applies substitutions by
+    /// sequential `str::replace`, so two producers claiming one anchor is not a
+    /// merge — it is a silent no-op for whichever runs second, which renders the
+    /// feature as if it were absent. The assembly with no contributions is
+    /// asserted to be this string, byte for byte.
     pub const AMBIENT: &str = "    let ambient = albedo * frame.ambient.rgb;\n";
-    /// Its counterpart inside the sky branch.
+    /// Its counterpart inside the sky branch, reassembled under the same rule.
     pub const FILL: &str = "            fill = albedo * hemisphere;\n";
     /// The frame uniform's tail, where the refraction variant appends the
     /// view-projection it needs to project an exit point.
@@ -148,9 +157,11 @@ pub(crate) fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, 
     let substitutions = || producers.iter().flat_map(|p| p.substitutions.iter());
     for (anchor, _) in substitutions().chain([
         &(anchor::UNIFORM_TAIL, EXTENDED_UNIFORM_TAIL),
-        // Not in any producer's substitution list — it is reassembled rather
-        // than replaced — but just as load-bearing, so it is asserted here.
+        // Not in any producer's substitution list — they are reassembled rather
+        // than replaced — but just as load-bearing, so they are asserted here.
         &(anchor::VERTEX_STAGE, ""),
+        &(anchor::AMBIENT, ""),
+        &(anchor::FILL, ""),
     ]) {
         assert_eq!(
             source.matches(anchor).count(),
@@ -174,6 +185,9 @@ pub(crate) fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, 
         anchor::VERTEX_STAGE,
         &vertex_stage(producers.iter().filter_map(|p| p.vertex.as_ref())),
     );
+    let (ambient, fill) = fill_lines(producers.iter().filter_map(|p| p.fill.as_ref()));
+    out = out.replace(anchor::AMBIENT, &ambient);
+    out = out.replace(anchor::FILL, &fill);
     for (anchor, replacement) in substitutions() {
         out = out.replace(anchor, replacement);
     }
@@ -193,7 +207,79 @@ pub(crate) struct Producer {
     /// What this producer adds to the vertex stage, if anything. Terrain and
     /// refraction add nothing: they resolve a surface per pixel.
     pub(crate) vertex: Option<VertexContribution>,
+    /// How this producer changes the fill light, if at all (M35). Reassembled
+    /// rather than substituted — see [`anchor::AMBIENT`].
+    pub(crate) fill: Option<FillContribution>,
     pub(crate) substitutions: Vec<(&'static str, &'static str)>,
+}
+
+/// One producer's change to the ambient and sky-fill terms.
+///
+/// Two kinds, because the two compose differently. An `occlusion` multiplier is
+/// a *scale* on whatever the fill turned out to be, and any number of producers
+/// may contribute one — they multiply. An `irradiance` expression *replaces*
+/// where the fill comes from, and at most one producer may contribute it, for
+/// [`VertexContribution::position`]'s reason: a second would silently win or
+/// lose on iteration order.
+///
+/// An all-empty set assembles to [`anchor::AMBIENT`] and [`anchor::FILL`]
+/// verbatim, which is what keeps the plain pipeline compiling `mesh.wgsl` as it
+/// sits on disk — and what keeps M16's untouchable lines reaching the compiler
+/// surrounded by the code they shipped in.
+#[derive(Default)]
+pub(crate) struct FillContribution {
+    /// A factor the ambient terms are multiplied by — an occlusion map, say.
+    /// Written as the WGSL that follows a `*`, e.g. `"sampled.occlusion"`.
+    ///
+    /// Multiplies the *ambient* terms and **never** the direct sun: that is the
+    /// whole difference between ambient occlusion and a second shadow map.
+    pub(crate) occlusion: Option<&'static str>,
+    /// The expression the ambient term reads instead of `frame.ambient.rgb`.
+    /// At most one producer may set it.
+    pub(crate) ambient_source: Option<&'static str>,
+    /// The expression the sky branch reads instead of `hemisphere`, under the
+    /// same rule.
+    pub(crate) hemisphere_source: Option<&'static str>,
+}
+
+/// Assemble the two fill lines from their contributions, in producer order.
+///
+/// Returns `(ambient, fill)` — the replacements for [`anchor::AMBIENT`] and
+/// [`anchor::FILL`]. With no contributions each is its anchor byte for byte,
+/// which `producers_compose_without_a_hand_written_fill` pins.
+pub(crate) fn fill_lines<'a>(
+    contributions: impl Iterator<Item = &'a FillContribution> + Clone,
+) -> (String, String) {
+    // A second producer deciding where the fill comes from would silently win
+    // or lose depending on iteration order; neither is a thing to discover from
+    // a render. `vertex_stage`'s rule, for its reason.
+    let one = |what: &str, field: fn(&FillContribution) -> Option<&'static str>| {
+        let mut found = contributions.clone().filter_map(field);
+        let first = found.next();
+        assert!(
+            found.next().is_none(),
+            "two producers both claim to compute the {what}; the fill can only \
+             come from one place"
+        );
+        first
+    };
+
+    // Multipliers concatenate in producer order, so the arithmetic a variant
+    // compiles is a function of the producer list and nothing else.
+    let multipliers: String = contributions
+        .clone()
+        .filter_map(|c| c.occlusion)
+        .map(|m| format!(" * {m}"))
+        .collect();
+
+    let ambient_source = one("ambient source", |c| c.ambient_source).unwrap_or("frame.ambient.rgb");
+    let hemisphere_source =
+        one("hemisphere source", |c| c.hemisphere_source).unwrap_or("hemisphere");
+
+    (
+        format!("    let ambient = albedo * {ambient_source}{multipliers};\n"),
+        format!("            fill = albedo * {hemisphere_source}{multipliers};\n"),
+    )
 }
 
 /// One producer's addition to the vertex stage.
@@ -282,6 +368,10 @@ pub(crate) fn terrain_producer() -> Producer {
         // plain stage already interpolates, so it adds nothing to the vertex
         // stage.
         vertex: None,
+        // Terrain shades itself per pixel but takes the fill light every
+        // other opaque surface takes — it is an ordinary lit surface that
+        // happens to compute its own albedo.
+        fill: None,
         substitutions: vec![
             (
                 anchor::PROLOGUE,
@@ -322,6 +412,16 @@ pub(crate) fn texture_producer() -> Producer {
             tail: "    out.uv = uv * object.map_uv.xy + object.map_uv.zw;\n",
             ..VertexContribution::default()
         }),
+        // Occlusion multiplies the ambient terms and **never** the direct sun:
+        // that is the whole difference between ambient occlusion and a second
+        // shadow map. A multiplier rather than a replacement, so it composes
+        // with GI deciding where the fill comes from — before M35 this was a
+        // whole-line substitution, and a second claimant would have silently
+        // erased it.
+        fill: Some(FillContribution {
+            occlusion: Some("sampled.occlusion"),
+            ..FillContribution::default()
+        }),
         substitutions: vec![
             (
                 anchor::PROLOGUE,
@@ -348,17 +448,6 @@ pub(crate) fn texture_producer() -> Producer {
                 anchor::ROUGHNESS,
                 "    let roughness = max(object.emissive_roughness.w * sampled.roughness, 0.045);\n",
             ),
-            // Occlusion multiplies the ambient terms and **never** the direct
-            // sun: that is the whole difference between ambient occlusion and a
-            // second shadow map.
-            (
-                anchor::AMBIENT,
-                "    let ambient = albedo * frame.ambient.rgb * sampled.occlusion;\n",
-            ),
-            (
-                anchor::FILL,
-                "            fill = albedo * hemisphere * sampled.occlusion;\n",
-            ),
         ],
     }
 }
@@ -376,6 +465,9 @@ pub(crate) fn refraction_producer() -> Producer {
         // Refraction is entirely a fragment-stage decision: it bends a view
         // ray, it does not move a vertex.
         vertex: None,
+        // Refraction bends what is seen *through* a surface; it does not
+        // change what lights the surface itself.
+        fill: None,
         substitutions: vec![
             (
                 anchor::FRAME_TAIL,
@@ -454,6 +546,9 @@ pub(crate) fn skin_producer() -> Producer {
             normal: Some("skinned.normal"),
             ..VertexContribution::default()
         }),
+        // A skinned surface takes the same fill as any other; the skin moved
+        // the vertex and stopped there.
+        fill: None,
         // Nothing in the fragment stage: a skinned surface is shaded exactly
         // like any other, which is the point of doing this in the vertex
         // stage at all.
@@ -713,6 +808,77 @@ mod seam_tests {
             !both.contains("object.mvp * vec4<f32>(position, 1.0)"),
             "the unskinned position must not survive alongside the skinned one"
         );
+    }
+
+    /// The empty fill assembly must be M16's two lines byte for byte (M35).
+    ///
+    /// This is the property the whole reassembly rests on: those lines are two
+    /// of the four CLAUDE.md flags as ULP-sensitive, and they have to reach the
+    /// compiler surrounded by the code they shipped in. If this drifts by a
+    /// space, every variant that does *not* use GI starts compiling different
+    /// arithmetic — and the A/B that would catch it runs once a milestone, not
+    /// once a build.
+    #[test]
+    fn the_empty_fill_assembly_is_the_anchor_byte_for_byte() {
+        let (ambient, fill) = super::fill_lines(std::iter::empty());
+        assert_eq!(ambient, super::anchor::AMBIENT);
+        assert_eq!(fill, super::anchor::FILL);
+    }
+
+    /// And with only the texture producer it must be exactly what that producer
+    /// used to substitute, or M26's occlusion silently changes shape.
+    #[test]
+    fn the_texture_only_fill_assembly_matches_the_pre_m35_substitution() {
+        let texture = super::texture_producer();
+        let (ambient, fill) = super::fill_lines(texture.fill.iter());
+        assert_eq!(
+            ambient,
+            "    let ambient = albedo * frame.ambient.rgb * sampled.occlusion;\n"
+        );
+        assert_eq!(
+            fill,
+            "            fill = albedo * hemisphere * sampled.occlusion;\n"
+        );
+    }
+
+    /// Two producers on the fill is the case that forced the assembly, and the
+    /// one `str::replace` could not express: an occlusion map *and* a probe
+    /// lookup have to both survive.
+    #[test]
+    fn an_occluder_and_an_irradiance_source_compose() {
+        let occlusion = super::FillContribution {
+            occlusion: Some("sampled.occlusion"),
+            ..Default::default()
+        };
+        let gi = super::FillContribution {
+            ambient_source: Some("gi_ambient"),
+            hemisphere_source: Some("gi_hemisphere"),
+            ..Default::default()
+        };
+        let (ambient, fill) = super::fill_lines([&occlusion, &gi].into_iter());
+        assert_eq!(
+            ambient,
+            "    let ambient = albedo * gi_ambient * sampled.occlusion;\n"
+        );
+        assert_eq!(
+            fill,
+            "            fill = albedo * gi_hemisphere * sampled.occlusion;\n"
+        );
+    }
+
+    /// Two producers claiming to *be* the fill is the error that must be loud.
+    #[test]
+    #[should_panic(expected = "the fill can only come from one place")]
+    fn two_irradiance_sources_are_refused() {
+        let a = super::FillContribution {
+            ambient_source: Some("one"),
+            ..Default::default()
+        };
+        let b = super::FillContribution {
+            ambient_source: Some("two"),
+            ..Default::default()
+        };
+        super::fill_lines([&a, &b].into_iter());
     }
 
     /// The joint palette reaches the GPU as three *rows*, and glam matrices are
