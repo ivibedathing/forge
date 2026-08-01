@@ -59,6 +59,7 @@ engine init [dir] [--force]              # scaffold a project: starter scene + A
 engine agent-guide                       # the agent orientation as markdown (a stdout exception)
 engine import <model.glb> [--into scene.json] [--textures dir] [--materials dir]  # glTF materials (M26)
 engine list-components [--component Name]  # scene + component JSON Schemas (with range constraints)
+engine list-components --markdown          # the same vocabulary as prose; generates docs/component-reference.md
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
 engine run                               # M0 triangle (stack proof)
 engine info                              # selected GPU adapter as JSON
@@ -1552,18 +1553,22 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**25 of the 37 baselines are pinned by no test at all** — the sweep is their only check. The twelve a
-test actually diff-renders and asserts *matching* are `m12_hud`, `m16_environment`, `m17_fire`,
-`m18_water`, `m19_trees`, `m20_clouds`, `m21_daylight_1200`, `m22_terrain`, `m23_road`,
-`m30_skeletal`, `m31_ui` and `m32_locomotion`; everything else — `m4_lighting`, both `m8_drop`, `m9_t025`, both `m10`,
-`m11_lap`, `m13_smoke`, `m14_break`, the other four `m21_daylight_*`, `m26_materials`, both `m27_*`,
-both `m28_pointer_*`, `m29_meadow`, and all six `showcase_*` — rides on `bin/verify-baselines` alone.
-**This ratio has been getting worse, not better**: it was 16 of 35 when last counted, and M26/M28
-each added fixtures whose baselines no test asserts. Two entries mislead if skimmed.
-`m27_water_refraction.png` *is* named by a CLI test, but only in the **negative** direction (with
-`ior` back at 1.0 the baseline must *not* match), which pins that refraction is load-bearing and
-does not pin the render. And `m11_lap.png`: the lap CLI test pins the *drive* (positions, elevation,
-parked HUD strings) and names the PNG in a comment, but nothing diff-renders it. A sweep failure that will not reproduce twice in a row is worth suspecting before it
+**31 of the 37 baselines are pinned by a test**, and the six that are not are the six `showcase_*`
+frames — deliberately. They are not byte-reproducible on this adapter (measured repeatedly at four
+to six distinct images from six renders of an *unchanged* scene, on any binary), so a test
+asserting them would fail at random, which is worse than no test. They keep their `diff_args`
+tolerance in the manifest and stay the sweep's job; `cli.rs` says so where someone would go to add
+them.
+
+This was 25-of-37 unpinned until the pins landed, and getting worse rather than better — 16 of 35
+when first counted, with M26 and M28 each adding fixtures nothing asserted. The nineteen that were
+missing now cost **3.6 s** in the CLI suite for the lot, `m11_lap`'s eleven thousand steps of
+vehicle physics included, which is the answer to why it had not been done. Two of them looked
+pinned and were not: `m27_water_refraction.png` was named by a test only in the **negative**
+direction (with `ior` back at 1.0 the baseline must *not* match), which pins refraction as
+load-bearing and says nothing about the render; and `m11_lap.png` was named only in a comment, by
+a test that pins the *drive* — positions, elevation, the parked HUD strings — and never rendered
+it. Both now have the positive half too. A sweep failure that will not reproduce twice in a row is worth suspecting before it
 is worth debugging: since M29 **all six `showcase_*` frames** carry a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02`, because a meadow at `samples: 4` is not byte-reproducible
 on this adapter and the tour has one in every frame (M22 had already given `showcase_646` a
@@ -1654,10 +1659,16 @@ one is compiler-checked.
 
 Plus `engine-physics`, `engine-script`, `engine-editor`. Supporting:
 `schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`, and
-`docs/` — which holds `cli-contract.md` and `error-codes.md` and **nothing else**. The design doc's
-§4 sketch also lists `docs/component-reference.md` and `docs/scene-format.md`; neither was ever
-built, and the component reference today is `engine list-components` plus the doc comments it
-carries into the schema. Don't cite either file as if it exists.
+`docs/`, which holds four documents. `cli-contract.md` is the wire contract and `error-codes.md`
+mirrors `codes.rs`, both pinned by repo-contract tests. **`component-reference.md` is generated** —
+`engine list-components --markdown` renders the same schema the flagless form publishes, and
+`checked_in_component_reference_matches_the_code` fails when the committed file is stale, so it can
+never become a second source of truth (invariant 7). **`scene-format.md` is prose**, covering what
+the schema cannot say: internal tagging, entity names as addresses, asset paths relative to the
+*scene file*, which components own their own geometry, and the cost of JSON having no comments. Its
+worked example is fenced with `<!-- validated -->` and checked by a test rather than trusted — the
+example in a format document is the first thing anyone copies, and the test caught two invented
+`RigidBody` fields the hour it was written.
 
 Stack: Rust + wgpu 30 (Vulkan/Metal/DX12) + winit 0.30 + glam + serde/JSON + hecs + `image` for PNG
 export.
@@ -1750,14 +1761,12 @@ sampled nearest, no new dependency and no float, arriving as a `font` field whos
 font), pointer lock and scroll, text input and focus, per-side padding, and world-space UI (a health
 bar over an enemy's head is a *projection* question and wants `world.project(x, y, z)`).
 
-**Housekeeping the M31 audit turned up and did not do**, in the order they are worth doing:
-
-- **25 of the 37 baselines are pinned by no test** (see Verification). The pile stopped growing at
-  M32, whose fixture arrived with a CLI test that diff-renders it — which is the cheap thing that
-  makes a baseline survive someone who does not run the sweep, and the thing every earlier fixture
-  should be given.
-- **`docs/scene-format.md` and `docs/component-reference.md`** are sketched in the design doc §4 and
-  were never written. If either lands it must be generated and pinned like `error-codes.md`.
+**The M31 audit's housekeeping is done**: `scene_renderer.rs` and `validate.rs` are split, the
+clippy warnings are cleared and their CI step is blocking, every reproducible baseline has a test,
+and both `docs/` files the design doc sketched now exist. What is left of that list is one standing
+rule rather than a task: **a new fixture arrives with the CLI test that diff-renders it**, in the
+same commit, unless it is in the tour's nondeterministic class — in which case say so where the
+test would have gone.
 
 **The clippy warnings are cleared and CI's clippy step is blocking.** Six of the twenty-eight were
 not bugs to fix but the lint being wrong, and they carry a local `#[allow]` with the reason —
