@@ -629,6 +629,192 @@ pub(super) fn check_component(
         // check with the component alone.
         ComponentData::FootPlant(_) => {}
 
+        // A proxy set (M33). Everything here is answerable from the component
+        // alone: which shapes a proxy may be, that each part carries the
+        // dimensions its shape needs, that no two parts report under one name,
+        // and the budget. Whether the joints exist is the rig's answer and
+        // lives in engine-assets, beside the `FootPlant` joint check.
+        ComponentData::SkinnedCollider(ref proxies) => {
+            use crate::components::ColliderShapeKind::{
+                Capsule, ConvexHull, Cuboid, Sphere, Trimesh,
+            };
+
+            if proxies.parts.len() > crate::components::MAX_COLLIDER_PARTS {
+                errors.push(
+                    cx.err(
+                        codes::TOO_MANY_COLLIDER_PARTS,
+                        format!(
+                            "this SkinnedCollider lists {} parts; at most {} are built",
+                            proxies.parts.len(),
+                            crate::components::MAX_COLLIDER_PARTS
+                        ),
+                        &format!("{component_path}/parts"),
+                    )
+                    .entity(entity)
+                    .component("SkinnedCollider")
+                    .field("parts"),
+                );
+            }
+
+            let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for (i, part) in proxies.parts.iter().enumerate() {
+                let part_path = format!("{component_path}/parts/{i}");
+                let label = part.part_name();
+
+                // Reports address a part by name, and two parts under one name
+                // would make `list-colliders` and a contact's `part` ambiguous
+                // — the failure a report exists to prevent.
+                if !seen.insert(label) {
+                    errors.push(
+                        cx.err(
+                            codes::DUPLICATE_COLLIDER_PART,
+                            format!(
+                                "two parts of this SkinnedCollider report as {label:?}; \
+                                 part names address a proxy in every report, so they \
+                                 must be unique (set \"name\" on one of them)"
+                            ),
+                            &part_path,
+                        )
+                        .entity(entity)
+                        .component("SkinnedCollider")
+                        .field(format!("parts/{i}/name")),
+                    );
+                }
+
+                let shape_name = match part.shape {
+                    Cuboid => "cuboid",
+                    Sphere => "sphere",
+                    Capsule => "capsule",
+                    Trimesh => "trimesh",
+                    ConvexHull => "convex_hull",
+                };
+                if matches!(part.shape, Trimesh | ConvexHull) {
+                    errors.push(
+                        cx.err(
+                            codes::COLLIDER_PART_SHAPE_UNSUPPORTED,
+                            format!(
+                                "part {label:?} is a {shape_name}; a proxy may only be \
+                                 \"cuboid\", \"sphere\" or \"capsule\". A mesh shape \
+                                 describes one specific mesh, and a skinned mesh is \
+                                 posed on the GPU where physics cannot read it"
+                            ),
+                            &format!("{part_path}/shape"),
+                        )
+                        .entity(entity)
+                        .component("SkinnedCollider")
+                        .field(format!("parts/{i}/shape")),
+                    );
+                    continue;
+                }
+
+                // `Collider`'s per-shape rule, applied per part.
+                let fields: [(&str, bool, bool); 3] = [
+                    ("half_extents", part.half_extents.is_some(), part.shape == Cuboid),
+                    (
+                        "radius",
+                        part.radius.is_some(),
+                        matches!(part.shape, Sphere | Capsule),
+                    ),
+                    (
+                        "half_height",
+                        part.half_height.is_some(),
+                        part.shape == Capsule,
+                    ),
+                ];
+                for (field, present, wanted) in fields {
+                    if wanted && !present {
+                        errors.push(
+                            cx.err(
+                                codes::MISSING_FIELD,
+                                format!(
+                                    "{shape_name} parts require the field {field:?} \
+                                     (part {label:?})"
+                                ),
+                                &part_path,
+                            )
+                            .entity(entity)
+                            .component("SkinnedCollider")
+                            .field(format!("parts/{i}/{field}")),
+                        );
+                    }
+                    if !wanted && present {
+                        errors.push(
+                            cx.err(
+                                codes::SHAPE_FIELD_MISMATCH,
+                                format!(
+                                    "{shape_name} parts have no field {field:?} \
+                                     (part {label:?})"
+                                ),
+                                &format!("{part_path}/{field}"),
+                            )
+                            .entity(entity)
+                            .component("SkinnedCollider")
+                            .field(format!("parts/{i}/{field}")),
+                        );
+                    }
+                }
+
+                // Strictly positive, negated so a NaN fails — `Collider`'s
+                // comparison and its reason.
+                #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                let mut dimension = |field: &str, label: String, v: f32| {
+                    if !(v > 0.0) {
+                        errors.push(
+                            cx.err(
+                                codes::INVALID_SHAPE_DIMENSION,
+                                format!(
+                                    "SkinnedCollider.{label} is {v}; it must be greater \
+                                     than 0"
+                                ),
+                                &format!("{part_path}/{field}"),
+                            )
+                            .entity(entity)
+                            .component("SkinnedCollider")
+                            .field(format!("parts/{i}/{field}")),
+                        );
+                    }
+                };
+                if let Some(half_extents) = part.half_extents {
+                    for (axis, v) in half_extents.to_array().into_iter().enumerate() {
+                        dimension(
+                            "half_extents",
+                            format!("parts[{i}].half_extents[{axis}]"),
+                            v,
+                        );
+                    }
+                }
+                if let Some(radius) = part.radius {
+                    dimension("radius", format!("parts[{i}].radius"), radius);
+                }
+                if let Some(half_height) = part.half_height {
+                    dimension("half_height", format!("parts[{i}].half_height"), half_height);
+                }
+            }
+
+            // M12's rule, unchanged: an empty array reads as "nothing", and
+            // absence is how "everything" is spelled.
+            for (field, list) in [
+                ("layers", &proxies.layers),
+                ("collides_with", &proxies.collides_with),
+            ] {
+                if list.as_ref().is_some_and(Vec::is_empty) {
+                    errors.push(
+                        cx.err(
+                            codes::EMPTY_COLLISION_LAYERS,
+                            format!(
+                                "SkinnedCollider.{field} is an empty array, which would \
+                                 mean \"nothing\"; omit the field to mean \"everything\""
+                            ),
+                            &format!("{component_path}/{field}"),
+                        )
+                        .entity(entity)
+                        .component("SkinnedCollider")
+                        .field(field),
+                    );
+                }
+            }
+        }
+
         ComponentData::Meadow(ref meadow) => {
             if meadow.stages.len() < 2 {
                 errors.push(

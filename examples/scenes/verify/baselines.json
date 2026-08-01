@@ -510,6 +510,18 @@
       "height": 360,
       "milestone": "M32",
       "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m33_proxies.png",
+      "scene": "examples/scenes/verify/m33_proxies.json",
+      "args": [
+        "--steps",
+        "150"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M33",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [

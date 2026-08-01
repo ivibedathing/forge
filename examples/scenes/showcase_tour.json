@@ -1042,6 +1042,63 @@
           "max_drop": 0.45,
           "max_lift": 0.35,
           "align": 24.0
+        },
+        {
+          "type": "SkinnedCollider",
+          "layers": [
+            "character"
+          ],
+          "parts": [
+            {
+              "joint": "Head",
+              "shape": "sphere",
+              "radius": 0.13,
+              "offset": [
+                0.0,
+                0.07,
+                0.0
+              ]
+            },
+            {
+              "joint": "Chest",
+              "shape": "capsule",
+              "radius": 0.17,
+              "half_height": 0.13,
+              "offset": [
+                0.0,
+                -0.04,
+                0.0
+              ]
+            },
+            {
+              "joint": "Hips",
+              "shape": "capsule",
+              "radius": 0.16,
+              "half_height": 0.06
+            },
+            {
+              "joint": "LegL",
+              "shape": "capsule",
+              "radius": 0.09,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.21,
+                0.0
+              ]
+            },
+            {
+              "joint": "LegR",
+              "shape": "capsule",
+              "radius": 0.09,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.21,
+                0.0
+              ]
+            }
+          ]
         }
       ]
     },

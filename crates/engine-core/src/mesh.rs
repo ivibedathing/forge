@@ -314,6 +314,17 @@ impl MeshSource for BuiltinAssets {
     }
 }
 
+/// Everything the physics world resolves out of asset files: geometry for a
+/// `trimesh`/`convex_hull` collider, and — since M33 — the rig a
+/// `SkinnedCollider`'s proxies ride.
+///
+/// One parameter rather than two, with a blanket impl, exactly as
+/// [`AssetSource`](crate::texture::AssetSource) did for the draw list, so every
+/// existing caller of `PhysicsWorld::build` keeps passing what it passed
+/// before.
+pub trait PhysicsAssets: MeshSource + crate::skeleton::RigSource {}
+impl<T: MeshSource + crate::skeleton::RigSource + ?Sized> PhysicsAssets for T {}
+
 impl crate::skeleton::RigSource for BuiltinAssets {
     /// A `builtin:` primitive is generated geometry with no file behind it, so
     /// it has no rig — an empty one, not an error, which is what lets every

@@ -5282,3 +5282,260 @@ fn m29_meadow_baseline_pins_the_field_at_samples_1() {
         &["--time", "0.7"],
     );
 }
+// ── Skinned collider proxies (M33) ────────────────────────────────────────
+
+/// The milestone's fixture: two identical walkers walk into two identical
+/// crates, and the only difference between them is a `SkinnedCollider`.
+fn proxy_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m33_proxies.json")
+}
+
+#[test]
+fn the_proxy_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(proxy_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The M33 fixture rendered: one walker bulldozing a crate along, and its twin
+/// standing past a crate it walked straight through.
+///
+/// The two walkers are the assertion, M30's fixture logic for the third time —
+/// they share a file, a mesh, a clip and a crate, so anything that made both
+/// wrong would leave them identical.
+///
+/// It aims at its subject with no terrain in frame, per M22's rule, so it
+/// carries a hard bit-exact pin; four consecutive renders came back as one
+/// image, measured rather than assumed.
+#[test]
+fn the_m33_proxy_fixture_pins_a_shoved_crate() {
+    let scene = proxy_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m33_proxies.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The milestone's claim as a number, with no image read: a character whose
+/// pose the physics world can see moves what it walks into, and one whose pose
+/// it cannot see does not.
+#[test]
+fn a_proxied_walker_shoves_its_crate_and_an_unproxied_one_walks_through_its_own() {
+    let output = engine()
+        .arg("simulate")
+        .arg(proxy_scene())
+        .arg("--steps")
+        .arg("150")
+        .arg("--entity")
+        .arg("CrateHit")
+        .arg("--entity")
+        .arg("CrateMissed")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let z_of = |name: &str| -> f64 {
+        report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == name)
+            .unwrap_or_else(|| panic!("no {name} in {report}"))["position"][2]
+            .as_f64()
+            .unwrap()
+    };
+
+    // Both crates are authored at z = -0.55 and both walkers walk into them.
+    let hit = z_of("CrateHit");
+    let missed = z_of("CrateMissed");
+    assert!(
+        hit < -1.2,
+        "the proxied walker must shove its crate well past its authored z = -0.55, \
+         it is at {hit}"
+    );
+    assert!(
+        (missed + 0.55).abs() < 1e-3,
+        "the unproxied walker must pass through its crate without touching it, \
+         but the crate moved to {missed}"
+    );
+}
+
+/// `engine list-colliders` and `engine list-joints` must agree about where a
+/// part is — the report closing the loop on itself, since a hitbox riding a
+/// joint is invisible in every render.
+///
+/// They agree to millimetres rather than exactly, and the residue is causal:
+/// this walker's clip is stride-driven, so its `phase` is advanced by the
+/// ground it covered, which physics cannot know until it has run. The proxy is
+/// therefore posed from the previous step's phase — M12's contact latency, in
+/// another place. A wrong joint, a dropped model transform or a mis-composed
+/// offset would all be off by tens of centimetres, not by two millimetres.
+#[test]
+fn list_colliders_and_list_joints_agree_about_where_a_part_is() {
+    let scene = proxy_scene();
+
+    let colliders = engine()
+        .arg("list-colliders")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Proxied")
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    let colliders = json_stdout(&colliders);
+    let hips = colliders["colliders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["part"] == "Hips")
+        .unwrap_or_else(|| panic!("no Hips proxy in {colliders}"));
+
+    let joints = engine()
+        .arg("list-joints")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Proxied")
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    let joints = json_stdout(&joints);
+    let joint = joints["rigs"][0]["joints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["name"] == "Hips")
+        .unwrap_or_else(|| panic!("no Hips joint in {joints}"));
+
+    // The Hips part carries no offset, so the two should name the same point.
+    for axis in 0..3 {
+        let from_physics = hips["position"][axis].as_f64().unwrap();
+        let from_pose = joint["world"]["position"][axis].as_f64().unwrap();
+        assert!(
+            (from_physics - from_pose).abs() < 5e-3,
+            "axis {axis}: the proxy is at {from_physics}, the joint at {from_pose}"
+        );
+    }
+
+    // Every part the component authors is built, and each is named once.
+    let parts: Vec<&str> = colliders["colliders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["part"].as_str())
+        .collect();
+    assert_eq!(parts.len(), 11, "{colliders}");
+    assert!(parts.contains(&"Head") && parts.contains(&"FootR"), "{parts:?}");
+}
+
+/// A shot to the head reports the head. The entity name stays an entity name —
+/// a proxy is not one, and a report that put `Proxied/Head` where an entity
+/// belongs would name something no command accepts (design §5).
+#[test]
+fn a_raycast_names_the_proxy_part_it_hit() {
+    let scene = proxy_scene();
+
+    let at_head = engine()
+        .arg("raycast")
+        .arg(&scene)
+        .arg("--from")
+        .arg("-6,1.55,-1.4833")
+        .arg("--dir")
+        .arg("1,0,0")
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    let hit = json_stdout(&at_head)["hit"].clone();
+    assert_eq!(hit["entity"], "Proxied", "{hit}");
+    assert_eq!(hit["part"], "Head", "{hit}");
+
+    // The same ray across the unproxied walker's lane finds nothing: its pose
+    // is invisible to physics, which is the whole difference between them.
+    let past_loose = engine()
+        .arg("raycast")
+        .arg(&scene)
+        .arg("--from")
+        .arg("-6,1.55,1.4833")
+        .arg("--dir")
+        .arg("1,0,0")
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    assert_eq!(json_stdout(&past_loose)["hit"], serde_json::Value::Null);
+}
+
+/// `list-colliders` answers for an ordinary scene too — "where are the
+/// colliders" was unanswerable before this command, and answering it only for
+/// proxies would be half a report.
+#[test]
+fn list_colliders_reports_component_colliders_with_no_part() {
+    let output = engine()
+        .arg("list-colliders")
+        .arg(repo_path("examples/scenes/verify/m8_drop.json"))
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let rows = report["colliders"].as_array().unwrap();
+    assert!(!rows.is_empty(), "{report}");
+    assert!(
+        rows.iter().all(|row| row["part"].is_null()),
+        "a scene with no SkinnedCollider has no parts: {report}"
+    );
+    let cube = rows
+        .iter()
+        .find(|row| row["entity"] == "DropCube")
+        .unwrap_or_else(|| panic!("no DropCube in {report}"));
+    assert_eq!(cube["shape"], "cuboid", "{cube}");
+    assert_eq!(cube["dimensions"], serde_json::json!([0.5, 0.5, 0.5]), "{cube}");
+}
+
+/// A proxy on a joint the rig does not have is refused before a device or a
+/// step exists, with the near miss named — `world.key`'s manners, and
+/// `FootPlant`'s, since the failure is identical: a mistyped joint otherwise
+/// builds no hitbox at all, silently, and nothing in the render says so.
+#[test]
+fn a_proxy_on_an_unknown_joint_is_refused_with_a_suggestion() {
+    let scene = proxy_scene();
+    let source = std::fs::read_to_string(&scene).unwrap();
+    let typo = source.replace(r#""joint": "Chest""#, r#""joint": "Chset""#);
+    assert_ne!(source, typo, "the fixture must author a Chest proxy");
+
+    // Next to the original: asset paths resolve relative to the scene file.
+    let broken = scene.with_file_name("m33_broken_joint.json");
+    std::fs::write(&broken, typo).unwrap();
+    let output = engine().arg("validate").arg(&broken).output().unwrap();
+    let _ = std::fs::remove_file(&broken);
+
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr_lines(&output);
+    let unknown = errors
+        .iter()
+        .find(|e| e["error"] == "unknown_joint")
+        .unwrap_or_else(|| panic!("expected unknown_joint, got {errors:?}"));
+    assert_eq!(unknown["component"], "SkinnedCollider", "{unknown}");
+    assert_eq!(unknown["did_you_mean"], "Chest", "{unknown}");
+}

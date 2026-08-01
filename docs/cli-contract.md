@@ -105,6 +105,8 @@ engine list-animations <scene-or-clip-or-gltf> [--schema]
 engine list-joints <scene-or-gltf> [--entity Name] [--time T] [--clip Name]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
+engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
+                                             # every collider physics holds, and where
 engine ui-layout <scene.json> [--width W --height H] [--entity Name]...  # where the UI landed
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
@@ -326,6 +328,22 @@ make_car_track.py` is the worked example: it writes the road, asks where it
 went, and writes the scene again with the barriers on it. With no `--entity`
 the scene must contain exactly one road; naming one that is not there is
 `entity_not_found` with a `did_you_mean`.
+
+`engine list-colliders` prints `steps` and one `colliders` array, name-sorted:
+each row's `entity`, `shape` (`sphere`/`cuboid`/`capsule`/`trimesh`/
+`convex_hull`/`other`), its `dimensions` in the file's own terms (a sphere's
+radius; a cuboid's three half-extents; a capsule's half-height and radius; a
+mesh shape's is its geometry, so the array is empty), world `position` and
+`rotation` (Euler XYZ degrees), and `sensor`. A skinned collider proxy (M33)
+carries a `part` as well — the name it reports under, which no other row has.
+
+The rows are read back out of the built physics world rather than re-derived
+from the components, which is what makes it impossible for the report and the
+simulation to disagree: `road-centerline`'s argument, applied to physics. That
+matters most for a proxy, whose placement comes from a *pose* and which appears
+in no render at all. `--steps N` runs the simulation first, because a
+stride-driven pose is what the run reached rather than a function of the file —
+`list-joints` grew the same flag in M32 for the same reason.
 
 ## The render digest
 

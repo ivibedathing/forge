@@ -169,6 +169,18 @@ registry! {
     UNKNOWN_JOINT = "unknown_joint", Input,
         "a joint name is not in the entity's rig";
 
+    // ── Skinned collider proxies (M33) ─────────────────────────────────
+    SKINNED_COLLIDER_WITHOUT_SKIN = "skinned_collider_without_skin", Input,
+        "a SkinnedCollider is on an entity whose Mesh carries no skin";
+    SKINNED_COLLIDER_NON_UNIFORM_SCALE = "skinned_collider_non_uniform_scale", Input,
+        "a proxied character's Transform.scale must be uniform";
+    DUPLICATE_COLLIDER_PART = "duplicate_collider_part", Input,
+        "two parts of one SkinnedCollider report under the same name";
+    TOO_MANY_COLLIDER_PARTS = "too_many_collider_parts", Input,
+        "a SkinnedCollider lists more parts than the physics world builds";
+    COLLIDER_PART_SHAPE_UNSUPPORTED = "collider_part_shape_unsupported", Input,
+        "a SkinnedCollider part names a mesh shape, which a proxy cannot be";
+
     // ── Breaking (M14) ─────────────────────────────────────────────────
     BREAKABLE_WITHOUT_COLLIDER = "breakable_without_collider", Input,
         "a Breakable sets impulse_threshold but the entity has no Collider to be hit on";

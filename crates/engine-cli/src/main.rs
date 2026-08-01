@@ -263,6 +263,32 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Print every collider the physics world holds: shape, size, and where
+    /// it actually is (M33).
+    ///
+    /// The command skinned collider proxies are really for. A hitbox riding a
+    /// joint is invisible in a render and derived from a pose, so "is the head
+    /// where I think it is" had no answer at all; this reads the answer back
+    /// out of rapier rather than re-deriving it, so the report cannot drift
+    /// from the simulation — `road-centerline`'s argument, applied to physics.
+    ///
+    /// Component-authored colliders are listed too, because "where are the
+    /// colliders" is the question and half an answer is worse than none.
+    ListColliders {
+        scene: PathBuf,
+        /// Narrow to one entity's colliders.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Step the simulation first. A proxy follows a pose, and a
+        /// stride-driven pose is what the *run* reached rather than a function
+        /// of the file — the reason `list-joints` grew the same flag in M32.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
+        /// Replay an input timeline while stepping.
+        #[arg(long)]
+        input: Option<PathBuf>,
+    },
+
     /// Print where every HUD element ends up on screen (M31).
     ///
     /// This is the command the UI system is really for. An agent authoring a
@@ -516,6 +542,12 @@ fn main() {
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
+        Command::ListColliders {
+            scene,
+            entity,
+            steps,
+            input,
+        } => list_colliders(scene, entity, steps, input),
         Command::UiLayout {
             scene,
             width,
@@ -822,6 +854,77 @@ fn load_scene(path: &PathBuf) -> Result<Scene> {
         }
         last
     })
+}
+
+/// `engine list-colliders` — every collider the physics world holds (M33).
+///
+/// Read out of the built world rather than out of the components: a skinned
+/// collider proxy has no `Transform` to inspect, its placement is derived from
+/// a pose, and a second implementation of that derivation is exactly what
+/// `road-centerline` and `ui-layout` exist to prevent.
+///
+/// `--steps` runs the simulation first, for M32's reason: a stride-driven pose
+/// is what the run reached, not a function of the file, so a report that never
+/// stepped would describe a character standing still.
+fn list_colliders(
+    scene_path: PathBuf,
+    entity: Option<String>,
+    steps: u32,
+    input_path: Option<PathBuf>,
+) -> Result<()> {
+    let display = scene_path.display().to_string();
+    let mut scene = load_scene(&scene_path)?;
+    let input = simulate::load_input(input_path.as_deref())?;
+
+    let physics = simulate::run(
+        &mut scene,
+        &scene_path,
+        steps,
+        input.as_ref(),
+        &engine_core::input::Viewport::DEFAULT,
+        None,
+    )?
+    .physics;
+
+    let rows = physics.collider_report();
+    if let Some(wanted) = &entity {
+        if !rows.iter().any(|row| &row.entity == wanted) {
+            return Err(EngineError::new(
+                codes::ENTITY_NOT_FOUND,
+                format!("no entity named {wanted:?} with a collider in {display}"),
+            )
+            .entity(wanted)
+            .file(&display)
+            .suggest_from(wanted, rows.iter().map(|row| row.entity.as_str())));
+        }
+    }
+
+    let colliders: Vec<serde_json::Value> = rows
+        .iter()
+        .filter(|row| entity.as_ref().is_none_or(|wanted| &row.entity == wanted))
+        .map(|row| {
+            let mut record = serde_json::json!({
+                "entity": row.entity,
+                "shape": row.shape,
+                "dimensions": row.dimensions,
+                "position": [row.position.x, row.position.y, row.position.z],
+                "rotation": [row.rotation.x, row.rotation.y, row.rotation.z],
+                "sensor": row.sensor,
+            });
+            // Only proxies carry a part, so an ordinary collider's row is the
+            // shape it would have had if this command had existed since M8.
+            if let Some(part) = &row.part {
+                record["part"] = serde_json::json!(part);
+            }
+            record
+        })
+        .collect();
+
+    println!(
+        "{}",
+        serde_json::json!({ "steps": steps, "colliders": colliders })
+    );
+    Ok(())
 }
 
 /// `engine road-centerline` — publish a road's sampled centerline (M23).

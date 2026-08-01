@@ -304,6 +304,50 @@ pub fn posed_globals(
     )
 }
 
+/// One skinned entity's joints in skin space at **scene** time `time`, clip
+/// selection and all.
+///
+/// [`posed_globals`] takes a clip and a clip-local time, which every caller was
+/// deriving for itself from the entity's `AnimationPlayer`. M33 gave the
+/// physics world a third caller — proxies follow the pose (`SkinnedCollider`)
+/// — and three copies of "which clip, and what time is it in that clip" is two
+/// too many: a hitbox that read the clip differently from the render would sit
+/// somewhere the character visibly is not.
+///
+/// `time` of `None` is the rest pose. It still needs a real pose rather than an
+/// identity one, for the reason `Scene::palette_for` documents: the vertices
+/// live in skin space.
+pub fn posed_globals_at(
+    world: &World,
+    entity: Entity,
+    rig: &skeleton::Rig,
+    time: Option<f32>,
+) -> Vec<Mat4> {
+    let Some(skin) = &rig.skin else {
+        return Vec::new();
+    };
+    // `hecs::Ref` derefs to the component, so this clones the `AnimationPlayer`
+    // rather than the guard — `.cloned()` does not apply and clippy's
+    // `map_clone` suggestion does not compile here.
+    #[allow(clippy::map_clone)]
+    let player = world.get::<&AnimationPlayer>(entity).ok().map(|p| p.clone());
+    // A property clip on a skinned entity is legal: it animates components,
+    // not joints, and the rig stays at rest.
+    let clip = player
+        .as_ref()
+        .and_then(|player| match skeleton::ClipRef::parse(&player.clip) {
+            skeleton::ClipRef::Skeletal { clip, .. } => rig.clip_named(clip),
+            skeleton::ClipRef::Property(_) => None,
+        });
+    let local = match (time, &player, clip) {
+        (Some(t), Some(player), Some(clip)) => {
+            crate::animation::local_time(player, skeleton::duration(clip), t)
+        }
+        _ => 0.0,
+    };
+    posed_globals(world, entity, skin, time.and(clip), local)
+}
+
 /// How many moments of a cycle [`measure_stride`] looks at.
 ///
 /// Fixed rather than a flag: the answer is a number an author pastes into a
