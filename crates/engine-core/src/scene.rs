@@ -1130,12 +1130,7 @@ impl Scene {
                 (*light, direction)
             });
 
-        let ambient = self
-            .world
-            .query::<&AmbientLight>()
-            .iter()
-            .next()
-            .map(|ambient| *ambient);
+        let ambient = self.world.query::<&AmbientLight>().iter().next().copied();
 
         // Point lights are plural, so unlike the sun their order is visible in
         // the uniform array — sort by entity name, the same determinism rule

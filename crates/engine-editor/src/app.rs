@@ -400,9 +400,11 @@ impl EditorApp {
         // ── Render the scene into the offscreen texture ──────────────
         let items = self.frame_items();
         let camera_eye = self.camera.eye();
-        // Cloned rather than copied: `ResolvedLights` carries a point-light Vec
-        // as of M17, so it is no longer `Copy`.
-        let lights = self.doc.lights.clone();
+        // `ResolvedLights` is `Copy`: M17's point lights ride in a fixed-size
+        // array with a count, precisely so resolving lights every frame costs
+        // no allocation. (This line used to clone, under a comment claiming
+        // the Vec version; there has never been one.)
+        let lights = self.doc.lights;
         let environment = self.doc.environment;
         let viewport = self
             .viewport

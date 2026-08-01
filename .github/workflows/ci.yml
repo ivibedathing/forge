@@ -45,15 +45,21 @@ jobs:
       # paid. A formatting regression is now a red build.
       - run: cargo fmt --all -- --check
 
-      # Still advisory. 28 clippy warnings remain, and clearing them touches
-      # geometry and validation code — exactly the kind of change this repo's
-      # ULP-sensitive paths want gated behind an A/B between binaries rather
-      # than swept in under a lint fix. Make this blocking on the commit that
-      # actually clears them, not before.
+      # Blocking too, as of the commit that cleared the last 28 warnings. That
+      # change was gated behind an A/B between binaries, since several of the
+      # fixes were in geometry and validation code: 34 of 36 render artifacts
+      # byte-identical, and the two that differed are the tour frames this
+      # adapter cannot render reproducibly at all (both binaries disagree with
+      # themselves on them — see CLAUDE.md §Verification).
       #
-      # Note it does have to *compile*: `approx_constant` and friends are
-      # deny-by-default, so a single one aborts the run for the whole crate
-      # and every later lint in it goes unreported. That happened once and
-      # `continue-on-error` hid it for the length of a milestone.
+      # Some warnings here are silenced with a local `#[allow]` and a written
+      # reason rather than "fixed", because the lint is wrong about them: the
+      # `!(a > b)` comparisons in validation are negated precisely so NaN
+      # fails, and `a <= b` would let it through. Read the comment before
+      # deleting an allow.
+      #
+      # Note this step has to *compile*, not merely warn: `approx_constant` and
+      # friends are deny-by-default, so a single one aborts the run for the
+      # whole crate and every later lint in it goes unreported. That happened
+      # once, and `continue-on-error` hid it for the length of a milestone.
       - run: cargo clippy --workspace --all-targets
-        continue-on-error: true

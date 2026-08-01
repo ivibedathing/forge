@@ -20,7 +20,7 @@ use engine_core::{codes, EngineError, Result, Scene};
 use engine_render::Gpu;
 use winit::event_loop::{ControlFlow, EventLoop};
 
-use crate::app::{Content, ViewerApp};
+use crate::app::{Content, SceneContent, ViewerApp};
 
 #[derive(Parser)]
 #[command(
@@ -2245,7 +2245,7 @@ fn run_scene(
         title,
         width,
         height,
-        Content::Scene {
+        Content::Scene(Box::new(SceneContent {
             items,
             water,
             clouds,
@@ -2258,7 +2258,7 @@ fn run_scene(
             daylight,
             hud_items,
             simulation,
-        },
+        })),
     ))
 }
 

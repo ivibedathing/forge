@@ -147,15 +147,16 @@ pub fn resolve_scene_materials(file: &mut crate::SceneFile, base_dir: &Path) -> 
             }
             match resolve_material(&asset, base_dir).and_then(|path| load_material(&path)) {
                 Ok(mut loaded) => {
-                    for map in [
+                    for reference in [
                         &mut loaded.albedo_map,
                         &mut loaded.orm_map,
                         &mut loaded.normal_map,
                         &mut loaded.emissive_map,
-                    ] {
-                        if let Some(reference) = map {
-                            *reference = rebase(&asset, reference);
-                        }
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        *reference = rebase(&asset, reference);
                     }
                     cache.insert(asset.clone(), loaded.clone());
                     let mut resolved = loaded;

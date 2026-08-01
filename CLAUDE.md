@@ -775,7 +775,7 @@ a frozen day is reproducible with no `--time` at all. `day_length: 24.0` makes a
   on `sky`); authoring either anyway is the `daylight_overrides_sky` warning, naming the fix.
 - **The horizon-sun shadow bug**, which day/night is the first thing to reach: a sun on the horizon
   casts shadows of unbounded length and one just below it casts them *upward*.
-  `clamp_shadow_elevation` in `scene_renderer.rs` floors the direction used for the **shadow matrix**
+  `clamp_shadow_elevation` in `scene_renderer/shadow.rs` floors the direction used for the **shadow matrix**
   at 5° while the lighting direction keeps going. Above 5° it returns its input unchanged, which is
   why it costs every pre-M21 baseline nothing.
 - **Scripts** get exactly two read-only getters, `world.time_of_day()` and `world.sun_altitude()`,
@@ -1397,12 +1397,20 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
   `quad(−Z, Y, X)`, so `u` is vertical on +X and *horizontal* on −X. Anything strongly directional on
   a cube therefore draws differently on all four sides, and a box's tiling is a property of the
   **face** you care about rather than of the box (the arena shooter's four perimeter walls carry four
-  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`, which M28 also gave
-  a mouse-driven title/pause/end menu built from ordinary `HudText`/`HudRect`: the layout is measured
-  from the **centre** of the frame so one recorded timeline clicks the same button at any window
-  size, hiding an element is a zero size or an empty string, and its demo timeline is now authored by
-  a closed-loop director, `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a
-  drone at step 431).
+  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`, whose
+  title/pause/end menu was **rebuilt on M31**: a `HudPanel` tree the engine lays out and a
+  `HudInteract` it hit-tests, where M28's version was rectangles the script computed, centred by
+  multiplying a string's length by the glyph advance, and hover-highlighted by putting brackets
+  round the label. What that bought is worth reading as a worked example of the UI system —
+  hug-sized cards that are three different sizes for three screens, `visible` in place of the
+  empty-string/zero-size pair, a play HUD authored *hidden* so `--steps 0` is the title screen, and
+  a demo director that asks `engine ui-layout` where the button is instead of hard-coding the
+  fraction. It also carries the one trap in `HudImage`: with no `slice` an image is all middle band
+  and the middle band **tiles**, so an icon must be drawn at its source size — 32 px of a 16 px
+  reticle is four reticles. Its demo timeline is authored by a closed-loop director,
+  `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a drone at step 431, and
+  M31's **press capture** means that director now writes the release on the button too. Four
+  `Meadow` strips ring the plateau since the same pass).
   The crate texture is a *framed* panel with a centre batten for that reason: a border is invariant
   under it. `Tree` tubes are the well-behaved case (`u` around the ring, `v` along the branch), which
   is also why bark fissures must vary in `u` — transposed, a trunk wears tyre tread.
@@ -1534,6 +1542,14 @@ the *unchanged* pre-M31 scene, `showcase_585` came back as **5 distinct images f
 the M31 binary and **3 from 6** on `main`'s. A frame that disagrees with itself on both sides of a
 change is the adapter; `cmp`-ing one render against one render would have called that a regression.
 
+The clippy cleanup re-measured it on **two** frames and got the same answer, which is worth knowing
+before anyone reads an A/B result as a regression: `showcase_585` came back **6 distinct of 6** on
+the new binary and **5 of 6** on `main`'s, and `showcase_646` **3 of 6** and **4 of 6**. Its A/B
+found exactly those two frames differing out of 36 artifacts — and neither binary agrees with
+itself on either, so the difference is the adapter and not the change. **This is the reason the
+`md5`-it-N-times step is not optional**: a two-artifact A/B failure looks damning and here meant
+nothing.
+
 **Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
 `--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
 per artifact family and check the `checked` count in the summary line.
@@ -1569,6 +1585,21 @@ Cargo workspace (design doc §4), dependency order bottom-up:
 - `crates/engine-render` — wgpu renderer, shaders, materials
 - `crates/engine-assets` — mesh/texture loading, asset schema
 - `crates/engine-cli` — the `engine` binary; the primary interface
+
+**`engine-render/src/scene_renderer/` is six modules**, split out of one 5,989-line file as **pure
+code motion** — not one expression changed, which is the only form that refactor is safe in on a
+path this file flags as ULP-sensitive in four places (the A/B: 34 of 36 artifacts byte-identical,
+the two exceptions being the tour frames this adapter cannot reproduce at all). `uniforms.rs` is
+every `#[repr(C)]` struct the GPU sees plus the functions that pack a component into one — **field
+order there is a wire format**, matching a WGSL declaration positionally. `shaders.rs` is the WGSL
+assembly seam (`with_surface`, the `Producer`s, the anchors, and the `seam_tests` that pin every
+substitution actually landing). `pipelines.rs` is `with_samples` and the per-pass constructors;
+`resources.rs` the caches and frame-scoped GPU resources; `shadow.rs` the shadow map and its
+matrix math. `mod.rs` keeps `SceneRenderer`, `ScenePass` and `draw`. **`draw` is deliberately still
+one function** — breaking it into passes re-scopes borrows in the hot path, which is the shape of
+edit that has moved pixels here before, so it wants its own change and its own A/B. Submodules are
+children and see the parent's private items; what they define is `pub(crate)` and glob-imported
+back, so call sites read as they did when it was one file.
 
 Plus `engine-physics`, `engine-script`, `engine-editor`. Supporting:
 `schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`, and
@@ -1670,21 +1701,28 @@ bar over an enemy's head is a *projection* question and wants `world.project(x, 
 
 **Housekeeping the M31 audit turned up and did not do**, in the order they are worth doing:
 
-- **`scene_renderer.rs` has outgrown its file** — 5,977 lines, of which `SceneRenderer::with_samples`
-  is ~880 (pipeline construction) and `SceneRenderer::draw` is ~1,150. `validate.rs` is 5,539 with
-  `validate_source` at ~1,400. Splitting them is the one real structural debt in the workspace, and
-  `draw` is exactly the ULP-sensitive path this file keeps warning about — so it wants its own
-  change with its own A/B between binaries, never a drive-by while doing something else.
-- **28 clippy warnings** across engine-core, engine-render, engine-physics, engine-script,
-  engine-assets and engine-editor — mostly `map_or`→`is_none_or`, `manual_flatten`,
-  `needless_range_loop`, `too_many_arguments`, and two `large_enum_variant` in `engine-cli/src/app.rs`.
-  Several touch geometry and validation code, so this is an A/B-gated change too, not a `--fix` run.
-  Clearing them is what lets CI's clippy step stop being `continue-on-error`.
+- **`validate.rs` has outgrown its file** — 5,539 lines with `validate_source` at ~1,400. It is now
+  the largest file in the workspace, and unlike the renderer it is GPU-free and fully covered by
+  the corpus tests, so splitting it is ordinary work rather than a ULP question.
 - **25 of the 36 baselines are pinned by no test** (see Verification). Each new fixture has been
   adding to that pile; a CLI test that diff-renders the fixture is cheap and is what makes a
   baseline survive someone who does not run the sweep.
 - **`docs/scene-format.md` and `docs/component-reference.md`** are sketched in the design doc §4 and
   were never written. If either lands it must be generated and pinned like `error-codes.md`.
+
+**The clippy warnings are cleared and CI's clippy step is blocking.** Six of the twenty-eight were
+not bugs to fix but the lint being wrong, and they carry a local `#[allow]` with the reason —
+**read it before deleting one**. Five are the `!(a > b)` comparisons in `validate.rs` and
+`engine-script`, written negated *precisely so NaN fails*; clippy's suggested `a <= b` is false for
+NaN, so "fixing" them would let a NaN far plane, collider dimension, meadow stage or explosion
+radius validate clean. The sixth is `drop(write_object)` in `scene_renderer/mod.rs`, which releases the
+closure's mutable borrow of `object_bytes` — deleting it does not compile. Four
+`too_many_arguments` allows carry their own rationale (a nine-field keyframe constructor, a
+recursive validation walk threading a JSON location, a collider builder naming four geometry
+sources, and eleven index-aligned slices on the blended draw path). One genuine defect fell out of
+it: the editor cloned `ResolvedLights` under a comment claiming M17 had made it non-`Copy`, when
+M17 had deliberately kept it `Copy` with a fixed-size point-light array — the comment asserted the
+opposite of the design it cited.
 
 ## Out of scope for v1
 

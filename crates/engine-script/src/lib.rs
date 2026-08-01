@@ -666,6 +666,9 @@ fn curated_engine() -> rhai::Engine {
          radius: f64,
          impulse: f64|
          -> std::result::Result<(), Box<EvalAltResult>> {
+            // `!(radius > 0.0)` and not `radius <= 0.0`: a NaN radius has to
+            // be a located script error, not an explosion of unknown size.
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
             if !(radius > 0.0) {
                 return Err(Box::new(EvalAltResult::ErrorRuntime(
                     format!("explosion radius must be positive, got {radius}").into(),

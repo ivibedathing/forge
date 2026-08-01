@@ -150,6 +150,11 @@ pub struct PhysicsWorld {
     pending_breaks: Vec<PendingBreak>,
 }
 
+/// One wheel awaiting assembly into a `Vehicle`, as `build` collects them:
+/// the wheel's own entity name (which is what the sort is by, and so what
+/// fixes the controller's wheel indices), its ECS entity, and its component.
+type MountedWheel = (String, Entity, WheelData);
+
 /// One raycast vehicle: a chassis body plus its wheels' visual entities,
 /// in wheel-entity-name order (the controller's wheel indices follow it).
 struct Vehicle {
@@ -325,7 +330,7 @@ impl PhysicsWorld {
         // Deterministic build order: chassis sorted by name, wheels within a
         // vehicle sorted by their entity name; the controller's wheel
         // indices follow that order.
-        let mut wheels_by_chassis: Vec<(String, Vec<(String, Entity, WheelData)>)> = Vec::new();
+        let mut wheels_by_chassis: Vec<(String, Vec<MountedWheel>)> = Vec::new();
         for (entity, name, wheel) in world.query::<(Entity, &Name, &WheelData)>().iter() {
             match wheels_by_chassis
                 .iter_mut()
@@ -899,6 +904,14 @@ impl PhysicsWorld {
 /// so any scale is representable). `force_events` opts the collider into
 /// contact-force events — thresholded breakables only, so scenes without
 /// breakables run the exact event path they always did.
+///
+/// Nine parameters, and they are nine independent lookups the caller has
+/// already done — the component, its transform, and the four places a shape's
+/// geometry can come from (its own asset, the entity's Mesh, a Terrain, a
+/// Road). Bundling them into a struct would build that struct per collider at
+/// scene load and hide which sources a given shape actually consults, which is
+/// the whole subtlety of this function.
+#[allow(clippy::too_many_arguments)]
 fn build_collider(
     collider: &ColliderData,
     transform: &Transform,
