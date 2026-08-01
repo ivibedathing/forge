@@ -260,7 +260,7 @@ mod tests {
     ) -> Vec<BreakEvent> {
         let mut events = Vec::new();
         for _ in 0..steps {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
             events.extend(apply_breaks(&mut scene.world, physics, &[]).unwrap());
         }
         events
@@ -366,7 +366,7 @@ mod tests {
             radius: 5.0,
             impulse: 50.0,
         });
-        physics.step(&mut scene.world);
+        physics.step(&mut scene.world, 0.0);
         let events = apply_breaks(&mut scene.world, &mut physics, &[]).unwrap();
 
         assert_eq!(events.len(), 1, "the blast breaks the crate: {events:?}");

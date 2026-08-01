@@ -471,7 +471,12 @@ impl ViewerApp {
                                 }
                             }
                             if let Some(physics) = &mut sim.physics {
-                                let events = physics.step(&mut sim.scene.world);
+                                // `step_index` is 0-based and incremented
+                                // below, so the time this step ends at — the
+                                // one the frame after it renders, and the one
+                                // proxies pose at (M33) — is the next index's.
+                                let events = physics
+                                    .step(&mut sim.scene.world, (sim.step_index + 1) as f32 * dt);
                                 sim.contacts.apply(&events);
                                 // Breaks apply after physics, exactly as in
                                 // the headless loop — played and simulated

@@ -163,6 +163,28 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                 }
             }
 
+            // A SkinnedCollider (M33), for `check_plant`'s reason exactly: a
+            // proxy on a joint the rig does not have would silently never be
+            // built, and a hitbox that is not there is invisible until
+            // something walks through a character.
+            if let ComponentData::SkinnedCollider(proxies) = component {
+                for mut error in check_proxies(proxies, entity_mesh.as_deref(), base_dir) {
+                    let json_path = error
+                        .context()
+                        .and_then(|c| c.field.clone())
+                        .map(|field| format!("{component_path}/{field}"))
+                        .unwrap_or_else(|| component_path.clone());
+                    error = error
+                        .file(path)
+                        .entity(entity.name.clone())
+                        .component("SkinnedCollider");
+                    if let Some(line) = index.line_of_or_parent(&json_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(json_path));
+                }
+            }
+
             // Every mesh reference this component holds: a Mesh's `asset`,
             // a Collider's mesh-collider `asset` (M12), or each fragment
             // `mesh` of a Breakable (M14).
@@ -332,6 +354,67 @@ fn check_plant(
         }
     }
 
+    errors
+}
+
+/// Open a proxy set's glTF and check every joint it rides (M33).
+///
+/// `check_plant`'s shape, and deliberately so: the two components ask the file
+/// the same question — "is this joint in the rig" — and the answer is
+/// `unknown_joint` with `did_you_mean` in both.
+fn check_proxies(
+    proxies: &engine_core::components::SkinnedCollider,
+    mesh: Option<&str>,
+    base_dir: &Path,
+) -> Vec<EngineError> {
+    // No `Mesh` at all is engine-core's `skinned_collider_without_skin`.
+    let Some(asset) = mesh else {
+        return Vec::new();
+    };
+    let path = match MeshAsset::resolve(asset, base_dir) {
+        Ok(MeshAsset::Builtin(_)) => {
+            return vec![EngineError::new(
+                engine_core::codes::SKINNED_COLLIDER_WITHOUT_SKIN,
+                format!(
+                    "this SkinnedCollider is on an entity whose Mesh is the builtin \
+                     primitive {asset:?}, which has no skeleton for a proxy to ride"
+                ),
+            )]
+        }
+        Ok(MeshAsset::File(path)) => path,
+        Err(_) => return Vec::new(),
+    };
+    let Ok(rig) = crate::gltf_skin::load_rig(&path) else {
+        return Vec::new();
+    };
+    let Some(skin) = &rig.skin else {
+        return vec![EngineError::new(
+            engine_core::codes::SKINNED_COLLIDER_WITHOUT_SKIN,
+            format!(
+                "this SkinnedCollider is on an entity whose Mesh {asset:?} carries no \
+                 skin; there are no joints in it for a proxy to ride"
+            ),
+        )];
+    };
+
+    let names: Vec<&str> = skin.joints.iter().map(|j| j.name.as_str()).collect();
+    let mut errors = Vec::new();
+    for (i, part) in proxies.parts.iter().enumerate() {
+        if skin.joint_named(&part.joint).is_none() {
+            errors.push(
+                EngineError::new(
+                    engine_core::codes::UNKNOWN_JOINT,
+                    format!(
+                        "the rig in {asset:?} has no joint named {:?} (engine \
+                         list-joints {asset} lists them)",
+                        part.joint
+                    ),
+                )
+                .field(format!("parts/{i}/joint"))
+                .suggest_from(&part.joint, names.iter().copied()),
+            );
+        }
+    }
     errors
 }
 

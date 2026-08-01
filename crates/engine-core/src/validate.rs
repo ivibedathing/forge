@@ -268,6 +268,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         // A `FootPlant`'s JSON path (M32), for the checks that need to know
         // what else is on this entity.
         let mut foot_plant: Option<String> = None;
+        // A `SkinnedCollider` (M33): its proxies ride the entity's rig, so the
+        // checks need the entity's `Mesh` and its scale.
+        let mut skinned_collider: Option<(crate::components::SkinnedCollider, String)> = None;
         let mut tree_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
@@ -394,6 +397,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 Some(ComponentData::FootPlant(p)) => {
                     foot_plant = Some(component_path.clone());
                     foot_plants.push((name.to_string(), p, component_path));
+                }
+                Some(ComponentData::SkinnedCollider(s)) => {
+                    skinned_collider = Some((s, component_path));
                 }
                 Some(ComponentData::HudPanel(p)) => {
                     has_hud_element = true;
@@ -672,6 +678,68 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 note_distinct(layer, path);
             }
             for layer in collider_data.collides_with.iter().flatten() {
+                layer_refs.push((layer.clone(), name.to_string(), path.clone()));
+                note_distinct(layer, path);
+            }
+        }
+
+        // ── Skinned collider proxies (M33) ────────────────────────────
+        //
+        // A proxy rides a joint, and the joints live in the mesh file — so a
+        // component on an entity with no `Mesh` describes a rig that will
+        // never exist. Whether the file it names carries a *skin* is
+        // engine-assets' half, the M30/M32 division.
+        if let Some((proxies, path)) = &skinned_collider {
+            if mesh_asset.is_none() {
+                errors.push(
+                    cx.err(
+                        codes::SKINNED_COLLIDER_WITHOUT_SKIN,
+                        format!(
+                            "entity {name:?} has a SkinnedCollider but no Mesh; its \
+                             proxies ride joints, and the joints live in a skinned \
+                             mesh file"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("SkinnedCollider"),
+                );
+            }
+            // `FootPlant`'s reason, arriving at the same refusal from the
+            // other side: a sphere through a non-uniform scale is not a
+            // sphere, and rapier has no shape for what it becomes.
+            let uniform = (scale.x - scale.y).abs() < 1e-4 && (scale.y - scale.z).abs() < 1e-4;
+            if !uniform {
+                errors.push(
+                    cx.err(
+                        codes::SKINNED_COLLIDER_NON_UNIFORM_SCALE,
+                        format!(
+                            "entity {name:?} has a SkinnedCollider and a non-uniform \
+                             Transform.scale [{}, {}, {}]; a proxy is scaled by it, and \
+                             a non-uniformly scaled sphere or capsule is not a shape \
+                             rapier has",
+                            scale.x, scale.y, scale.z
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("SkinnedCollider"),
+                );
+            }
+
+            // The layer budget and the reference check are M12's, and they
+            // count every collider in the scene — proxies included, or a
+            // character's own layer names would be invisible to both.
+            let mut note_distinct = |layer: &str, path: &str| {
+                if !distinct_layers.iter().any(|(l, _)| l == layer) {
+                    distinct_layers.push((layer.to_string(), path.to_string()));
+                }
+            };
+            for layer in proxies.layers.iter().flatten() {
+                layer_memberships.insert(layer.clone());
+                note_distinct(layer, path);
+            }
+            for layer in proxies.collides_with.iter().flatten() {
                 layer_refs.push((layer.clone(), name.to_string(), path.clone()));
                 note_distinct(layer, path);
             }
@@ -2421,6 +2489,192 @@ fn check_component(
         // check with the component alone.
         ComponentData::FootPlant(_) => {}
 
+        // A proxy set (M33). Everything here is answerable from the component
+        // alone: which shapes a proxy may be, that each part carries the
+        // dimensions its shape needs, that no two parts report under one name,
+        // and the budget. Whether the joints exist is the rig's answer and
+        // lives in engine-assets, beside the `FootPlant` joint check.
+        ComponentData::SkinnedCollider(ref proxies) => {
+            use crate::components::ColliderShapeKind::{
+                Capsule, ConvexHull, Cuboid, Sphere, Trimesh,
+            };
+
+            if proxies.parts.len() > crate::components::MAX_COLLIDER_PARTS {
+                errors.push(
+                    cx.err(
+                        codes::TOO_MANY_COLLIDER_PARTS,
+                        format!(
+                            "this SkinnedCollider lists {} parts; at most {} are built",
+                            proxies.parts.len(),
+                            crate::components::MAX_COLLIDER_PARTS
+                        ),
+                        &format!("{component_path}/parts"),
+                    )
+                    .entity(entity)
+                    .component("SkinnedCollider")
+                    .field("parts"),
+                );
+            }
+
+            let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for (i, part) in proxies.parts.iter().enumerate() {
+                let part_path = format!("{component_path}/parts/{i}");
+                let label = part.part_name();
+
+                // Reports address a part by name, and two parts under one name
+                // would make `list-colliders` and a contact's `part` ambiguous
+                // — the failure a report exists to prevent.
+                if !seen.insert(label) {
+                    errors.push(
+                        cx.err(
+                            codes::DUPLICATE_COLLIDER_PART,
+                            format!(
+                                "two parts of this SkinnedCollider report as {label:?}; \
+                                 part names address a proxy in every report, so they \
+                                 must be unique (set \"name\" on one of them)"
+                            ),
+                            &part_path,
+                        )
+                        .entity(entity)
+                        .component("SkinnedCollider")
+                        .field(format!("parts/{i}/name")),
+                    );
+                }
+
+                let shape_name = match part.shape {
+                    Cuboid => "cuboid",
+                    Sphere => "sphere",
+                    Capsule => "capsule",
+                    Trimesh => "trimesh",
+                    ConvexHull => "convex_hull",
+                };
+                if matches!(part.shape, Trimesh | ConvexHull) {
+                    errors.push(
+                        cx.err(
+                            codes::COLLIDER_PART_SHAPE_UNSUPPORTED,
+                            format!(
+                                "part {label:?} is a {shape_name}; a proxy may only be \
+                                 \"cuboid\", \"sphere\" or \"capsule\". A mesh shape \
+                                 describes one specific mesh, and a skinned mesh is \
+                                 posed on the GPU where physics cannot read it"
+                            ),
+                            &format!("{part_path}/shape"),
+                        )
+                        .entity(entity)
+                        .component("SkinnedCollider")
+                        .field(format!("parts/{i}/shape")),
+                    );
+                    continue;
+                }
+
+                // `Collider`'s per-shape rule, applied per part.
+                let fields: [(&str, bool, bool); 3] = [
+                    ("half_extents", part.half_extents.is_some(), part.shape == Cuboid),
+                    (
+                        "radius",
+                        part.radius.is_some(),
+                        matches!(part.shape, Sphere | Capsule),
+                    ),
+                    (
+                        "half_height",
+                        part.half_height.is_some(),
+                        part.shape == Capsule,
+                    ),
+                ];
+                for (field, present, wanted) in fields {
+                    if wanted && !present {
+                        errors.push(
+                            cx.err(
+                                codes::MISSING_FIELD,
+                                format!(
+                                    "{shape_name} parts require the field {field:?} \
+                                     (part {label:?})"
+                                ),
+                                &part_path,
+                            )
+                            .entity(entity)
+                            .component("SkinnedCollider")
+                            .field(format!("parts/{i}/{field}")),
+                        );
+                    }
+                    if !wanted && present {
+                        errors.push(
+                            cx.err(
+                                codes::SHAPE_FIELD_MISMATCH,
+                                format!(
+                                    "{shape_name} parts have no field {field:?} \
+                                     (part {label:?})"
+                                ),
+                                &format!("{part_path}/{field}"),
+                            )
+                            .entity(entity)
+                            .component("SkinnedCollider")
+                            .field(format!("parts/{i}/{field}")),
+                        );
+                    }
+                }
+
+                // Strictly positive, negated so a NaN fails — `Collider`'s
+                // comparison and its reason.
+                #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                let mut dimension = |field: &str, label: String, v: f32| {
+                    if !(v > 0.0) {
+                        errors.push(
+                            cx.err(
+                                codes::INVALID_SHAPE_DIMENSION,
+                                format!(
+                                    "SkinnedCollider.{label} is {v}; it must be greater \
+                                     than 0"
+                                ),
+                                &format!("{part_path}/{field}"),
+                            )
+                            .entity(entity)
+                            .component("SkinnedCollider")
+                            .field(format!("parts/{i}/{field}")),
+                        );
+                    }
+                };
+                if let Some(half_extents) = part.half_extents {
+                    for (axis, v) in half_extents.to_array().into_iter().enumerate() {
+                        dimension(
+                            "half_extents",
+                            format!("parts[{i}].half_extents[{axis}]"),
+                            v,
+                        );
+                    }
+                }
+                if let Some(radius) = part.radius {
+                    dimension("radius", format!("parts[{i}].radius"), radius);
+                }
+                if let Some(half_height) = part.half_height {
+                    dimension("half_height", format!("parts[{i}].half_height"), half_height);
+                }
+            }
+
+            // M12's rule, unchanged: an empty array reads as "nothing", and
+            // absence is how "everything" is spelled.
+            for (field, list) in [
+                ("layers", &proxies.layers),
+                ("collides_with", &proxies.collides_with),
+            ] {
+                if list.as_ref().is_some_and(Vec::is_empty) {
+                    errors.push(
+                        cx.err(
+                            codes::EMPTY_COLLISION_LAYERS,
+                            format!(
+                                "SkinnedCollider.{field} is an empty array, which would \
+                                 mean \"nothing\"; omit the field to mean \"everything\""
+                            ),
+                            &format!("{component_path}/{field}"),
+                        )
+                        .entity(entity)
+                        .component("SkinnedCollider")
+                        .field(field),
+                    );
+                }
+            }
+        }
+
         ComponentData::Meadow(ref meadow) => {
             if meadow.stages.len() < 2 {
                 errors.push(
@@ -3717,6 +3971,163 @@ mod tests {
         { "name": "Cube1",  "components": [ { "type": "Mesh", "asset": "builtin:cube" } ] }
       ]
     }"#;
+
+    // ── Skinned collider proxies (M33) ────────────────────────────
+
+    /// A proxy set as the design intends it: the rejections below all have to
+    /// leave this alone.
+    #[test]
+    fn accepts_a_skinned_collider() {
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Walker", "components": [
+                { "type": "Transform" },
+                { "type": "Mesh", "asset": "builtin:cube" },
+                { "type": "SkinnedCollider", "layers": ["hitbox"], "parts": [
+                    { "joint": "Head", "shape": "sphere", "radius": 0.14 },
+                    { "joint": "Chest", "shape": "capsule", "radius": 0.2,
+                      "half_height": 0.15, "offset": [0.0, -0.05, 0.0] },
+                    { "joint": "FootL", "shape": "cuboid",
+                      "half_extents": [0.05, 0.05, 0.12], "sensor": true }
+                ] } ] }
+          ]
+        }"#;
+        // Nothing here is engine-core's to complain about; that a `builtin:`
+        // mesh has no skin for these joints to be in is engine-assets' half,
+        // because saying so needs the file opened.
+        assert!(codes_of(source).is_empty(), "{:?}", codes_of(source));
+    }
+
+    #[test]
+    fn a_proxy_set_has_a_budget() {
+        let parts = (0..crate::components::MAX_COLLIDER_PARTS + 1)
+            .map(|i| {
+                format!(r#"{{ "joint": "J{i}", "shape": "sphere", "radius": 0.1 }}"#)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let source = format!(
+            r#"{{
+          "name": "s",
+          "entities": [
+            {{ "name": "Walker", "components": [
+                {{ "type": "Transform" }},
+                {{ "type": "Mesh", "asset": "builtin:cube" }},
+                {{ "type": "SkinnedCollider", "parts": [{parts}] }} ] }}
+          ]
+        }}"#
+        );
+        assert!(codes_of(&source).contains(&codes::TOO_MANY_COLLIDER_PARTS));
+    }
+
+    #[test]
+    fn an_empty_proxy_layer_list_is_refused_like_a_colliders() {
+        // M12's rule, and the trap is the same: an empty array reads as
+        // "nothing", and absence is how "everything" is spelled.
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Walker", "components": [
+                { "type": "Transform" },
+                { "type": "Mesh", "asset": "builtin:cube" },
+                { "type": "SkinnedCollider", "layers": [], "parts": [
+                    { "joint": "Head", "shape": "sphere", "radius": 0.14 } ] } ] }
+          ]
+        }"#;
+        assert!(codes_of(source).contains(&codes::EMPTY_COLLISION_LAYERS));
+    }
+
+    #[test]
+    fn a_proxy_needs_a_mesh_to_ride() {
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Ghost", "components": [
+                { "type": "Transform" },
+                { "type": "SkinnedCollider", "parts": [
+                    { "joint": "Head", "shape": "sphere", "radius": 0.14 } ] } ] }
+          ]
+        }"#;
+        assert!(codes_of(source).contains(&codes::SKINNED_COLLIDER_WITHOUT_SKIN));
+    }
+
+    #[test]
+    fn a_proxy_may_not_be_a_mesh_shape() {
+        // A proxy exists precisely because the skinned mesh is on the GPU.
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Walker", "components": [
+                { "type": "Transform" },
+                { "type": "Mesh", "asset": "builtin:cube" },
+                { "type": "SkinnedCollider", "parts": [
+                    { "joint": "Head", "shape": "trimesh" } ] } ] }
+          ]
+        }"#;
+        assert!(codes_of(source).contains(&codes::COLLIDER_PART_SHAPE_UNSUPPORTED));
+    }
+
+    #[test]
+    fn two_parts_may_not_report_under_one_name() {
+        // Both default their report name to the joint, so this is the mistake
+        // an author makes by putting two proxies on one bone.
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Walker", "components": [
+                { "type": "Transform" },
+                { "type": "Mesh", "asset": "builtin:cube" },
+                { "type": "SkinnedCollider", "parts": [
+                    { "joint": "Chest", "shape": "sphere", "radius": 0.2 },
+                    { "joint": "Chest", "shape": "sphere", "radius": 0.1 } ] } ] }
+          ]
+        }"#;
+        assert!(codes_of(source).contains(&codes::DUPLICATE_COLLIDER_PART));
+
+        // Naming one of them settles it.
+        let named = source.replace(
+            r#"{ "joint": "Chest", "shape": "sphere", "radius": 0.1 }"#,
+            r#"{ "joint": "Chest", "name": "Belly", "shape": "sphere", "radius": 0.1 }"#,
+        );
+        assert!(!codes_of(&named).contains(&codes::DUPLICATE_COLLIDER_PART));
+    }
+
+    #[test]
+    fn a_proxy_shape_needs_the_fields_that_shape_has() {
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Walker", "components": [
+                { "type": "Transform" },
+                { "type": "Mesh", "asset": "builtin:cube" },
+                { "type": "SkinnedCollider", "parts": [
+                    { "joint": "Head", "shape": "sphere",
+                      "half_extents": [0.1, 0.1, 0.1] },
+                    { "joint": "Chest", "shape": "capsule", "radius": -1.0,
+                      "half_height": 0.2 } ] } ] }
+          ]
+        }"#;
+        let codes = codes_of(source);
+        assert!(codes.contains(&codes::MISSING_FIELD), "{codes:?}");
+        assert!(codes.contains(&codes::SHAPE_FIELD_MISMATCH), "{codes:?}");
+        assert!(codes.contains(&codes::INVALID_SHAPE_DIMENSION), "{codes:?}");
+    }
+
+    #[test]
+    fn a_proxied_character_may_not_be_scaled_unevenly() {
+        let source = r#"{
+          "name": "s",
+          "entities": [
+            { "name": "Walker", "components": [
+                { "type": "Transform", "scale": [1.0, 2.0, 1.0] },
+                { "type": "Mesh", "asset": "builtin:cube" },
+                { "type": "SkinnedCollider", "parts": [
+                    { "joint": "Head", "shape": "sphere", "radius": 0.14 } ] } ] }
+          ]
+        }"#;
+        assert!(codes_of(source).contains(&codes::SKINNED_COLLIDER_NON_UNIFORM_SCALE));
+    }
 
     #[test]
     fn accepts_a_valid_scene() {

@@ -68,6 +68,11 @@ build fails.
 | `foot_plant_chain_too_long` | 1 | a foot's chain reaches past the rig's root |
 | `too_many_planted_feet` | 1 | a FootPlant lists more feet than the solver runs |
 | `unknown_joint` | 1 | a joint name is not in the entity's rig |
+| `skinned_collider_without_skin` | 1 | a SkinnedCollider is on an entity whose Mesh carries no skin |
+| `skinned_collider_non_uniform_scale` | 1 | a proxied character's Transform.scale must be uniform |
+| `duplicate_collider_part` | 1 | two parts of one SkinnedCollider report under the same name |
+| `too_many_collider_parts` | 1 | a SkinnedCollider lists more parts than the physics world builds |
+| `collider_part_shape_unsupported` | 1 | a SkinnedCollider part names a mesh shape, which a proxy cannot be |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |
