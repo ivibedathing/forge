@@ -344,6 +344,31 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Ask a water surface how high it is at a world XZ position, and which way
+    /// it faces.
+    ///
+    /// The same evaluator `world.water_height` and buoyancy answer with, so a
+    /// prop placed from the shell floats at the height the physics agrees with.
+    /// Unlike `terrain-height` this takes a clock — water moves — and it can
+    /// report *no water here*, because a patch has edges.
+    WaterHeight {
+        scene: PathBuf,
+        /// World position as x,z — the height is what is being asked for.
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+        /// Which surface, when the scene has more than one. Defaults to the
+        /// only one; with several, naming one is required.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Seconds of scene time. Overrides `--steps` when given, exactly as on
+        /// `screenshot`.
+        #[arg(long, default_value_t = 0.0)]
+        time: f32,
+        /// Fixed steps to convert into scene time, when `--time` is absent.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
+    },
+
     /// Print entities with every component field resolved — defaults filled
     /// in, as the engine actually built them.
     ///
@@ -566,6 +591,13 @@ fn main() {
             input,
         } => ui_layout(scene, width, height, entity, steps, input),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
+        Command::WaterHeight {
+            scene,
+            at,
+            entity,
+            time,
+            steps,
+        } => water_height(scene, at, entity, time, steps),
         Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Import {
             model,
@@ -1188,59 +1220,13 @@ fn terrain_height(scene_path: PathBuf, at: String, entity: Option<String>) -> Re
     let (x, z) = parse_xz(&at)?;
     let scene = load_scene(&scene_path)?;
 
-    let patches: Vec<String> = {
-        let mut names: Vec<String> = scene
-            .names()
-            .filter(|name| {
-                scene.entity(name).is_some_and(|entity| {
-                    scene
-                        .world
-                        .get::<&engine_core::components::Terrain>(entity)
-                        .is_ok()
-                })
-            })
-            .map(str::to_string)
-            .collect();
-        names.sort();
-        names
-    };
-
-    // The `road-centerline` convention exactly: name one when there are
-    // several, default to the only one, and fail rather than guess.
-    let name = match (&entity, patches.len()) {
-        (Some(requested), _) => patches
-            .iter()
-            .find(|patch| *patch == requested)
-            .cloned()
-            .ok_or_else(|| {
-                EngineError::new(
-                    codes::ENTITY_NOT_FOUND,
-                    format!("no entity named {requested:?} with a Terrain component"),
-                )
-                .entity(requested)
-                .file(scene_path.display().to_string())
-                .suggest_from(requested, patches.iter().map(String::as_str))
-            })?,
-        (None, 1) => patches[0].clone(),
-        (None, 0) => {
-            return Err(EngineError::new(
-                codes::MISSING_COMPONENT,
-                "scene has no entity with a Terrain component",
-            )
-            .file(scene_path.display().to_string()))
-        }
-        (None, _) => {
-            return Err(EngineError::new(
-                codes::MISSING_COMPONENT,
-                format!(
-                    "scene has {} terrain patches ({}); name one with --entity",
-                    patches.len(),
-                    patches.join(", ")
-                ),
-            )
-            .file(scene_path.display().to_string()))
-        }
-    };
+    let name = sole_entity_with::<engine_core::components::Terrain>(
+        &scene,
+        &scene_path,
+        &entity,
+        "Terrain",
+        "terrain patches",
+    )?;
 
     let height = scene
         .terrain_height(&name, x, z)
@@ -1255,6 +1241,114 @@ fn terrain_height(scene_path: PathBuf, at: String, entity: Option<String>) -> Re
             "height": height,
         })
     );
+    Ok(())
+}
+
+/// Which entity a "where is the surface" query is about: the one the caller
+/// named, or the only candidate, and an error rather than a guess.
+///
+/// The `road-centerline` convention, factored out when `water-height` became
+/// the third command to want it. Naming the candidates in the ambiguous case is
+/// the part worth keeping — an agent that has to re-read the scene file to find
+/// out what it could have written has been sent back to the picture.
+fn sole_entity_with<C: engine_core::hecs::Component>(
+    scene: &engine_core::Scene,
+    scene_path: &Path,
+    requested: &Option<String>,
+    component: &str,
+    plural: &str,
+) -> Result<String> {
+    let mut candidates: Vec<String> = scene
+        .names()
+        .filter(|name| {
+            scene
+                .entity(name)
+                .is_some_and(|entity| scene.world.get::<&C>(entity).is_ok())
+        })
+        .map(str::to_string)
+        .collect();
+    candidates.sort();
+
+    match (requested, candidates.len()) {
+        (Some(requested), _) => candidates
+            .iter()
+            .find(|candidate| *candidate == requested)
+            .cloned()
+            .ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {requested:?} with a {component} component"),
+                )
+                .entity(requested)
+                .file(scene_path.display().to_string())
+                .suggest_from(requested, candidates.iter().map(String::as_str))
+            }),
+        (None, 1) => Ok(candidates.remove(0)),
+        (None, 0) => Err(EngineError::new(
+            codes::MISSING_COMPONENT,
+            format!("scene has no entity with a {component} component"),
+        )
+        .file(scene_path.display().to_string())),
+        (None, count) => Err(EngineError::new(
+            codes::MISSING_COMPONENT,
+            format!(
+                "scene has {count} {plural} ({}); name one with --entity",
+                candidates.join(", ")
+            ),
+        )
+        .file(scene_path.display().to_string())),
+    }
+}
+
+/// Ask a water surface where it is at a world XZ position (M38).
+///
+/// `terrain-height`'s twin, and different from it in exactly the two ways water
+/// is different from ground. It takes a **clock**, because the surface moves —
+/// resolved by `scene_time`, so the number printed is the number the render at
+/// that frame drew and the number a buoyant body felt. And it can answer *no
+/// water here*, because a patch is a bounded body: a column past the edge
+/// reports `"water": false` with no height rather than a confident 0.0.
+///
+/// The normal rides along because it costs nothing — it falls out of the same
+/// derivatives — and because a script sitting a boat *on* a wave needs it, so
+/// asking for it later would mean a second command.
+fn water_height(
+    scene_path: PathBuf,
+    at: String,
+    entity: Option<String>,
+    time: f32,
+    steps: u32,
+) -> Result<()> {
+    let (x, z) = parse_xz(&at)?;
+    let scene = load_scene(&scene_path)?;
+    let name = sole_entity_with::<engine_core::components::Water>(
+        &scene,
+        &scene_path,
+        &entity,
+        "Water",
+        "water surfaces",
+    )?;
+    let seconds = scene_time(time, steps, &scene);
+
+    let report = match scene.water_sample(&name, x, z, seconds) {
+        Some(sample) => serde_json::json!({
+            "entity": name,
+            "x": x,
+            "z": z,
+            "time": seconds,
+            "water": true,
+            "height": sample.height,
+            "normal": [sample.normal.x, sample.normal.y, sample.normal.z],
+        }),
+        None => serde_json::json!({
+            "entity": name,
+            "x": x,
+            "z": z,
+            "time": seconds,
+            "water": false,
+        }),
+    };
+    println!("{report}");
     Ok(())
 }
 

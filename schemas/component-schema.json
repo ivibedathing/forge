@@ -2402,6 +2402,13 @@
             "minItems": 3,
             "type": "array"
           },
+          "density": {
+            "default": 1000.0,
+            "description": "Density of the fluid in kg/m³, `> 0`. Fresh water is 1000 (the default),\nsea water about 1025.\n\nThe **only** field here that nothing renders. It is what a [`Buoyancy`]\nbody weighs the water it displaces against, and it lives on the lake\nrather than on the boat because it is a property of the fluid: two hulls\nin one pond disagreeing about how dense the water is would not be a knob,\nit would be a bug. The authoring knob for \"this floats higher\" already\nexists and is [`Collider::density`], in the same unit.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
           "depth_fade": {
             "default": 2.5,
             "description": "Metres of water the view has to pass through to reach `deep_color` and\nfull `opacity`. `> 0`.\n\nBeer-Lambert absorption against the depth of whatever is behind the\nsurface, so the same water is clear at the edge of a pond and opaque in\nthe middle — which is most of how a surface reads as *deep* rather than\nas a coloured pane. A clear alpine lake is 6 or more; a silty pond is\nunder 1.",
@@ -3334,6 +3341,47 @@
           "parts"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Makes a dynamic body float on a named [`Water`] surface (M38).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M38 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
+        "properties": {
+          "angular_drag": {
+            "default": 2.0,
+            "description": "Angular damping in 1/s, scaled by submersion exactly as [`drag`] is.\n`>= 0`.\n\nUsually wants to be the larger of the two: water stops a hull from\nspinning far more effectively than it stops it from drifting, and a boat\nthat rolls for twenty seconds after a wave reads as weightless.\n\n[`drag`]: Buoyancy::drag",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "drag": {
+            "default": 1.0,
+            "description": "Linear damping in 1/s applied **in proportion to how submerged the body\nis**, `>= 0`.\n\nAdded on top of [`RigidBody::linear_damping`], not replacing it: that\nfield is the body's drag in air, and this is the water's. Water drag is\nnot a property of the boat, which is exactly why it cannot be authored on\nthe `RigidBody` — a hull thrown clear of the pond has to stop being\ndamped the moment it leaves, and a half-submerged one is dragged half as\nhard.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "samples": {
+            "default": 2,
+            "description": "Columns per axis across the body's footprint, `[1, 4]`. Default 2, so a\nhull is sampled at four points.\n\nThe fidelity knob, and it decides whether the body can **turn**: at 1\nthere is a single upward push through the middle and a raft cannot right\nitself or ride a slope, because a force through the centre of mass makes\nno torque. At 2 each quarter of the hull feels its own wave, which is\nwhat makes a boat pitch into a swell instead of hovering over it. Past\nthat the returns fall off quickly — 3 and 4 are for a long hull spanning\nseveral wavelengths.",
+            "format": "uint32",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": {
+            "const": "Buoyancy",
+            "type": "string"
+          },
+          "water": {
+            "default": "",
+            "description": "The [`Water`] entity this body floats on, by name. Required.\n\nNamed rather than found by overlap, for [`Meadow::terrain`]'s reason: one\nimplementation of \"where is the surface\", pointed at explicitly. A scene\nwith two ponds has to say which one, and a scene with one still says it,\nso the file records what the physics did.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -3365,7 +3413,8 @@
     "Road",
     "Meadow",
     "FootPlant",
-    "SkinnedCollider"
+    "SkinnedCollider",
+    "Buoyancy"
   ],
   "scene": {
     "$defs": {
@@ -5263,6 +5312,13 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "density": {
+                "default": 1000.0,
+                "description": "Density of the fluid in kg/m³, `> 0`. Fresh water is 1000 (the default),\nsea water about 1025.\n\nThe **only** field here that nothing renders. It is what a [`Buoyancy`]\nbody weighs the water it displaces against, and it lives on the lake\nrather than on the boat because it is a property of the fluid: two hulls\nin one pond disagreeing about how dense the water is would not be a knob,\nit would be a bug. The authoring knob for \"this floats higher\" already\nexists and is [`Collider::density`], in the same unit.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
               "depth_fade": {
                 "default": 2.5,
                 "description": "Metres of water the view has to pass through to reach `deep_color` and\nfull `opacity`. `> 0`.\n\nBeer-Lambert absorption against the depth of whatever is behind the\nsurface, so the same water is clear at the edge of a pond and opaque in\nthe middle — which is most of how a surface reads as *deep* rather than\nas a coloured pane. A clear alpine lake is 6 or more; a silty pond is\nunder 1.",
@@ -6193,6 +6249,47 @@
             "required": [
               "type",
               "parts"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Makes a dynamic body float on a named [`Water`] surface (M38).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M38 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
+            "properties": {
+              "angular_drag": {
+                "default": 2.0,
+                "description": "Angular damping in 1/s, scaled by submersion exactly as [`drag`] is.\n`>= 0`.\n\nUsually wants to be the larger of the two: water stops a hull from\nspinning far more effectively than it stops it from drifting, and a boat\nthat rolls for twenty seconds after a wave reads as weightless.\n\n[`drag`]: Buoyancy::drag",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "drag": {
+                "default": 1.0,
+                "description": "Linear damping in 1/s applied **in proportion to how submerged the body\nis**, `>= 0`.\n\nAdded on top of [`RigidBody::linear_damping`], not replacing it: that\nfield is the body's drag in air, and this is the water's. Water drag is\nnot a property of the boat, which is exactly why it cannot be authored on\nthe `RigidBody` — a hull thrown clear of the pond has to stop being\ndamped the moment it leaves, and a half-submerged one is dragged half as\nhard.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "samples": {
+                "default": 2,
+                "description": "Columns per axis across the body's footprint, `[1, 4]`. Default 2, so a\nhull is sampled at four points.\n\nThe fidelity knob, and it decides whether the body can **turn**: at 1\nthere is a single upward push through the middle and a raft cannot right\nitself or ride a slope, because a force through the centre of mass makes\nno torque. At 2 each quarter of the hull feels its own wave, which is\nwhat makes a boat pitch into a swell instead of hovering over it. Past\nthat the returns fall off quickly — 3 and 4 are for a long hull spanning\nseveral wavelengths.",
+                "format": "uint32",
+                "maximum": 4,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "type": {
+                "const": "Buoyancy",
+                "type": "string"
+              },
+              "water": {
+                "default": "",
+                "description": "The [`Water`] entity this body floats on, by name. Required.\n\nNamed rather than found by overlap, for [`Meadow::terrain`]'s reason: one\nimplementation of \"where is the surface\", pointed at explicitly. A scene\nwith two ponds has to say which one, and a scene with one still says it,\nso the file records what the physics did.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
             ],
             "type": "object"
           }

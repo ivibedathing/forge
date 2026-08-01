@@ -629,6 +629,29 @@ pub(super) fn check_component(
         // check with the component alone.
         ComponentData::FootPlant(_) => {}
 
+        // Buoyancy (M38). Only one thing is answerable without the rest of the
+        // scene: that the surface was named at all. An empty `water` is what an
+        // author who omitted the field gets, and it has to be an error rather
+        // than a default — there is no water a boat can be assumed to float on.
+        // Whether that name resolves, and whether this entity is even a body
+        // that can be pushed, is the cross-entity pass's.
+        ComponentData::Buoyancy(ref buoyancy) => {
+            if buoyancy.water.trim().is_empty() {
+                errors.push(
+                    cx.err(
+                        codes::BUOYANCY_WATER_MISSING,
+                        "this Buoyancy names no water; \"water\" must be the name of a \
+                         Water entity for the body to have a surface to float on"
+                            .to_string(),
+                        &format!("{component_path}/water"),
+                    )
+                    .entity(entity)
+                    .component("Buoyancy")
+                    .field("water"),
+                );
+            }
+        }
+
         // A proxy set (M33). Everything here is answerable from the component
         // alone: which shapes a proxy may be, that each part carries the
         // dimensions its shape needs, that no two parts report under one name,

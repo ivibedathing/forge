@@ -494,3 +494,190 @@ fn geometry_standing_in_the_water_does_not_smear_into_it() {
         "refraction dragged the pillar across the water: {straight} red pixels became {bent}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The M38 agreement test: the surface the GPU draws is the surface
+// `engine_core::water::sample_at` reports.
+// ---------------------------------------------------------------------------
+
+/// Odd, so the ray through the exact centre pixel is the camera's own axis.
+///
+/// A even-sized frame has no centre *pixel* — its centre falls on a corner
+/// between four — and the half-pixel offset would tilt the probe ray off
+/// vertical, which is the one property this whole test rests on.
+const PROBE: u32 = 65;
+
+/// Render one probe frame: a straight-down camera over black water and a black
+/// bed, with every term in the water shader zeroed except the shore foam.
+///
+/// The scene is built so that the centre pixel is a *measurement*, not a look.
+/// With the sun at zero intensity, the sky off, and both water colours and the
+/// bed black, every term the fragment shader adds — reflection, sun specular,
+/// the lit water body — is exactly zero, and what survives the blend is
+/// `mix(0, white, foam_amount)` over a black destination. The pixel *is* the
+/// foam ramp.
+fn probe_frame(waves: &str, x: f32, z: f32, time: f32, bed_y: f32, shore: f32) -> Image {
+    let source = format!(
+        r#"{{
+  "name": "probe",
+  "environment": {{ "sky": false, "shadows": false, "samples": 1, "fog_density": 0.0 }},
+  "entities": [
+    {{ "name": "Camera", "components": [
+      {{ "type": "Transform", "position": [{x}, 6.0, {z}], "rotation": [-90.0, 0.0, 0.0] }},
+      {{ "type": "Camera", "fov": 50.0, "near": 0.1, "far": 100.0, "active": true }} ] }},
+    {{ "name": "Sun", "components": [
+      {{ "type": "Transform", "rotation": [-60.0, 0.0, 0.0] }},
+      {{ "type": "DirectionalLight", "color": [0.0, 0.0, 0.0], "intensity": 0.0 }} ] }},
+    {{ "name": "Fill", "components": [
+      {{ "type": "AmbientLight", "color": [1.0, 1.0, 1.0], "intensity": 1.0 }} ] }},
+    {{ "name": "Bed", "components": [
+      {{ "type": "Transform", "position": [0.0, {bed_y}, 0.0], "scale": [200.0, 1.0, 200.0] }},
+      {{ "type": "Mesh", "asset": "builtin:plane" }},
+      {{ "type": "Material", "albedo": [0.0, 0.0, 0.0], "roughness": 1.0 }} ] }},
+    {{ "name": "Lake", "components": [
+      {{ "type": "Transform", "position": [0.0, 0.0, 0.0], "scale": [40.0, 1.0, 40.0] }},
+      {{ "type": "Water", "segments": 256, "detail": 0.0, "crest_foam": 0.0,
+         "shore_foam": {shore}, "foam_color": [1.0, 1.0, 1.0],
+         "shallow_color": [0.0, 0.0, 0.0], "deep_color": [0.0, 0.0, 0.0],
+         "opacity": 1.0, "depth_fade": 1.0, "waves": {waves} }} ] }}
+  ]
+}}"#
+    );
+    let scene = Scene::from_source(&source, "probe.json").expect("probe scene should be valid");
+    let (camera, camera_transform) = scene.camera(None).expect("probe scene needs a camera");
+    let items = scene
+        .render_items(&BuiltinAssets)
+        .expect("probe uses builtins only");
+    offscreen::render(
+        &items,
+        &scene.water_items(),
+        &scene.cloud_items(),
+        &scene.road_items(),
+        &scene.meadow_items(),
+        &[],
+        &camera,
+        camera_transform.matrix(),
+        scene.lights().resolved(),
+        scene.environment,
+        time,
+        PROBE,
+        PROBE,
+        &scene.hud_tree(&engine_core::mesh::BuiltinAssets),
+        &[],
+    )
+    .expect("offscreen render failed")
+}
+
+/// Undo the sRGB encode the render target applies on write.
+fn to_linear(byte: u8) -> f32 {
+    let v = byte as f32 / 255.0;
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Turn the centre pixel back into the world Y the GPU put the surface at.
+///
+/// The chain is the fragment shader's, run backwards: the pixel is
+/// `foam_amount`, foam is `(1 − smoothstep(0, shore, thickness))²`, and with a
+/// vertical probe ray over a flat bed `thickness` is `surface_y − bed_y`.
+/// `0.5 − sin(asin(1 − 2y)/3)` is the closed-form inverse of the smoothstep
+/// polynomial `3u² − 2u³`.
+fn surface_height_from(image: &Image, bed_y: f32, shore: f32) -> f32 {
+    let pixel = image.pixel(PROBE / 2, PROBE / 2);
+    let foam = to_linear(pixel[0]);
+    let ramp = (1.0 - foam.sqrt()).clamp(0.0, 1.0);
+    let u = 0.5 - ((1.0 - 2.0 * ramp).clamp(-1.0, 1.0).asin() / 3.0).sin();
+    bed_y + u * shore
+}
+
+#[test]
+fn the_cpu_evaluator_agrees_with_the_surface_the_shader_draws() {
+    if !gpu_available() {
+        return;
+    }
+
+    // Two waves at real steepness, crossing: a sum, not a single sine, so a
+    // wrong `Q`, a wrong `ω`, a dropped second wave or a direction convention
+    // off by a sign all show up as centimetres of disagreement.
+    const WAVES: &str = r#"[
+        { "direction": 25.0, "wavelength": 8.0, "amplitude": 0.5, "steepness": 0.5, "speed": 1.5 },
+        { "direction": 140.0, "wavelength": 3.4, "amplitude": 0.15, "steepness": 0.3, "speed": 0.8 }
+    ]"#;
+    // The bed and the foam width place the wave's whole range in the steep,
+    // responsive middle of the smoothstep, where one 8-bit code is millimetres.
+    const BED_Y: f32 = -2.0;
+    const SHORE: f32 = 4.0;
+
+    let water: engine_core::components::Water =
+        serde_json::from_str(&format!(r#"{{ "waves": {WAVES} }}"#)).expect("waves parse");
+    let transform = engine_core::components::Transform {
+        scale: engine_core::math::Vec3::new(40.0, 1.0, 40.0),
+        ..Default::default()
+    };
+    let surface = engine_core::water::Surface::new(&water, &transform);
+
+    // Spread over the wave train and over time, so a probe cannot be right by
+    // sitting on a crest where several wrong formulas happen to agree.
+    let probes = [
+        (0.0f32, 0.0f32, 0.0f32),
+        (1.7, -0.9, 0.0),
+        (-3.2, 2.4, 1.25),
+        (5.5, 5.5, 2.5),
+        (-6.1, -4.3, 3.75),
+        (2.0, -7.5, 6.0),
+    ];
+
+    let mut worst: f32 = 0.0;
+    for (x, z, time) in probes {
+        let image = probe_frame(WAVES, x, z, time, BED_Y, SHORE);
+        let drawn = surface_height_from(&image, BED_Y, SHORE);
+        let computed = surface
+            .sample_at(x, z, time)
+            .expect("the probe columns are inside the patch");
+
+        let error = (drawn - computed.height).abs();
+        worst = worst.max(error);
+        assert!(
+            error < 0.03,
+            "at ({x}, {z}, t={time}) the shader drew the surface at {drawn:.4} m \
+             and `water::sample_at` says {:.4} m — {error:.4} m apart",
+            computed.height
+        );
+    }
+
+    // The two error terms this test knowingly carries, stated rather than
+    // absorbed into a loose tolerance: the rasterizer interpolates the surface
+    // linearly between grid vertices (bounded by A·k²·d²/8, about 1 mm at
+    // `segments: 256` over 40 m) while the evaluator is continuous, and an
+    // 8-bit channel quantizes the foam ramp. Both are millimetres. If this
+    // starts failing at a couple of centimetres, the two implementations have
+    // drifted — that is the whole point of the test, so do not widen it.
+    assert!(
+        worst < 0.03,
+        "worst disagreement {worst:.4} m is larger than quantization explains"
+    );
+}
+
+#[test]
+fn the_probe_reads_a_flat_surface_where_the_evaluator_puts_it() {
+    // The calibration half of the agreement test. With no waves at all the
+    // answer is known without either implementation — the water is exactly at
+    // its entity's Y — so this is what fails first if the *readback* is wrong
+    // (sRGB decode, smoothstep inverse, off-centre pixel) rather than the wave
+    // arithmetic. Without it, a broken probe and a broken evaluator that
+    // happened to cancel would both look like success above.
+    if !gpu_available() {
+        return;
+    }
+    for bed_y in [-2.0f32, -3.0] {
+        let image = probe_frame("[]", 1.0, -2.0, 0.0, bed_y, 4.0);
+        let drawn = surface_height_from(&image, bed_y, 4.0);
+        assert!(
+            (drawn - 0.0).abs() < 0.02,
+            "flat water sits at y = 0; the probe read {drawn:.4} m over a bed at {bed_y}"
+        );
+    }
+}

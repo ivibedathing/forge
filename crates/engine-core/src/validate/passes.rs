@@ -345,6 +345,92 @@ pub(super) fn meadow(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Engin
     }
 }
 
+/// Buoyancy (M38): the water a body floats on, and the body itself.
+pub(super) fn buoyancy(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
+    let SceneFacts {
+        buoyancies,
+        water_names,
+        collider_names,
+        body_kinds,
+        seen_names,
+        ..
+    } = facts;
+
+    // ── Buoyancy pass (M38) ────────────────────────────────────────────
+    //
+    // Two halves. The meadow pass's name check, because the same silent failure
+    // is available — a `water` that resolves to nothing would leave a boat
+    // sinking with nothing in the file saying why. And a check the meadow pass
+    // has no equivalent of: buoyancy is *a force*, so an entity with no dynamic
+    // body has nothing for it to act on. Authoring one there is a component
+    // that cannot do anything, which is exactly the class of mistake a render
+    // cannot show you.
+    for (owner, buoyancy, component_path) in buoyancies {
+        let water_path = format!("{component_path}/water");
+        if !buoyancy.water.trim().is_empty() {
+            if !seen_names.contains(&buoyancy.water.as_str()) {
+                errors.push(
+                    cx.err(
+                        codes::BUOYANCY_WATER_NOT_FOUND,
+                        format!(
+                            "the Buoyancy on {owner:?} names water {:?}, which is not an \
+                             entity in this scene",
+                            buoyancy.water
+                        ),
+                        &water_path,
+                    )
+                    .entity(owner)
+                    .component("Buoyancy")
+                    .field("water")
+                    .suggest_from(&buoyancy.water, seen_names.iter().copied()),
+                );
+            } else if !water_names.contains(buoyancy.water.as_str()) {
+                errors.push(
+                    cx.err(
+                        codes::BUOYANCY_WATER_INVALID,
+                        format!(
+                            "the Buoyancy on {owner:?} names water {:?}, but that entity \
+                             has no Water component; a body floats on a Water surface, so \
+                             the name must be one",
+                            buoyancy.water
+                        ),
+                        &water_path,
+                    )
+                    .entity(owner)
+                    .component("Buoyancy")
+                    .field("water")
+                    .suggest_from(&buoyancy.water, water_names.iter().map(String::as_str)),
+                );
+            }
+        }
+
+        let dynamic = body_kinds.get(owner.as_str()) == Some(&crate::components::BodyKind::Dynamic);
+        let has_collider = collider_names.contains(owner.as_str());
+        if !dynamic || !has_collider {
+            let missing = match (dynamic, has_collider) {
+                (false, false) => "has neither a dynamic RigidBody nor a Collider",
+                (false, true) => "has no dynamic RigidBody",
+                (true, false) => "has no Collider",
+                (true, true) => unreachable!("guarded by the condition above"),
+            };
+            errors.push(
+                cx.err(
+                    codes::BUOYANCY_WITHOUT_BODY,
+                    format!(
+                        "the Buoyancy on {owner:?} {missing}; buoyancy is a force applied \
+                         to a dynamic body, and the shape it displaces water with is the \
+                         entity's own Collider, so without both the component can have no \
+                         effect at all"
+                    ),
+                    component_path,
+                )
+                .entity(owner)
+                .component("Buoyancy"),
+            );
+        }
+    }
+}
+
 /// Foot planting (M32): the ground a character stands on.
 pub(super) fn foot_planting(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
     let SceneFacts {

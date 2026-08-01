@@ -1994,6 +1994,93 @@ pub struct Water {
     /// be turned on in a tuned scene without re-tuning it.
     #[schemars(range(min = 1.0, max = 3.0))]
     pub ior: f32,
+
+    /// Density of the fluid in kg/m³, `> 0`. Fresh water is 1000 (the default),
+    /// sea water about 1025.
+    ///
+    /// The **only** field here that nothing renders. It is what a [`Buoyancy`]
+    /// body weighs the water it displaces against, and it lives on the lake
+    /// rather than on the boat because it is a property of the fluid: two hulls
+    /// in one pond disagreeing about how dense the water is would not be a knob,
+    /// it would be a bug. The authoring knob for "this floats higher" already
+    /// exists and is [`Collider::density`], in the same unit.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub density: f32,
+}
+
+/// Makes a dynamic body float on a named [`Water`] surface (M38).
+///
+/// Archimedes, sampled: the body's collider is divided into columns, each column
+/// is asked how deep it sits under the wave above it, and each pushes up with
+/// the weight of the water it displaces. Because the pushes land at their own
+/// columns rather than at the centre of mass, a hull that rolls has more of
+/// itself submerged on the low side and rights itself — the pitch and roll come
+/// out of the same sum as the lift, with nothing modelling them separately.
+///
+/// **Absent, nothing floats**, which is the pre-M38 engine exactly. The
+/// component needs a `RigidBody` that is dynamic and a `Collider` to have a
+/// shape at all, and validation says so rather than letting a scene author a
+/// component that silently does nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Buoyancy {
+    /// The [`Water`] entity this body floats on, by name. Required.
+    ///
+    /// Named rather than found by overlap, for [`Meadow::terrain`]'s reason: one
+    /// implementation of "where is the surface", pointed at explicitly. A scene
+    /// with two ponds has to say which one, and a scene with one still says it,
+    /// so the file records what the physics did.
+    pub water: String,
+
+    /// Columns per axis across the body's footprint, `[1, 4]`. Default 2, so a
+    /// hull is sampled at four points.
+    ///
+    /// The fidelity knob, and it decides whether the body can **turn**: at 1
+    /// there is a single upward push through the middle and a raft cannot right
+    /// itself or ride a slope, because a force through the centre of mass makes
+    /// no torque. At 2 each quarter of the hull feels its own wave, which is
+    /// what makes a boat pitch into a swell instead of hovering over it. Past
+    /// that the returns fall off quickly — 3 and 4 are for a long hull spanning
+    /// several wavelengths.
+    #[schemars(range(min = 1, max = 4))]
+    pub samples: u32,
+
+    /// Linear damping in 1/s applied **in proportion to how submerged the body
+    /// is**, `>= 0`.
+    ///
+    /// Added on top of [`RigidBody::linear_damping`], not replacing it: that
+    /// field is the body's drag in air, and this is the water's. Water drag is
+    /// not a property of the boat, which is exactly why it cannot be authored on
+    /// the `RigidBody` — a hull thrown clear of the pond has to stop being
+    /// damped the moment it leaves, and a half-submerged one is dragged half as
+    /// hard.
+    #[schemars(range(min = 0.0))]
+    pub drag: f32,
+
+    /// Angular damping in 1/s, scaled by submersion exactly as [`drag`] is.
+    /// `>= 0`.
+    ///
+    /// Usually wants to be the larger of the two: water stops a hull from
+    /// spinning far more effectively than it stops it from drifting, and a boat
+    /// that rolls for twenty seconds after a wave reads as weightless.
+    ///
+    /// [`drag`]: Buoyancy::drag
+    #[schemars(range(min = 0.0))]
+    pub angular_drag: f32,
+}
+
+impl Default for Buoyancy {
+    fn default() -> Self {
+        Self {
+            // No sensible default: which water a boat floats on is not
+            // guessable, and validation requires it. Empty is what an author
+            // omitting it gets, and what the error message is about.
+            water: String::new(),
+            samples: 2,
+            drag: 1.0,
+            angular_drag: 2.0,
+        }
+    }
 }
 
 impl Water {
@@ -2026,6 +2113,9 @@ impl Default for Water {
             shore_foam: 0.0,
             foam_color: Vec3::new(0.86, 0.90, 0.92),
             ior: 1.0,
+            // Fresh water. Nothing reads this unless something floats, so it
+            // costs a pre-M38 scene nothing to have gained it.
+            density: 1000.0,
         }
     }
 }
@@ -3299,6 +3389,7 @@ components!(
     Meadow,
     FootPlant,
     SkinnedCollider,
+    Buoyancy,
 );
 
 #[cfg(test)]
@@ -3401,7 +3492,8 @@ mod tests {
                 "Road",
                 "Meadow",
                 "FootPlant",
-                "SkinnedCollider"
+                "SkinnedCollider",
+                "Buoyancy"
             ]
         );
     }

@@ -5842,3 +5842,346 @@ fn the_shell_fixture_matches_its_baseline() {
     let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
     assert_eq!(report["pass"], true, "{report}");
 }
+
+// ── Buoyancy and the water evaluator (M38) ──────────────────────────────
+
+/// A pond with two floats and a stone, sized so the whole pond is inside the
+/// patch and nothing needs a long settle.
+const POND: &str = r#"{
+  "name":"pond",
+  "physics":{"gravity":[0.0,-9.81,0.0],"timestep_hz":60},
+  "entities":[
+    {"name":"Cam","components":[
+      {"type":"Transform","position":[0.0,3.0,8.0],"rotation":[-15.0,0.0,0.0]},
+      {"type":"Camera","fov":50.0,"near":0.1,"far":100.0,"active":true}]},
+    {"name":"Bed","components":[
+      {"type":"Transform","position":[0.0,-3.0,0.0],"scale":[40.0,1.0,40.0]},
+      {"type":"Mesh","asset":"builtin:plane"},
+      {"type":"Material","albedo":[0.3,0.3,0.3]},
+      {"type":"Collider","shape":"cuboid","half_extents":[0.5,0.05,0.5]}]},
+    {"name":"Lake","components":[
+      {"type":"Transform","scale":[20.0,1.0,20.0]},
+      {"type":"Water","segments":64,"waves":[
+        {"direction":30.0,"wavelength":6.0,"amplitude":0.12,"steepness":0.4,"speed":1.4}]}]},
+    {"name":"Cork","components":[
+      {"type":"Transform","position":[-1.5,0.6,0.0],"scale":[0.8,0.8,0.8]},
+      {"type":"Mesh","asset":"builtin:sphere"},
+      {"type":"Material","albedo":[0.8,0.4,0.1]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5,"density":250.0},
+      {"type":"Buoyancy","water":"Lake","samples":1,"drag":2.0}]},
+    {"name":"Anvil","components":[
+      {"type":"Transform","position":[1.5,0.6,0.0],"scale":[0.8,0.8,0.8]},
+      {"type":"Mesh","asset":"builtin:sphere"},
+      {"type":"Material","albedo":[0.2,0.2,0.2]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5,"density":7800.0},
+      {"type":"Buoyancy","water":"Lake","samples":1,"drag":2.0}]}
+  ]}"#;
+
+/// The claim buoyancy exists to make: what is lighter than water stays at the
+/// surface, and what is heavier goes to the bottom.
+///
+/// Two bodies identical in every way but `Collider.density`, so nothing that
+/// moved both — a broken evaluator, gravity, the bed — can make this pass. The
+/// numbers are metres and the pond is 3 m deep, so the gap between the two
+/// outcomes is far larger than any tolerance question.
+#[test]
+fn a_light_body_floats_and_a_dense_one_sinks() {
+    let scene = scene_file("buoyancy-density", POND);
+    let report = json_stdout(
+        &engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", "420"])
+            .args(["--entity", "Cork"])
+            .args(["--entity", "Anvil"])
+            .output()
+            .unwrap(),
+    );
+
+    let height_of = |name: &str| -> f64 {
+        report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == name)
+            .unwrap_or_else(|| panic!("{name} should be in the report"))["position"][1]
+            .as_f64()
+            .unwrap()
+    };
+
+    let cork = height_of("Cork");
+    let anvil = height_of("Anvil");
+    assert!(
+        cork > -0.6,
+        "a body a quarter the density of water must stay at the surface, not sink to {cork}"
+    );
+    assert!(
+        anvil < -2.0,
+        "a body denser than steel must reach the bed, not hover at {anvil}"
+    );
+}
+
+/// Buoyancy is opt-in, and this is what "opt-in" has to mean: the *same* light
+/// body with no `Buoyancy` component sinks like any other.
+///
+/// Without this, a passing float test proves only that something holds bodies
+/// up — it could be the water's collider, if water had one, or a bug.
+#[test]
+fn without_the_component_nothing_floats() {
+    let sinking = POND.replace(
+        r#",
+      {"type":"Buoyancy","water":"Lake","samples":1,"drag":2.0}]},
+    {"name":"Anvil"#,
+        r#"]},
+    {"name":"Anvil"#,
+    );
+    let scene = scene_file("buoyancy-optin", &sinking);
+    let report = json_stdout(
+        &engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", "420"])
+            .args(["--entity", "Cork"])
+            .output()
+            .unwrap(),
+    );
+    let cork = report["entities"][0]["position"][1].as_f64().unwrap();
+    assert!(
+        cork < -2.0,
+        "a cork with no Buoyancy is an ordinary body and belongs on the bed, not at {cork}"
+    );
+}
+
+/// `water-height` and `world.water_height` are one evaluator, exactly as
+/// `terrain-height` and `world.terrain_height` are.
+///
+/// The terrain twin of this test is what M22's one-implementation claim rests
+/// on; water needs it more, not less, because there is a *third* copy of the
+/// curve in `water.wgsl` that a render test holds separately.
+#[test]
+fn water_height_is_the_evaluator_scripts_ask() {
+    let scene = scene_file(
+        "water-sampler",
+        &POND.replace(
+            r#"{"name":"Cam","components":["#,
+            r#"{"name":"Probe","components":[{"type":"Script","source":"probe.rhai"}]},
+    {"name":"Cam","components":["#,
+        ),
+    );
+    std::fs::write(
+        scene.parent().unwrap().join("probe.rhai"),
+        "fn step(world, step) { world.hud(\"h=\" + world.water_height(\"Lake\", 2.5, -1.5)); }\n",
+    )
+    .unwrap();
+
+    // Ten steps, and the CLI is asked about **nine**. That is not an
+    // off-by-one: a script runs at the time its step *begins* at
+    // (`step_index`, 0-based) while physics and the render are handed the time
+    // it *ends* at, so the last of ten script calls saw 9/60 s. Terrain never
+    // had to care because a height field has no clock. Asking both at the same
+    // instant is the entire point of this test, so the offset is spelled out
+    // rather than absorbed into a tolerance.
+    let simulated = json_stdout(
+        &engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", "10"])
+            .output()
+            .unwrap(),
+    );
+    let from_script: f64 = simulated["hud"][0]
+        .as_str()
+        .expect("the script pushes one HUD line")
+        .trim_start_matches("h=")
+        .parse()
+        .unwrap();
+
+    let from_cli = json_stdout(
+        &engine()
+            .arg("water-height")
+            .arg(&scene)
+            .args(["--at", "2.5,-1.5"])
+            .args(["--steps", "9"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        from_cli["height"].as_f64().unwrap() as f32,
+        from_script as f32,
+        "the CLI and the script API must sample the same surface"
+    );
+}
+
+/// Water has edges, and the query says so rather than answering 0.0.
+#[test]
+fn water_height_reports_where_there_is_no_water() {
+    let scene = scene_file("water-edges", POND);
+    let inside = json_stdout(
+        &engine()
+            .arg("water-height")
+            .arg(&scene)
+            .args(["--at", "3,3"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(inside["water"], true);
+    assert!(inside["height"].is_number(), "{inside}");
+    assert_eq!(
+        inside["normal"].as_array().unwrap().len(),
+        3,
+        "the normal rides along: {inside}"
+    );
+
+    // The patch is 20 m across, so ±10 m is the edge.
+    let outside = json_stdout(
+        &engine()
+            .arg("water-height")
+            .arg(&scene)
+            .args(["--at", "10.5,0"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(outside["water"], false);
+    assert!(
+        outside.get("height").is_none(),
+        "no water means no height to report: {outside}"
+    );
+}
+
+/// The surface moves, so the query has a clock and it is load-bearing.
+#[test]
+fn water_height_answers_at_the_time_it_is_asked_about() {
+    let scene = scene_file("water-clock", POND);
+    let at = |args: [&str; 2]| -> f64 {
+        json_stdout(
+            &engine()
+                .arg("water-height")
+                .arg(&scene)
+                .args(["--at", "0,0"])
+                .args(args)
+                .output()
+                .unwrap(),
+        )["height"]
+            .as_f64()
+            .unwrap()
+    };
+
+    let start = at(["--time", "0.0"]);
+    let later = at(["--time", "1.7"]);
+    assert!(
+        (start - later).abs() > 1e-3,
+        "a travelling wave must have moved between t=0 and t=1.7: {start} vs {later}"
+    );
+    // `--steps` is the same clock at `steps / timestep_hz`, which is how a
+    // render and a physics step agree about where the wave is.
+    assert!(
+        (at(["--steps", "102"]) - later).abs() < 1e-6,
+        "102 steps at 60 Hz is 1.7 s"
+    );
+}
+
+/// The fixture: a raft and a buoy riding a swell, and a stone on the bed.
+///
+/// **The three densities are the assertion.** They share a pond, a clock and an
+/// evaluator, so anything that broke buoyancy as a whole would move all three
+/// together — only a working force law puts one at the waterline, one half out
+/// of it, and one on the bottom. Pinned bit-exactly: five renders of this scene
+/// came back as one image, because the camera holds no terrain and the scene
+/// renders at `samples: 1`.
+#[test]
+fn the_buoyancy_fixture_matches_its_baseline() {
+    let scene = repo_path("examples/scenes/verify/m38_buoyancy.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m38_buoyancy.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("480")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+}
+
+/// A `Buoyancy` that names nothing, names the wrong thing, or sits on something
+/// that cannot be pushed — all at once, because validation reports everything at
+/// once (M5) and a scene with three mistakes should need one run to find them.
+#[test]
+fn buoyancy_refuses_the_component_that_could_do_nothing() {
+    let broken = r#"{
+  "name":"broken buoyancy",
+  "entities":[
+    {"name":"Cam","components":[
+      {"type":"Transform","position":[0.0,2.0,6.0]},
+      {"type":"Camera","fov":50.0,"near":0.1,"far":100.0,"active":true}]},
+    {"name":"Lake","components":[
+      {"type":"Transform","scale":[20.0,1.0,20.0]},
+      {"type":"Water"}]},
+    {"name":"Nameless","components":[
+      {"type":"Transform","position":[0.0,1.0,0.0]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5},
+      {"type":"Buoyancy"}]},
+    {"name":"WrongTarget","components":[
+      {"type":"Transform","position":[2.0,1.0,0.0]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5},
+      {"type":"Buoyancy","water":"Cam"}]},
+    {"name":"Typo","components":[
+      {"type":"Transform","position":[4.0,1.0,0.0]},
+      {"type":"RigidBody","body":"dynamic"},
+      {"type":"Collider","shape":"sphere","radius":0.5},
+      {"type":"Buoyancy","water":"Laike"}]},
+    {"name":"Statue","components":[
+      {"type":"Transform","position":[6.0,1.0,0.0]},
+      {"type":"RigidBody","body":"fixed"},
+      {"type":"Collider","shape":"sphere","radius":0.5},
+      {"type":"Buoyancy","water":"Lake"}]}
+  ]}"#;
+    let scene = scene_file("buoyancy-broken", broken);
+    let output = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let lines = stderr_lines(&output);
+    let codes = codes_of(&lines);
+    for expected in [
+        "buoyancy_water_missing",
+        "buoyancy_water_invalid",
+        "buoyancy_water_not_found",
+        "buoyancy_without_body",
+    ] {
+        assert!(
+            codes.iter().any(|code| code == expected),
+            "expected {expected} among {codes:?}"
+        );
+    }
+
+    // A near miss suggests the real surface, like every other name error here.
+    let typo = lines
+        .iter()
+        .find(|l| l["error"] == "buoyancy_water_not_found")
+        .expect("the typo case is reported");
+    assert_eq!(typo["did_you_mean"], "Lake");
+
+    // A fixed body cannot take a force, so the component on it is inert — that
+    // is the failure the render cannot show you and the reason this is an error
+    // rather than a warning.
+    let inert = lines
+        .iter()
+        .find(|l| l["error"] == "buoyancy_without_body")
+        .expect("the fixed body is reported");
+    assert_eq!(inert["entity"], "Statue");
+}

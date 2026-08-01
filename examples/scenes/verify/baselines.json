@@ -534,6 +534,18 @@
       "height": 360,
       "milestone": "M36",
       "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m38_buoyancy.png",
+      "scene": "examples/scenes/verify/m38_buoyancy.json",
+      "args": [
+        "--steps",
+        "480"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M38",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [
