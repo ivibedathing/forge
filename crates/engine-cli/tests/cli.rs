@@ -3058,6 +3058,126 @@ fn the_m23_road_fixture_pins_markings_and_a_drivable_surface() {
     assert_eq!(report["diff_pixels"], 0, "{report}");
 }
 
+/// The M40 fixture: a circuit that can only be authored with all five of the
+/// milestone's additions at once — banked corners the engine signed itself, a
+/// pit lane that widens through `RoadPoint.width`, three roads riding an M22
+/// terrain rather than carrying pasted-in heights, a `Junction` where the pit
+/// lane meets the paddock road, and grain on the asphalt.
+///
+/// The render half pins the lot. The physics half pins the one claim a picture
+/// cannot make: **the banking has the right sign.** A ball dropped on the west
+/// straight, approaching a right-hand corner, has to roll toward the *inside*
+/// of that turn and stay on the asphalt. A bank signed the other way rolls it
+/// off the outside, which is a circuit that throws the car off at every corner
+/// — the exact failure `Road::auto_bank` exists to stop an author making by
+/// hand.
+#[test]
+fn the_m40_track_fixture_pins_banking_width_and_a_junction() {
+    let scene = repo_path("examples/scenes/verify/m40_track.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m40_track.png");
+
+    // Physics first: no GPU needed, so it runs on every machine.
+    let simulated = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "180"])
+        .args(["--entity", "Ball"])
+        .output()
+        .unwrap();
+    assert_eq!(simulated.status.code(), Some(0), "{simulated:?}");
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&simulated).trim()).unwrap();
+    let position = report["entities"][0]["position"]
+        .as_array()
+        .expect("the ball's position")
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect::<Vec<f64>>();
+
+    // The straight runs down x = -40 toward a corner that turns right, so the
+    // inside is +x and the outside is -x.
+    assert!(
+        position[0] > -40.0,
+        "a ball on a correctly banked road rolls toward the inside of the \
+         turn (+x from -40); it went the other way, which is the bank signed \
+         backwards: {position:?}"
+    );
+    // 4.5 m of asphalt plus 1.8 m of shoulder each side. Rolling *off* is as
+    // wrong as not rolling at all.
+    assert!(
+        position[0] < -33.7,
+        "the ball left the road entirely: {position:?}"
+    );
+    assert!(
+        position[1] > -4.0 && position[1] < 0.0,
+        "the ball should be resting on a road that follows the terrain about \
+         2.5 m below the origin, not fallen through it: {position:?}"
+    );
+
+    // The junction resolved every arm it names. A dropped arm is a hole in the
+    // patch, and a hole is exactly what the primitive exists to close.
+    let plan = engine().arg("junction-plan").arg(&scene).output().unwrap();
+    assert_eq!(plan.status.code(), Some(0), "{plan:?}");
+    let plan: serde_json::Value = serde_json::from_str(stdout_of(&plan).trim()).unwrap();
+    let arms = plan["arms"].as_array().expect("arms");
+    assert_eq!(arms.len(), 3, "the T junction has three arms: {plan}");
+    for arm in arms {
+        let reach = arm["reach"].as_f64().unwrap();
+        assert!(
+            (2.0..12.0).contains(&reach),
+            "arm {} met the junction {reach} m out, which is not a mouth: {plan}",
+            arm["road"]
+        );
+    }
+
+    // Per-point width reached what the file asked for and no more — the
+    // monotone cubic's whole job, one quantity over from the heights.
+    let centerline = engine()
+        .arg("road-centerline")
+        .arg(&scene)
+        .args(["--entity", "PitLane"])
+        .output()
+        .unwrap();
+    assert_eq!(centerline.status.code(), Some(0), "{centerline:?}");
+    let centerline: serde_json::Value =
+        serde_json::from_str(stdout_of(&centerline).trim()).unwrap();
+    let widths: Vec<f64> = centerline["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["width"].as_f64().unwrap())
+        .collect();
+    let widest = widths.iter().cloned().fold(f64::MIN, f64::max);
+    let narrowest = widths.iter().cloned().fold(f64::MAX, f64::min);
+    assert!(
+        (widest - 13.0).abs() < 1e-3,
+        "the pit lane is authored to reach 13 m and must not bulge past it: {widest}"
+    );
+    assert!(
+        (narrowest - 7.0).abs() < 1e-3,
+        "and must not pinch below the road's own 7 m: {narrowest}"
+    );
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .args(["--steps", "180"])
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
 // ── engine init / engine agent-guide (distribution) ────────────────────────
 //
 // The scaffold is what someone gets who installed a binary and has no
@@ -5949,7 +6069,9 @@ fn the_m39_ragdoll_fixture_pins_a_collapsing_character() {
     let diff = engine()
         .arg("diff-render")
         .arg(ragdoll_scene())
-        .arg(repo_path("examples/scenes/verify/baselines/m39_ragdoll.png"))
+        .arg(repo_path(
+            "examples/scenes/verify/baselines/m39_ragdoll.png",
+        ))
         .arg("--steps")
         .arg("75")
         .output()
@@ -6123,7 +6245,9 @@ fn a_ragdoll_baked_mid_fall_reloads_into_the_same_heap() {
     let diff = engine()
         .arg("diff-render")
         .arg(&baked)
-        .arg(repo_path("examples/scenes/verify/baselines/m39_ragdoll.png"))
+        .arg(repo_path(
+            "examples/scenes/verify/baselines/m39_ragdoll.png",
+        ))
         .arg("--steps")
         .arg("0")
         .output()

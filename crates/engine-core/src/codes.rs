@@ -233,6 +233,24 @@ registry! {
         "a sharp corner turns too far to mitre; give it a radius";
     TOO_MANY_ROAD_KERBS = "too_many_road_kerbs", Input,
         "a Road kerbs more corners than the shader's span array holds";
+    ROAD_TERRAIN_NOT_FOUND = "road_terrain_not_found", Input,
+        "a Road's \"follow_terrain\" names no entity in the scene";
+    ROAD_TERRAIN_INVALID = "road_terrain_invalid", Input,
+        "a Road's \"follow_terrain\" must name an entity that has a Terrain component";
+
+    // ── Junctions (M40) ────────────────────────────────────────────────
+    JUNCTION_WITH_MESH = "junction_with_mesh", Input,
+        "a Junction entity owns its own surface; it may not also have a Mesh or a Material";
+    JUNCTION_TOO_FEW_ARMS = "junction_too_few_arms", Input,
+        "a Junction needs at least two arms to bound a patch";
+    JUNCTION_ROAD_NOT_FOUND = "junction_road_not_found", Input,
+        "a Junction arm's \"road\" names no entity in the scene";
+    JUNCTION_ROAD_INVALID = "junction_road_invalid", Input,
+        "a Junction arm's \"road\" must name an entity that has a Road component";
+    JUNCTION_ARM_CLOSED = "junction_arm_closed", Input,
+        "a Junction arm names a closed road, which has no free end to meet";
+    JUNCTION_DUPLICATE_ARM = "junction_duplicate_arm", Input,
+        "two Junction arms name the same end of the same road";
 
     // ── Scripting (M10) ────────────────────────────────────────────────
     SCRIPT_PARSE_ERROR = "script_parse_error", Input,
@@ -322,6 +340,10 @@ registry! {
         "warning: daylight computes the sky and ambient, so the authored ones are never read";
     COLLIDER_MESH_SIZE_MISMATCH = "collider_mesh_size_mismatch", Input,
         "warning: a Collider is a very different size from the builtin mesh it sits on";
+    ROAD_PINS_OVERLAP = "road_pins_overlap", Input,
+        "warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly";
+    ROAD_FOLLOW_ROTATED = "road_follow_rotated", Input,
+        "warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed";
 
     // ── Scene semantics at command time ───────────────────────────────
     SCENE_UNREADABLE = "scene_unreadable", Input,

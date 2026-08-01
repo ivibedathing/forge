@@ -632,6 +632,9 @@ pub fn set_field(
                 "color" => c.color = v3,
                 "shoulder_color" => c.shoulder_color = v3,
                 "bank_color" => c.bank_color = v3,
+                // Grain is read per pixel too (M40), so it repaints for free —
+                // a road that dries out over a scene is a clip on `grain`.
+                "grain" => c.grain = scalar,
                 _ => return false,
             }
         }
@@ -669,6 +672,31 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     ("Road", "skirt"),
     ("Road", "segment_length"),
     ("Road", "segment_angle"),
+    // M40's shape fields, in here for the same reason: all four are in the
+    // road's cache key, so a clip on one regenerates and re-uploads the whole
+    // ribbon every frame it changes. `grain_scale` joins them not because it
+    // moves a vertex — it does not — but because a road's grain cell size
+    // changing per frame is a shimmer, not an animation.
+    ("Road", "auto_bank"),
+    ("Road", "auto_bank_radius"),
+    ("Road", "follow_smoothing"),
+    ("Road", "follow_blend"),
+    ("Road", "grain_scale"),
+    // A junction's patch is generated from the roads that reach it and cached
+    // the same way, and its colours are the only fields a clip could touch
+    // without rebuilding it — but a `Junction` is not reachable by name from a
+    // clip's `component` field yet, so the whole component is listed rather
+    // than half of it.
+    ("Junction", "flare"),
+    ("Junction", "corner_segments"),
+    ("Junction", "shoulder"),
+    ("Junction", "skirt"),
+    ("Junction", "roughness"),
+    ("Junction", "grain"),
+    ("Junction", "grain_scale"),
+    ("Junction", "color"),
+    ("Junction", "shoulder_color"),
+    ("Junction", "bank_color"),
     // A meadow's placement and its plant template are generated and
     // `Arc`-cached the same way, and these are exactly the fields its cache key
     // covers — animating one would rebuild the template and re-scatter every

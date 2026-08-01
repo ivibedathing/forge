@@ -93,6 +93,14 @@ build fails.
 | `road_corner_does_not_fit` | 1 | two corner radii need more of the edge between them than it has |
 | `road_corner_needs_radius` | 1 | a sharp corner turns too far to mitre; give it a radius |
 | `too_many_road_kerbs` | 1 | a Road kerbs more corners than the shader's span array holds |
+| `road_terrain_not_found` | 1 | a Road's "follow_terrain" names no entity in the scene |
+| `road_terrain_invalid` | 1 | a Road's "follow_terrain" must name an entity that has a Terrain component |
+| `junction_with_mesh` | 1 | a Junction entity owns its own surface; it may not also have a Mesh or a Material |
+| `junction_too_few_arms` | 1 | a Junction needs at least two arms to bound a patch |
+| `junction_road_not_found` | 1 | a Junction arm's "road" names no entity in the scene |
+| `junction_road_invalid` | 1 | a Junction arm's "road" must name an entity that has a Road component |
+| `junction_arm_closed` | 1 | a Junction arm names a closed road, which has no free end to meet |
+| `junction_duplicate_arm` | 1 | two Junction arms name the same end of the same road |
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |
@@ -128,6 +136,8 @@ build fails.
 | `unknown_collision_layer` | 1 | warning: collides_with names a layer no collider is a member of |
 | `daylight_overrides_sky` | 1 | warning: daylight computes the sky and ambient, so the authored ones are never read |
 | `collider_mesh_size_mismatch` | 1 | warning: a Collider is a very different size from the builtin mesh it sits on |
+| `road_pins_overlap` | 1 | warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly |
+| `road_follow_rotated` | 1 | warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed |
 | `scene_unreadable` | 1 | the scene file could not be read |
 | `scene_parse_desync` | 2 | internal bug: the scene passed validation but failed to parse |
 | `entity_not_found` | 1 | no entity has the requested name |

@@ -249,6 +249,177 @@ pub struct RoadItem {
     pub surface: std::sync::Arc<crate::road::RoadSurface>,
     pub model: glam::Mat4,
     pub road: crate::components::Road,
+    /// Set when this draw is a [`Junction`](crate::components::Junction)'s
+    /// patch rather than a `Road`'s ribbon (M40).
+    ///
+    /// A junction is drawn by the road pipeline — same shader, same uniform,
+    /// markings switched off — so it belongs in this list. It is not a road,
+    /// though, and `engine road-centerline` filters on exactly this: a patch
+    /// has no centerline to publish.
+    pub junction: Option<crate::components::Junction>,
+}
+
+/// Every entity's name, for the free draw-list builders below.
+fn names_of(world: &World) -> std::collections::HashMap<String, Entity> {
+    world
+        .query::<(Entity, &Name)>()
+        .iter()
+        .map(|(entity, name)| (name.0.clone(), entity))
+        .collect()
+}
+
+fn flat_transform(world: &World, entity: Entity) -> Transform {
+    world
+        .get::<&Transform>(entity)
+        .map(|t| *t)
+        .unwrap_or_default()
+}
+
+/// One road's generated ribbon, resolving the terrain it named (M40).
+///
+/// Free rather than a [`Scene`] method because physics builds its trimesh
+/// colliders straight off a `World` and has to reach the same geometry the
+/// renderer draws. Two implementations of "which terrain does this road ride
+/// on" is exactly the disagreement `road-centerline` exists to prevent, one
+/// level down.
+fn road_surface_of(
+    world: &World,
+    names: &std::collections::HashMap<String, Entity>,
+    road: &crate::components::Road,
+    model: glam::Mat4,
+) -> std::sync::Arc<crate::road::RoadSurface> {
+    // Resolve the ground first, as `meadow_items` does and for the same reason:
+    // the borrows have to outlive the `surface` call that reads through them. A
+    // road that names no terrain — every road before M40 — resolves to `None`
+    // and keeps its authored heights.
+    let ground_entity = road
+        .follow_terrain
+        .as_deref()
+        .and_then(|n| names.get(n).copied());
+    let ground_terrain =
+        ground_entity.and_then(|e| world.get::<&crate::components::Terrain>(e).ok());
+    let ground_transform = ground_entity.map(|e| flat_transform(world, e));
+    let ground = match (&ground_terrain, &ground_transform) {
+        (Some(terrain), Some(transform)) => Some(crate::road::Ground { terrain, transform }),
+        _ => None,
+    };
+    crate::road::surface(road, model, ground)
+}
+
+/// Flatten a world's roads *and* its junction patches into one draw list (M40).
+///
+/// Both are drawn by the road pipeline, so both belong here; `RoadItem.junction`
+/// is what tells them apart for the consumers that care.
+pub fn road_items_of(world: &World) -> Vec<RoadItem> {
+    let names = names_of(world);
+    let mut items: Vec<RoadItem> = world
+        .query::<(Entity, &crate::components::Road)>()
+        .iter()
+        .map(|(entity, road)| {
+            let model = flat_transform(world, entity).matrix();
+            RoadItem {
+                entity: world
+                    .get::<&Name>(entity)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default(),
+                surface: road_surface_of(world, &names, road, model),
+                model,
+                road: road.clone(),
+                junction: None,
+            }
+        })
+        .collect();
+
+    items.extend(junction_items_of(world).into_iter().map(|item| RoadItem {
+        // A patch answers as a road because the pipeline asks it as one — see
+        // `junction::as_road`. The rest of `RoadSurface` is genuinely empty
+        // rather than faked: a junction has no centerline, no dashes and no
+        // kerbs, and every one of those is switched off in the uniform.
+        road: crate::junction::as_road(&item.junction, &item.surface),
+        surface: std::sync::Arc::new(crate::road::RoadSurface {
+            mesh: std::sync::Arc::clone(&item.surface.mesh),
+            length: 0.0,
+            dash_period: 0.0,
+            dash_duty: 1.0,
+            kerbs: Vec::new(),
+            centerline: Vec::new(),
+        }),
+        model: item.model,
+        entity: item.entity,
+        junction: Some(item.junction),
+    }));
+
+    items.sort_by(|a, b| a.entity.cmp(&b.entity));
+    items
+}
+
+/// Flatten a world's junctions, resolving each arm to the road it names (M40).
+pub fn junction_items_of(world: &World) -> Vec<JunctionItem> {
+    let names = names_of(world);
+    let mut items: Vec<JunctionItem> = world
+        .query::<(Entity, &crate::components::Junction)>()
+        .iter()
+        .map(|(entity, junction)| {
+            let model = flat_transform(world, entity).matrix();
+
+            // The arms' roads have to be *built* before the patch can be, and
+            // the built pieces have to outlive the borrows handed to
+            // `junction::surface` — so they are collected first and borrowed
+            // second. An arm naming an entity with no Road is dropped here and
+            // reported by validation (`junction_road_not_found`); the render
+            // path does not re-litigate what validation already said.
+            let resolved: Vec<(String, crate::components::Road, _, glam::Mat4, _)> = junction
+                .arms
+                .iter()
+                .filter_map(|arm| {
+                    let entity = names.get(&arm.road).copied()?;
+                    let road = (*world.get::<&crate::components::Road>(entity).ok()?).clone();
+                    let arm_model = flat_transform(world, entity).matrix();
+                    let surface = road_surface_of(world, &names, &road, arm_model);
+                    Some((arm.road.clone(), road, surface, arm_model, arm.end))
+                })
+                .collect();
+            let arms: Vec<crate::junction::Arm<'_>> = resolved
+                .iter()
+                .map(
+                    |(name, road, surface, arm_model, end)| crate::junction::Arm {
+                        name,
+                        road,
+                        surface,
+                        model: *arm_model,
+                        end: *end,
+                    },
+                )
+                .collect();
+
+            JunctionItem {
+                entity: world
+                    .get::<&Name>(entity)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default(),
+                surface: crate::junction::surface(junction, model, &arms),
+                model,
+                junction: junction.clone(),
+            }
+        })
+        .collect();
+    items.sort_by(|a, b| a.entity.cmp(&b.entity));
+    items
+}
+
+/// One junction, with its patch generated and the arms it resolved (M40).
+///
+/// Separate from the [`RoadItem`] the renderer draws, because the two answer
+/// different questions: the draw list wants geometry, and `engine
+/// junction-plan` wants to know *where the arms turned out to be* — which is
+/// the only way to tell a patch that stretched from a road that stopped short.
+#[derive(Debug, Clone)]
+pub struct JunctionItem {
+    /// The source entity's stable name (invariant 4).
+    pub entity: String,
+    pub surface: std::sync::Arc<crate::junction::JunctionSurface>,
+    pub model: glam::Mat4,
+    pub junction: crate::components::Junction,
 }
 
 /// One meadow, with its plants grown and placed (M29) — [`WaterItem`]'s
@@ -1035,23 +1206,12 @@ impl Scene {
     /// Sorted by entity name, so a road's place in the frame does not depend on
     /// how hecs happened to lay out archetypes.
     pub fn road_items(&self) -> Vec<RoadItem> {
-        let mut items: Vec<RoadItem> = self
-            .world
-            .query::<(Entity, &crate::components::Road)>()
-            .iter()
-            .map(|(entity, road)| RoadItem {
-                entity: self
-                    .world
-                    .get::<&Name>(entity)
-                    .map(|n| n.0.clone())
-                    .unwrap_or_default(),
-                surface: crate::road::surface(road),
-                model: self.transform_of(entity).matrix(),
-                road: road.clone(),
-            })
-            .collect();
-        items.sort_by(|a, b| a.entity.cmp(&b.entity));
-        items
+        road_items_of(&self.world)
+    }
+
+    /// The scene's junctions, with their patches generated (M40).
+    pub fn junction_items(&self) -> Vec<JunctionItem> {
+        junction_items_of(&self.world)
     }
 
     /// Extract the screen-space overlay as plain data, in **scene-file order**

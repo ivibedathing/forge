@@ -589,9 +589,7 @@ impl ViewerApp {
                 // whether the shadow map binds as a 2D texture or an array, so
                 // it is pipeline state exactly as `samples` is.
                 let wanted_cascades = environment.shadow_cascades.clamp(1, 4);
-                if renderer.samples() != wanted_samples
-                    || renderer.cascades() != wanted_cascades
-                {
+                if renderer.samples() != wanted_samples || renderer.cascades() != wanted_cascades {
                     let (width, height) = target.size();
                     let format = renderer.format();
                     // Into the existing box rather than a fresh one: the

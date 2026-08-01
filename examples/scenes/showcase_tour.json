@@ -3245,12 +3245,277 @@
             "center_width": 0.13,
             "center_dash": 2.4,
             "center_gap": 3.6
-          }
+          },
+          "auto_bank": 5.0,
+          "auto_bank_radius": 26.0,
+          "grain": 0.5,
+          "grain_scale": 0.4
         },
         {
           "type": "Collider",
           "shape": "trimesh",
           "friction": 0.9
+        }
+      ]
+    },
+    {
+      "name": "ServiceSpur",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Road",
+          "closed": false,
+          "width": 5.0,
+          "shoulder": 1.0,
+          "skirt": 2.5,
+          "segment_length": 2.0,
+          "segment_angle": 4.0,
+          "color": [
+            0.085,
+            0.085,
+            0.095
+          ],
+          "roughness": 0.93,
+          "shoulder_color": [
+            0.14,
+            0.13,
+            0.09
+          ],
+          "bank_color": [
+            0.11,
+            0.09,
+            0.07
+          ],
+          "follow_terrain": "Ground",
+          "follow_smoothing": 10.0,
+          "grain": 0.5,
+          "grain_scale": 0.4,
+          "points": [
+            {
+              "position": [
+                -86.0,
+                0.25,
+                0.0
+              ],
+              "radius": 0.0
+            },
+            {
+              "position": [
+                -74.0,
+                0.25,
+                0.0
+              ],
+              "radius": 6.0,
+              "width": 9.0
+            },
+            {
+              "position": [
+                -64.0,
+                0.25,
+                0.0
+              ],
+              "radius": 6.0,
+              "width": 9.0
+            },
+            {
+              "position": [
+                -56.0,
+                0.25,
+                0.0
+              ],
+              "radius": 0.0
+            }
+          ],
+          "markings": {
+            "edge_width": 0.12,
+            "edge_inset": 0.09
+          }
+        }
+      ]
+    },
+    {
+      "name": "ServiceNorth",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Road",
+          "closed": false,
+          "width": 5.0,
+          "shoulder": 1.0,
+          "skirt": 2.5,
+          "segment_length": 2.0,
+          "segment_angle": 4.0,
+          "color": [
+            0.085,
+            0.085,
+            0.095
+          ],
+          "roughness": 0.93,
+          "shoulder_color": [
+            0.14,
+            0.13,
+            0.09
+          ],
+          "bank_color": [
+            0.11,
+            0.09,
+            0.07
+          ],
+          "follow_terrain": "Ground",
+          "follow_smoothing": 10.0,
+          "grain": 0.5,
+          "grain_scale": 0.4,
+          "points": [
+            {
+              "position": [
+                -50.0,
+                0.25,
+                -26.0
+              ],
+              "radius": 0.0
+            },
+            {
+              "position": [
+                -50.0,
+                0.25,
+                -6.0
+              ],
+              "radius": 0.0
+            }
+          ],
+          "markings": {
+            "edge_width": 0.12,
+            "edge_inset": 0.09
+          }
+        }
+      ]
+    },
+    {
+      "name": "ServiceSouth",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Road",
+          "closed": false,
+          "width": 5.0,
+          "shoulder": 1.0,
+          "skirt": 2.5,
+          "segment_length": 2.0,
+          "segment_angle": 4.0,
+          "color": [
+            0.085,
+            0.085,
+            0.095
+          ],
+          "roughness": 0.93,
+          "shoulder_color": [
+            0.14,
+            0.13,
+            0.09
+          ],
+          "bank_color": [
+            0.11,
+            0.09,
+            0.07
+          ],
+          "follow_terrain": "Ground",
+          "follow_smoothing": 10.0,
+          "grain": 0.5,
+          "grain_scale": 0.4,
+          "points": [
+            {
+              "position": [
+                -50.0,
+                0.25,
+                26.0
+              ],
+              "radius": 0.0
+            },
+            {
+              "position": [
+                -50.0,
+                0.25,
+                6.0
+              ],
+              "radius": 0.0
+            }
+          ],
+          "markings": {
+            "edge_width": 0.12,
+            "edge_inset": 0.09
+          }
+        }
+      ]
+    },
+    {
+      "name": "ServiceJunction",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Junction",
+          "arms": [
+            {
+              "road": "ServiceSpur",
+              "end": "end"
+            },
+            {
+              "road": "ServiceNorth",
+              "end": "end"
+            },
+            {
+              "road": "ServiceSouth",
+              "end": "end"
+            }
+          ],
+          "corner_segments": 6,
+          "shoulder": 1.0,
+          "skirt": 2.5,
+          "color": [
+            0.085,
+            0.085,
+            0.095
+          ],
+          "roughness": 0.93,
+          "shoulder_color": [
+            0.14,
+            0.13,
+            0.09
+          ],
+          "bank_color": [
+            0.11,
+            0.09,
+            0.07
+          ],
+          "grain": 0.5,
+          "grain_scale": 0.4
         }
       ]
     },
