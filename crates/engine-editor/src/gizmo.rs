@@ -346,7 +346,8 @@ mod tests {
         // ring, away from where the X and Z rings cross it. A far corner
         // must miss everything.
         let (u, v) = ring_basis(Vec3::Y);
-        let on_ring = project(view_projection, size, origin + (u + v) * radius * 0.7071).unwrap();
+        let diagonal = std::f32::consts::FRAC_1_SQRT_2;
+        let on_ring = project(view_projection, size, origin + (u + v) * radius * diagonal).unwrap();
         assert_eq!(
             hit_ring(view_projection, size, origin, radius, on_ring),
             Some(1)

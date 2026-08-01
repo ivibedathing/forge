@@ -251,8 +251,11 @@ mod tests {
 
     #[test]
     fn carries_doc_comments_into_the_schema() {
-        // Doc comments are the source for `docs/component-reference.md`
-        // (design doc §4), so they have to survive schema generation.
+        // Doc comments are what `engine list-components` publishes as each
+        // field's description, and what the editor generates its inspector
+        // labels from — so they have to survive schema generation. (Design
+        // doc §4 also sketches a `docs/component-reference.md` built from
+        // them; that file was never written.)
         let mesh = variant("Mesh");
         let description = mesh["description"]
             .as_str()
