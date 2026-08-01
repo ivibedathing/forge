@@ -75,7 +75,8 @@ struct RoadUniform {
     shoulder: vec4<f32>,
     // rgb = embankment colour, w = 1 when a start line is painted.
     bank: vec4<f32>,
-    // x = where that line is, in metres along the centerline; y, z, w unused.
+    // x = where that line is, in metres along the centerline; y = grain amount
+    // (0 = off), z = grain cell size in metres; w unused.
     start: vec4<f32>,
     // (start_v, end_v, side, stripe) per kerbed corner. `side` is +1 for the
     // driver's right — the inside of the turn, which only the plan-view
@@ -225,6 +226,33 @@ fn evaluate_point_light(
     return out;
 }
 
+/// A hash of one integer grain cell, in `[0, 1)`.
+///
+/// Integer arithmetic rather than the usual `fract(sin(dot(p, k)) * 43758.5)`:
+/// `sin` of a large argument is where two GPUs disagree first, and this repo's
+/// house rule is that a generator sitting under a baseline writes its sequence
+/// out rather than borrowing one whose precision it does not control (M19's
+/// forests, M29's meadows). Integer ops are exact on every backend.
+fn grain_hash(cell: vec2<f32>) -> f32 {
+    let i = vec2<u32>(bitcast<u32>(i32(cell.x)), bitcast<u32>(i32(cell.y)));
+    var h = i.x * 374761393u + i.y * 668265263u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h = h ^ (h >> 16u);
+    return f32(h) * (1.0 / 4294967296.0);
+}
+
+/// Smooth value noise over the road's own surface coordinates.
+fn grain_noise(p: vec2<f32>) -> f32 {
+    let cell = floor(p);
+    let f = p - cell;
+    let w = f * f * (3.0 - 2.0 * f);
+    let a = grain_hash(cell);
+    let b = grain_hash(cell + vec2<f32>(1.0, 0.0));
+    let c = grain_hash(cell + vec2<f32>(0.0, 1.0));
+    let d = grain_hash(cell + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+}
+
 /// What is painted at this point on the road: a colour and how much of the
 /// pixel it covers, plus how much of that is glossier than asphalt.
 struct Surface {
@@ -232,6 +260,10 @@ struct Surface {
     /// How marked this pixel is, 0..1 — paint and kerbs both. Drives the
     /// roughness blend, so markings catch the sun the way fresh paint does.
     marked: f32,
+    /// Grain's push on the roughness, and **exactly zero when grain is off**
+    /// (M40) — the fragment stage branches on that rather than adding it, so
+    /// the default path reaches the compiler as the arithmetic M23 shipped.
+    roughness_bias: f32,
 };
 
 fn road_surface(v: f32, u: f32) -> Surface {
@@ -247,6 +279,7 @@ fn road_surface(v: f32, u: f32) -> Surface {
 
     var out: Surface;
     out.marked = 0.0;
+    out.roughness_bias = 0.0;
 
     // The three surfaces, blended over a pixel rather than stepped, so the
     // asphalt edge does not crawl when the camera moves.
@@ -254,6 +287,28 @@ fn road_surface(v: f32, u: f32) -> Surface {
     let on_bank = smoothstep(outer - du, outer + du, across);
     out.albedo = mix(object.albedo_metallic.rgb, road.shoulder.rgb, on_shoulder);
     out.albedo = mix(out.albedo, road.bank.rgb, on_bank);
+
+    // Asphalt grain (M40), before any paint so a line stays a clean line —
+    // grain is the surface it is painted on, not something on top of it.
+    //
+    // The whole term is behind a branch rather than multiplied by an amount
+    // that happens to be zero. The four lighting lines below are the ones this
+    // repo pins byte for byte, and arithmetic added ahead of them can change
+    // how the compiler contracts them even when it is arithmetically inert —
+    // measured three separate times on `mesh.wgsl`. A uniform branch costs
+    // nothing and makes "grain off is M23" structural rather than numerical.
+    if road.start.y > 0.0 {
+        let cell = max(road.start.z, 1e-3);
+        let p = vec2<f32>(v, u) / cell;
+        // Two octaves: the coarse one is the aggregate, the fine one the chips.
+        let noise = grain_noise(p) * 0.65 + grain_noise(p * 2.7 + vec2<f32>(11.3, 5.1)) * 0.35;
+        let signed = noise - 0.5;
+        out.albedo = out.albedo * (1.0 + signed * road.start.y * 0.55);
+        // Rougher in the hollows, smoother on the polished aggregate. This is
+        // most of what stops a wide road reading as a painted plane when the
+        // sun is low.
+        out.roughness_bias = signed * road.start.y * 0.16;
+    }
 
     // Paint only reaches the asphalt and its immediate edge.
     let paintable = 1.0 - on_bank;
@@ -345,7 +400,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Paint and kerbs are glossier than the asphalt around them, which is most
     // of what makes fresh markings read as painted rather than as recoloured
     // road when the sun is low.
-    let roughness = max(mix(object.emissive_roughness.w, 0.55, painted.marked), 0.045);
+    var roughness = max(mix(object.emissive_roughness.w, 0.55, painted.marked), 0.045);
+    // Grain's push, applied only when there is grain — see `Surface`.
+    if painted.roughness_bias != 0.0 {
+        roughness = clamp(roughness + painted.roughness_bias, 0.045, 1.0);
+    }
 
     let n = normalize(in.normal);
     let v = normalize(frame.camera_pos.xyz - in.world_position);

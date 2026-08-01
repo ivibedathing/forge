@@ -24,6 +24,7 @@ scene's components with the defaults filled in.
 | [`HudPanel`](#hudpanel) | A screen-space container that lays its children out (M31). |
 | [`HudRect`](#hudrect) | A screen-space solid rectangle (M12): the primitive behind health bars, |
 | [`HudText`](#hudtext) | A screen-space text label (M12): lines of the built-in 8×8 pixel font, |
+| [`Junction`](#junction) | Where roads meet: the patch of asphalt a ribbon cannot be (M40). |
 | [`Material`](#material) | Surface appearance, in the metallic/roughness parameterization every |
 | [`Meadow`](#meadow) | Ground cover that grows, seeds and dies on a loop: grass, weeds, wildflowers |
 | [`Mesh`](#mesh) | Renderable geometry. |
@@ -376,6 +377,48 @@ always been.
 | `visible` | `boolean` | `true` | Drawn and hit-testable when true (the default). Hiding a panel hides its whole subtree — one boolean is how a menu opens and closes. |
 | `wrap` | `number` | `0` | Wrap width in pixels; `0` (the default) is no wrapping. Breaks on spaces — a word longer than `wrap` overflows rather than splitting, since a mid-word break in a fixed-width font reads as corruption. (at least 0) |
 
+## Junction
+
+Where roads meet: the patch of asphalt a ribbon cannot be (M40).
+
+A [`Road`] is swept along a curve, which is the wrong primitive for a
+crossroads — two ribbons crossing leave a hole. A junction is instead the
+area **bounded by the mouths of the roads that reach it**: each arm names a
+road and which end of it arrives, and the patch stretches to whatever those
+mouths turn out to be.
+
+The mouths are read off each road's finished surface — the same
+[`RoadSurface`](crate::road::RoadSurface) the renderer draws and physics
+builds its trimesh from — so a junction cannot disagree with the road it
+joins about where that road ended, how wide it was there, what height it
+reached, or how far it was banked. That is the `engine road-centerline` rule
+applied inside the engine: nothing re-derives a curve someone else built.
+
+**The junction does not trim its roads.** It would be the tidier result and
+it inverts the ownership every recipe here follows: a road's geometry would
+become a function of which junctions happen to name it, and `engine inspect`
+on the road would stop predicting the road. The author ends each road at the
+junction's mouth, and because the patch stretches, "roughly there" is enough
+— an arm stopping 2 m short simply makes the patch 2 m longer on that side.
+
+Like every other recipe, the entity owns its geometry and so carries **no**
+`Mesh` and no `Material` (`junction_with_mesh`), and a `Collider` with
+`"shape": "trimesh"` on it takes the patch.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `arms` | `object[]` | `[]` | The roads that meet here, in any order — the patch is built in rotational order about the mouths whatever order they are listed in. At least two. |
+| `bank_color` | `[number; 3]` | `[0.2, 0.17, 0.13]` | Linear RGB of the embankment. Each component `[0, 1]`. |
+| `color` | `[number; 3]` | `[0.09, 0.09, 0.1]` | Linear RGB of the asphalt. Each component `[0, 1]`. |
+| `corner_segments` | `integer` | `6` | How finely each of those corners is cut. `>= 1`. (at least 1, at most 64) |
+| `flare` | `number` | `1` | How far the corner between two arms reaches out toward where their edges would have crossed, `[0, 1]`.  `1` — the default — is the full flare, a quadratic Bézier through that intersection, which is the shape a real corner has. `0` is the straight chord from one mouth's corner to the next. (at least 0, at most 1) |
+| `grain` | `number` | `0` | How strongly the asphalt is grained, `[0, 1]` — [`Road::grain`] on a patch, so a junction and the roads reaching it can wear the same surface. (at least 0, at most 1) |
+| `grain_scale` | `number` | `0.35` | Size of one grain cell, in metres. `> 0`. (greater than 0) |
+| `roughness` | `number` | `0.92` | Surface roughness, `[0, 1]`. (at least 0, at most 1) |
+| `shoulder` | `number` | `1.5` | Shoulder around the patch, in metres — the same surface, for the same reason a road's is. `>= 0`. (at least 0) |
+| `shoulder_color` | `[number; 3]` | `[0.17, 0.2, 0.14]` | Linear RGB of the shoulder. Each component `[0, 1]`. |
+| `skirt` | `number` | `0.6` | How far the embankment drops below the shoulder's outer edge, in metres. `>= 0`. (at least 0) |
+
 ## Material
 
 Surface appearance, in the metallic/roughness parameterization every
@@ -652,11 +695,18 @@ other surface in the engine keeps them.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
+| `auto_bank` | `number` | `0` | Bank every corner by this many degrees at a radius of [`auto_bank_radius`](Self::auto_bank_radius), scaling as `1 / radius` for anything wider and capped here for anything tighter (M40). `0` — the default — leaves the road flat. `>= 0`.  **The engine picks the sign**, raising the outside of each turn, and that is the whole reason this field exists next to [`RoadPoint::bank`]. Which way a corner banks is a fact about the winding of the polygon it belongs to; deriving it per corner by hand is how a circuit ends up with one corner that throws the car off.  It is a shape knob, not a physical one. Banking a corner for a *speed* is `atan(v² / gR)` and wants a velocity a road cannot know — the answer for a kart and an F1 car differ by 20°. (at least 0) |
+| `auto_bank_radius` | `number` | `20` | The corner radius [`auto_bank`](Self::auto_bank) is quoted at, in metres. `> 0`. (greater than 0) |
 | `bank_color` | `[number; 3]` | `[0.2, 0.17, 0.13]` | Linear RGB of the embankment below the shoulder. Each component `[0, 1]`. |
 | `closed` | `boolean` | `false` | Join the last point back to the first. A closed road is a circuit: the polygon's exterior angles sum to one turn, so it shuts without a solver. |
 | `color` | `[number; 3]` | `[0.09, 0.09, 0.1]` | Linear RGB of the asphalt. Each component `[0, 1]`. |
+| `follow_blend` | `number` | `30` | How far either side of a [`pinned`](RoadPoint::pin_height) point its height correction fades out, in metres. `>= 0`. (at least 0) |
+| `follow_smoothing` | `number` | `12` | How far along the road the sampled ground is averaged, in metres. `>= 0`, and `0` reproduces the terrain exactly, bumps and all. (at least 0) |
+| `follow_terrain` | `string` | `null` | Name of a `Terrain` entity this road rides on (M40). Absent — the default — is a road whose heights are absolute, which is every road before M40.  With it set, each point's `y` becomes a **clearance above the ground** and the terrain is sampled at every centerline sample rather than only at the authored points, then smoothed over [`follow_smoothing`](Self::follow_smoothing) metres — terrain is noise, and a road that reproduces it is undrivable.  The road does **not** carve the terrain: a height field stays the one source of truth for where the ground is. Where the smoothed road passes below the real ground the ground pokes through it, and the answers are more clearance, a [`pinned`](RoadPoint::pin_height) point, or more smoothing. |
+| `grain` | `number` | `0` | How strongly the asphalt is grained, `[0, 1]`. `0` — the default — is the flat colour M23 shipped (M40).  A value-noise field in the road's own `(u, v)`, so it follows every curve and grade the way the markings do, perturbing albedo and roughness. Deliberately not a normal perturbation: grain that tilts the shading normal sparkles under a moving camera at exactly the frequencies a deterministic renderer should not be producing. (at least 0, at most 1) |
+| `grain_scale` | `number` | `0.35` | Size of one grain cell, in metres. `> 0`. (greater than 0) |
 | `markings` | `object` | — | What is painted on a road, and where.  Every marking is computed per pixel from the road's surface coordinates — `u`, metres from the centerline across the road, and `v`, metres along it — rather than built as geometry laid on the asphalt. That is what makes a line follow every curve and grade for free, keeps a dash the same length in metres through a hairpin as on a straight, and means paint can never z-fight: it is not a surface on a surface, it is the same pixel shaded differently. |
-| `points` | `object[]` | `[{"position": [0, 0, 0], "radius": 0}, {"position": [0, 0, -20], "radius": 0}]` | The centerline, corner by corner, in the order they are driven. At least two points; a closed road needs at least three. |
+| `points` | `object[]` | `2 entries` | The centerline, corner by corner, in the order they are driven. At least two points; a closed road needs at least three. |
 | `roughness` | `number` | `0.92` | Surface roughness, `[0, 1]`, meaning what `Material.roughness` means. Asphalt is nearly matte; wet asphalt is not. (at least 0, at most 1) |
 | `segment_angle` | `number` | `5` | Most degrees of arc one segment may cover through a corner. `>= 0.5`.  This is the resolution knob that matters: a corner cut every 5° is smooth to drive and to look at, and the cost is linear in the road's length rather than quadratic like a grid's. (at least 0.5) |
 | `segment_length` | `number` | `2` | Longest a straight segment may be before the road is cut again, in metres. `>= 0.25`. (at least 0.25) |

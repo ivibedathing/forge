@@ -88,7 +88,10 @@ pub(crate) fn rest_relative(
 ) -> Quat {
     let frame = |(joint, local): (usize, Mat4)| {
         let global = rest_globals.get(joint).copied().unwrap_or(Mat4::IDENTITY);
-        (global * local).to_scale_rotation_translation().1.normalize()
+        (global * local)
+            .to_scale_rotation_translation()
+            .1
+            .normalize()
     };
     frame(parent).inverse() * frame(child)
 }
@@ -130,7 +133,10 @@ pub(crate) fn joint_between(
             GenericJointBuilder::new(JointAxesMask::LOCKED_REVOLUTE_AXES)
                 .local_frame1(Pose::from_parts(anchor_parent, rest * to_axis))
                 .local_frame2(Pose::from_parts(anchor_child, to_axis))
-                .limits(JointAxis::AngX, [range[0].to_radians(), range[1].to_radians()])
+                .limits(
+                    JointAxis::AngX,
+                    [range[0].to_radians(), range[1].to_radians()],
+                )
                 .build()
         }
         None => {

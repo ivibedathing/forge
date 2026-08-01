@@ -14,6 +14,7 @@ pub mod daylight;
 pub mod error;
 pub mod formatter;
 pub mod input;
+pub mod junction;
 pub mod lineindex;
 pub mod locomotion;
 pub mod material;

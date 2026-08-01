@@ -2440,6 +2440,11 @@ pub struct RoadPoint {
     /// road *surface* height there; the profile between points is a monotone
     /// cubic through these, so the grade turns over smoothly and never
     /// overshoots an authored height.
+    ///
+    /// With [`Road::follow_terrain`] set, `y` means something different: it is
+    /// the **clearance above the sampled ground**, so `0` sits the road on the
+    /// terrain. [`pin_height`](Self::pin_height) turns it back into an absolute
+    /// height for one point.
     #[schemars(with = "[f32; 3]")]
     pub position: Vec3,
 
@@ -2455,6 +2460,44 @@ pub struct RoadPoint {
     /// thing a polygon cannot guarantee (`road_corner_does_not_fit`).
     #[schemars(range(min = 0.0))]
     pub radius: f32,
+
+    /// Width of the asphalt here, in metres, overriding the road's `width`
+    /// (M40). Absent — the default — is the road's own width, so a file that
+    /// never mentions this is the M23 road exactly. `> 0`.
+    ///
+    /// Interpolated along the centerline by the same monotone cubic the heights
+    /// use, so a road never bulges wider than the widest width authored on it.
+    /// **The whole cross-section scales, shoulder included**: `u` — signed
+    /// metres across the road — has to mean one thing at every `v` for the
+    /// shader to find the asphalt edge, so the widening is one factor on the
+    /// section rather than a metre value added to the asphalt alone. Paint
+    /// scales with it: a section at 1.5× width wears a 1.5× wider edge line.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub width: Option<f32>,
+
+    /// Roll of the cross-section here, in degrees, positive raising the
+    /// driver's **right** edge (M40).
+    ///
+    /// Absent falls through to [`Road::auto_bank`], which is the way to author
+    /// a circuit: auto-banking knows which way the road turns and so raises the
+    /// outside of every corner without the file carrying a sign that has to
+    /// agree with the winding of a polygon being edited beside it. Reach for an
+    /// explicit value for the cases auto-banking cannot know — a banked
+    /// straight, a corner deliberately flat.
+    pub bank: Option<f32>,
+
+    /// Read `position.y` as an absolute height even though the road follows a
+    /// terrain (M40) — a bridge deck, a level a junction has to meet.
+    ///
+    /// The pin is a *local* correction to the followed profile, faded out over
+    /// [`Road::follow_blend`] metres either side, so the road reaches this
+    /// height exactly and goes back to hugging the ground. Two pins closer
+    /// together than that blend pull on each other and neither is reached
+    /// exactly; validation warns (`road_pins_overlap`).
+    ///
+    /// Without `follow_terrain` every height is already absolute and this does
+    /// nothing.
+    pub pin_height: bool,
 }
 
 impl Default for RoadPoint {
@@ -2462,6 +2505,9 @@ impl Default for RoadPoint {
         Self {
             position: Vec3::ZERO,
             radius: 0.0,
+            width: None,
+            bank: None,
+            pin_height: false,
         }
     }
 }
@@ -2667,6 +2713,70 @@ pub struct Road {
     #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub bank_color: Vec3,
 
+    /// Bank every corner by this many degrees at a radius of
+    /// [`auto_bank_radius`](Self::auto_bank_radius), scaling as `1 / radius`
+    /// for anything wider and capped here for anything tighter (M40). `0` —
+    /// the default — leaves the road flat. `>= 0`.
+    ///
+    /// **The engine picks the sign**, raising the outside of each turn, and
+    /// that is the whole reason this field exists next to
+    /// [`RoadPoint::bank`]. Which way a corner banks is a fact about the
+    /// winding of the polygon it belongs to; deriving it per corner by hand is
+    /// how a circuit ends up with one corner that throws the car off.
+    ///
+    /// It is a shape knob, not a physical one. Banking a corner for a *speed*
+    /// is `atan(v² / gR)` and wants a velocity a road cannot know — the answer
+    /// for a kart and an F1 car differ by 20°.
+    #[schemars(range(min = 0.0))]
+    pub auto_bank: f32,
+
+    /// The corner radius [`auto_bank`](Self::auto_bank) is quoted at, in
+    /// metres. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub auto_bank_radius: f32,
+
+    /// Name of a `Terrain` entity this road rides on (M40). Absent — the
+    /// default — is a road whose heights are absolute, which is every road
+    /// before M40.
+    ///
+    /// With it set, each point's `y` becomes a **clearance above the ground**
+    /// and the terrain is sampled at every centerline sample rather than only
+    /// at the authored points, then smoothed over
+    /// [`follow_smoothing`](Self::follow_smoothing) metres — terrain is noise,
+    /// and a road that reproduces it is undrivable.
+    ///
+    /// The road does **not** carve the terrain: a height field stays the one
+    /// source of truth for where the ground is. Where the smoothed road passes
+    /// below the real ground the ground pokes through it, and the answers are
+    /// more clearance, a [`pinned`](RoadPoint::pin_height) point, or more
+    /// smoothing.
+    pub follow_terrain: Option<String>,
+
+    /// How far along the road the sampled ground is averaged, in metres.
+    /// `>= 0`, and `0` reproduces the terrain exactly, bumps and all.
+    #[schemars(range(min = 0.0))]
+    pub follow_smoothing: f32,
+
+    /// How far either side of a [`pinned`](RoadPoint::pin_height) point its
+    /// height correction fades out, in metres. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub follow_blend: f32,
+
+    /// How strongly the asphalt is grained, `[0, 1]`. `0` — the default — is
+    /// the flat colour M23 shipped (M40).
+    ///
+    /// A value-noise field in the road's own `(u, v)`, so it follows every
+    /// curve and grade the way the markings do, perturbing albedo and
+    /// roughness. Deliberately not a normal perturbation: grain that tilts the
+    /// shading normal sparkles under a moving camera at exactly the frequencies
+    /// a deterministic renderer should not be producing.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub grain: f32,
+
+    /// Size of one grain cell, in metres. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub grain_scale: f32,
+
     /// What is painted on it.
     pub markings: RoadMarkings,
 }
@@ -2682,11 +2792,11 @@ impl Default for Road {
             points: vec![
                 RoadPoint {
                     position: Vec3::ZERO,
-                    radius: 0.0,
+                    ..RoadPoint::default()
                 },
                 RoadPoint {
                     position: Vec3::new(0.0, 0.0, -20.0),
-                    radius: 0.0,
+                    ..RoadPoint::default()
                 },
             ],
             closed: false,
@@ -2699,7 +2809,148 @@ impl Default for Road {
             roughness: 0.92,
             shoulder_color: Vec3::new(0.17, 0.20, 0.14),
             bank_color: Vec3::new(0.20, 0.17, 0.13),
+            // Every M40 field is off or neutral here, which is what makes a
+            // pre-M40 scene generate pre-M40 vertices.
+            auto_bank: 0.0,
+            auto_bank_radius: 20.0,
+            follow_terrain: None,
+            follow_smoothing: 12.0,
+            follow_blend: 30.0,
+            grain: 0.0,
+            grain_scale: 0.35,
             markings: RoadMarkings::default(),
+        }
+    }
+}
+
+/// Which end of a road arrives at a [`Junction`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum JunctionEnd {
+    /// The road's first point.
+    Start,
+    /// The road's last point. A closed road has no free end, so an arm onto one
+    /// is a validation error.
+    End,
+}
+
+/// One road arriving at a [`Junction`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct JunctionArm {
+    /// Name of the entity carrying the `Road` that arrives here (invariant 4).
+    pub road: String,
+    /// Which end of it arrives.
+    pub end: JunctionEnd,
+}
+
+impl Default for JunctionArm {
+    fn default() -> Self {
+        Self {
+            road: String::new(),
+            end: JunctionEnd::End,
+        }
+    }
+}
+
+/// Where roads meet: the patch of asphalt a ribbon cannot be (M40).
+///
+/// A [`Road`] is swept along a curve, which is the wrong primitive for a
+/// crossroads — two ribbons crossing leave a hole. A junction is instead the
+/// area **bounded by the mouths of the roads that reach it**: each arm names a
+/// road and which end of it arrives, and the patch stretches to whatever those
+/// mouths turn out to be.
+///
+/// The mouths are read off each road's finished surface — the same
+/// [`RoadSurface`](crate::road::RoadSurface) the renderer draws and physics
+/// builds its trimesh from — so a junction cannot disagree with the road it
+/// joins about where that road ended, how wide it was there, what height it
+/// reached, or how far it was banked. That is the `engine road-centerline` rule
+/// applied inside the engine: nothing re-derives a curve someone else built.
+///
+/// **The junction does not trim its roads.** It would be the tidier result and
+/// it inverts the ownership every recipe here follows: a road's geometry would
+/// become a function of which junctions happen to name it, and `engine inspect`
+/// on the road would stop predicting the road. The author ends each road at the
+/// junction's mouth, and because the patch stretches, "roughly there" is enough
+/// — an arm stopping 2 m short simply makes the patch 2 m longer on that side.
+///
+/// Like every other recipe, the entity owns its geometry and so carries **no**
+/// `Mesh` and no `Material` (`junction_with_mesh`), and a `Collider` with
+/// `"shape": "trimesh"` on it takes the patch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Junction {
+    /// The roads that meet here, in any order — the patch is built in
+    /// rotational order about the mouths whatever order they are listed in. At
+    /// least two.
+    #[schemars(length(max = 16))]
+    pub arms: Vec<JunctionArm>,
+
+    /// How far the corner between two arms reaches out toward where their edges
+    /// would have crossed, `[0, 1]`.
+    ///
+    /// `1` — the default — is the full flare, a quadratic Bézier through that
+    /// intersection, which is the shape a real corner has. `0` is the straight
+    /// chord from one mouth's corner to the next.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub flare: f32,
+
+    /// How finely each of those corners is cut. `>= 1`.
+    #[schemars(range(min = 1, max = 64))]
+    pub corner_segments: u32,
+
+    /// Shoulder around the patch, in metres — the same surface, for the same
+    /// reason a road's is. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub shoulder: f32,
+
+    /// How far the embankment drops below the shoulder's outer edge, in metres.
+    /// `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub skirt: f32,
+
+    /// Linear RGB of the asphalt. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// Surface roughness, `[0, 1]`.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub roughness: f32,
+
+    /// Linear RGB of the shoulder. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub shoulder_color: Vec3,
+
+    /// Linear RGB of the embankment. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub bank_color: Vec3,
+
+    /// How strongly the asphalt is grained, `[0, 1]` — [`Road::grain`] on a
+    /// patch, so a junction and the roads reaching it can wear the same
+    /// surface.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub grain: f32,
+
+    /// Size of one grain cell, in metres. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub grain_scale: f32,
+}
+
+impl Default for Junction {
+    fn default() -> Self {
+        Self {
+            arms: Vec::new(),
+            flare: 1.0,
+            corner_segments: 6,
+            shoulder: 1.5,
+            skirt: 0.6,
+            color: Vec3::new(0.09, 0.09, 0.10),
+            roughness: 0.92,
+            shoulder_color: Vec3::new(0.17, 0.20, 0.14),
+            bank_color: Vec3::new(0.20, 0.17, 0.13),
+            grain: 0.0,
+            grain_scale: 0.35,
         }
     }
 }
@@ -3468,6 +3719,7 @@ components!(
     Cloud,
     Terrain,
     Road,
+    Junction,
     Meadow,
     FootPlant,
     SkinnedCollider,
@@ -3572,6 +3824,7 @@ mod tests {
                 "Cloud",
                 "Terrain",
                 "Road",
+                "Junction",
                 "Meadow",
                 "FootPlant",
                 "SkinnedCollider",

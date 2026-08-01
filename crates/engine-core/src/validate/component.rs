@@ -360,6 +360,95 @@ pub(super) fn check_component(
                     .field("markings"),
                 );
             }
+
+            // Pins closer together than the blend they fade over pull on each
+            // other, and neither height is reached exactly (M40). Silent, and
+            // visible only as a bridge deck that came out 30 cm low — so it is
+            // said out loud instead.
+            if road.follow_terrain.is_some() && road.follow_blend > 0.0 {
+                let pinned: Vec<usize> = road
+                    .points
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.pin_height)
+                    .map(|(i, _)| i)
+                    .collect();
+                for pair in pinned.windows(2) {
+                    let (a, b) = (&road.points[pair[0]], &road.points[pair[1]]);
+                    let gap = glam::Vec2::new(a.position.x, a.position.z)
+                        .distance(glam::Vec2::new(b.position.x, b.position.z));
+                    // Straight-line distance under-reads the arc between them,
+                    // so this only fires when they are genuinely close — the
+                    // direction a warning should err in.
+                    if gap < road.follow_blend {
+                        errors.push(
+                            cx.err(
+                                codes::ROAD_PINS_OVERLAP,
+                                format!(
+                                    "points {} and {} are both pinned and {gap:.1} m apart, \
+                                     inside this road's follow_blend of {:.1} m; each pin is \
+                                     a correction faded out over that distance, so two \
+                                     inside one blend pull on each other and neither height \
+                                     is reached exactly — move them apart or shorten \
+                                     follow_blend",
+                                    pair[0], pair[1], road.follow_blend,
+                                ),
+                                &format!("{component_path}/points/{}", pair[1]),
+                            )
+                            .entity(entity)
+                            .component("Road")
+                            .field("points")
+                            .warning(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // A junction's arms are checked against the scene in the junction pass,
+        // which is where the other entities are in view. What is checkable from
+        // the component alone is how many there are and whether two of them are
+        // the same end of the same road — which builds a patch with a zero-width
+        // wedge in it.
+        ComponentData::Junction(ref junction) => {
+            if junction.arms.len() < 2 {
+                errors.push(
+                    cx.err(
+                        codes::JUNCTION_TOO_FEW_ARMS,
+                        format!(
+                            "Junction has {} arm(s); a patch is bounded by the mouths of \
+                             the roads reaching it, so it needs at least 2",
+                            junction.arms.len()
+                        ),
+                        &format!("{component_path}/arms"),
+                    )
+                    .entity(entity)
+                    .component("Junction")
+                    .field("arms"),
+                );
+            }
+            for (index, arm) in junction.arms.iter().enumerate() {
+                if let Some(first) = junction.arms[..index]
+                    .iter()
+                    .position(|other| other.road == arm.road && other.end == arm.end)
+                {
+                    errors.push(
+                        cx.err(
+                            codes::JUNCTION_DUPLICATE_ARM,
+                            format!(
+                                "arms {first} and {index} both name the {:?} end of road \
+                                 {:?}; two arms at one mouth leave a zero-width wedge in \
+                                 the patch",
+                                arm.end, arm.road
+                            ),
+                            &format!("{component_path}/arms/{index}"),
+                        )
+                        .entity(entity)
+                        .component("Junction")
+                        .field("arms"),
+                    );
+                }
+            }
         }
 
         // The flat Collider struct keeps the file walkable; which fields each

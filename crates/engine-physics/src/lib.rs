@@ -18,8 +18,8 @@ use std::sync::Mutex;
 
 use engine_core::components::{
     BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent, Name,
-    Ragdoll as RagdollData, RigidBody as RigidBodyData, Road, SkinnedCollider,
-    Terrain as TerrainData, Transform, Wheel as WheelData,
+    Ragdoll as RagdollData, RigidBody as RigidBodyData, SkinnedCollider, Terrain as TerrainData,
+    Transform, Wheel as WheelData,
 };
 use engine_core::mesh::{MeshSource, PhysicsAssets};
 use engine_core::scene::PhysicsSettings;
@@ -308,9 +308,33 @@ impl PhysicsWorld {
                 .collect()
         };
 
+        // Every surface an entity *generates* — a Road's ribbon, a Junction's
+        // patch — built once here, by entity name, through the same functions
+        // the renderer's draw list goes through (M40). Before M40 a road could
+        // be regenerated from its own component inside `build_collider`; a road
+        // that follows a `Terrain` it names, and a junction bounded by the
+        // roads that reach it, both need the rest of the world in view.
+        let generated: HashMap<String, GeneratedSurface> = {
+            let mut surfaces = HashMap::new();
+            for item in engine_core::scene::road_items_of(world) {
+                surfaces.insert(
+                    item.entity.clone(),
+                    GeneratedSurface {
+                        kind: if item.junction.is_some() {
+                            "Junction"
+                        } else {
+                            "Road"
+                        },
+                        mesh: Arc::clone(&item.surface.mesh),
+                    },
+                );
+            }
+            surfaces
+        };
+
         // Deterministic build order: hecs iteration order is stable for a
         // freshly spawned world, and every simulate run spawns fresh.
-        for (entity, name, transform, body, collider, mesh, terrain, breakable, road) in world
+        for (entity, name, transform, body, collider, mesh, terrain, breakable) in world
             .query::<(
                 Entity,
                 &Name,
@@ -320,7 +344,6 @@ impl PhysicsWorld {
                 Option<&MeshComponent>,
                 Option<&TerrainData>,
                 Option<&Breakable>,
-                Option<&Road>,
             )>()
             .iter()
         {
@@ -385,7 +408,7 @@ impl PhysicsWorld {
                     &physics.name_of[&entity],
                     mesh.map(|m| m.asset.as_str()),
                     terrain,
-                    road,
+                    generated.get(&physics.name_of[&entity]),
                     meshes,
                     &layer_bits,
                     break_threshold.is_some(),
@@ -627,10 +650,9 @@ impl PhysicsWorld {
                     fit: part.fit.map(|_| skinned::Fit {
                         radius: part.radius.unwrap_or(0.0) * scale,
                         half_length: match part.shape {
-                            engine_core::components::ColliderShapeKind::Cuboid => part
-                                .half_extents
-                                .map(|h| h.y * scale)
-                                .unwrap_or_default(),
+                            engine_core::components::ColliderShapeKind::Cuboid => {
+                                part.half_extents.map(|h| h.y * scale).unwrap_or_default()
+                            }
                             _ => part.half_height.unwrap_or_default() * scale,
                         },
                         half_extents: part.half_extents.map(|h| h * scale),
@@ -956,7 +978,11 @@ impl PhysicsWorld {
         let kicks = std::mem::take(&mut self.queued_kicks);
         for (entity, part, impulse) in kicks {
             let Some(proxy) = self.proxies.iter().find(|proxy| {
-                proxy.part == part && self.name_of.get(&proxy.entity).is_some_and(|n| *n == entity)
+                proxy.part == part
+                    && self
+                        .name_of
+                        .get(&proxy.entity)
+                        .is_some_and(|n| *n == entity)
             }) else {
                 continue;
             };
@@ -1249,9 +1275,7 @@ impl PhysicsWorld {
             let proxy = &self.proxies[index];
             let Some(fit) = &proxy.fit else { continue };
             let shape = match fit.half_extents {
-                Some(half_extents) => {
-                    SharedShape::cuboid(half_extents.x, half, half_extents.z)
-                }
+                Some(half_extents) => SharedShape::cuboid(half_extents.x, half, half_extents.z),
                 None => SharedShape::capsule_y(half, fit.radius),
             };
             let proxy_body = proxy.body;
@@ -1285,7 +1309,8 @@ impl PhysicsWorld {
         if self.ragdolls[index].active {
             return;
         }
-        let (Some(rig), Ok(component)) = (self.rig_of.get(&entity), world.get::<&RagdollData>(entity))
+        let (Some(rig), Ok(component)) =
+            (self.rig_of.get(&entity), world.get::<&RagdollData>(entity))
         else {
             return;
         };
@@ -1316,7 +1341,10 @@ impl PhysicsWorld {
         let mut placement: Vec<Option<ragdoll::Placement>> = vec![None; parts.len()];
         for (slot, &part) in parts.iter().enumerate() {
             let proxy = &self.proxies[part];
-            let global = globals.get(proxy.joint).copied().unwrap_or(glam::Mat4::IDENTITY);
+            let global = globals
+                .get(proxy.joint)
+                .copied()
+                .unwrap_or(glam::Mat4::IDENTITY);
             let pose = skinned::part_pose(model, global, proxy.local);
             placement[slot] = Some(ragdoll::Placement {
                 translation: pose.translation,
@@ -1365,7 +1393,8 @@ impl PhysicsWorld {
         let overrides = |joint: &str| component.joints.iter().find(|o| o.joint == joint);
         let mut joints = Vec::new();
         for (slot, &part) in parts.iter().enumerate() {
-            let Some(parent_slot) = self.ragdolls[index].parents.get(slot).copied().flatten() else {
+            let Some(parent_slot) = self.ragdolls[index].parents.get(slot).copied().flatten()
+            else {
                 continue;
             };
             let (Some(child), Some(parent)) = (
@@ -1378,22 +1407,32 @@ impl PhysicsWorld {
             // Anchored at the child *joint's* origin — the anatomical joint,
             // not either capsule's centre — so an elbow hinges where an elbow
             // is.
-            let anchor = (model * globals.get(child.joint).copied().unwrap_or(glam::Mat4::IDENTITY))
-                .w_axis
-                .truncate();
+            let anchor = (model
+                * globals
+                    .get(child.joint)
+                    .copied()
+                    .unwrap_or(glam::Mat4::IDENTITY))
+            .w_axis
+            .truncate();
             let name = skin.joints[child.joint].name.clone();
             let joint = ragdoll::joint_between(
                 parent.frame(anchor),
                 child.frame(anchor),
-                ragdoll::rest_relative(&rest, (parent.joint, parent.local), (child.joint, child.local)),
+                ragdoll::rest_relative(
+                    &rest,
+                    (parent.joint, parent.local),
+                    (child.joint, child.local),
+                ),
                 overrides(&name),
                 component.limit,
             );
             let parent_body = self.proxies[parts[parent_slot]].body;
-            joints.push(
-                self.impulse_joints
-                    .insert(parent_body, self.proxies[part].body, joint, true),
-            );
+            joints.push(self.impulse_joints.insert(
+                parent_body,
+                self.proxies[part].body,
+                joint,
+                true,
+            ));
         }
 
         // ── The character's own body steps aside ──────────────────────
@@ -1404,7 +1443,9 @@ impl PhysicsWorld {
         let own: Vec<ColliderHandle> = self
             .entity_of_collider
             .iter()
-            .filter(|(handle, &owner)| owner == entity && !self.part_of_collider.contains_key(*handle))
+            .filter(|(handle, &owner)| {
+                owner == entity && !self.part_of_collider.contains_key(*handle)
+            })
             .map(|(handle, _)| *handle)
             .collect();
         for handle in own {
@@ -1451,7 +1492,8 @@ impl PhysicsWorld {
             // The new model matrix first: every joint global is derived through
             // its inverse, so solving before the root has moved would put the
             // whole skeleton one step behind the body it hangs on.
-            let root_body = self.proxies[self.ragdolls[index].parts[self.ragdolls[index].root]].body;
+            let root_body =
+                self.proxies[self.ragdolls[index].parts[self.ragdolls[index].root]].body;
             let Some(root) = self.bodies.get(root_body) else {
                 continue;
             };
@@ -1665,10 +1707,18 @@ impl PhysicsWorld {
 ///
 /// Nine parameters, and they are nine independent lookups the caller has
 /// already done — the component, its transform, and the four places a shape's
-/// geometry can come from (its own asset, the entity's Mesh, a Terrain, a
-/// Road). Bundling them into a struct would build that struct per collider at
-/// scene load and hide which sources a given shape actually consults, which is
-/// the whole subtlety of this function.
+/// geometry can come from (its own asset, the entity's Mesh, a Terrain, or a
+/// surface the entity generates). Bundling them into a struct would build that
+/// struct per collider at scene load and hide which sources a given shape
+/// actually consults, which is the whole subtlety of this function.
+/// A surface an entity generates rather than loads, resolved before the
+/// collider loop — see `build_collider`'s `generated` parameter.
+struct GeneratedSurface {
+    /// What generated it, for the error message naming where geometry failed.
+    kind: &'static str,
+    mesh: Arc<engine_core::mesh::MeshData>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_collider(
     collider: &ColliderData,
@@ -1678,7 +1728,14 @@ fn build_collider(
     terrain: Option<&TerrainData>,
     // `road` is the entity's Road when it has one: a mesh-shaped collider with
     // no asset, no Mesh and no Terrain takes the road's generated ribbon (M23).
-    road: Option<&Road>,
+    // The surface this entity *generates*, when it has one: a `Road`'s ribbon
+    // or a `Junction`'s patch, already built. Pre-resolved rather than rebuilt
+    // here because since M40 both are functions of more than their own
+    // component — a road may follow a `Terrain` it names, and a junction is
+    // bounded by the roads that reach it — and physics reading the same
+    // `Arc` the renderer draws is what keeps the surface driven and the
+    // surface drawn from drifting apart.
+    generated: Option<&GeneratedSurface>,
     meshes: &dyn MeshSource,
     layer_bits: &HashMap<String, Group>,
     force_events: bool,
@@ -1718,31 +1775,38 @@ fn build_collider(
             // collidable without a mesh file duplicating what the renderer
             // already draws — and, for a road, they are what makes the surface
             // driven and the surface drawn impossible to author apart.
-            let (asset, mesh, from_road) =
-                match (collider.asset.as_deref().or(entity_mesh), terrain, road) {
-                    (Some(asset), _, _) => (
-                        asset.to_string(),
-                        meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
-                        false,
+            let (asset, mesh, from_road) = match (
+                collider.asset.as_deref().or(entity_mesh),
+                terrain,
+                generated,
+            ) {
+                (Some(asset), _, _) => (
+                    asset.to_string(),
+                    meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
+                    false,
+                ),
+                (None, Some(terrain), _) => (
+                    "the entity's Terrain".to_string(),
+                    engine_core::terrain::surface_grid(
+                        terrain,
+                        glam::Vec2::new(transform.position.x, transform.position.z),
+                        glam::Vec2::new(scale.x, scale.z),
                     ),
-                    (None, Some(terrain), _) => (
-                        "the entity's Terrain".to_string(),
-                        engine_core::terrain::surface_grid(
-                            terrain,
-                            glam::Vec2::new(transform.position.x, transform.position.z),
-                            glam::Vec2::new(scale.x, scale.z),
-                        ),
-                        false,
-                    ),
-                    (None, None, Some(road)) => (
-                        format!("the Road on {entity:?}"),
-                        engine_core::road::surface(road).mesh.clone(),
-                        true,
-                    ),
-                    (None, None, None) => {
-                        return Err(shape_bug(entity, "mesh collider with no asset in reach"))
-                    }
-                };
+                    false,
+                ),
+                (None, None, Some(generated)) => (
+                    format!("the {} on {entity:?}", generated.kind),
+                    std::sync::Arc::clone(&generated.mesh),
+                    // A junction's patch is road-generated geometry too:
+                    // the same coplanar-triangle contact bug is waiting on
+                    // it, and a car crossing a junction is exactly the case
+                    // that finds it.
+                    true,
+                ),
+                (None, None, None) => {
+                    return Err(shape_bug(entity, "mesh collider with no asset in reach"))
+                }
+            };
             let vertices: Vec<Vec3> = mesh
                 .positions
                 .iter()

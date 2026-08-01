@@ -386,6 +386,38 @@
         ],
         "type": "object"
       },
+      "JunctionArm": {
+        "additionalProperties": false,
+        "description": "One road arriving at a [`Junction`].",
+        "properties": {
+          "end": {
+            "$ref": "#/$defs/JunctionEnd",
+            "default": "end",
+            "description": "Which end of it arrives."
+          },
+          "road": {
+            "default": "",
+            "description": "Name of the entity carrying the `Road` that arrives here (invariant 4).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "JunctionEnd": {
+        "description": "Which end of a road arrives at a [`Junction`].",
+        "oneOf": [
+          {
+            "const": "start",
+            "description": "The road's first point.",
+            "type": "string"
+          },
+          {
+            "const": "end",
+            "description": "The road's last point. A closed road has no free end, so an arm onto one\nis a validation error.",
+            "type": "string"
+          }
+        ]
+      },
       "ParticleBlend": {
         "description": "How a particle's color combines with what is already on screen.\n\nNOTE: leave these variants undocumented. A doc comment on an enum *variant*\nmakes schemars emit oneOf/const instead of a flat `\"enum\": [...]`, which\nblinds the validation walk's closed-vocabulary check — the same trap\n[`ColliderShapeKind`] carries a note about.",
         "enum": [
@@ -593,13 +625,27 @@
         "additionalProperties": false,
         "description": "One authored point on a road's centerline.\n\nThe road is a **polygon with corner radii**, not a spline: a closed polygon\nreturns to its own first vertex and its exterior angles sum to exactly one\nturn, so position and heading close without solving anything. Nothing here\ncarries a heading, deliberately — a heading is derived, and a stored one can\nbe edited into disagreeing with the points on either side of it.",
         "properties": {
+          "bank": {
+            "default": null,
+            "description": "Roll of the cross-section here, in degrees, positive raising the\ndriver's **right** edge (M40).\n\nAbsent falls through to [`Road::auto_bank`], which is the way to author\na circuit: auto-banking knows which way the road turns and so raises the\noutside of every corner without the file carrying a sign that has to\nagree with the winding of a polygon being edited beside it. Reach for an\nexplicit value for the cases auto-banking cannot know — a banked\nstraight, a corner deliberately flat.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pin_height": {
+            "default": false,
+            "description": "Read `position.y` as an absolute height even though the road follows a\nterrain (M40) — a bridge deck, a level a junction has to meet.\n\nThe pin is a *local* correction to the followed profile, faded out over\n[`Road::follow_blend`] metres either side, so the road reaches this\nheight exactly and goes back to hugging the ground. Two pins closer\ntogether than that blend pull on each other and neither is reached\nexactly; validation warns (`road_pins_overlap`).\n\nWithout `follow_terrain` every height is already absolute and this does\nnothing.",
+            "type": "boolean"
+          },
           "position": {
             "default": [
               0.0,
               0.0,
               0.0
             ],
-            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.",
+            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.\n\nWith [`Road::follow_terrain`] set, `y` means something different: it is\nthe **clearance above the sampled ground**, so `0` sits the road on the\nterrain. [`pin_height`](Self::pin_height) turns it back into an absolute\nheight for one point.",
             "items": {
               "format": "float",
               "type": "number"
@@ -614,6 +660,16 @@
             "format": "float",
             "minimum": 0.0,
             "type": "number"
+          },
+          "width": {
+            "default": null,
+            "description": "Width of the asphalt here, in metres, overriding the road's `width`\n(M40). Absent — the default — is the road's own width, so a file that\nnever mentions this is the M23 road exactly. `> 0`.\n\nInterpolated along the centerline by the same monotone cubic the heights\nuse, so a road never bulges wider than the widest width authored on it.\n**The whole cross-section scales, shoulder included**: `u` — signed\nmetres across the road — has to mean one thing at every `v` for the\nshader to find the asphalt edge, so the widening is one factor on the\nsection rather than a metre value added to the asphalt alone. Paint\nscales with it: a section at 1.5× width wears a 1.5× wider edge line.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -2918,6 +2974,20 @@
         "additionalProperties": false,
         "description": "A road: a circuit, a street, a mountain pass.\n\nThe entity owns its surface geometry — one continuous ribbon generated from\nthe centerline — so a `Road` entity carries **no** `Mesh` and no `Material`\n(`road_with_mesh`), the same rule [`Water`] follows and for the same reason.\n\nAsphalt, shoulders and the embankment skirt are all the **same** triangles.\nThat is not a saving, it is the point: road and shoulder as two surfaces at\nslightly different heights build a ledge along the asphalt edge, and a wheel\nthat drops off it wedges against the step and stops the car dead. There is\nno seam between segments either, because consecutive cross-sections share\ntheir vertices.\n\nPhysics reads the same mesh: a `Collider` with `\"shape\": \"trimesh\"` on a\nroad entity needs no `asset` and no `Mesh`, because the road is the\ngeometry. Friction and collision layers stay on the `Collider`, where every\nother surface in the engine keeps them.",
         "properties": {
+          "auto_bank": {
+            "default": 0.0,
+            "description": "Bank every corner by this many degrees at a radius of\n[`auto_bank_radius`](Self::auto_bank_radius), scaling as `1 / radius`\nfor anything wider and capped here for anything tighter (M40). `0` —\nthe default — leaves the road flat. `>= 0`.\n\n**The engine picks the sign**, raising the outside of each turn, and\nthat is the whole reason this field exists next to\n[`RoadPoint::bank`]. Which way a corner banks is a fact about the\nwinding of the polygon it belongs to; deriving it per corner by hand is\nhow a circuit ends up with one corner that throws the car off.\n\nIt is a shape knob, not a physical one. Banking a corner for a *speed*\nis `atan(v² / gR)` and wants a velocity a road cannot know — the answer\nfor a kart and an F1 car differ by 20°.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "auto_bank_radius": {
+            "default": 20.0,
+            "description": "The corner radius [`auto_bank`](Self::auto_bank) is quoted at, in\nmetres. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
           "bank_color": {
             "default": [
               0.20000000298023224,
@@ -2957,6 +3027,43 @@
             "minItems": 3,
             "type": "array"
           },
+          "follow_blend": {
+            "default": 30.0,
+            "description": "How far either side of a [`pinned`](RoadPoint::pin_height) point its\nheight correction fades out, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "follow_smoothing": {
+            "default": 12.0,
+            "description": "How far along the road the sampled ground is averaged, in metres.\n`>= 0`, and `0` reproduces the terrain exactly, bumps and all.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "follow_terrain": {
+            "default": null,
+            "description": "Name of a `Terrain` entity this road rides on (M40). Absent — the\ndefault — is a road whose heights are absolute, which is every road\nbefore M40.\n\nWith it set, each point's `y` becomes a **clearance above the ground**\nand the terrain is sampled at every centerline sample rather than only\nat the authored points, then smoothed over\n[`follow_smoothing`](Self::follow_smoothing) metres — terrain is noise,\nand a road that reproduces it is undrivable.\n\nThe road does **not** carve the terrain: a height field stays the one\nsource of truth for where the ground is. Where the smoothed road passes\nbelow the real ground the ground pokes through it, and the answers are\nmore clearance, a [`pinned`](RoadPoint::pin_height) point, or more\nsmoothing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grain": {
+            "default": 0.0,
+            "description": "How strongly the asphalt is grained, `[0, 1]`. `0` — the default — is\nthe flat colour M23 shipped (M40).\n\nA value-noise field in the road's own `(u, v)`, so it follows every\ncurve and grade the way the markings do, perturbing albedo and\nroughness. Deliberately not a normal perturbation: grain that tilts the\nshading normal sparkles under a moving camera at exactly the frequencies\na deterministic renderer should not be producing.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "grain_scale": {
+            "default": 0.3499999940395355,
+            "description": "Size of one grain cell, in metres. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
           "markings": {
             "$ref": "#/$defs/RoadMarkings",
             "default": {
@@ -2987,20 +3094,26 @@
           "points": {
             "default": [
               {
+                "bank": null,
+                "pin_height": false,
                 "position": [
                   0.0,
                   0.0,
                   0.0
                 ],
-                "radius": 0.0
+                "radius": 0.0,
+                "width": null
               },
               {
+                "bank": null,
+                "pin_height": false,
                 "position": [
                   0.0,
                   0.0,
                   -20.0
                 ],
-                "radius": 0.0
+                "radius": 0.0,
+                "width": null
               }
             ],
             "description": "The centerline, corner by corner, in the order they are driven. At\nleast two points; a closed road needs at least three.",
@@ -3073,6 +3186,133 @@
             "exclusiveMinimum": 0.0,
             "format": "float",
             "type": "number"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Where roads meet: the patch of asphalt a ribbon cannot be (M40).\n\nA [`Road`] is swept along a curve, which is the wrong primitive for a\ncrossroads — two ribbons crossing leave a hole. A junction is instead the\narea **bounded by the mouths of the roads that reach it**: each arm names a\nroad and which end of it arrives, and the patch stretches to whatever those\nmouths turn out to be.\n\nThe mouths are read off each road's finished surface — the same\n[`RoadSurface`](crate::road::RoadSurface) the renderer draws and physics\nbuilds its trimesh from — so a junction cannot disagree with the road it\njoins about where that road ended, how wide it was there, what height it\nreached, or how far it was banked. That is the `engine road-centerline` rule\napplied inside the engine: nothing re-derives a curve someone else built.\n\n**The junction does not trim its roads.** It would be the tidier result and\nit inverts the ownership every recipe here follows: a road's geometry would\nbecome a function of which junctions happen to name it, and `engine inspect`\non the road would stop predicting the road. The author ends each road at the\njunction's mouth, and because the patch stretches, \"roughly there\" is enough\n— an arm stopping 2 m short simply makes the patch 2 m longer on that side.\n\nLike every other recipe, the entity owns its geometry and so carries **no**\n`Mesh` and no `Material` (`junction_with_mesh`), and a `Collider` with\n`\"shape\": \"trimesh\"` on it takes the patch.",
+        "properties": {
+          "arms": {
+            "default": [],
+            "description": "The roads that meet here, in any order — the patch is built in\nrotational order about the mouths whatever order they are listed in. At\nleast two.",
+            "items": {
+              "$ref": "#/$defs/JunctionArm"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "bank_color": {
+            "default": [
+              0.20000000298023224,
+              0.17000000178813934,
+              0.12999999523162842
+            ],
+            "description": "Linear RGB of the embankment. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "color": {
+            "default": [
+              0.09000000357627869,
+              0.09000000357627869,
+              0.10000000149011612
+            ],
+            "description": "Linear RGB of the asphalt. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "corner_segments": {
+            "default": 6,
+            "description": "How finely each of those corners is cut. `>= 1`.",
+            "format": "uint32",
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "flare": {
+            "default": 1.0,
+            "description": "How far the corner between two arms reaches out toward where their edges\nwould have crossed, `[0, 1]`.\n\n`1` — the default — is the full flare, a quadratic Bézier through that\nintersection, which is the shape a real corner has. `0` is the straight\nchord from one mouth's corner to the next.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "grain": {
+            "default": 0.0,
+            "description": "How strongly the asphalt is grained, `[0, 1]` — [`Road::grain`] on a\npatch, so a junction and the roads reaching it can wear the same\nsurface.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "grain_scale": {
+            "default": 0.3499999940395355,
+            "description": "Size of one grain cell, in metres. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "roughness": {
+            "default": 0.9200000166893005,
+            "description": "Surface roughness, `[0, 1]`.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "shoulder": {
+            "default": 1.5,
+            "description": "Shoulder around the patch, in metres — the same surface, for the same\nreason a road's is. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "shoulder_color": {
+            "default": [
+              0.17000000178813934,
+              0.20000000298023224,
+              0.14000000059604645
+            ],
+            "description": "Linear RGB of the shoulder. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "skirt": {
+            "default": 0.6000000238418579,
+            "description": "How far the embankment drops below the shoulder's outer edge, in metres.\n`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": {
+            "const": "Junction",
+            "type": "string"
           }
         },
         "required": [
@@ -3554,6 +3794,7 @@
     "Cloud",
     "Terrain",
     "Road",
+    "Junction",
     "Meadow",
     "FootPlant",
     "SkinnedCollider",
@@ -5863,6 +6104,20 @@
             "additionalProperties": false,
             "description": "A road: a circuit, a street, a mountain pass.\n\nThe entity owns its surface geometry — one continuous ribbon generated from\nthe centerline — so a `Road` entity carries **no** `Mesh` and no `Material`\n(`road_with_mesh`), the same rule [`Water`] follows and for the same reason.\n\nAsphalt, shoulders and the embankment skirt are all the **same** triangles.\nThat is not a saving, it is the point: road and shoulder as two surfaces at\nslightly different heights build a ledge along the asphalt edge, and a wheel\nthat drops off it wedges against the step and stops the car dead. There is\nno seam between segments either, because consecutive cross-sections share\ntheir vertices.\n\nPhysics reads the same mesh: a `Collider` with `\"shape\": \"trimesh\"` on a\nroad entity needs no `asset` and no `Mesh`, because the road is the\ngeometry. Friction and collision layers stay on the `Collider`, where every\nother surface in the engine keeps them.",
             "properties": {
+              "auto_bank": {
+                "default": 0.0,
+                "description": "Bank every corner by this many degrees at a radius of\n[`auto_bank_radius`](Self::auto_bank_radius), scaling as `1 / radius`\nfor anything wider and capped here for anything tighter (M40). `0` —\nthe default — leaves the road flat. `>= 0`.\n\n**The engine picks the sign**, raising the outside of each turn, and\nthat is the whole reason this field exists next to\n[`RoadPoint::bank`]. Which way a corner banks is a fact about the\nwinding of the polygon it belongs to; deriving it per corner by hand is\nhow a circuit ends up with one corner that throws the car off.\n\nIt is a shape knob, not a physical one. Banking a corner for a *speed*\nis `atan(v² / gR)` and wants a velocity a road cannot know — the answer\nfor a kart and an F1 car differ by 20°.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "auto_bank_radius": {
+                "default": 20.0,
+                "description": "The corner radius [`auto_bank`](Self::auto_bank) is quoted at, in\nmetres. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
               "bank_color": {
                 "default": [
                   0.20000000298023224,
@@ -5902,6 +6157,43 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "follow_blend": {
+                "default": 30.0,
+                "description": "How far either side of a [`pinned`](RoadPoint::pin_height) point its\nheight correction fades out, in metres. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "follow_smoothing": {
+                "default": 12.0,
+                "description": "How far along the road the sampled ground is averaged, in metres.\n`>= 0`, and `0` reproduces the terrain exactly, bumps and all.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "follow_terrain": {
+                "default": null,
+                "description": "Name of a `Terrain` entity this road rides on (M40). Absent — the\ndefault — is a road whose heights are absolute, which is every road\nbefore M40.\n\nWith it set, each point's `y` becomes a **clearance above the ground**\nand the terrain is sampled at every centerline sample rather than only\nat the authored points, then smoothed over\n[`follow_smoothing`](Self::follow_smoothing) metres — terrain is noise,\nand a road that reproduces it is undrivable.\n\nThe road does **not** carve the terrain: a height field stays the one\nsource of truth for where the ground is. Where the smoothed road passes\nbelow the real ground the ground pokes through it, and the answers are\nmore clearance, a [`pinned`](RoadPoint::pin_height) point, or more\nsmoothing.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "grain": {
+                "default": 0.0,
+                "description": "How strongly the asphalt is grained, `[0, 1]`. `0` — the default — is\nthe flat colour M23 shipped (M40).\n\nA value-noise field in the road's own `(u, v)`, so it follows every\ncurve and grade the way the markings do, perturbing albedo and\nroughness. Deliberately not a normal perturbation: grain that tilts the\nshading normal sparkles under a moving camera at exactly the frequencies\na deterministic renderer should not be producing.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "grain_scale": {
+                "default": 0.3499999940395355,
+                "description": "Size of one grain cell, in metres. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
               "markings": {
                 "$ref": "#/$defs/RoadMarkings",
                 "default": {
@@ -5932,20 +6224,26 @@
               "points": {
                 "default": [
                   {
+                    "bank": null,
+                    "pin_height": false,
                     "position": [
                       0.0,
                       0.0,
                       0.0
                     ],
-                    "radius": 0.0
+                    "radius": 0.0,
+                    "width": null
                   },
                   {
+                    "bank": null,
+                    "pin_height": false,
                     "position": [
                       0.0,
                       0.0,
                       -20.0
                     ],
-                    "radius": 0.0
+                    "radius": 0.0,
+                    "width": null
                   }
                 ],
                 "description": "The centerline, corner by corner, in the order they are driven. At\nleast two points; a closed road needs at least three.",
@@ -6018,6 +6316,133 @@
                 "exclusiveMinimum": 0.0,
                 "format": "float",
                 "type": "number"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Where roads meet: the patch of asphalt a ribbon cannot be (M40).\n\nA [`Road`] is swept along a curve, which is the wrong primitive for a\ncrossroads — two ribbons crossing leave a hole. A junction is instead the\narea **bounded by the mouths of the roads that reach it**: each arm names a\nroad and which end of it arrives, and the patch stretches to whatever those\nmouths turn out to be.\n\nThe mouths are read off each road's finished surface — the same\n[`RoadSurface`](crate::road::RoadSurface) the renderer draws and physics\nbuilds its trimesh from — so a junction cannot disagree with the road it\njoins about where that road ended, how wide it was there, what height it\nreached, or how far it was banked. That is the `engine road-centerline` rule\napplied inside the engine: nothing re-derives a curve someone else built.\n\n**The junction does not trim its roads.** It would be the tidier result and\nit inverts the ownership every recipe here follows: a road's geometry would\nbecome a function of which junctions happen to name it, and `engine inspect`\non the road would stop predicting the road. The author ends each road at the\njunction's mouth, and because the patch stretches, \"roughly there\" is enough\n— an arm stopping 2 m short simply makes the patch 2 m longer on that side.\n\nLike every other recipe, the entity owns its geometry and so carries **no**\n`Mesh` and no `Material` (`junction_with_mesh`), and a `Collider` with\n`\"shape\": \"trimesh\"` on it takes the patch.",
+            "properties": {
+              "arms": {
+                "default": [],
+                "description": "The roads that meet here, in any order — the patch is built in\nrotational order about the mouths whatever order they are listed in. At\nleast two.",
+                "items": {
+                  "$ref": "#/$defs/JunctionArm"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "bank_color": {
+                "default": [
+                  0.20000000298023224,
+                  0.17000000178813934,
+                  0.12999999523162842
+                ],
+                "description": "Linear RGB of the embankment. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "color": {
+                "default": [
+                  0.09000000357627869,
+                  0.09000000357627869,
+                  0.10000000149011612
+                ],
+                "description": "Linear RGB of the asphalt. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "corner_segments": {
+                "default": 6,
+                "description": "How finely each of those corners is cut. `>= 1`.",
+                "format": "uint32",
+                "maximum": 64,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "flare": {
+                "default": 1.0,
+                "description": "How far the corner between two arms reaches out toward where their edges\nwould have crossed, `[0, 1]`.\n\n`1` — the default — is the full flare, a quadratic Bézier through that\nintersection, which is the shape a real corner has. `0` is the straight\nchord from one mouth's corner to the next.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "grain": {
+                "default": 0.0,
+                "description": "How strongly the asphalt is grained, `[0, 1]` — [`Road::grain`] on a\npatch, so a junction and the roads reaching it can wear the same\nsurface.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "grain_scale": {
+                "default": 0.3499999940395355,
+                "description": "Size of one grain cell, in metres. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "roughness": {
+                "default": 0.9200000166893005,
+                "description": "Surface roughness, `[0, 1]`.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "shoulder": {
+                "default": 1.5,
+                "description": "Shoulder around the patch, in metres — the same surface, for the same\nreason a road's is. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "shoulder_color": {
+                "default": [
+                  0.17000000178813934,
+                  0.20000000298023224,
+                  0.14000000059604645
+                ],
+                "description": "Linear RGB of the shoulder. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "skirt": {
+                "default": 0.6000000238418579,
+                "description": "How far the embankment drops below the shoulder's outer edge, in metres.\n`>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "type": {
+                "const": "Junction",
+                "type": "string"
               }
             },
             "required": [
@@ -7024,6 +7449,38 @@
         ],
         "type": "object"
       },
+      "JunctionArm": {
+        "additionalProperties": false,
+        "description": "One road arriving at a [`Junction`].",
+        "properties": {
+          "end": {
+            "$ref": "#/$defs/JunctionEnd",
+            "default": "end",
+            "description": "Which end of it arrives."
+          },
+          "road": {
+            "default": "",
+            "description": "Name of the entity carrying the `Road` that arrives here (invariant 4).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "JunctionEnd": {
+        "description": "Which end of a road arrives at a [`Junction`].",
+        "oneOf": [
+          {
+            "const": "start",
+            "description": "The road's first point.",
+            "type": "string"
+          },
+          {
+            "const": "end",
+            "description": "The road's last point. A closed road has no free end, so an arm onto one\nis a validation error.",
+            "type": "string"
+          }
+        ]
+      },
       "ParticleBlend": {
         "description": "How a particle's color combines with what is already on screen.\n\nNOTE: leave these variants undocumented. A doc comment on an enum *variant*\nmakes schemars emit oneOf/const instead of a flat `\"enum\": [...]`, which\nblinds the validation walk's closed-vocabulary check — the same trap\n[`ColliderShapeKind`] carries a note about.",
         "enum": [
@@ -7259,13 +7716,27 @@
         "additionalProperties": false,
         "description": "One authored point on a road's centerline.\n\nThe road is a **polygon with corner radii**, not a spline: a closed polygon\nreturns to its own first vertex and its exterior angles sum to exactly one\nturn, so position and heading close without solving anything. Nothing here\ncarries a heading, deliberately — a heading is derived, and a stored one can\nbe edited into disagreeing with the points on either side of it.",
         "properties": {
+          "bank": {
+            "default": null,
+            "description": "Roll of the cross-section here, in degrees, positive raising the\ndriver's **right** edge (M40).\n\nAbsent falls through to [`Road::auto_bank`], which is the way to author\na circuit: auto-banking knows which way the road turns and so raises the\noutside of every corner without the file carrying a sign that has to\nagree with the winding of a polygon being edited beside it. Reach for an\nexplicit value for the cases auto-banking cannot know — a banked\nstraight, a corner deliberately flat.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pin_height": {
+            "default": false,
+            "description": "Read `position.y` as an absolute height even though the road follows a\nterrain (M40) — a bridge deck, a level a junction has to meet.\n\nThe pin is a *local* correction to the followed profile, faded out over\n[`Road::follow_blend`] metres either side, so the road reaches this\nheight exactly and goes back to hugging the ground. Two pins closer\ntogether than that blend pull on each other and neither is reached\nexactly; validation warns (`road_pins_overlap`).\n\nWithout `follow_terrain` every height is already absolute and this does\nnothing.",
+            "type": "boolean"
+          },
           "position": {
             "default": [
               0.0,
               0.0,
               0.0
             ],
-            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.",
+            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.\n\nWith [`Road::follow_terrain`] set, `y` means something different: it is\nthe **clearance above the sampled ground**, so `0` sits the road on the\nterrain. [`pin_height`](Self::pin_height) turns it back into an absolute\nheight for one point.",
             "items": {
               "format": "float",
               "type": "number"
@@ -7280,6 +7751,16 @@
             "format": "float",
             "minimum": 0.0,
             "type": "number"
+          },
+          "width": {
+            "default": null,
+            "description": "Width of the asphalt here, in metres, overriding the road's `width`\n(M40). Absent — the default — is the road's own width, so a file that\nnever mentions this is the M23 road exactly. `> 0`.\n\nInterpolated along the centerline by the same monotone cubic the heights\nuse, so a road never bulges wider than the widest width authored on it.\n**The whole cross-section scales, shoulder included**: `u` — signed\nmetres across the road — has to mean one thing at every `v` for the\nshader to find the asphalt edge, so the widening is one factor on the\nsection rather than a metre value added to the asphalt alone. Paint\nscales with it: a section at 1.5× width wears a 1.5× wider edge line.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "type": "object"

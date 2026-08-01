@@ -242,10 +242,9 @@ pub fn fit_parts(
     let mut counts = vec![0usize; skin.joints.len()];
 
     for (index, position) in mesh.positions.iter().enumerate() {
-        let (Some(joints), Some(weights)) = (
-            mesh.joint_indices.get(index),
-            mesh.joint_weights.get(index),
-        ) else {
+        let (Some(joints), Some(weights)) =
+            (mesh.joint_indices.get(index), mesh.joint_weights.get(index))
+        else {
             break;
         };
         let Some(slot) = (0..4)
@@ -303,10 +302,7 @@ pub fn fit_parts(
                 // limb is, averaged because a capsule has one radius and
                 // picking the larger would sink the shape into the mesh.
                 let axis = dominant_axis(half);
-                let others: Vec<f32> = (0..3)
-                    .filter(|&i| i != axis)
-                    .map(|i| half[i])
-                    .collect();
+                let others: Vec<f32> = (0..3).filter(|&i| i != axis).map(|i| half[i]).collect();
                 let radius = ((others[0] + others[1]) * 0.5).max(1e-3);
                 part.radius = Some(radius);
                 part.half_height = Some((half[axis] - radius).max(1e-3));
@@ -415,7 +411,10 @@ mod tests {
 
         let field = pose_field(&skin, &pose);
         assert_eq!(field.len(), skin.joints.len());
-        assert!(field[0].scale.is_none(), "an unscaled joint omits its scale");
+        assert!(
+            field[0].scale.is_none(),
+            "an unscaled joint omits its scale"
+        );
         assert_eq!(field[4].scale, Some(Vec3::splat(1.5)));
 
         let back = pose_from_field(&skin, &field);
@@ -437,10 +436,8 @@ mod tests {
         // Physics moved the shin — and only the shin. The local that comes
         // back must reproduce that global exactly once the hierarchy is walked
         // forward again, which is the round trip the render depends on.
-        let target = Mat4::from_rotation_translation(
-            Quat::from_rotation_z(0.9),
-            Vec3::new(0.3, -0.8, 0.1),
-        );
+        let target =
+            Mat4::from_rotation_translation(Quat::from_rotation_z(0.9), Vec3::new(0.3, -0.8, 0.1));
         let mut solved = vec![None; skin.joints.len()];
         solved[4] = Some(target);
 

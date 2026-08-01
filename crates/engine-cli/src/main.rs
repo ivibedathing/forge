@@ -263,6 +263,22 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Print where a Junction's arms actually met it (M40).
+    ///
+    /// A junction is bounded by the *mouths* of the roads that reach it, and
+    /// the author's job is to end each road near the crossing — so the question
+    /// that matters is where those mouths turned out to be. A screenshot cannot
+    /// tell a road that stopped 8 m short from one that arrived at the wrong
+    /// angle, and both produce a patch that looks wrong in the same way.
+    ///
+    /// `road-centerline`'s reason, one primitive over.
+    JunctionPlan {
+        scene: PathBuf,
+        /// Which junction, when the scene has more than one.
+        #[arg(long)]
+        entity: Option<String>,
+    },
+
     /// Print every collider the physics world holds: shape, size, and where
     /// it actually is (M33).
     ///
@@ -582,6 +598,7 @@ fn main() {
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
+        Command::JunctionPlan { scene, entity } => junction_plan(scene, entity),
         Command::ListColliders {
             scene,
             entity,
@@ -1195,7 +1212,14 @@ fn fit_colliders(
 /// The transform is applied, so the positions are world space.
 fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
     let scene = load_scene(&scene_path)?;
-    let roads = scene.road_items();
+    // Junction patches ride in the same draw list (M40) and are not roads:
+    // a patch has no centerline to publish, and counting them here would make
+    // "the scene has 3 roads" wrong.
+    let roads: Vec<_> = scene
+        .road_items()
+        .into_iter()
+        .filter(|item| item.junction.is_none())
+        .collect();
 
     let road = match (&entity, roads.len()) {
         (Some(name), _) => roads
@@ -1245,6 +1269,10 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
                 "position": [world.x, world.y, world.z],
                 "forward": [point.direction.x, point.direction.y],
                 "v": point.v,
+                // M40: the cross-section, so a car placed on a banked corner
+                // does not have to re-derive the roll from the polygon.
+                "width": point.width,
+                "bank": point.bank.to_degrees(),
             })
         })
         .collect();
@@ -1258,6 +1286,85 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
             "shoulder": road.road.shoulder,
             "closed": road.road.closed,
             "points": points,
+        })
+    );
+    Ok(())
+}
+
+/// `engine junction-plan <scene> [--entity N]` — where a junction's arms met it
+/// (M40).
+///
+/// The transform is applied, so the positions are world space, matching
+/// `road-centerline`. `reach` is how far each mouth sits from the patch's
+/// centre: a set of similar reaches is a tidy junction, and one much larger
+/// than the rest is the road that stopped short.
+fn junction_plan(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
+    let scene = load_scene(&scene_path)?;
+    let junctions = scene.junction_items();
+
+    let junction = match (&entity, junctions.len()) {
+        (Some(name), _) => junctions
+            .iter()
+            .find(|item| item.entity == *name)
+            .ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {name:?} with a Junction component"),
+                )
+                .entity(name)
+                .file(scene_path.display().to_string())
+                .suggest_from(name, junctions.iter().map(|item| item.entity.as_str()))
+            })?,
+        (None, 1) => &junctions[0],
+        (None, 0) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                "scene has no entity with a Junction component",
+            )
+            .file(scene_path.display().to_string()))
+        }
+        (None, _) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                format!(
+                    "scene has {} junctions ({}); name one with --entity",
+                    junctions.len(),
+                    junctions
+                        .iter()
+                        .map(|item| item.entity.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .file(scene_path.display().to_string()))
+        }
+    };
+
+    let arms: Vec<serde_json::Value> = junction
+        .surface
+        .mouths
+        .iter()
+        .map(|mouth| {
+            let world = junction.model.transform_point3(mouth.center);
+            serde_json::json!({
+                "road": mouth.road,
+                "position": [world.x, world.y, world.z],
+                "into": [mouth.into.x, mouth.into.y],
+                "width": mouth.half_asphalt * 2.0,
+                "half_total": mouth.half_total,
+                "reach": mouth.reach,
+            })
+        })
+        .collect();
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "entity": junction.entity,
+            "width": junction.surface.half_asphalt * 2.0,
+            "shoulder": junction.surface.shoulder,
+            "triangles": junction.surface.mesh.triangle_count(),
+            "arms": arms,
         })
     );
     Ok(())

@@ -1339,6 +1339,38 @@ committed baselines must render byte for byte as they do at `main`.
 
 ---
 
+## M40 — Roads that build a track: `verify/m40_track.json`
+
+A closed circuit riding an M22 terrain, with auto-banked corners, kerbs and a start line; a pit lane
+that widens from 7 m to 13 m and back through `RoadPoint.width`; two paddock roads; and a `Junction`
+where all three meet in a T. Grain on every one of them. A ball is dropped on the west straight.
+
+**It cannot be authored without all five of M40's additions at once**, which is the point: banking
+needs the engine to pick the sign, the pit lane needs per-point width, none of the four roads carries
+a pasted-in height, and the T is a hole in the asphalt without the junction primitive.
+
+The **physics half pins the claim a picture cannot make**: the banking has the right sign. The ball
+sits on a straight approaching a right-hand corner, and it has to roll toward the *inside* of that
+turn and stay on the asphalt. Signed the other way it rolls off the outside — a circuit that throws
+the car off at every corner, which is exactly the mistake `Road.auto_bank` exists to stop an author
+making by hand. The test also asserts the junction resolved all three arms (a dropped arm is a hole
+in the patch) and that the width profile reached 13 m without bulging past it.
+
+`samples: 1`, because there is terrain in frame — CLAUDE.md's reproducibility rule — so it carries a
+hard bit-exact pin (`the_m40_track_fixture_pins_banking_width_and_a_junction`).
+
+What it covers: the shared `Profile` behind height, width and bank; the cross-section scale and roll;
+terrain sampling *across* the road rather than down its middle; the junction patch, its flares and
+its mouths; and grain through `road.wgsl`. Not covered by the fixture and covered by tests instead:
+pinned heights (`RoadPoint.pin_height`), `flare: 0`, and a junction between exactly two arms.
+
+**The bit-exactness half** is the A/B between binaries, and it is what "everything defaults to M23"
+means: with grain off, no per-point width, no bank and no `follow_terrain`, every committed baseline
+must render byte for byte as it does at `main`. Measured at 34 of 34 comparable artifacts, the six
+tour frames excluded because the tour *scene* gained four entities in the same commit.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):
