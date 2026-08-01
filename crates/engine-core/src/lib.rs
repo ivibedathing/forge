@@ -20,6 +20,7 @@ pub mod material;
 pub mod meadow;
 pub mod mesh;
 pub mod particles;
+pub mod ragdoll;
 pub mod road;
 pub mod scene;
 pub mod schema;

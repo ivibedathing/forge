@@ -181,6 +181,20 @@ registry! {
     COLLIDER_PART_SHAPE_UNSUPPORTED = "collider_part_shape_unsupported", Input,
         "a SkinnedCollider part names a mesh shape, which a proxy cannot be";
 
+    // ── Ragdolls (M39) ─────────────────────────────────────────────────
+    RAGDOLL_WITHOUT_PROXIES = "ragdoll_without_proxies", Input,
+        "a Ragdoll is on an entity with no SkinnedCollider; the bodies are the proxies";
+    RAGDOLL_DISCONNECTED_PARTS = "ragdoll_disconnected_parts", Input,
+        "a Ragdoll's parts form more than one tree, which is a ragdoll in pieces";
+    RAGDOLL_UNKNOWN_JOINT = "ragdoll_unknown_joint", Input,
+        "a Ragdoll joint override names a joint no part of the SkinnedCollider rides";
+    RAGDOLL_DUPLICATE_JOINT = "ragdoll_duplicate_joint", Input,
+        "two Ragdoll joint overrides name the same joint";
+    RAGDOLL_BAD_HINGE = "ragdoll_bad_hinge", Input,
+        "a Ragdoll hinge axis is zero-length, or its range runs backwards";
+    COLLIDER_PART_FIT_UNSUPPORTED = "collider_part_fit_unsupported", Input,
+        "a sphere part asks to fit the bone, and a sphere has no length to solve";
+
     // ── Breaking (M14) ─────────────────────────────────────────────────
     BREAKABLE_WITHOUT_COLLIDER = "breakable_without_collider", Input,
         "a Breakable sets impulse_threshold but the entity has no Collider to be hit on";

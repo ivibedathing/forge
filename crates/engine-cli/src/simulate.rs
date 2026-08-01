@@ -145,6 +145,9 @@ pub fn run(
                     impulse: blast.impulse,
                 });
             }
+            for kick in scripts.take_kicks() {
+                physics.queue_ragdoll_impulse(&kick.entity, &kick.part, Vec3::from(kick.impulse));
+            }
         }
         // The scene time this step *ends* at, which is the time the render
         // would draw after `step` steps — so a skinned collider proxy (M33)
@@ -676,6 +679,39 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                         "stride",
                         "AnimationPlayer",
                         number_from_f32(current.stride),
+                    ));
+                }
+            }
+        }
+        // A ragdoll (M39), and this one *must* bake for M32's reason exactly,
+        // one system further on: the skeleton of a corpse lives in
+        // `Ragdoll.pose`, so a baked scene that dropped it would reload the
+        // character standing up in its bind pose and the bake's promise —
+        // reload, re-render, bit-exactly — would be false for every dead body
+        // in every scene. `active` goes with it: without the flag the reloaded
+        // pose would be a corpse the clip immediately animates out of.
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::Ragdoll(_)))
+        {
+            if let Ok(current) = scene.world.get::<&engine_core::components::Ragdoll>(entity) {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::Ragdoll(r) => Some(r.clone()),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.active != rest.active {
+                    edits.push(field_edit("active", "Ragdoll", Value::Bool(current.active)));
+                }
+                if current.pose != rest.pose {
+                    edits.push(field_edit(
+                        "pose",
+                        "Ragdoll",
+                        serde_json::to_value(&current.pose).unwrap_or(Value::Null),
                     ));
                 }
             }

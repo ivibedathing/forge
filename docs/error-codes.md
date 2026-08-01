@@ -73,6 +73,12 @@ build fails.
 | `duplicate_collider_part` | 1 | two parts of one SkinnedCollider report under the same name |
 | `too_many_collider_parts` | 1 | a SkinnedCollider lists more parts than the physics world builds |
 | `collider_part_shape_unsupported` | 1 | a SkinnedCollider part names a mesh shape, which a proxy cannot be |
+| `ragdoll_without_proxies` | 1 | a Ragdoll is on an entity with no SkinnedCollider; the bodies are the proxies |
+| `ragdoll_disconnected_parts` | 1 | a Ragdoll's parts form more than one tree, which is a ragdoll in pieces |
+| `ragdoll_unknown_joint` | 1 | a Ragdoll joint override names a joint no part of the SkinnedCollider rides |
+| `ragdoll_duplicate_joint` | 1 | two Ragdoll joint overrides name the same joint |
+| `ragdoll_bad_hinge` | 1 | a Ragdoll hinge axis is zero-length, or its range runs backwards |
+| `collider_part_fit_unsupported` | 1 | a sphere part asks to fit the bone, and a sphere has no length to solve |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |

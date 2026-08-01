@@ -693,6 +693,17 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     // `parts`, which the format cannot address at all.
     ("SkinnedCollider", "friction"),
     ("SkinnedCollider", "restitution"),
+    // M33's reason again, one milestone on (M39): every one of these is read
+    // exactly once, at the handoff, and written into rapier bodies and joints
+    // that never consult the component again. A clip driving `limit` would
+    // animate a number nothing reads — the silent no-op this table exists to
+    // turn into an error. `density` is the sharpest case: it sets each part's
+    // mass when the ragdoll fires, and a corpse whose mass changed every frame
+    // would be a solver bug rather than an effect.
+    ("Ragdoll", "density"),
+    ("Ragdoll", "limit"),
+    ("Ragdoll", "linear_damping"),
+    ("Ragdoll", "angular_damping"),
 ];
 
 /// Whether a field is vector-shaped in the published schema (3-element

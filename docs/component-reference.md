@@ -29,6 +29,7 @@ scene's components with the defaults filled in.
 | [`Mesh`](#mesh) | Renderable geometry. |
 | [`ParticleEmitter`](#particleemitter) | A deterministic particle emitter (M13): smoke, sparks, dust — and, with the |
 | [`PointLight`](#pointlight) | A local light that shines in every direction from its entity's position, |
+| [`Ragdoll`](#ragdoll) | Physics driving a skinned character's skeleton (M39). |
 | [`RigidBody`](#rigidbody) | A simulated rigid body (M8). Requires a `Transform`; a **dynamic** body |
 | [`Road`](#road) | A road: a circuit, a street, a mountain pass. |
 | [`Script`](#script) | Gameplay logic as data (M10): a Rhai script run once per fixed step. |
@@ -570,6 +571,42 @@ Presence counts as "the scene lit itself": a scene whose only light is a
 | `color` | `[number; 3]` | `[1, 1, 1]` | Linear RGB, each component in `[0, 1]`. |
 | `intensity` | `number` | `1` | Brightness at one unit of distance. `>= 0`.  Falloff is inverse-square, so this is the value the surface of a sphere one metre away receives — which makes `intensity` comparable to `DirectionalLight.intensity` at exactly that distance and four times dimmer at two metres. A campfire is a few units; a candle is a fraction. (at least 0) |
 | `range` | `number` | `10` | Distance in world units at which the light reaches exactly zero. `> 0`.  Inverse-square falloff never truly reaches zero, so a range is what keeps a light local: the physical curve is multiplied by a window that smoothly closes at `range`. Without it, every light in a scene would contribute a little to every surface, and a lantern in one room would lift the black level of the next. (greater than 0) |
+
+## Ragdoll
+
+Physics driving a skinned character's skeleton (M39).
+
+M33 said the pose drives the proxies and nothing reads them back, and called
+that its whole design. **This reverses that sentence for one entity, once,
+permanently.** When `active` turns true the entity's `SkinnedCollider`
+proxies stop being kinematic followers and become dynamic bodies wired
+together with rapier joints; from that step on the skeleton is a report of
+where they ended up.
+
+**The pose stays in the file, which is why invariant 2 survives the
+reversal.** `pose` is written back after every step, exactly as M32 writes
+`AnimationPlayer.phase` back, and `locomotion::posed_globals_at` reads it
+before it looks at a clip — so the render, `engine list-joints`,
+`engine list-colliders` and `world.joint_position` all see the ragdolled
+skeleton through the seam they already shared. M32's rule is what settled
+it: a ragdoll halfway to the floor, baked and reloaded, has to land in the
+same heap, and a pose living in the physics world would reload standing up.
+
+The bodies **are** the proxies, so the hitbox that was shot is the body that
+falls, and the collider set does not change on handoff — which matters
+because that set is an input to rapier's broad phase.
+
+See `designs/ragdoll-design.md`.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `active` | `boolean` | `false` | Whether physics owns the skeleton. A scene may ship this true and its character is a corpse from step 0; `world.ragdoll(name)` sets it, and nothing clears it — the handoff is one-way (design §3). |
+| `angular_damping` | `number` | `0.6` | The same, for spin — and the one that stops a corpse pinwheeling. (at least 0) |
+| `density` | `number` | `985` | kg/m³, `Collider.density`'s unit. Each part's mass is its shape's volume times this. Defaults to a shade under water, which is roughly what a person is. (at least 0) |
+| `joints` | `object[]` | — | Joints that want something other than the default cone. |
+| `limit` | `number` | `45` | Half-angle in degrees of the cone every joint gets unless `joints` overrides it. (at least 0, at most 180) |
+| `linear_damping` | `number` | `0.05` | Velocity damping on every part. Deliberately above a physically honest value: a real body tumbles for longer than a game wants to watch, and this is the dial that fixes it. (at least 0) |
+| `pose` | `object[]` | — | The skeleton, once physics owns it: one entry per joint of the rig, written by the engine after every step. Absent until the handoff.  It is in the file rather than in the physics world because that is what makes a baked ragdoll reload into the same heap — see the type's docs. |
 
 ## RigidBody
 

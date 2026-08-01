@@ -5842,3 +5842,399 @@ fn the_shell_fixture_matches_its_baseline() {
     let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
     assert_eq!(report["pass"], true, "{report}");
 }
+
+// ── Ragdolls (M39) ─────────────────────────────────────────────────────────
+
+/// The milestone's fixture: two identical walkers, and the only difference
+/// between them is a `Ragdoll` a script fires at step 40.
+fn ragdoll_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m39_ragdoll.json")
+}
+
+#[test]
+fn the_ragdoll_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(ragdoll_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The M39 fixture rendered mid-collapse: one walker folding onto the floor
+/// while its twin walks on.
+///
+/// The two walkers are the assertion, M30's fixture logic for the fourth time
+/// — they share a file, a mesh, a clip and a proxy set, so anything that made
+/// both wrong would leave them identical. Step 75 rather than the end of the
+/// run because a settled corpse is a flat pile: the frame where the milestone
+/// is legible is the one still falling.
+///
+/// No terrain in frame, per M22's rule, so this is a hard bit-exact pin — four
+/// consecutive renders came back as one image, measured rather than assumed.
+#[test]
+fn the_m39_ragdoll_fixture_pins_a_collapsing_character() {
+    let diff = engine()
+        .arg("diff-render")
+        .arg(ragdoll_scene())
+        .arg(repo_path("examples/scenes/verify/baselines/m39_ragdoll.png"))
+        .arg("--steps")
+        .arg("75")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The milestone's claim as a number, with no image read: the character
+/// physics took over falls, and its twin does not.
+///
+/// `Transform.position` following the root part is what makes this readable at
+/// all — a ragdoll whose transform stayed put would be invisible to `simulate`,
+/// to culling and to every script distance check, while being plainly
+/// somewhere else on screen (design §4).
+#[test]
+fn the_ragdolled_walker_falls_and_its_twin_keeps_walking() {
+    let output = engine()
+        .arg("simulate")
+        .arg(ragdoll_scene())
+        .arg("--steps")
+        .arg("150")
+        .arg("--entity")
+        .arg("Dropped")
+        .arg("--entity")
+        .arg("Walking")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let y_of = |name: &str| -> f64 {
+        report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == name)
+            .unwrap_or_else(|| panic!("no {name} in {report}"))["position"][1]
+            .as_f64()
+            .unwrap()
+    };
+
+    // Both are authored standing at y = 0 and carried by the same script line.
+    let dropped = y_of("Dropped");
+    assert!(
+        dropped > 0.05 && dropped < 0.45,
+        "the ragdoll's root should end up on the floor but above it — a hips \
+         joint at {dropped} is either still standing or fell through"
+    );
+    assert_eq!(
+        y_of("Walking"),
+        0.0,
+        "the walker with no Ragdoll must be exactly where the script put it"
+    );
+}
+
+/// M33's agreement test with its arrow reversed: physics is now the *source* of
+/// the pose, and `list-colliders` and `list-joints` still have to name the same
+/// point.
+///
+/// This is the check that the whole design turns on. The proxy's placement is
+/// read out of rapier; the joint's is read out of `Ragdoll.pose`, the component
+/// field physics wrote. If the write-back's `G = M⁻¹ · B · L⁻¹` were wrong in
+/// any of its three factors these would disagree by tens of centimetres.
+///
+/// Exactly, not to millimetres, unlike M33's: there is no stride latency here,
+/// because a ragdolled character's pose is not advanced by ground covered.
+#[test]
+fn a_ragdolled_characters_reports_agree_about_where_its_hips_are() {
+    let scene = ragdoll_scene();
+
+    let colliders = engine()
+        .arg("list-colliders")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Dropped")
+        .arg("--steps")
+        .arg("75")
+        .output()
+        .unwrap();
+    let colliders = json_stdout(&colliders);
+    let hips = colliders["colliders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["part"] == "Hips")
+        .unwrap_or_else(|| panic!("no Hips proxy in {colliders}"));
+
+    let joints = engine()
+        .arg("list-joints")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Dropped")
+        .arg("--steps")
+        .arg("75")
+        .output()
+        .unwrap();
+    let joints = json_stdout(&joints);
+    let joint = joints["rigs"][0]["joints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["name"] == "Hips")
+        .unwrap_or_else(|| panic!("no Hips joint in {joints}"));
+
+    // The Hips part carries no offset, so the two name the same point.
+    for axis in 0..3 {
+        let from_physics = hips["position"][axis].as_f64().unwrap();
+        let from_pose = joint["world"]["position"][axis].as_f64().unwrap();
+        assert!(
+            (from_physics - from_pose).abs() < 1e-3,
+            "axis {axis}: the proxy is at {from_physics}, the joint at {from_pose}"
+        );
+    }
+}
+
+/// A corpse baked mid-fall reloads into the same heap — **bit-exactly**.
+///
+/// This is why `Ragdoll.pose` is a component field rather than state in the
+/// physics world (design §2, and M32's rule that the bake is what settles the
+/// question). A pose that lived in `PhysicsWorld` would reload as a character
+/// standing up in its bind pose, and the bake's promise would be false for
+/// every dead body in every scene.
+#[test]
+fn a_ragdoll_baked_mid_fall_reloads_into_the_same_heap() {
+    let baked = repo_path("examples/scenes/verify/m39_baked_probe.json");
+    let _ = std::fs::remove_file(&baked);
+
+    let bake = engine()
+        .arg("simulate")
+        .arg(ragdoll_scene())
+        .arg("--steps")
+        .arg("75")
+        .arg("--bake")
+        .arg(&baked)
+        .output()
+        .unwrap();
+    assert!(bake.status.success(), "{:?}", stderr_lines(&bake));
+
+    // The pose is in the file, in full, and the flag with it.
+    let text = std::fs::read_to_string(&baked).unwrap();
+    let file: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let ragdoll = file["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Dropped")
+        .unwrap()["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["type"] == "Ragdoll")
+        .expect("the baked corpse must carry its Ragdoll")
+        .clone();
+    assert_eq!(ragdoll["active"], true, "{ragdoll}");
+    assert_eq!(
+        ragdoll["pose"].as_array().map(Vec::len),
+        Some(13),
+        "one entry per joint of the rig, {ragdoll}"
+    );
+
+    // And it draws as the frame it was baked from, with no steps at all.
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&baked)
+        .arg(repo_path("examples/scenes/verify/baselines/m39_ragdoll.png"))
+        .arg("--steps")
+        .arg("0")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        let _ = std::fs::remove_file(&baked);
+        eprintln!("skipping bake round-trip pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    let _ = std::fs::remove_file(&baked);
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// A `fit: "bone"` part takes its length from the posed rig, and a plain one
+/// does not (M39 §7).
+///
+/// The fixture's thigh capsules are fitted and its shin capsules are authored,
+/// so one pair reports a `half_height` the rig implies and the other reports
+/// the number in the file. This is the property M33 wanted when it refused
+/// resizing shapes — not that they never change, but that what they *are* is
+/// answerable with a command.
+#[test]
+fn a_fitted_part_reports_the_bone_and_an_authored_one_reports_the_file() {
+    let colliders = engine()
+        .arg("list-colliders")
+        .arg(ragdoll_scene())
+        .arg("--entity")
+        .arg("Walking")
+        .arg("--steps")
+        .arg("30")
+        .output()
+        .unwrap();
+    let colliders = json_stdout(&colliders);
+    let half_height = |part: &str| -> f64 {
+        colliders["colliders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["part"] == part)
+            .unwrap_or_else(|| panic!("no {part} in {colliders}"))["dimensions"][0]
+            .as_f64()
+            .unwrap()
+    };
+
+    // `KneeL` is authored at 0.15 and must stay there, exactly.
+    assert!(
+        (half_height("KneeL") - 0.15).abs() < 1e-6,
+        "an authored part must report the file's number, got {}",
+        half_height("KneeL")
+    );
+    // `LegL` is authored at 0.15 too and asks to fit; the walker's thigh is a
+    // different length, so the reported number must have moved off it.
+    let fitted = half_height("LegL");
+    assert!(
+        (fitted - 0.15).abs() > 1e-3,
+        "a fitted part must report the bone, not the authored 0.15, got {fitted}"
+    );
+}
+
+/// `engine fit-colliders` solves a proxy set and prints it as text — the
+/// answer to M33's refusal of runtime generation rather than an overruling of
+/// it (design §8). Without `--write` the scene file is untouched.
+#[test]
+fn fit_colliders_prints_a_proxy_set_and_leaves_the_file_alone() {
+    let scene = ragdoll_scene();
+    let before = std::fs::read_to_string(&scene).unwrap();
+
+    let output = engine()
+        .arg("fit-colliders")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Walking")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    assert_eq!(report["written"], false, "{report}");
+
+    let parts = report["entities"][0]["component"]["parts"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no parts in {report}"));
+    // One per joint the skin actually weights, which for this rig is all
+    // thirteen — and each names a joint of the rig rather than an index.
+    assert_eq!(parts.len(), 13, "{report}");
+    assert!(
+        parts.iter().any(|p| p["joint"] == "Head"),
+        "the fitted set must name joints, {report}"
+    );
+    // Every fitted shape has to be one a proxy may be, and a real size.
+    for part in parts {
+        assert_eq!(part["shape"], "cuboid", "{part}");
+        for axis in 0..3 {
+            assert!(
+                part["half_extents"][axis].as_f64().unwrap() > 0.0,
+                "a fitted extent must be positive, {part}"
+            );
+        }
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(&scene).unwrap(),
+        before,
+        "fit-colliders without --write must not touch the scene file"
+    );
+}
+
+/// The four ragdoll-specific refusals, each reported before a device or a step
+/// exists.
+#[test]
+fn ragdoll_validation_refuses_what_it_should() {
+    let dir = scratch_dir("ragdoll-validation");
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("bad.json");
+
+    // A Ragdoll with no SkinnedCollider: the bodies *are* the proxies.
+    std::fs::write(
+        &scene,
+        serde_json::json!({
+            "name": "bad",
+            "entities": [{
+                "name": "Ghost",
+                "components": [
+                    { "type": "Transform" },
+                    { "type": "Ragdoll" },
+                ],
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let codes = codes_of(&stderr_lines(
+        &engine().arg("validate").arg(&scene).output().unwrap(),
+    ));
+    assert!(
+        codes.contains(&"ragdoll_without_proxies".to_string()),
+        "{codes:?}"
+    );
+
+    // A hinge with no axis, a range that runs backwards, a range with no
+    // hinge, two overrides for one joint, and an override for a joint no part
+    // rides — all at once, because this validator reports every error.
+    std::fs::write(
+        &scene,
+        serde_json::json!({
+            "name": "bad",
+            "entities": [{
+                "name": "Walker",
+                "components": [
+                    { "type": "Transform" },
+                    { "type": "Mesh", "asset": "builtin:cube" },
+                    { "type": "SkinnedCollider", "parts": [
+                        { "joint": "Hips", "shape": "sphere", "radius": 0.1 },
+                    ]},
+                    { "type": "Ragdoll", "joints": [
+                        { "joint": "Hips", "hinge": [0.0, 0.0, 0.0] },
+                        { "joint": "Hips", "limit": 20.0 },
+                        { "joint": "Knee", "limit": 20.0 },
+                        { "joint": "Hips", "range": [10.0, 0.0] },
+                    ]},
+                ],
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let codes = codes_of(&stderr_lines(
+        &engine().arg("validate").arg(&scene).output().unwrap(),
+    ));
+    for wanted in [
+        "ragdoll_bad_hinge",
+        "ragdoll_duplicate_joint",
+        "ragdoll_unknown_joint",
+    ] {
+        assert!(
+            codes.contains(&wanted.to_string()),
+            "expected {wanted} in {codes:?}"
+        );
+    }
+}
