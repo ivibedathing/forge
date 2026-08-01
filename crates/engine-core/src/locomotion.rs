@@ -70,10 +70,11 @@ impl Locomotion {
             .query::<(Entity, &Transform, &mut AnimationPlayer)>()
             .iter()
         {
-            if !(player.stride > 0.0) {
-                // Includes NaN, which would otherwise poison `phase` for the
-                // rest of the run — validation rejects it, but a script can
-                // still write one through `set_animation_stride`.
+            // `is_sign_positive` alone would let a NaN through, and a NaN
+            // stride poisons `phase` for the rest of the run — validation
+            // rejects one, but a script can still write it through
+            // `set_animation_stride`.
+            if !player.stride.is_finite() || player.stride <= 0.0 {
                 continue;
             }
             let position = transform.position;

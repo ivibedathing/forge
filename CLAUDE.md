@@ -1704,9 +1704,10 @@ bar over an enemy's head is a *projection* question and wants `world.project(x, 
 - **`validate.rs` has outgrown its file** — 5,539 lines with `validate_source` at ~1,400. It is now
   the largest file in the workspace, and unlike the renderer it is GPU-free and fully covered by
   the corpus tests, so splitting it is ordinary work rather than a ULP question.
-- **25 of the 36 baselines are pinned by no test** (see Verification). Each new fixture has been
-  adding to that pile; a CLI test that diff-renders the fixture is cheap and is what makes a
-  baseline survive someone who does not run the sweep.
+- **25 of the 37 baselines are pinned by no test** (see Verification). The pile stopped growing at
+  M32, whose fixture arrived with a CLI test that diff-renders it — which is the cheap thing that
+  makes a baseline survive someone who does not run the sweep, and the thing every earlier fixture
+  should be given.
 - **`docs/scene-format.md` and `docs/component-reference.md`** are sketched in the design doc §4 and
   were never written. If either lands it must be generated and pinned like `error-codes.md`.
 
