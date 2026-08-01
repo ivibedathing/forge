@@ -5619,14 +5619,28 @@ fn simulate_report(scene: &Path, steps: u32, entities: &[&str]) -> serde_json::V
     for name in entities {
         command.arg("--entity").arg(name);
     }
-    let output = command.output().unwrap();
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "simulate failed: {:?}",
-        stderr_lines(&output)
-    );
-    serde_json::from_str(stdout_of(&output).trim()).unwrap()
+    json_stdout(&command.output().unwrap())
+}
+
+/// The other half of the shell's contract: a script that asks for something
+/// impossible fails the run, and says so as a located `script_runtime_error`.
+/// Shared by the setters that validate at the call (M13's rule), so the two
+/// cannot drift on what a script failure looks like — only on the sentence.
+fn script_error(scene: &Path) -> serde_json::Value {
+    let output = engine()
+        .arg("simulate")
+        .arg(scene)
+        .arg("--steps")
+        .arg("1")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr_lines(&output);
+    errors
+        .iter()
+        .find(|e| e["error"] == "script_runtime_error")
+        .unwrap_or_else(|| panic!("expected script_runtime_error, got {errors:?}"))
+        .clone()
 }
 
 /// The round trip is the whole promise, and it is checked *across processes*:
@@ -5696,19 +5710,7 @@ fn an_empty_slot_is_not_an_error_and_an_impossible_one_is() {
     assert_eq!(report["entities"][0]["position"][0], 7.0, "{report}");
 
     let bad = shell_scene("slot-range", r#"fn step(world, step) { world.save(11); }"#);
-    let output = engine()
-        .arg("simulate")
-        .arg(&bad)
-        .arg("--steps")
-        .arg("1")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let errors = stderr_lines(&output);
-    let failure = errors
-        .iter()
-        .find(|e| e["error"] == "script_runtime_error")
-        .unwrap_or_else(|| panic!("expected script_runtime_error, got {errors:?}"));
+    let failure = script_error(&bad);
     assert!(
         failure["message"].as_str().unwrap().contains("0..9"),
         "the message must name the range: {failure}"
@@ -5757,19 +5759,7 @@ fn samples_must_be_one_or_four_at_the_call() {
         "samples",
         r#"fn step(world, step) { world.set_samples(2); }"#,
     );
-    let output = engine()
-        .arg("simulate")
-        .arg(&scene)
-        .arg("--steps")
-        .arg("1")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let errors = stderr_lines(&output);
-    let failure = errors
-        .iter()
-        .find(|e| e["error"] == "script_runtime_error")
-        .unwrap_or_else(|| panic!("expected script_runtime_error, got {errors:?}"));
+    let failure = script_error(&scene);
     assert!(
         failure["message"]
             .as_str()
@@ -5805,15 +5795,7 @@ fn ui_layout_can_report_the_layout_a_run_painted() {
         if let Some(steps) = steps {
             command.arg("--steps").arg(steps.to_string());
         }
-        let output = command.output().unwrap();
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "ui-layout failed: {:?}",
-            stderr_lines(&output)
-        );
-        let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
-        report["elements"][0]["rect"].clone()
+        json_stdout(&command.output().unwrap())["elements"][0]["rect"].clone()
     };
 
     let at_rest = rect(None);

@@ -1046,11 +1046,10 @@ fn ui_layout(
     // have produced would be worse than not reporting one.
     if steps > 0 {
         let input = simulate::load_input(input_path.as_deref())?;
-        let stepping = engine_core::input::Viewport {
-            width,
-            height,
-            camera: view.camera.clone(),
-        };
+        // No camera: `ui-layout` has no `--camera`, and a HUD is screen-space
+        // anyway — what the viewport is carrying here is the frame the script's
+        // clicks resolve against.
+        let stepping = engine_core::input::Viewport::new(width, height, None);
         simulate::run(
             &mut scene,
             &scene_path,

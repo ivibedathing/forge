@@ -112,10 +112,11 @@ fn dist2(ax, ay, az, bx, by, bz) {
 
 // --- the weapons (M36) ------------------------------------------------------
 //
-// Three of them, and each number is a lookup rather than a table because Rhai
-// arrays of arrays cost depth this script does not have. Index 0 is the
-// sidearm the run starts with; the order matches `WEAPONS` in `make_arena.py`,
-// and 1/2/3 select them.
+// Three of them, and each number is a branch rather than an array literal
+// because a Rhai function cannot close over a table declared outside it — so
+// the table form would allocate a fresh array on every call, and half of these
+// are read every step. Index 0 is the sidearm the run starts with; the order
+// matches `WEAPONS` in `make_arena.py`, and 1/2/3 select them.
 //
 // The pistol is the gun that shipped, with one number moved: 0.13 s between
 // shots became 0.20, so the rifle has somewhere to be faster. Everything else
@@ -198,13 +199,10 @@ fn turn_z(ax, az, degrees) {
 // The first free bullet slot, or -1. Scanning beats a round-robin index: it
 // never overwrites a bolt still in flight.
 fn free_slot(world, count) {
-    let slot = -1;
     for i in 0..count {
-        if slot >= 0 { continue; }
-        let life = world.state("b" + i.to_string() + "t", 0.0);
-        if life <= 0.0 { slot = i; }
+        if world.state("b" + i.to_string() + "t", 0.0) <= 0.0 { return i; }
     }
-    slot
+    -1
 }
 
 // Put `pellets` bolts in the air. Returns how many actually launched — fewer
@@ -218,13 +216,13 @@ fn free_slot(world, count) {
 // held rifle trigger climbs and settles instead of drilling one hole.
 fn spray(world, pellets, pool, mux, muy, muz, ax, az, speed, life, spread, walk, damage) {
     let launched = 0;
+    let span = (pellets - 1).to_float();
     for p in 0..pellets {
         let slot = free_slot(world, pool);
         if slot < 0 { continue; }
         // Symmetric about the aim: -spread at p = 0, +spread at the last
         // pellet, and exactly 0 for a single bolt with no walk.
         let offset = spread * walk;
-        let span = (pellets - 1).to_float();
         if pellets > 1 { offset = spread * (2.0 * p.to_float() / span - 1.0); }
         let dx = turn_x(ax, az, offset);
         let dz = turn_z(ax, az, offset);
@@ -470,13 +468,9 @@ fn clicked_slot(world, slots) {
 // A three-way setting's label. Settings are ordinary `world.state` keys, which
 // is what makes them saveable for free: `world.save` writes the whole map, so
 // it carries them without knowing they exist.
+// Rhai is dynamically typed, so this one function serves both the rows' words
+// and the lamp scale's floats.
 fn opt3(v, a, b, c) {
-    if v == 0 { return a; }
-    if v == 1 { return b; }
-    c
-}
-
-fn opt3f(v, a, b, c) {
     if v == 0 { return a; }
     if v == 1 { return b; }
     c
@@ -499,7 +493,9 @@ fn health_color(fraction) {
 }
 
 // Park the two weapons the player is not holding below the floor, where a
-// spent bullet already goes.
+// spent bullet already goes. Called on the step the weapon changes and not
+// otherwise: the scene authors all three down there, and nothing but the line
+// above moves one back up, so the two that are parked stay parked.
 fn stow_weapons(world, active) {
     for w in 0..3 {
         if w == active { continue; }
@@ -660,8 +656,19 @@ fn step(world, step) {
     let paused_now = k_pause && !pause_was;
     world.set_state("esc", if k_pause { 1 } else { 0 });
 
-    let hit = clicked_slot(world, SLOTS);
-    let has_save = world.has_save(SAVE_SLOT);
+    // Both of these are menu questions, and both cost real work to ask — seven
+    // name lookups for the click, a `stat` of the slot file for the save — so
+    // neither is asked on a step that could not read the answer.
+    //
+    // No slot is hit-testable while a run is playing (the card is hidden, and
+    // M31 does not hit-test a hidden element), so `mode == 1` is exactly the
+    // case where the scan is guaranteed to come back -1.
+    let hit = -1;
+    if mode != 1 { hit = clicked_slot(world, SLOTS); }
+    // And LOAD GAME is only ever on the title card: mode 0 reads it below, and
+    // mode 5 is the one screen a BACK can land on mode 0 from.
+    let has_save = false;
+    if mode == 0 || mode == 5 { has_save = world.has_save(SAVE_SLOT); }
     // Whether a run has actually started, which is *not* "mode > 0": the
     // settings screen is reachable from the title card, and a HUD reporting
     // SCORE 0 and WAVE 1/3 over it is reporting on a game nobody has begun.
@@ -697,8 +704,7 @@ fn step(world, step) {
     // Quitting (M36). The engine's answer to a button, and the *caller*
     // decides what it means: the viewer closes its window, a headless run
     // stops stepping and says which step it stopped on.
-    let quitting = mode == 0 && hit == 4;
-    if mode == 2 && hit == 4 { quitting = true; }
+    let quitting = hit == 4 && (mode == 0 || mode == 2);
     if quitting { world.quit(); }
 
     // Saving and loading. A save is the *campaign*, not the arena: the engine
@@ -722,8 +728,10 @@ fn step(world, step) {
     let advance = mode == 4 && hit == 1;
     mode = next;
     world.set_state("mode", mode);
-    if mode == 1 { world.set_state("begun", 1); }
-    if mode == 1 { begun = true; }
+    if mode == 1 {
+        world.set_state("begun", 1);
+        begun = true;
+    }
 
     // A load replaced the whole state map, `mode` included — and the save was
     // taken from a pause screen, so it says 2. The run has to start *playing*,
@@ -787,7 +795,7 @@ fn step(world, step) {
     let want_fog = 0.0012;
     if s_qual == 0 { want_fog = 0.0; }
     world.set_fog(want_fog);
-    set_lamps(world, LAMP_FULL * opt3f(s_light, 0.0, 0.45, 1.0));
+    set_lamps(world, LAMP_FULL * opt3(s_light, 0.0, 0.45, 1.0));
 
     // --- the player ---------------------------------------------------------
     let p = world.position("Player");
@@ -904,7 +912,7 @@ fn step(world, step) {
     let hz = hand[2];
     world.set_position(held, hx, hy, hz);
     world.look_at(held, hx + ax * 10.0, hy, hz + az * 10.0);
-    stow_weapons(world, weapon);
+    if switched { stow_weapons(world, weapon); }
 
     let reach = wep_muzzle(weapon);
     let mux = hx + ax * reach;
@@ -1274,9 +1282,8 @@ fn step(world, step) {
     // The HUD setting picks how much of it comes back. MINIMAL keeps the two
     // readouts a fight actually needs — health and ammo — and drops the score
     // and the wave counter, which are between-fight information.
-    let started = begun;
-    let full_hud = started && s_hud == 0;
-    let any_hud = started && s_hud < 2;
+    let full_hud = begun && s_hud == 0;
+    let any_hud = begun && s_hud < 2;
     world.set_hud_visible("ScoreGroup", full_hud);
     world.set_hud_visible("WaveText", full_hud);
     world.set_hud_visible("HealthGroup", any_hud);

@@ -232,6 +232,30 @@ enum Paint {
     },
 }
 
+/// The attachments a scene pass draws into besides the swapchain image: the
+/// depth buffer, and — only when the scene asks for MSAA — the multisampled
+/// color target the frame resolves out of.
+///
+/// One function rather than a copy per occasion, because the sample-count
+/// gate, the size and the format have to agree across all three times the pair
+/// gets built: the window appearing, the window resizing, and a script moving
+/// `environment.samples` (M36). The two are always made together and always
+/// from the same numbers; splitting them is how one ends up a resize behind
+/// the other, which renders wrong on exactly one of the three paths.
+fn frame_attachments(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    samples: u32,
+) -> (wgpu::TextureView, Option<wgpu::TextureView>) {
+    (
+        scene_renderer::depth_texture_multisampled(device, width, height, samples),
+        (samples > 1)
+            .then(|| scene_renderer::msaa_color_texture(device, format, width, height, samples)),
+    )
+}
+
 /// Frames actually presented per second, averaged over a short window.
 ///
 /// Wall-clock, and therefore viewer-only: it measures how fast this machine is
@@ -562,21 +586,13 @@ impl ViewerApp {
                     // every pipeline the engine has.
                     **renderer =
                         SceneRenderer::with_samples(&target.gpu.device, format, wanted_samples);
-                    *depth = scene_renderer::depth_texture_multisampled(
+                    (*depth, *msaa) = frame_attachments(
                         &target.gpu.device,
+                        format,
                         width,
                         height,
                         wanted_samples,
                     );
-                    *msaa = (wanted_samples > 1).then(|| {
-                        scene_renderer::msaa_color_texture(
-                            &target.gpu.device,
-                            format,
-                            width,
-                            height,
-                            wanted_samples,
-                        )
-                    });
                 }
 
                 let particles = simulation
@@ -695,27 +711,16 @@ impl ApplicationHandler for ViewerApp {
             Content::Scene(ref scene) => {
                 let (width, height) = target.size();
                 let samples = scene.environment.samples.max(1);
+                let (depth, msaa) =
+                    frame_attachments(&target.gpu.device, target.format(), width, height, samples);
                 Paint::Scene {
                     renderer: Box::new(SceneRenderer::with_samples(
                         &target.gpu.device,
                         target.format(),
                         samples,
                     )),
-                    depth: scene_renderer::depth_texture_multisampled(
-                        &target.gpu.device,
-                        width,
-                        height,
-                        samples,
-                    ),
-                    msaa: (samples > 1).then(|| {
-                        scene_renderer::msaa_color_texture(
-                            &target.gpu.device,
-                            target.format(),
-                            width,
-                            height,
-                            samples,
-                        )
-                    }),
+                    depth,
+                    msaa,
                 }
             }
         };
@@ -806,22 +811,13 @@ impl ApplicationHandler for ViewerApp {
                         renderer,
                     }) = self.paint.as_mut()
                     {
-                        let samples = renderer.samples();
-                        *depth = scene_renderer::depth_texture_multisampled(
+                        (*depth, *msaa) = frame_attachments(
                             &target.gpu.device,
+                            renderer.format(),
                             size.width,
                             size.height,
-                            samples,
+                            renderer.samples(),
                         );
-                        *msaa = (samples > 1).then(|| {
-                            scene_renderer::msaa_color_texture(
-                                &target.gpu.device,
-                                renderer.format(),
-                                size.width,
-                                size.height,
-                                samples,
-                            )
-                        });
                     }
                 }
             }

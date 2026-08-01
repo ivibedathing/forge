@@ -56,6 +56,26 @@ fn runtime(message: String) -> Box<EvalAltResult> {
     Box::new(EvalAltResult::ErrorRuntime(message.into(), Position::NONE))
 }
 
+/// Which asset does this entity draw? The first link of the chain both the
+/// joint queries (M30) and the clip check (M36) walk, shared so the sentence a
+/// script sees when it asks a rig question of an entity that has no mesh stays
+/// one sentence rather than two copies of it.
+///
+/// Only the first link: what the two do with the asset diverges deliberately.
+/// `joint_world` looks the rig up straight away, while `check_clip` has to
+/// compare the asset against the one the clip names *first*, so that a clip out
+/// of the wrong file reports the mismatch rather than "carries no skin".
+fn rig_asset(
+    world: &hecs::World,
+    entity: hecs::Entity,
+    name: &str,
+) -> std::result::Result<String, Box<EvalAltResult>> {
+    world
+        .get::<&Mesh>(entity)
+        .map(|mesh| mesh.asset.clone())
+        .map_err(|_| runtime(format!("entity {name:?} has no Mesh, so it has no rig")))
+}
+
 /// Where save slots live, relative to the scene file (M36).
 const SAVE_DIR: &str = "saves";
 
@@ -438,10 +458,7 @@ impl WorldApi {
         let entity = self.entity(name)?;
         let world = self.world.borrow();
 
-        let asset = world
-            .get::<&Mesh>(entity)
-            .map(|mesh| mesh.asset.clone())
-            .map_err(|_| runtime(format!("entity {name:?} has no Mesh, so it has no rig")))?;
+        let asset = rig_asset(&world, entity, name)?;
         let rig = self.rigs.get(&asset).ok_or_else(|| {
             runtime(format!(
                 "entity {name:?} references {asset:?}, which carries no skin"
@@ -516,10 +533,7 @@ impl WorldApi {
             return Ok(());
         };
 
-        let mesh = world
-            .get::<&Mesh>(entity)
-            .map(|mesh| mesh.asset.clone())
-            .map_err(|_| runtime(format!("entity {name:?} has no Mesh, so it has no rig")))?;
+        let mesh = rig_asset(&world, entity, name)?;
         if mesh != asset {
             // M30's `skeletal_player_mesh_mismatch`, as a runtime error: a clip
             // out of a file the entity does not draw would silently never play.
@@ -1528,13 +1542,19 @@ fn curated_engine() -> rhai::Engine {
     engine.register_fn(
         "set_animation_clip",
         |w: &mut WorldApi, name: &str, clip: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            // The unchanged case first, and it is the overwhelmingly common
+            // one: a script asks for the gait it wants every step and switches
+            // a handful of times in a run. Answering it costs one component
+            // read — the validation walk and the two allocations below belong
+            // to the step that actually cuts, not to the 3,000 that do not.
+            if w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| p.clip == clip)?
+            {
+                return Ok(());
+            }
             w.check_clip(name, clip)?;
             let stored = clip.to_string();
             w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| {
-                if p.clip == stored {
-                    return;
-                }
-                p.clip = stored.clone();
+                p.clip = stored;
                 // Reset, never carried over: a phase is a fraction of a *cycle*
                 // and two clips do not share one, so carrying it is M32's
                 // `speed` trap in another place — the pose teleports on the
@@ -1998,6 +2018,26 @@ mod tests {
         dir
     }
 
+    /// The default host every test but one wants: 60 Hz, no daylight, a
+    /// default `environment`, builtin assets. The two `unwrap`s are the
+    /// fixture's own assertion — a scene with a `Script` on it builds a host,
+    /// and a test whose script does not compile should fail here rather than
+    /// silently step nothing. The exception is the test that seeds an
+    /// *authored* `environment`, which spells `ScriptHost::build` out because
+    /// the seed is the thing it is asserting on.
+    fn host_for(scene: &Scene, path: &Path) -> ScriptHost {
+        ScriptHost::build(
+            &scene.world,
+            path,
+            60,
+            None,
+            Default::default(),
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
     #[test]
     fn scripts_move_entities_deterministically() {
         let dir = temp_dir("move");
@@ -2010,16 +2050,7 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         for step in 0..150 {
             host.step(
                 &mut scene.world,
@@ -2048,16 +2079,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.position("Nobody"); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2088,16 +2110,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { let x = 0; loop { x += 1; } }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2147,16 +2160,7 @@ mod tests {
                 if step == 1 { world.look_at("Mover", 5.0, 0.25, 0.0); }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let entity = scene.entity("Mover").unwrap();
 
         host.step(
@@ -2218,16 +2222,7 @@ mod tests {
                 world.set_state("vw", world.viewport_width());
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let entity = scene.entity("Mover").unwrap();
 
         let mut held = InputState::default();
@@ -2286,16 +2281,7 @@ mod tests {
             ),
         ] {
             let (mut scene, path) = scene_with_script(&dir, source);
-            let host = ScriptHost::build(
-                &scene.world,
-                &path,
-                60,
-                None,
-                Default::default(),
-                &engine_core::mesh::BuiltinAssets,
-            )
-            .unwrap()
-            .unwrap();
+            let host = host_for(&scene, &path);
             let error = host
                 .step(
                     &mut scene.world,
@@ -2326,16 +2312,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.cursor_ground(0.0); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2376,16 +2353,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
 
         let mut held = InputState::default();
         held.set_cursor(glam::Vec2::new(0.25, 0.5));
@@ -2427,16 +2395,7 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
 
         let mut held = InputState::default();
         held.press("ArrowUp");
@@ -2465,16 +2424,7 @@ mod tests {
 
         let (mut scene, path) =
             scene_with_script(&dir, r#"fn step(world, step) { world.key("ArowUp"); }"#);
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2504,16 +2454,7 @@ mod tests {
                 world.set_position("Mover", f[0], f[1], f[2]);
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let entity = scene.entity("Mover").unwrap();
 
         // Physics writes yaws past ±90° as the gimbal twin (±180, θ, ±180),
@@ -2575,16 +2516,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -2640,16 +2572,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -2691,16 +2614,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.set_engine_force("Mover", 1.0); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2723,16 +2637,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.linear_velocity("Mover"); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2764,16 +2669,7 @@ mod tests {
                 world.set_position("Mover", 0.0, y, 0.0);
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let entity = scene.entity("Mover").unwrap();
         let y_of = |scene: &Scene| scene.world.get::<&Transform>(entity).unwrap().position.y;
 
@@ -2829,16 +2725,7 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let hud = host
             .step(
                 &mut scene.world,
@@ -2872,16 +2759,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.touching("Nobody"); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2907,16 +2785,7 @@ mod tests {
                 while i < 17 { world.hud("line"); i += 1; }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2936,16 +2805,7 @@ mod tests {
 
         let (mut scene, path) =
             scene_with_script(&dir, "fn step(world, step) { world.hud(\"caf\u{e9}\"); }");
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2990,16 +2850,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -3053,16 +2904,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -3093,16 +2935,7 @@ mod tests {
         // Missing components are structured errors, like every accessor.
         let (mut scene, path) =
             scene_with_script(&dir, r#"fn step(world, step) { world.hud_text("Mover"); }"#);
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -3141,16 +2974,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         let rate_now = |scene: &Scene| {
             scene
                 .world
@@ -3193,16 +3017,7 @@ mod tests {
                 &dir,
                 &format!("fn step(world, step) {{ world.set_particle_rate(\"Puff\", {bad}); }}"),
             );
-            let host = ScriptHost::build(
-                &scene.world,
-                &path,
-                60,
-                None,
-                Default::default(),
-                &engine_core::mesh::BuiltinAssets,
-            )
-            .unwrap()
-            .unwrap();
+            let host = host_for(&scene, &path);
             let error = host
                 .step(
                     &mut scene.world,
@@ -3226,16 +3041,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.particle_rate("Mover"); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -3288,16 +3094,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -3344,16 +3141,7 @@ mod tests {
             std::fs::write(dir.join("scripts/test.rhai"), &script).unwrap();
             let mut scene =
                 Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-            let host = ScriptHost::build(
-                &scene.world,
-                &scene_path,
-                60,
-                None,
-                Default::default(),
-                &engine_core::mesh::BuiltinAssets,
-            )
-            .unwrap()
-            .unwrap();
+            let host = host_for(&scene, &scene_path);
             let error = host
                 .step(
                     &mut scene.world,
@@ -3387,16 +3175,7 @@ mod tests {
         ]}"#;
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         let error = host
             .step(
                 &mut scene.world,
@@ -3445,16 +3224,7 @@ mod tests {
                 world.set_position("Mover", laps, 0.0, world.state("missing", -7.5));
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         for step in 0..8 {
             host.step(
                 &mut scene.world,
@@ -3504,16 +3274,7 @@ mod tests {
                 if step == 2 { world.break_entity("Ghost"); }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
 
         host.step(
             &mut scene.world,
@@ -3568,16 +3329,7 @@ mod tests {
                 if step == 2 { world.explode(0.0, 0.0, 0.0, 1.0, -1.0); }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
 
         host.step(
             &mut scene.world,
@@ -3638,16 +3390,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.set_position("Fragment", 1.0, 2.0, 3.0); }"#,
         );
-        let mut host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let mut host = host_for(&scene, &path);
 
         // Before the spawn the name is unknown — a runtime error.
         let error = host
@@ -3688,16 +3431,7 @@ mod tests {
     fn no_time_or_io_exists_in_the_sandbox() {
         let dir = temp_dir("sandbox");
         let (mut scene, path) = scene_with_script(&dir, r#"fn step(world, step) { timestamp(); }"#);
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -3728,19 +3462,6 @@ mod tests {
             )
             .unwrap();
         }
-    }
-
-    fn host_for(scene: &Scene, path: &Path) -> ScriptHost {
-        ScriptHost::build(
-            &scene.world,
-            path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap()
     }
 
     /// M36. The round trip is the whole promise: what one run saved, a
