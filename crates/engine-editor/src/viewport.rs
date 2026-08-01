@@ -6,7 +6,7 @@
 //! buffer, same clear — so what the editor shows is what the engine renders,
 //! not an editor approximation (principle #7).
 
-use engine_core::scene::{CloudItem, RenderItem, ResolvedLights, RoadItem, WaterItem};
+use engine_core::scene::{CloudItem, MeadowItem, RenderItem, ResolvedLights, RoadItem, WaterItem};
 use engine_render::scene_renderer::{self, ScenePass, SceneRenderer};
 use glam::{Mat4, Vec3};
 
@@ -45,6 +45,7 @@ impl ViewportRenderer {
         water: &[WaterItem],
         clouds: &[CloudItem],
         roads: &[RoadItem],
+        meadows: &[MeadowItem],
         view_projection: Mat4,
         camera_position: Vec3,
         lights: ResolvedLights,
@@ -61,22 +62,24 @@ impl ViewportRenderer {
                 render_state.renderer.write().free_texture(&old.id);
             }
 
-            let texture = render_state.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("editor-viewport"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
+            let texture = render_state
+                .device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("editor-viewport"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let depth = scene_renderer::depth_texture(&render_state.device, width, height);
             let id = render_state.renderer.write().register_native_texture(
@@ -108,6 +111,7 @@ impl ViewportRenderer {
                 water,
                 clouds,
                 roads,
+                meadows,
                 // The editor shows the scene at rest; particles only exist
                 // once the fixed clock advances, so there are none to draw.
                 particles: &[],
@@ -136,10 +140,7 @@ impl ViewportRenderer {
     /// Read the current viewport texture back to CPU RGBA8 — the agent
     /// verification path (`--self-screenshot`). Mirrors `offscreen.rs`'s
     /// readback, including the row-alignment unpadding.
-    pub fn read_back(
-        &self,
-        render_state: &egui_wgpu::RenderState,
-    ) -> Option<(u32, u32, Vec<u8>)> {
+    pub fn read_back(&self, render_state: &egui_wgpu::RenderState) -> Option<(u32, u32, Vec<u8>)> {
         let target = self.target.as_ref()?;
         let (width, height) = (target.width, target.height);
 
@@ -154,11 +155,12 @@ impl ViewportRenderer {
             mapped_at_creation: false,
         });
 
-        let mut encoder = render_state
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("viewport-readback-encoder"),
-            });
+        let mut encoder =
+            render_state
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("viewport-readback-encoder"),
+                });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &target._texture,
@@ -219,11 +221,7 @@ pub fn grid_items() -> Vec<RenderItem> {
         items.push(RenderItem {
             entity: String::new(),
             mesh: std::sync::Arc::clone(&cube),
-            model: Mat4::from_scale_rotation_translation(
-                scale,
-                glam::Quat::IDENTITY,
-                position,
-            ),
+            model: Mat4::from_scale_rotation_translation(scale, glam::Quat::IDENTITY, position),
             material: Material {
                 albedo,
                 metallic: 0.0,
@@ -233,6 +231,7 @@ pub fn grid_items() -> Vec<RenderItem> {
             },
             textures: Default::default(),
             terrain: None,
+            joints: Vec::new(),
         });
     };
 

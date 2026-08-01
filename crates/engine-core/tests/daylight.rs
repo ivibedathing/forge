@@ -1,7 +1,7 @@
 //! Day and night (M21).
 //!
 //! Every test here is GPU-free and unconditional — there is no skip path,
-//! because the whole system is a pure CPU function by design (`daylight-design.md`
+//! because the whole system is a pure CPU function by design (M21's design,
 //! §1). That is most of the point of building it this way.
 
 use engine_core::daylight::{DaylightKeyframe, DaylightSettings};
@@ -88,8 +88,14 @@ fn the_sun_rises_east_of_the_noon_bearing_and_sets_west_of_it() {
     // sun toward −Z makes −Z south, so +Z is north; facing north in a
     // right-handed Y-up system puts east at cross(+Z, +Y) = −X. So the sun
     // rises toward −X and sets toward +X.
-    assert!(dawn.x < -0.9, "sunrise should be toward −X (east), was {dawn:?}");
-    assert!(dusk.x > 0.9, "sunset should be toward +X (west), was {dusk:?}");
+    assert!(
+        dawn.x < -0.9,
+        "sunrise should be toward −X (east), was {dawn:?}"
+    );
+    assert!(
+        dusk.x > 0.9,
+        "sunset should be toward +X (west), was {dusk:?}"
+    );
     // Both on the horizon, so no vertical component.
     assert!(dawn.y.abs() < 1e-3 && dusk.y.abs() < 1e-3);
     // ...and they are opposites, which is the part that actually matters.
@@ -135,8 +141,14 @@ fn sun_azimuth_rotates_the_whole_arc_without_changing_altitude() {
     // 62° up, so its whole horizontal component is only cos(62°) ≈ 0.47 —
     // what identifies the bearing is that all of it is in X and none in Z.
     let to = to_sun(&turned, 12.0);
-    assert!(to.x > 0.4, "noon sun should have turned toward +X, was {to:?}");
-    assert!(to.z.abs() < 1e-4, "noon sun should have left the Z axis, was {to:?}");
+    assert!(
+        to.x > 0.4,
+        "noon sun should have turned toward +X, was {to:?}"
+    );
+    assert!(
+        to.z.abs() < 1e-4,
+        "noon sun should have left the Z axis, was {to:?}"
+    );
 }
 
 #[test]
@@ -214,7 +226,10 @@ fn the_clock_wraps_across_midnight_rather_than_clamping() {
     s.day_length = 24.0;
 
     assert!((s.hours_at(0.5) - 23.5).abs() < 1e-4);
-    assert!((s.hours_at(1.5) - 0.5).abs() < 1e-4, "did not wrap past midnight");
+    assert!(
+        (s.hours_at(1.5) - 0.5).abs() < 1e-4,
+        "did not wrap past midnight"
+    );
     assert!((s.hours_at(2.5) - 1.5).abs() < 1e-4);
 }
 
@@ -324,7 +339,11 @@ fn fog_is_a_scale_so_a_clear_scene_stays_clear_all_day() {
     // the multiplier is always a sane finite number to multiply by.
     let mut noon = s.clone();
     noon.time_of_day = 12.0;
-    assert_eq!(noon.evaluate(0.0).fog_scale, 1.0, "noon should not alter fog");
+    assert_eq!(
+        noon.evaluate(0.0).fog_scale,
+        1.0,
+        "noon should not alter fog"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -436,8 +455,15 @@ fn moon_intensity_zero_leaves_the_night_lit_only_by_ambient() {
     s.time_of_day = 1.0;
 
     let day = s.evaluate(0.0);
-    assert_eq!(day.light_color, Vec3::ZERO, "a moonless night has no direct light");
-    assert!(day.ambient.max_element() > 0.0, "ambient should still be there");
+    assert_eq!(
+        day.light_color,
+        Vec3::ZERO,
+        "a moonless night has no direct light"
+    );
+    assert!(
+        day.ambient.max_element() > 0.0,
+        "ambient should still be there"
+    );
 }
 
 // ---------------------------------------------------------------------------

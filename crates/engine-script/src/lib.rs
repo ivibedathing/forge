@@ -21,13 +21,15 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
+use std::sync::Arc;
+
 use engine_core::components::{
-    AmbientLight, Breakable, DirectionalLight, HudRect, HudText, Name, ParticleEmitter, PointLight,
-    RigidBody, Script, Terrain, Transform, Wheel,
+    AmbientLight, AnimationPlayer, Breakable, DirectionalLight, HudImage, HudPanel, HudRect,
+    HudText, Mesh, Name, ParticleEmitter, PointLight, RigidBody, Script, Terrain, Transform, Wheel,
 };
 use engine_core::contact::ContactState;
 use engine_core::daylight::{Daylight, DaylightSettings};
-use engine_core::input::{self, InputState};
+use engine_core::input::{self, InputState, Pointer};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
 use rhai::packages::{
@@ -45,6 +47,13 @@ const MAX_OPERATIONS: u64 = 1_000_000;
 /// error, not a truncation — deterministic and loud.
 const MAX_HUD_LINES: usize = 16;
 const MAX_HUD_CHARS: usize = 96;
+
+/// A located-nowhere runtime error. Rhai fills the position in from the call
+/// site, which is what makes these point at the script line rather than at the
+/// engine.
+fn runtime(message: String) -> Box<EvalAltResult> {
+    Box::new(EvalAltResult::ErrorRuntime(message.into(), Position::NONE))
+}
 
 /// A blast queued by `world.explode`, waiting for the next physics step.
 /// Plain numbers so the crate that owns physics can translate — scripting
@@ -83,6 +92,10 @@ pub struct ScriptHost {
     /// evaluated once per step from the step number, so scripts read the same
     /// clock the renderer does and a replay reads it identically.
     daylight: Option<DaylightSettings>,
+    /// The rig behind every skinned mesh the scene references (M30), resolved
+    /// once at build. Rigs are shared and immutable, so holding them costs a
+    /// pointer each and spares `world.joint_position` a file read per call.
+    rigs: Rc<HashMap<String, Arc<engine_core::skeleton::Rig>>>,
 }
 
 /// What scripts see: the world, entity names, and the fixed timestep.
@@ -97,6 +110,16 @@ struct WorldApi {
     /// has input to offer, so runs without `--input` behave exactly as they
     /// did before input existed.
     input: Rc<InputState>,
+    /// Where the pointer points during this step (M28): the cursor, the frame
+    /// it was measured in, and the ray through it. Resolved by the caller
+    /// from the camera it is about to render through.
+    pointer: Pointer,
+    /// What the pointer is doing to the overlay this step (M31): hover, an
+    /// in-flight press, and the click it turned into. Resolved by the caller
+    /// against the layout for the frame it is about to render, *before*
+    /// scripts run — so `world.clicked` is a question about this step, not a
+    /// callback the engine fires into a script.
+    interaction: Rc<engine_core::ui::Interaction>,
     /// Who touches whom, as of the previous physics step (M12). Scripts run
     /// before physics, so a hit at physics step N is visible at step N+1 —
     /// the causal order, documented on `ContactState`.
@@ -113,6 +136,12 @@ struct WorldApi {
     /// `daylight` block — in which case asking for the time is a runtime
     /// error rather than a made-up noon.
     daylight: Option<Daylight>,
+    /// Scene time at this step, in seconds: `step * dt`, the same reproducible
+    /// clock the renderer poses a rig on. Evaluated once per step, so two
+    /// `world.joint_position` calls in one step cannot disagree.
+    time: f32,
+    /// The scene's rigs (M30), by `Mesh.asset`.
+    rigs: Rc<HashMap<String, Arc<engine_core::skeleton::Rig>>>,
 }
 
 impl WorldApi {
@@ -169,6 +198,77 @@ impl WorldApi {
         self.with_component(name, "Transform", f)
     }
 
+    /// The `offset` of whichever HUD component the entity carries (M28).
+    ///
+    /// `offset` means the same thing on a `HudText` and a `HudRect` — pixels
+    /// inward from the anchor — so, like `with_light`, the API takes the name
+    /// and does not make the author remember which kind it is.
+    fn with_hud_offset<T>(
+        &mut self,
+        name: &str,
+        f: impl FnOnce(&mut glam::Vec2) -> T,
+    ) -> std::result::Result<T, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow_mut();
+        if let Ok(mut text) = world.get::<&mut HudText>(entity) {
+            return Ok(f(&mut text.offset));
+        }
+        if let Ok(mut rect) = world.get::<&mut HudRect>(entity) {
+            return Ok(f(&mut rect.offset));
+        }
+        if let Ok(mut panel) = world.get::<&mut HudPanel>(entity) {
+            return Ok(f(&mut panel.offset));
+        }
+        if let Ok(mut image) = world.get::<&mut HudImage>(entity) {
+            return Ok(f(&mut image.offset));
+        }
+        Err(Box::new(EvalAltResult::ErrorRuntime(
+            format!("entity {name:?} has no HudText, HudRect, HudPanel or HudImage").into(),
+            Position::NONE,
+        )))
+    }
+
+    /// Reach whichever HUD element the entity carries (M31).
+    ///
+    /// `with_hud_offset`'s generalization: `visible`, `color`, `opacity` and
+    /// `size` mean the same thing on all four components, so the API takes a
+    /// name and does not make the author remember which kind it is. The order
+    /// is arbitrary but fixed — an entity carrying two HUD elements is
+    /// `duplicate_component` only if they are the same type, and a panel with
+    /// a text on it is a legal, if unusual, thing to have written.
+    fn with_hud_element<T>(
+        &mut self,
+        name: &str,
+        call: &str,
+        panel: impl FnOnce(&mut HudPanel) -> T,
+        rect: impl FnOnce(&mut HudRect) -> T,
+        image: impl FnOnce(&mut HudImage) -> T,
+        text: impl FnOnce(&mut HudText) -> T,
+    ) -> std::result::Result<T, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow_mut();
+        if let Ok(mut c) = world.get::<&mut HudPanel>(entity) {
+            return Ok(panel(&mut c));
+        }
+        if let Ok(mut c) = world.get::<&mut HudRect>(entity) {
+            return Ok(rect(&mut c));
+        }
+        if let Ok(mut c) = world.get::<&mut HudImage>(entity) {
+            return Ok(image(&mut c));
+        }
+        if let Ok(mut c) = world.get::<&mut HudText>(entity) {
+            return Ok(text(&mut c));
+        }
+        Err(Box::new(EvalAltResult::ErrorRuntime(
+            format!(
+                "world.{call} needs a HUD element on entity {name:?}, which has no \
+                 HudPanel, HudRect, HudImage or HudText"
+            )
+            .into(),
+            Position::NONE,
+        )))
+    }
+
     /// Light access (M17), across all three light components.
     ///
     /// `color` and `intensity` mean the same thing on a `PointLight`, a
@@ -196,10 +296,7 @@ impl WorldApi {
             return Ok(ambient(&mut light));
         }
         Err(Box::new(EvalAltResult::ErrorRuntime(
-            format!(
-                "entity {name:?} has no PointLight, DirectionalLight, or AmbientLight"
-            )
-            .into(),
+            format!("entity {name:?} has no PointLight, DirectionalLight, or AmbientLight").into(),
             Position::NONE,
         )))
     }
@@ -235,6 +332,84 @@ impl WorldApi {
         Ok(engine_core::terrain::world_height_at(
             &terrain, &transform, x, z,
         ))
+    }
+
+    /// Where one joint of a skinned entity is right now, as a **world**
+    /// matrix (M30).
+    ///
+    /// Read-only, and deliberately so: there is no setter, for M21's reason —
+    /// a script-settable joint is hidden state (invariant 2), and the pose has
+    /// to stay a function of (files, time). What a script wants is not to move
+    /// a bone but to put something *where a bone is*, and that is an ordinary
+    /// `set_position` on an ordinary entity, visible in the trace and baked by
+    /// the change-based rule like anything else.
+    ///
+    /// This composes the same `skeleton::joint_globals` the renderer's palette
+    /// comes from, at the same scene time, with the entity's own `Transform`
+    /// read *live* — so a chase-camera script that has already moved the
+    /// character this step gets the hand where it now is, not where it was.
+    fn joint_world(
+        &mut self,
+        name: &str,
+        joint: &str,
+    ) -> std::result::Result<glam::Mat4, Box<EvalAltResult>> {
+        use engine_core::skeleton::{self, ClipRef};
+
+        let entity = self.entity(name)?;
+        let world = self.world.borrow();
+
+        let asset = world
+            .get::<&Mesh>(entity)
+            .map(|mesh| mesh.asset.clone())
+            .map_err(|_| runtime(format!("entity {name:?} has no Mesh, so it has no rig")))?;
+        let rig = self.rigs.get(&asset).ok_or_else(|| {
+            runtime(format!(
+                "entity {name:?} references {asset:?}, which carries no skin"
+            ))
+        })?;
+        let skin = rig.skin.as_ref().ok_or_else(|| {
+            runtime(format!(
+                "entity {name:?} references {asset:?}, which carries no skin"
+            ))
+        })?;
+
+        let index = skin.joint_named(joint).ok_or_else(|| {
+            // Named joints are a closed set per rig, so a typo can be caught
+            // exactly — the `world.key` treatment.
+            let mut message = format!("{asset:?} has no joint named {joint:?}");
+            if let Some(near) = engine_core::error::closest_match(
+                joint,
+                skin.joints.iter().map(|j| j.name.as_str()),
+            ) {
+                message.push_str(&format!(" (did you mean {near:?}?)"));
+            }
+            runtime(message)
+        })?;
+
+        let player = world
+            .get::<&AnimationPlayer>(entity)
+            .ok()
+            .map(|p| (*p).clone());
+        let clip = player.as_ref().and_then(|p| match ClipRef::parse(&p.clip) {
+            ClipRef::Skeletal { clip, .. } => rig.clip_named(clip),
+            ClipRef::Property(_) => None,
+        });
+        let local = match (&player, clip) {
+            (Some(player), Some(clip)) => {
+                engine_core::animation::local_time(player, skeleton::duration(clip), self.time)
+            }
+            _ => 0.0,
+        };
+
+        let transform = world
+            .get::<&Transform>(entity)
+            .map(|t| *t)
+            .unwrap_or_default();
+        // Through M32's shared seam, so a prop hung off a *planted* foot lands
+        // where the render draws that foot rather than where the clip alone
+        // put it.
+        let globals = engine_core::locomotion::posed_globals(&world, entity, skin, clip, local);
+        Ok(transform.matrix() * globals[index])
     }
 
     /// The vehicle path: velocity access needs a `RigidBody`; what a write
@@ -319,7 +494,14 @@ fn curated_engine() -> rhai::Engine {
             if !input::is_known_key(name) {
                 // Deterministic failure over a silently-never-pressed key.
                 let mut message = format!("{name:?} names no known key");
-                if let Some(suggestion) = input::closest_key(name) {
+                if input::is_known_button(name) {
+                    // The two namespaces share the held set but not the
+                    // query, so name the call that would have worked rather
+                    // than the nearest key to a mouse button.
+                    message.push_str(&format!(
+                        " (it is a mouse button — did you mean world.mouse({name:?})?)"
+                    ));
+                } else if let Some(suggestion) = input::closest_key(name) {
                     message.push_str(&format!(" (did you mean {suggestion:?}?)"));
                 }
                 return Err(Box::new(EvalAltResult::ErrorRuntime(
@@ -328,6 +510,62 @@ fn curated_engine() -> rhai::Engine {
                 )));
             }
             Ok(w.input.is_held(name))
+        },
+    );
+
+    // The mouse (M28). Buttons ride the same held set the keys do, but the
+    // namespace splits here: `key` takes key names and `mouse` takes button
+    // names, each rejecting the other kind with a suggestion. A script that
+    // asks `world.key("MouseLeft")` is told what it did wrong instead of
+    // reading `false` forever.
+    engine.register_fn(
+        "mouse",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<bool, Box<EvalAltResult>> {
+            if !input::is_known_button(name) {
+                let mut message = format!("{name:?} names no known mouse button");
+                if input::is_known_key(name) {
+                    message.push_str(&format!(
+                        " (it is a key — did you mean world.key({name:?})?)"
+                    ));
+                } else if let Some(suggestion) = input::closest_input(name) {
+                    message.push_str(&format!(" (did you mean {suggestion:?}?)"));
+                }
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    message.into(),
+                    Position::NONE,
+                )));
+            }
+            Ok(w.input.is_held(name))
+        },
+    );
+    engine.register_fn("cursor_x", |w: &mut WorldApi| f64::from(w.pointer.cursor.x));
+    engine.register_fn("cursor_y", |w: &mut WorldApi| f64::from(w.pointer.cursor.y));
+    // The frame in pixels, so a script can put the cursor in HUD coordinates:
+    // `cursor_x() * viewport_width()` is the pixel a menu button is
+    // hit-tested against, with no flip to get wrong.
+    engine.register_fn("viewport_width", |w: &mut WorldApi| {
+        w.pointer.viewport[0] as i64
+    });
+    engine.register_fn("viewport_height", |w: &mut WorldApi| {
+        w.pointer.viewport[1] as i64
+    });
+    // Where the cursor's ray meets the horizontal plane at `y` — the call a
+    // top-down game aims with, and the reason the engine resolves the ray
+    // rather than exposing a projection matrix to Rhai.
+    engine.register_fn(
+        "cursor_ground",
+        |w: &mut WorldApi, y: f64| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            // No camera, no direction. The M21 precedent: a script asking
+            // where the pointer is in a scene with no view is a bug, and
+            // inventing an answer hides it until something aims at nothing.
+            w.pointer.ground(y as f32).map(vec3_array).ok_or_else(|| {
+                Box::new(EvalAltResult::ErrorRuntime(
+                    "this scene has no camera to point through, so the cursor has no \
+                     direction; give one entity a Camera component (or pass --camera)"
+                        .into(),
+                    Position::NONE,
+                ))
+            })
         },
     );
 
@@ -351,6 +589,35 @@ fn curated_engine() -> rhai::Engine {
             w.entity(name)?;
             Ok(w.contacts
                 .started_with(name)
+                .into_iter()
+                .map(Dynamic::from)
+                .collect())
+        },
+    );
+
+    // The same two questions at proxy resolution (M33). The answers are
+    // **addresses** — `Walker/Head` — which are engine-produced and never
+    // accepted back: a proxy is not an entity, so `world.set_position` would
+    // rightly reject one. With no `SkinnedCollider` in the scene these return
+    // exactly what the two above do, which is what makes them safe to reach
+    // for in a script that may or may not be shooting at a character.
+    engine.register_fn(
+        "touching_parts",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.entity(engine_core::contact::owner_of(name))?;
+            Ok(w.contacts
+                .touching_parts(name)
+                .into_iter()
+                .map(Dynamic::from)
+                .collect())
+        },
+    );
+    engine.register_fn(
+        "contacts_started_parts",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.entity(engine_core::contact::owner_of(name))?;
+            Ok(w.contacts
+                .started_parts_with(name)
                 .into_iter()
                 .map(Dynamic::from)
                 .collect())
@@ -383,12 +650,18 @@ fn curated_engine() -> rhai::Engine {
             Ok(())
         },
     );
-    engine.register_fn("state", |w: &mut WorldApi, key: &str, default: f64| -> f64 {
-        w.state.borrow().get(key).copied().unwrap_or(default)
-    });
-    engine.register_fn("state", |w: &mut WorldApi, key: &str, default: i64| -> f64 {
-        w.state.borrow().get(key).copied().unwrap_or(default as f64)
-    });
+    engine.register_fn(
+        "state",
+        |w: &mut WorldApi, key: &str, default: f64| -> f64 {
+            w.state.borrow().get(key).copied().unwrap_or(default)
+        },
+    );
+    engine.register_fn(
+        "state",
+        |w: &mut WorldApi, key: &str, default: i64| -> f64 {
+            w.state.borrow().get(key).copied().unwrap_or(default as f64)
+        },
+    );
     engine.register_fn("set_state", |w: &mut WorldApi, key: &str, value: f64| {
         w.state.borrow_mut().insert(key.to_string(), value);
     });
@@ -422,6 +695,9 @@ fn curated_engine() -> rhai::Engine {
          radius: f64,
          impulse: f64|
          -> std::result::Result<(), Box<EvalAltResult>> {
+            // `!(radius > 0.0)` and not `radius <= 0.0`: a NaN radius has to
+            // be a located script error, not an explosion of unknown size.
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
             if !(radius > 0.0) {
                 return Err(Box::new(EvalAltResult::ErrorRuntime(
                     format!("explosion radius must be positive, got {radius}").into(),
@@ -548,10 +824,7 @@ fn curated_engine() -> rhai::Engine {
     );
     engine.register_fn(
         "set_engine_force",
-        |w: &mut WorldApi,
-         name: &str,
-         force: f64|
-         -> std::result::Result<(), Box<EvalAltResult>> {
+        |w: &mut WorldApi, name: &str, force: f64| -> std::result::Result<(), Box<EvalAltResult>> {
             w.with_wheel(name, |wheel| wheel.engine_force = force as f32)
         },
     );
@@ -563,10 +836,7 @@ fn curated_engine() -> rhai::Engine {
     );
     engine.register_fn(
         "set_brake",
-        |w: &mut WorldApi,
-         name: &str,
-         force: f64|
-         -> std::result::Result<(), Box<EvalAltResult>> {
+        |w: &mut WorldApi, name: &str, force: f64| -> std::result::Result<(), Box<EvalAltResult>> {
             w.with_wheel(name, |wheel| wheel.brake = force as f32)
         },
     );
@@ -611,12 +881,9 @@ fn curated_engine() -> rhai::Engine {
                     right.normalize()
                 };
                 let up = back.cross(right);
-                let (rx, ry, rz) = glam::Quat::from_mat3(&glam::Mat3::from_cols(
-                    right, up, back,
-                ))
-                .to_euler(glam::EulerRot::XYZ);
-                t.rotation =
-                    glam::Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees());
+                let (rx, ry, rz) = glam::Quat::from_mat3(&glam::Mat3::from_cols(right, up, back))
+                    .to_euler(glam::EulerRot::XYZ);
+                t.rotation = glam::Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees());
             })
         },
     );
@@ -631,10 +898,7 @@ fn curated_engine() -> rhai::Engine {
     );
     engine.register_fn(
         "set_hud_text",
-        |w: &mut WorldApi,
-         name: &str,
-         text: &str|
-         -> std::result::Result<(), Box<EvalAltResult>> {
+        |w: &mut WorldApi, name: &str, text: &str| -> std::result::Result<(), Box<EvalAltResult>> {
             let text = text.to_string();
             w.with_component::<HudText, _>(name, "HudText", move |t| t.text = text)
         },
@@ -662,6 +926,245 @@ fn curated_engine() -> rhai::Engine {
             })
         },
     );
+    // Moving a HUD element (M28), on either kind. A HUD that can be resized
+    // and re-worded but not *moved* cannot draw a crosshair, which is the
+    // minimum feedback a pointing device needs. Offsets are pixels inward
+    // from the element's own anchor, exactly as the component documents them.
+    engine.register_fn(
+        "hud_offset",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.with_hud_offset(name, |offset| {
+                vec![
+                    Dynamic::from_float(f64::from(offset.x)),
+                    Dynamic::from_float(f64::from(offset.y)),
+                ]
+            })
+        },
+    );
+    engine.register_fn(
+        "set_hud_offset",
+        |w: &mut WorldApi,
+         name: &str,
+         x: f64,
+         y: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            let offset = glam::Vec2::new(x as f32, y as f32);
+            if !offset.is_finite() {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("HUD offset must be finite, got [{x}, {y}]").into(),
+                    Position::NONE,
+                )));
+            }
+            w.with_hud_offset(name, |target| *target = offset)
+        },
+    );
+
+    // ── Interaction (M31) ──────────────────────────────────────────────
+    //
+    // Polled, never dispatched: the engine does not call into a script. A
+    // scene has many `Script` entities, and an `on_click` field would have to
+    // say which one owns the handler — a second addressing scheme for
+    // something already addressed by entity name — plus a dispatch-order rule
+    // and mid-step reentrancy. `world.key` set this shape in M11 for the same
+    // reason: a button that runs code is a *binding*, and bindings are game
+    // logic, and game logic lives in scripts.
+    //
+    // All three take an entity name and answer for the element on it; a name
+    // that is not an element is simply never hovered, which is deliberate —
+    // asking about the wrong entity is a logic bug in the script, not a
+    // resource error, and the polled shape has nowhere to report it that is
+    // not "false".
+    engine.register_fn("hovered", |w: &mut WorldApi, name: &str| {
+        w.interaction.hovered(name)
+    });
+    engine.register_fn("pressed", |w: &mut WorldApi, name: &str| {
+        w.interaction.pressed(name)
+    });
+    engine.register_fn("clicked", |w: &mut WorldApi, name: &str| {
+        w.interaction.clicked(name)
+    });
+
+    // ── HUD element fields (M31) ───────────────────────────────────────
+    //
+    // `visible` is the one that matters: it is how a menu opens and closes,
+    // one boolean on one panel, hiding the whole subtree. All of these bake
+    // change-based like every other script-driven field, so a run that opened
+    // a menu bakes a scene with the menu open.
+    engine.register_fn(
+        "hud_visible",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<bool, Box<EvalAltResult>> {
+            w.with_hud_element(
+                name,
+                "hud_visible",
+                |p| p.visible,
+                |r| r.visible,
+                |i| i.visible,
+                |t| t.visible,
+            )
+        },
+    );
+    engine.register_fn(
+        "set_hud_visible",
+        |w: &mut WorldApi,
+         name: &str,
+         visible: bool|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.with_hud_element(
+                name,
+                "set_hud_visible",
+                |p| p.visible = visible,
+                |r| r.visible = visible,
+                |i| i.visible = visible,
+                |t| t.visible = visible,
+            )
+        },
+    );
+
+    // Colour reads and writes the field that *means* colour on each kind — a
+    // `HudImage` has no `color`, and its `tint` is the multiplier that plays
+    // the same role, so one call reaches all four.
+    engine.register_fn(
+        "hud_color",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            let color = w.with_hud_element(
+                name,
+                "hud_color",
+                |p| p.color,
+                |r| r.color,
+                |i| i.tint,
+                |t| t.color,
+            )?;
+            Ok(vec3_array(color))
+        },
+    );
+    engine.register_fn(
+        "set_hud_color",
+        |w: &mut WorldApi,
+         name: &str,
+         r: f64,
+         g: f64,
+         b: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            // Clamped rather than rejected, following M17's split for lights:
+            // a colour outside [0, 1] has an obvious nearest legal answer, so
+            // it is clamped, where a NaN opacity does not and is an error.
+            let color = glam::Vec3::new(r as f32, g as f32, b as f32);
+            let color = if color.is_finite() {
+                color.clamp(glam::Vec3::ZERO, glam::Vec3::ONE)
+            } else {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("HUD color must be finite, got [{r}, {g}, {b}]").into(),
+                    Position::NONE,
+                )));
+            };
+            w.with_hud_element(
+                name,
+                "set_hud_color",
+                |p| p.color = color,
+                |x| x.color = color,
+                |i| i.tint = color,
+                |t| t.color = color,
+            )
+        },
+    );
+
+    engine.register_fn(
+        "hud_opacity",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            let opacity = w.with_hud_element(
+                name,
+                "hud_opacity",
+                |p| p.opacity,
+                |r| r.opacity,
+                |i| i.opacity,
+                // A `HudText` is always opaque — the 8×8 font is bit-exact in
+                // baselines precisely because a glyph pixel is fully on or
+                // fully off — so it reads as 1 and cannot be dimmed.
+                |_| 1.0,
+            )?;
+            Ok(f64::from(opacity))
+        },
+    );
+    engine.register_fn(
+        "set_hud_opacity",
+        |w: &mut WorldApi,
+         name: &str,
+         opacity: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            let value = opacity as f32;
+            if !value.is_finite() {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("HUD opacity must be finite, got {opacity}").into(),
+                    Position::NONE,
+                )));
+            }
+            let value = value.clamp(0.0, 1.0);
+            w.with_hud_element(
+                name,
+                "set_hud_opacity",
+                |p| p.opacity = value,
+                |r| r.opacity = value,
+                |i| i.opacity = value,
+                |_| {},
+            )
+        },
+    );
+
+    // `hud_size` generalizes M12's `set_hud_rect_size` to panels and images.
+    // The older name stays, because three committed scripts call it.
+    //
+    // A panel's absent `width`/`height` is hug sizing, so reading one back
+    // reports 0 rather than the laid-out box: layout is a function of the
+    // viewport, and this call has no viewport. `engine ui-layout` is where the
+    // resolved rectangle lives, and a script that needs it should be told to
+    // ask there rather than given a number that is right at one resolution.
+    engine.register_fn(
+        "hud_size",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            let size = w.with_hud_element(
+                name,
+                "hud_size",
+                |p| glam::Vec2::new(p.width.unwrap_or(0.0), p.height.unwrap_or(0.0)),
+                |r| r.size,
+                |i| i.size,
+                |t| glam::Vec2::new(0.0, t.size),
+            )?;
+            Ok(vec![
+                Dynamic::from_float(f64::from(size.x)),
+                Dynamic::from_float(f64::from(size.y)),
+            ])
+        },
+    );
+    engine.register_fn(
+        "set_hud_size",
+        |w: &mut WorldApi,
+         name: &str,
+         width: f64,
+         height: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            let size = glam::Vec2::new(width as f32, height as f32);
+            if !size.is_finite() || size.x < 0.0 || size.y < 0.0 {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("HUD size must be finite and non-negative, got [{width}, {height}]")
+                        .into(),
+                    Position::NONE,
+                )));
+            }
+            w.with_hud_element(
+                name,
+                "set_hud_size",
+                |p| {
+                    p.width = Some(size.x);
+                    p.height = Some(size.y);
+                },
+                |r| r.size = size,
+                |i| i.size = size,
+                // Setting a text's "size" is its glyph height, the one number
+                // it has; the width follows from the string.
+                |t| t.size = size.y,
+            )
+        },
+    );
 
     // Terrain (M22): read-only, and the only terrain field the API exposes.
     // A patch's shape is a function of its authored fields, so there is nothing
@@ -675,8 +1178,116 @@ fn curated_engine() -> rhai::Engine {
          x: f64,
          z: f64|
          -> std::result::Result<f64, Box<EvalAltResult>> {
-            w.terrain_height_at(name, x as f32, z as f32)
-                .map(f64::from)
+            w.terrain_height_at(name, x as f32, z as f32).map(f64::from)
+        },
+    );
+
+    // Joints (M30): read-only, and the only two skeletal calls the API
+    // exposes. There is deliberately no setter — a script-settable joint is
+    // hidden state (invariant 2) and the pose must stay a function of (files,
+    // time). Attaching a prop to a hand is then one line of ordinary script:
+    //
+    //     let p = world.joint_position("Robot", "Hand.R");
+    //     world.set_position("Torch", p[0], p[1], p[2]);
+    //
+    // which bakes change-based like every other script-driven transform, needs
+    // no new component, and shows up in the trace.
+    engine.register_fn(
+        "joint_position",
+        |w: &mut WorldApi,
+         name: &str,
+         joint: &str|
+         -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            let world = w.joint_world(name, joint)?;
+            let p = world.w_axis.truncate();
+            Ok(vec![
+                Dynamic::from(f64::from(p.x)),
+                Dynamic::from(f64::from(p.y)),
+                Dynamic::from(f64::from(p.z)),
+            ])
+        },
+    );
+    // Position *and* rotation, for aiming as well as placing — the rotation as
+    // XYZ Euler degrees, the file's convention, so it can be written straight
+    // back through `set_rotation`. Six numbers in one array rather than two
+    // calls, because two calls would pose the rig twice.
+    engine.register_fn(
+        "joint_transform",
+        |w: &mut WorldApi,
+         name: &str,
+         joint: &str|
+         -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            let world = w.joint_world(name, joint)?;
+            let (_, rotation, translation) = world.to_scale_rotation_translation();
+            let (x, y, z) = rotation.to_euler(glam::EulerRot::XYZ);
+            Ok([
+                translation.x,
+                translation.y,
+                translation.z,
+                x.to_degrees(),
+                y.to_degrees(),
+                z.to_degrees(),
+            ]
+            .iter()
+            .map(|v| Dynamic::from(f64::from(*v)))
+            .collect())
+        },
+    );
+
+    // Locomotion (M32): where the clip has got to, and how much ground a
+    // cycle of it covers. Unlike the joints above these *are* settable, and
+    // the distinction is where the number lives — a joint is derived from the
+    // clip and would be hidden state, while `phase` and `stride` are ordinary
+    // component fields that the file carries and the bake splices. A game with
+    // its own idea of locomotion (a phase that freezes mid-air, a gait that
+    // changes with terrain) drives it through these rather than through a
+    // second system in the engine.
+    engine.register_fn(
+        "animation_phase",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| f64::from(p.phase))
+        },
+    );
+    engine.register_fn(
+        "set_animation_phase",
+        |w: &mut WorldApi, name: &str, phase: f64| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Validated at the call, like `set_particle_rate` and for the same
+            // reason: this field bakes, so a bad value has to be a located
+            // script error rather than a scene file that no longer validates.
+            let stored = phase as f32;
+            if !stored.is_finite() || stored < 0.0 {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("animation phase must be a finite number >= 0, got {phase}").into(),
+                    Position::NONE,
+                )));
+            }
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| {
+                p.phase = stored;
+            })
+        },
+    );
+    engine.register_fn(
+        "animation_stride",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| f64::from(p.stride))
+        },
+    );
+    engine.register_fn(
+        "set_animation_stride",
+        |w: &mut WorldApi,
+         name: &str,
+         stride: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            let stored = stride as f32;
+            if !stored.is_finite() || stored < 0.0 {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("animation stride must be a finite number >= 0, got {stride}").into(),
+                    Position::NONE,
+                )));
+            }
+            w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| {
+                p.stride = stored;
+            })
         },
     );
 
@@ -689,9 +1300,7 @@ fn curated_engine() -> rhai::Engine {
     engine.register_fn(
         "particle_rate",
         |w: &mut WorldApi, name: &str| -> std::result::Result<f64, Box<EvalAltResult>> {
-            w.with_component::<ParticleEmitter, _>(name, "ParticleEmitter", |e| {
-                f64::from(e.rate)
-            })
+            w.with_component::<ParticleEmitter, _>(name, "ParticleEmitter", |e| f64::from(e.rate))
         },
     );
     engine.register_fn(
@@ -747,10 +1356,7 @@ fn curated_engine() -> rhai::Engine {
             let stored = intensity as f32;
             if !stored.is_finite() || stored < 0.0 {
                 return Err(Box::new(EvalAltResult::ErrorRuntime(
-                    format!(
-                        "light intensity must be a finite number >= 0, got {intensity}"
-                    )
-                    .into(),
+                    format!("light intensity must be a finite number >= 0, got {intensity}").into(),
                     Position::NONE,
                 )));
             }
@@ -860,6 +1466,7 @@ impl ScriptHost {
         scene_path: &Path,
         timestep_hz: u32,
         daylight: Option<DaylightSettings>,
+        rigs: &dyn engine_core::skeleton::RigSource,
     ) -> Result<Option<Self>> {
         let base_dir = scene_path.parent().unwrap_or(Path::new(""));
         let engine = curated_engine();
@@ -904,6 +1511,21 @@ impl ScriptHost {
         // Deterministic script order: sort by owning entity name.
         scripts.sort_by(|a, b| a.owner.cmp(&b.owner));
 
+        // The rig behind each distinct `Mesh.asset` in the scene, resolved
+        // once. Only skinned files are kept: `world.joint_position` is the
+        // only caller, and holding an empty `Rig` for every cube would make
+        // "does this entity have a rig" a lookup that always succeeds.
+        let mut skins: HashMap<String, Arc<engine_core::skeleton::Rig>> = HashMap::new();
+        for (_, mesh) in world.query::<(hecs::Entity, &Mesh)>().iter() {
+            if skins.contains_key(&mesh.asset) {
+                continue;
+            }
+            let rig = rigs.load_rig(&mesh.asset)?;
+            if rig.skin.is_some() {
+                skins.insert(mesh.asset.clone(), rig);
+            }
+        }
+
         Ok(Some(Self {
             engine,
             scripts,
@@ -913,6 +1535,7 @@ impl ScriptHost {
             breaks: Rc::new(RefCell::new(Vec::new())),
             explosions: Rc::new(RefCell::new(Vec::new())),
             daylight,
+            rigs: Rc::new(skins),
         }))
     }
 
@@ -934,8 +1557,9 @@ impl ScriptHost {
     }
 
     /// Run every script's `step` for step index `step`, with `input` as the
-    /// held-key set for the duration of the step and `contacts` as the
-    /// touching-state left by the previous physics step. The world is moved
+    /// held-key set for the duration of the step, `pointer` as where the
+    /// mouse pointed during it, and `contacts` as the touching-state left by
+    /// the previous physics step. The world is moved
     /// into the scripts' reach for the duration and moved back out even on
     /// error, so a failing script never swallows the ECS. Returns the HUD
     /// lines the step pushed — this step's alone; the list starts empty
@@ -945,6 +1569,8 @@ impl ScriptHost {
         world: &mut World,
         step: u64,
         input: &InputState,
+        pointer: &Pointer,
+        interaction: &engine_core::ui::Interaction,
         contacts: &ContactState,
     ) -> Result<Vec<String>> {
         // The same reproducible clock the renderer uses: whole fixed steps
@@ -960,7 +1586,11 @@ impl ScriptHost {
             names: Rc::clone(&self.names),
             dt: self.dt,
             daylight,
+            time: step as f32 * self.dt,
+            rigs: Rc::clone(&self.rigs),
             input: Rc::new(input.clone()),
+            pointer: *pointer,
+            interaction: Rc::new(interaction.clone()),
             contacts: Rc::new(contacts.clone()),
             state: Rc::clone(&self.state),
             hud: Rc::new(RefCell::new(Vec::new())),
@@ -1041,9 +1671,7 @@ pub fn validate_scene_scripts(source: &str, path: &str) -> Vec<EngineError> {
                         errors.push(
                             EngineError::new(
                                 codes::SCRIPT_MISSING_STEP_FN,
-                                format!(
-                                    "script {display} defines no `fn step(world, step)`"
-                                ),
+                                format!("script {display} defines no `fn step(world, step)`"),
                             )
                             .file(&display)
                             .entity(&entity.name),
@@ -1097,14 +1725,33 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         for step in 0..150 {
-            host.step(&mut scene.world, step, &InputState::default(), &ContactState::default()).unwrap();
+            host.step(
+                &mut scene.world,
+                step,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap();
         }
 
         let entity = scene.entity("Mover").unwrap();
         let y = scene.world.get::<&Transform>(entity).unwrap().position.y;
-        assert!((y - 2.25).abs() < 1e-4, "elevator should stop at 2.25, is at {y}");
+        assert!(
+            (y - 2.25).abs() < 1e-4,
+            "elevator should stop at 2.25, is at {y}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1115,15 +1762,35 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.position("Nobody"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("Nobody"), "{}", error.message);
         assert_eq!(error.context().unwrap().entity.as_deref(), Some("Mover"));
 
         // The world survived the failure.
         assert!(scene.entity("Mover").is_some());
-        assert!(scene.world.get::<&Transform>(scene.entity("Mover").unwrap()).is_ok());
+        assert!(scene
+            .world
+            .get::<&Transform>(scene.entity("Mover").unwrap())
+            .is_ok());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1134,8 +1801,25 @@ mod tests {
             &dir,
             r#"fn step(world, step) { let x = 0; loop { x += 1; } }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1152,19 +1836,15 @@ mod tests {
             ]}
         ]}"#;
         std::fs::write(dir.join("scene.json"), scene_json).unwrap();
-        let errors = validate_scene_scripts(
-            scene_json,
-            &dir.join("scene.json").display().to_string(),
-        );
+        let errors =
+            validate_scene_scripts(scene_json, &dir.join("scene.json").display().to_string());
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].error, "script_parse_error");
         assert!(errors[0].context().unwrap().line.is_some());
 
         std::fs::write(dir.join("scripts/test.rhai"), "fn stpe(world, step) {}").unwrap();
-        let errors = validate_scene_scripts(
-            scene_json,
-            &dir.join("scene.json").display().to_string(),
-        );
+        let errors =
+            validate_scene_scripts(scene_json, &dir.join("scene.json").display().to_string());
         assert_eq!(errors[0].error, "script_missing_step_fn");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1179,14 +1859,41 @@ mod tests {
                 if step == 1 { world.look_at("Mover", 5.0, 0.25, 0.0); }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let entity = scene.entity("Mover").unwrap();
 
-        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
         let r = scene.world.get::<&Transform>(entity).unwrap().rotation;
-        assert!(r.abs_diff_eq(glam::Vec3::ZERO, 1e-4), "straight ahead is identity: {r}");
+        assert!(
+            r.abs_diff_eq(glam::Vec3::ZERO, 1e-4),
+            "straight ahead is identity: {r}"
+        );
 
-        host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap();
+        host.step(
+            &mut scene.world,
+            1,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
         let t = *scene.world.get::<&Transform>(entity).unwrap();
         // Facing +X from the origin: forward (-Z rotated) must be +X, and
         // the entity's up must stay world-up (no roll).
@@ -1197,9 +1904,221 @@ mod tests {
             t.rotation.z.to_radians(),
         );
         let forward = rotation * -glam::Vec3::Z;
-        assert!(forward.abs_diff_eq(glam::Vec3::X, 1e-4), "forward is {forward}");
+        assert!(
+            forward.abs_diff_eq(glam::Vec3::X, 1e-4),
+            "forward is {forward}"
+        );
         let up = rotation * glam::Vec3::Y;
         assert!(up.abs_diff_eq(glam::Vec3::Y, 1e-4), "up is {up}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M28: the mouse reaches scripts as a button predicate, a cursor, and a
+    /// point on the ground — and the two namespaces stay apart.
+    #[test]
+    fn scripts_read_the_mouse_and_aim_at_the_ground_under_the_cursor() {
+        let dir = temp_dir("mouse");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) {
+                if world.mouse("MouseLeft") {
+                    let g = world.cursor_ground(0.0);
+                    world.set_position("Mover", g[0], g[1], g[2]);
+                }
+                world.set_state("cx", world.cursor_x());
+                world.set_state("vw", world.viewport_width());
+            }"#,
+        );
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        let entity = scene.entity("Mover").unwrap();
+
+        let mut held = InputState::default();
+        held.set_cursor(glam::Vec2::new(0.5, 0.5));
+        // 10 m up, looking straight down: the centre of the frame is the
+        // point directly below, whatever the fov.
+        let camera = engine_core::components::Camera::default();
+        let model = glam::Mat4::from_rotation_translation(
+            glam::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+            glam::Vec3::new(2.0, 10.0, -3.0),
+        );
+        let viewport = engine_core::input::Viewport::new(800, 400, None);
+        let pointer = Pointer::resolve(&held, &viewport, Some((camera, model)));
+
+        // Nothing held: the cursor is read, but nothing is aimed.
+        let before = scene.world.get::<&Transform>(entity).unwrap().position;
+        host.step(
+            &mut scene.world,
+            0,
+            &held,
+            &pointer,
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+        let resting = scene.world.get::<&Transform>(entity).unwrap().position;
+        assert_eq!(resting, before);
+
+        held.press("MouseLeft");
+        let pointer = Pointer::resolve(&held, &viewport, Some((camera, model)));
+        host.step(
+            &mut scene.world,
+            1,
+            &held,
+            &pointer,
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+        let aimed = scene.world.get::<&Transform>(entity).unwrap().position;
+        assert!(
+            (aimed - glam::Vec3::new(2.0, 0.0, -3.0)).length() < 1e-3,
+            "the ground under the centre of the frame is under the camera: {aimed}"
+        );
+
+        // A button asked for as a key — and a key asked for as a button —
+        // are located errors naming the call that would have worked.
+        for (source, wrong) in [
+            (
+                r#"fn step(world, step) { world.key("MouseLeft"); }"#,
+                "MouseLeft",
+            ),
+            (
+                r#"fn step(world, step) { world.mouse("MouseLef"); }"#,
+                "MouseLef",
+            ),
+        ] {
+            let (mut scene, path) = scene_with_script(&dir, source);
+            let host = ScriptHost::build(
+                &scene.world,
+                &path,
+                60,
+                None,
+                &engine_core::mesh::BuiltinAssets,
+            )
+            .unwrap()
+            .unwrap();
+            let error = host
+                .step(
+                    &mut scene.world,
+                    0,
+                    &InputState::default(),
+                    &Pointer::default(),
+                    &engine_core::ui::Interaction::default(),
+                    &ContactState::default(),
+                )
+                .unwrap_err();
+            assert_eq!(error.error, "script_runtime_error");
+            assert!(
+                error.message.contains(wrong) && error.message.contains("did you mean"),
+                "{}",
+                error.message
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A scene with no camera has no direction to point in, and says so —
+    /// the M21 precedent for `world.time_of_day()` without a `daylight`
+    /// block.
+    #[test]
+    fn asking_where_the_cursor_points_with_no_camera_is_an_error() {
+        let dir = temp_dir("nocamera");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.cursor_ground(0.0); }"#,
+        );
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(error.message.contains("no camera"), "{}", error.message);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A HUD that can be resized and re-worded but not moved cannot draw a
+    /// crosshair (M28).
+    #[test]
+    fn scripts_move_hud_elements_of_either_kind() {
+        let dir = temp_dir("hudoffset");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                world.set_hud_offset("Cross", world.cursor_x() * 200.0, world.cursor_y() * 100.0);
+                let o = world.hud_offset("Cross");
+                world.set_hud_offset("Label", o[0], o[1] + 8.0);
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Cross","components":[
+                {"type":"HudRect","size":[8.0,8.0]},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"Label","components":[{"type":"HudText","text":"x"}]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &scene_path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+
+        let mut held = InputState::default();
+        held.set_cursor(glam::Vec2::new(0.25, 0.5));
+        let pointer = Pointer::resolve(&held, &engine_core::input::Viewport::DEFAULT, None);
+        host.step(
+            &mut scene.world,
+            0,
+            &held,
+            &pointer,
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+
+        let rect = scene
+            .world
+            .get::<&HudRect>(scene.entity("Cross").unwrap())
+            .unwrap()
+            .offset;
+        assert_eq!(rect, glam::Vec2::new(50.0, 50.0));
+        let text = scene
+            .world
+            .get::<&HudText>(scene.entity("Label").unwrap())
+            .unwrap()
+            .offset;
+        assert_eq!(text, glam::Vec2::new(50.0, 58.0));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1215,24 +2134,61 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
 
         let mut held = InputState::default();
         held.press("ArrowUp");
-        host.step(&mut scene.world, 0, &held, &ContactState::default()).unwrap();
-        host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &held,
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+        host.step(
+            &mut scene.world,
+            1,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
 
         let entity = scene.entity("Mover").unwrap();
         let x = scene.world.get::<&Transform>(entity).unwrap().position.x;
         assert!((x - 1.0).abs() < 1e-6, "only the held step moves: x = {x}");
 
-        let (mut scene, path) = scene_with_script(
-            &dir,
-            r#"fn step(world, step) { world.key("ArowUp"); }"#,
-        );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let (mut scene, path) =
+            scene_with_script(&dir, r#"fn step(world, step) { world.key("ArowUp"); }"#);
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let error = host
-            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
             .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(
@@ -1253,7 +2209,15 @@ mod tests {
                 world.set_position("Mover", f[0], f[1], f[2]);
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let entity = scene.entity("Mover").unwrap();
 
         // Physics writes yaws past ±90° as the gimbal twin (±180, θ, ±180),
@@ -1265,12 +2229,23 @@ mod tests {
             -(150f32.to_radians().cos()),
         );
         for (rotation, expected) in [
-            (glam::Vec3::new(0.0, 90.0, 0.0), glam::Vec3::new(-1.0, 0.0, 0.0)),
+            (
+                glam::Vec3::new(0.0, 90.0, 0.0),
+                glam::Vec3::new(-1.0, 0.0, 0.0),
+            ),
             (glam::Vec3::new(0.0, 150.0, 0.0), yaw150),
             (glam::Vec3::new(-180.0, 30.0, -180.0), yaw150), // twin of yaw 150
         ] {
             scene.world.get::<&mut Transform>(entity).unwrap().rotation = rotation;
-            host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+            host.step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap();
             let p = scene.world.get::<&Transform>(entity).unwrap().position;
             assert!(
                 (p - expected).length() < 1e-4,
@@ -1303,13 +2278,31 @@ mod tests {
         ]}"#;
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
-        let mut scene =
-            Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
-        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+        let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &scene_path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
 
         let entity = scene.entity("Car").unwrap();
-        let body = *scene.world.get::<&engine_core::components::RigidBody>(entity).unwrap();
+        let body = *scene
+            .world
+            .get::<&engine_core::components::RigidBody>(entity)
+            .unwrap();
         assert_eq!(body.linear_velocity, glam::Vec3::new(3.0, 0.0, 0.0));
         assert_eq!(body.angular_velocity, glam::Vec3::new(0.0, 45.0, 0.0));
         std::fs::remove_dir_all(&dir).ok();
@@ -1349,11 +2342,34 @@ mod tests {
         ]}"#;
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
-        let mut scene =
-            Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
-        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
-        host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap();
+        let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &scene_path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+        host.step(
+            &mut scene.world,
+            1,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
 
         let wheel = |name: &str| {
             let entity = scene.entity(name).unwrap();
@@ -1365,7 +2381,10 @@ mod tests {
         };
         let rear = wheel("WheelBL");
         assert_eq!(rear.engine_force, 900.0);
-        assert_eq!(rear.brake, 4.0, "brake accumulated across two steps via readback");
+        assert_eq!(
+            rear.brake, 4.0,
+            "brake accumulated across two steps via readback"
+        );
         let front = wheel("WheelFL");
         assert_eq!(front.steering, 12.5, "steering set (and readback saw 900)");
 
@@ -1374,9 +2393,24 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.set_engine_force("Mover", 1.0); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let error = host
-            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
             .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("no Wheel"), "{}", error.message);
@@ -1390,9 +2424,24 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.linear_velocity("Mover"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let error = host
-            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
             .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("no RigidBody"), "{}", error.message);
@@ -1415,30 +2464,54 @@ mod tests {
                 world.set_position("Mover", 0.0, y, 0.0);
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let entity = scene.entity("Mover").unwrap();
         let y_of = |scene: &Scene| scene.world.get::<&Transform>(entity).unwrap().position.y;
 
         let mut contacts = ContactState::default();
-        contacts.apply(&[ContactEvent {
-            a: "Cam".into(),
-            b: "Mover".into(),
-            started: true,
-        }]);
-        host.step(&mut scene.world, 0, &InputState::default(), &contacts).unwrap();
+        contacts.apply(&[ContactEvent::new("Cam", "Mover", true)]);
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &contacts,
+        )
+        .unwrap();
         assert_eq!(y_of(&scene), 7.0, "touching + started + name all visible");
 
         // Next step: still touching, no longer freshly started.
         contacts.apply(&[]);
-        host.step(&mut scene.world, 1, &InputState::default(), &contacts).unwrap();
+        host.step(
+            &mut scene.world,
+            1,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &contacts,
+        )
+        .unwrap();
         assert_eq!(y_of(&scene), 5.0, "started clears, touching persists");
 
-        contacts.apply(&[ContactEvent {
-            a: "Cam".into(),
-            b: "Mover".into(),
-            started: false,
-        }]);
-        host.step(&mut scene.world, 2, &InputState::default(), &contacts).unwrap();
+        contacts.apply(&[ContactEvent::new("Cam", "Mover", false)]);
+        host.step(
+            &mut scene.world,
+            2,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &contacts,
+        )
+        .unwrap();
         assert_eq!(y_of(&scene), 0.0, "an ended contact disappears");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1455,14 +2528,36 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let hud = host
-            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
             .unwrap();
         assert_eq!(hud, vec!["SPEED 42 KM/H".to_string(), "LAP 1".to_string()]);
         // The next step pushes nothing, so the HUD is empty — not sticky.
         let hud = host
-            .step(&mut scene.world, 1, &InputState::default(), &ContactState::default())
+            .step(
+                &mut scene.world,
+                1,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
             .unwrap();
         assert!(hud.is_empty(), "{hud:?}");
         std::fs::remove_dir_all(&dir).ok();
@@ -1475,9 +2570,24 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.touching("Nobody"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let error = host
-            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
             .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("Nobody"), "{}", error.message);
@@ -1494,18 +2604,58 @@ mod tests {
                 while i < 17 { world.hud("line"); i += 1; }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
-        assert!(error.message.contains("at most 16 lines"), "{}", error.message);
-
-        let (mut scene, path) = scene_with_script(
-            &dir,
-            "fn step(world, step) { world.hud(\"caf\u{e9}\"); }",
+        assert!(
+            error.message.contains("at most 16 lines"),
+            "{}",
+            error.message
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
-        assert!(error.message.contains("printable ASCII"), "{}", error.message);
+
+        let (mut scene, path) =
+            scene_with_script(&dir, "fn step(world, step) { world.hud(\"caf\u{e9}\"); }");
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("printable ASCII"),
+            "{}",
+            error.message
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1534,10 +2684,25 @@ mod tests {
         ]}"#;
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
-        let mut scene =
-            Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
-        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+        let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &scene_path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
 
         let text = scene
             .world
@@ -1553,13 +2718,93 @@ mod tests {
             .size;
         assert_eq!(size, glam::Vec2::new(100.0, 8.0));
 
+        // M31's generalization reaches the same two through one call, and a
+        // panel and an image besides.
+        let dir = temp_dir("hudelem");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                world.set_hud_visible("Menu", false);
+                world.set_hud_color("Menu", 0.1, 0.2, 0.3);
+                world.set_hud_opacity("Menu", 0.75);
+                world.set_hud_size("Bar", 10.0, 4.0);
+                // Clamped, not rejected: an out-of-range colour has an
+                // obvious nearest legal answer (M17's split for lights).
+                world.set_hud_color("Bar", 5.0, -1.0, 0.5);
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Menu","components":[
+                {"type":"HudPanel","layout":"column"},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"Bar","components":[
+                {"type":"HudRect","size":[50.0,8.0],"parent":"Menu"}
+            ]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &scene_path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+
+        let menu = scene.entity("Menu").unwrap();
+        let panel = scene
+            .world
+            .get::<&engine_core::components::HudPanel>(menu)
+            .unwrap();
+        assert!(!panel.visible, "one boolean closes a menu");
+        assert_eq!(panel.color, glam::Vec3::new(0.1, 0.2, 0.3));
+        assert_eq!(panel.opacity, 0.75);
+        drop(panel);
+
+        let bar = scene
+            .world
+            .get::<&HudRect>(scene.entity("Bar").unwrap())
+            .unwrap();
+        assert_eq!(bar.size, glam::Vec2::new(10.0, 4.0));
+        assert_eq!(bar.color, glam::Vec3::new(1.0, 0.0, 0.5), "clamped");
+
         // Missing components are structured errors, like every accessor.
-        let (mut scene, path) = scene_with_script(
-            &dir,
-            r#"fn step(world, step) { world.hud_text("Mover"); }"#,
-        );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
+        let (mut scene, path) =
+            scene_with_script(&dir, r#"fn step(world, step) { world.hud_text("Mover"); }"#);
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
         assert_eq!(error.error, "script_runtime_error");
         assert!(error.message.contains("no HudText"), "{}", error.message);
         std::fs::remove_dir_all(&dir).ok();
@@ -1588,7 +2833,15 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &scene_path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let rate_now = |scene: &Scene| {
             scene
                 .world
@@ -1597,9 +2850,29 @@ mod tests {
                 .rate
         };
 
-        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
-        assert_eq!(rate_now(&scene), 0.0, "the script must be able to shut emission off");
-        host.step(&mut scene.world, 2, &InputState::default(), &ContactState::default()).unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            rate_now(&scene),
+            0.0,
+            "the script must be able to shut emission off"
+        );
+        host.step(
+            &mut scene.world,
+            2,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
         // The getter read the *live* 0.0 the previous step wrote, not the
         // file's 25.0 — the component is the single source of truth.
         assert_eq!(rate_now(&scene), 0.0, "the getter must see the live value");
@@ -1611,12 +2884,31 @@ mod tests {
                 &dir,
                 &format!("fn step(world, step) {{ world.set_particle_rate(\"Puff\", {bad}); }}"),
             );
-            let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+            let host = ScriptHost::build(
+                &scene.world,
+                &path,
+                60,
+                None,
+                &engine_core::mesh::BuiltinAssets,
+            )
+            .unwrap()
+            .unwrap();
             let error = host
-                .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+                .step(
+                    &mut scene.world,
+                    0,
+                    &InputState::default(),
+                    &Pointer::default(),
+                    &engine_core::ui::Interaction::default(),
+                    &ContactState::default(),
+                )
                 .unwrap_err();
             assert_eq!(error.error, "script_runtime_error", "{bad}");
-            assert!(error.message.contains("finite number >= 0"), "{bad}: {}", error.message);
+            assert!(
+                error.message.contains("finite number >= 0"),
+                "{bad}: {}",
+                error.message
+            );
         }
 
         // Missing components are structured errors, like every accessor.
@@ -1624,11 +2916,30 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.particle_rate("Mover"); }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let error = host
-            .step(&mut scene.world, 0, &InputState::default(), &ContactState::default())
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
             .unwrap_err();
-        assert!(error.message.contains("no ParticleEmitter"), "{}", error.message);
+        assert!(
+            error.message.contains("no ParticleEmitter"),
+            "{}",
+            error.message
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1666,11 +2977,21 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &scene_path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         host.step(
             &mut scene.world,
             0,
             &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
             &ContactState::default(),
         )
         .unwrap();
@@ -1706,16 +3027,27 @@ mod tests {
         // validation, so it is a located script error — same rule as
         // `set_particle_rate`.
         for bad in ["-1.0", "0.0/0.0", "1e300"] {
-            let script = format!("fn step(world, step) {{ world.set_light_intensity(\"Fire\", {bad}); }}");
+            let script =
+                format!("fn step(world, step) {{ world.set_light_intensity(\"Fire\", {bad}); }}");
             std::fs::write(dir.join("scripts/test.rhai"), &script).unwrap();
             let mut scene =
                 Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-            let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
+            let host = ScriptHost::build(
+                &scene.world,
+                &scene_path,
+                60,
+                None,
+                &engine_core::mesh::BuiltinAssets,
+            )
+            .unwrap()
+            .unwrap();
             let error = host
                 .step(
                     &mut scene.world,
                     0,
                     &InputState::default(),
+                    &Pointer::default(),
+                    &engine_core::ui::Interaction::default(),
                     &ContactState::default(),
                 )
                 .unwrap_err();
@@ -1742,12 +3074,22 @@ mod tests {
         ]}"#;
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(&scene.world, &scene_path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &scene_path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         let error = host
             .step(
                 &mut scene.world,
                 0,
                 &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
                 &ContactState::default(),
             )
             .unwrap_err();
@@ -1789,9 +3131,25 @@ mod tests {
                 world.set_position("Mover", laps, 0.0, world.state("missing", -7.5));
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
         for step in 0..8 {
-            host.step(&mut scene.world, step, &InputState::default(), &ContactState::default()).unwrap();
+            host.step(
+                &mut scene.world,
+                step,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap();
         }
         let entity = scene.entity("Mover").unwrap();
         let p = scene.world.get::<&Transform>(entity).unwrap().position;
@@ -1831,17 +3189,55 @@ mod tests {
                 if step == 2 { world.break_entity("Ghost"); }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
 
-        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
         assert_eq!(host.take_breaks(), vec!["Crate".to_string()]);
         assert!(host.take_breaks().is_empty(), "draining drains");
 
-        let error = host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap_err();
+        let error = host
+            .step(
+                &mut scene.world,
+                1,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
         assert!(error.message.contains("no Breakable"), "{}", error.message);
 
-        let error = host.step(&mut scene.world, 2, &InputState::default(), &ContactState::default()).unwrap_err();
-        assert!(error.message.contains("no entity named"), "{}", error.message);
+        let error = host
+            .step(
+                &mut scene.world,
+                2,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("no entity named"),
+            "{}",
+            error.message
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1856,19 +3252,65 @@ mod tests {
                 if step == 2 { world.explode(0.0, 0.0, 0.0, 1.0, -1.0); }
             }"#,
         );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
 
-        host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap();
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
         assert_eq!(
             host.take_explosions(),
-            vec![QueuedExplosion { center: [1.0, 2.0, 3.0], radius: 5.0, impulse: 20.0 }]
+            vec![QueuedExplosion {
+                center: [1.0, 2.0, 3.0],
+                radius: 5.0,
+                impulse: 20.0
+            }]
         );
 
-        let error = host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap_err();
-        assert!(error.message.contains("radius must be positive"), "{}", error.message);
+        let error = host
+            .step(
+                &mut scene.world,
+                1,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("radius must be positive"),
+            "{}",
+            error.message
+        );
 
-        let error = host.step(&mut scene.world, 2, &InputState::default(), &ContactState::default()).unwrap_err();
-        assert!(error.message.contains("cannot be negative"), "{}", error.message);
+        let error = host
+            .step(
+                &mut scene.world,
+                2,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("cannot be negative"),
+            "{}",
+            error.message
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1879,17 +3321,46 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.set_position("Fragment", 1.0, 2.0, 3.0); }"#,
         );
-        let mut host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
+        let mut host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
 
         // Before the spawn the name is unknown — a runtime error.
-        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
-        assert!(error.message.contains("no entity named"), "{}", error.message);
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("no entity named"),
+            "{}",
+            error.message
+        );
 
         let spawned = scene
             .world
             .spawn((Name("Fragment".to_string()), Transform::default()));
         host.sync_names(&scene.world);
-        host.step(&mut scene.world, 1, &InputState::default(), &ContactState::default()).unwrap();
+        host.step(
+            &mut scene.world,
+            1,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
         let p = scene.world.get::<&Transform>(spawned).unwrap().position;
         assert_eq!(p, glam::Vec3::new(1.0, 2.0, 3.0));
         std::fs::remove_dir_all(&dir).ok();
@@ -1898,12 +3369,26 @@ mod tests {
     #[test]
     fn no_time_or_io_exists_in_the_sandbox() {
         let dir = temp_dir("sandbox");
-        let (mut scene, path) = scene_with_script(
-            &dir,
-            r#"fn step(world, step) { timestamp(); }"#,
-        );
-        let host = ScriptHost::build(&scene.world, &path, 60, None).unwrap().unwrap();
-        let error = host.step(&mut scene.world, 0, &InputState::default(), &ContactState::default()).unwrap_err();
+        let (mut scene, path) = scene_with_script(&dir, r#"fn step(world, step) { timestamp(); }"#);
+        let host = ScriptHost::build(
+            &scene.world,
+            &path,
+            60,
+            None,
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap()
+        .unwrap();
+        let error = host
+            .step(
+                &mut scene.world,
+                0,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
         assert_eq!(
             error.error, "script_runtime_error",
             "timestamp() must not exist: {error:?}"

@@ -41,10 +41,20 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
     // Textures are keyed on (reference, colour space): the space decides how
     // the mip chain is filtered, so one file read as albedo and as ORM really
     // is two decodes, and a failure in either is worth reporting.
-    let mut texture_verdicts: HashMap<(String, engine_core::texture::ColorSpace), Option<EngineError>> =
-        HashMap::new();
+    let mut texture_verdicts: HashMap<
+        (String, engine_core::texture::ColorSpace),
+        Option<EngineError>,
+    > = HashMap::new();
 
     for (entity_index, entity) in file.entities.iter().enumerate() {
+        // The entity's own mesh, resolved once: a `FootPlant` names joints,
+        // and the rig those joints have to be in is the one its `Mesh` owns
+        // (M30's rule — a skin is a property of the asset).
+        let entity_mesh = entity.components.iter().find_map(|c| match c {
+            ComponentData::Mesh(mesh) => Some(mesh.asset.clone()),
+            _ => None,
+        });
+
         for (component_index, component) in entity.components.iter().enumerate() {
             let component_path = format!("/entities/{entity_index}/components/{component_index}");
 
@@ -65,6 +75,109 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                         .entity(entity.name.clone())
                         .component("Material")
                         .field(field);
+                    if let Some(line) = index.line_of_or_parent(&json_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(json_path));
+                }
+            }
+
+            // A HudImage (M31). The reference itself is engine-core's, and so
+            // is every field range; what needs this crate is the comparison
+            // between the nine-slice insets and the *source* image, which
+            // means decoding it. Same division as `texture_too_large`, and the
+            // same reason it fires from `validate` rather than from a draw:
+            // a frame that has quietly clamped its corners is a bug found too
+            // late, and the fix is a number the author cannot otherwise see.
+            if let ComponentData::HudImage(image) = component {
+                let space = engine_core::texture::ColorSpace::Srgb;
+                let verdict = texture_verdicts
+                    .entry((image.texture.clone(), space))
+                    .or_insert_with(|| check_texture(&image.texture, base_dir, space));
+                let json_path = format!("{component_path}/texture");
+                if let Some(template) = verdict {
+                    let mut error = template
+                        .clone()
+                        .file(path)
+                        .entity(entity.name.clone())
+                        .component("HudImage")
+                        .field("texture");
+                    if let Some(line) = index.line_of_or_parent(&json_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(json_path));
+                } else if let Some(error) = check_slice(image, base_dir, &entity.name) {
+                    let slice_path = format!("{component_path}/slice");
+                    let mut error = error.file(path);
+                    if let Some(line) = index.line_of_or_parent(&slice_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(slice_path));
+                }
+            }
+
+            // A skeletal AnimationPlayer (M30). The reference-level rules —
+            // the fragment being required, the player and the Mesh naming one
+            // file — are engine-core's, because they need no file opened.
+            // These three do: the file has to have a skin, the fragment has to
+            // name a clip that is in it, and the skin has to fit the palette.
+            if let ComponentData::AnimationPlayer(player) = component {
+                if let engine_core::skeleton::ClipRef::Skeletal { asset, clip } =
+                    engine_core::skeleton::ClipRef::parse(&player.clip)
+                {
+                    let json_path = format!("{component_path}/clip");
+                    for mut error in check_rig(asset, clip, base_dir) {
+                        error = error
+                            .file(path)
+                            .entity(entity.name.clone())
+                            .component("AnimationPlayer")
+                            .field("clip");
+                        if let Some(line) = index.line_of_or_parent(&json_path) {
+                            error = error.line(line);
+                        }
+                        errors.push(error.path(json_path.clone()));
+                    }
+                }
+            }
+
+            // A FootPlant (M32). The ground reference is engine-core's (it is
+            // another entity, not a file); what needs this crate is whether
+            // the joints it names are in the rig at all — a mistyped ankle
+            // otherwise plants nothing, silently, which is exactly the failure
+            // class `did_you_mean` exists for.
+            if let ComponentData::FootPlant(plant) = component {
+                for mut error in check_plant(plant, entity_mesh.as_deref(), base_dir) {
+                    let json_path = error
+                        .context()
+                        .and_then(|c| c.field.clone())
+                        .map(|field| format!("{component_path}/{field}"))
+                        .unwrap_or_else(|| component_path.clone());
+                    error = error
+                        .file(path)
+                        .entity(entity.name.clone())
+                        .component("FootPlant");
+                    if let Some(line) = index.line_of_or_parent(&json_path) {
+                        error = error.line(line);
+                    }
+                    errors.push(error.path(json_path));
+                }
+            }
+
+            // A SkinnedCollider (M33), for `check_plant`'s reason exactly: a
+            // proxy on a joint the rig does not have would silently never be
+            // built, and a hitbox that is not there is invisible until
+            // something walks through a character.
+            if let ComponentData::SkinnedCollider(proxies) = component {
+                for mut error in check_proxies(proxies, entity_mesh.as_deref(), base_dir) {
+                    let json_path = error
+                        .context()
+                        .and_then(|c| c.field.clone())
+                        .map(|field| format!("{component_path}/{field}"))
+                        .unwrap_or_else(|| component_path.clone());
+                    error = error
+                        .file(path)
+                        .entity(entity.name.clone())
+                        .component("SkinnedCollider");
                     if let Some(line) = index.line_of_or_parent(&json_path) {
                         error = error.line(line);
                     }
@@ -139,6 +252,274 @@ fn check_asset(asset: &str, base_dir: &Path) -> Option<EngineError> {
         Ok(MeshAsset::File(path)) => crate::gltf_mesh::load_gltf(&path).err(),
         Err(e) => Some(e),
     }
+}
+
+/// Open a skeletal player's glTF and check what only the file can answer.
+///
+/// Every joint a `FootPlant` names, against the rig its entity's `Mesh` owns
+/// (M32).
+///
+/// The verdicts carry a `field` naming where in the component the problem is,
+/// which the caller turns into a JSON pointer — a foot list is the first thing
+/// in this engine where "which one of them" needs an index in the path.
+fn check_plant(
+    plant: &engine_core::components::FootPlant,
+    mesh: Option<&str>,
+    base_dir: &Path,
+) -> Vec<EngineError> {
+    // No `Mesh` at all is engine-core's `foot_plant_without_skin`; saying it
+    // twice would be two errors for one mistake.
+    let Some(asset) = mesh else {
+        return Vec::new();
+    };
+    let path = match MeshAsset::resolve(asset, base_dir) {
+        Ok(MeshAsset::Builtin(_)) => {
+            return vec![EngineError::new(
+                engine_core::codes::FOOT_PLANT_WITHOUT_SKIN,
+                format!(
+                    "this FootPlant is on an entity whose Mesh is the builtin \
+                     primitive {asset:?}, which has no skeleton to plant"
+                ),
+            )]
+        }
+        Ok(MeshAsset::File(path)) => path,
+        Err(_) => return Vec::new(),
+    };
+    let Ok(rig) = crate::gltf_skin::load_rig(&path) else {
+        return Vec::new();
+    };
+    let Some(skin) = &rig.skin else {
+        return vec![EngineError::new(
+            engine_core::codes::FOOT_PLANT_WITHOUT_SKIN,
+            format!(
+                "this FootPlant is on an entity whose Mesh {asset:?} carries no skin; \
+                 there are no joints in it to plant"
+            ),
+        )];
+    };
+
+    let names: Vec<&str> = skin.joints.iter().map(|j| j.name.as_str()).collect();
+    let mut errors = Vec::new();
+
+    let mut named = |joint: &str, field: String| match skin.joint_named(joint) {
+        Some(index) => Some(index),
+        None => {
+            errors.push(
+                EngineError::new(
+                    engine_core::codes::UNKNOWN_JOINT,
+                    format!(
+                        "the rig in {asset:?} has no joint named {joint:?} (engine \
+                         list-joints {asset} lists them)"
+                    ),
+                )
+                .field(field)
+                .suggest_from(joint, names.iter().copied()),
+            );
+            None
+        }
+    };
+
+    let mut ankles = Vec::new();
+    for (i, foot) in plant.feet.iter().enumerate() {
+        if let Some(index) = named(&foot.ankle, format!("feet/{i}/ankle")) {
+            ankles.push((i, index, foot.chain));
+        }
+    }
+    if let Some(hips) = &plant.hips {
+        named(hips, "hips".to_string());
+    }
+
+    // A chain that reaches past the root would solve with fewer joints than
+    // the file asked for — a leg that bends at one place instead of two, which
+    // looks like the solver failing rather than like a mis-authored chain.
+    for (i, ankle, chain) in ankles {
+        let mut joint = ankle;
+        let mut available = 0;
+        while let Some(parent) = skin.joints[joint].parent {
+            available += 1;
+            joint = parent;
+        }
+        if available < chain {
+            errors.push(
+                EngineError::new(
+                    engine_core::codes::FOOT_PLANT_CHAIN_TOO_LONG,
+                    format!(
+                        "foot {:?} asks for a chain of {chain}, but {:?} has only \
+                         {available} joint(s) above it in the rig",
+                        plant.feet[i].ankle, plant.feet[i].ankle
+                    ),
+                )
+                .field(format!("feet/{i}/chain")),
+            );
+        }
+    }
+
+    errors
+}
+
+/// Open a proxy set's glTF and check every joint it rides (M33).
+///
+/// `check_plant`'s shape, and deliberately so: the two components ask the file
+/// the same question — "is this joint in the rig" — and the answer is
+/// `unknown_joint` with `did_you_mean` in both.
+fn check_proxies(
+    proxies: &engine_core::components::SkinnedCollider,
+    mesh: Option<&str>,
+    base_dir: &Path,
+) -> Vec<EngineError> {
+    // No `Mesh` at all is engine-core's `skinned_collider_without_skin`.
+    let Some(asset) = mesh else {
+        return Vec::new();
+    };
+    let path = match MeshAsset::resolve(asset, base_dir) {
+        Ok(MeshAsset::Builtin(_)) => {
+            return vec![EngineError::new(
+                engine_core::codes::SKINNED_COLLIDER_WITHOUT_SKIN,
+                format!(
+                    "this SkinnedCollider is on an entity whose Mesh is the builtin \
+                     primitive {asset:?}, which has no skeleton for a proxy to ride"
+                ),
+            )]
+        }
+        Ok(MeshAsset::File(path)) => path,
+        Err(_) => return Vec::new(),
+    };
+    let Ok(rig) = crate::gltf_skin::load_rig(&path) else {
+        return Vec::new();
+    };
+    let Some(skin) = &rig.skin else {
+        return vec![EngineError::new(
+            engine_core::codes::SKINNED_COLLIDER_WITHOUT_SKIN,
+            format!(
+                "this SkinnedCollider is on an entity whose Mesh {asset:?} carries no \
+                 skin; there are no joints in it for a proxy to ride"
+            ),
+        )];
+    };
+
+    let names: Vec<&str> = skin.joints.iter().map(|j| j.name.as_str()).collect();
+    let mut errors = Vec::new();
+    for (i, part) in proxies.parts.iter().enumerate() {
+        if skin.joint_named(&part.joint).is_none() {
+            errors.push(
+                EngineError::new(
+                    engine_core::codes::UNKNOWN_JOINT,
+                    format!(
+                        "the rig in {asset:?} has no joint named {:?} (engine \
+                         list-joints {asset} lists them)",
+                        part.joint
+                    ),
+                )
+                .field(format!("parts/{i}/joint"))
+                .suggest_from(&part.joint, names.iter().copied()),
+            );
+        }
+    }
+    errors
+}
+
+/// Returns templates: location context is attached by the caller, the way
+/// every other verdict in this pass is.
+fn check_rig(asset: &str, clip: &str, base_dir: &Path) -> Vec<EngineError> {
+    let path = match MeshAsset::resolve(asset, base_dir) {
+        // A `builtin:` primitive is generated geometry; it can no more carry a
+        // skin than it can carry a texture, and saying so beats "no skin".
+        Ok(MeshAsset::Builtin(_)) => {
+            return vec![EngineError::new(
+                engine_core::codes::MESH_HAS_NO_SKIN,
+                format!(
+                    "clip {asset}#{clip} names the builtin primitive {asset:?}, which \
+                     has no skeleton; skeletal clips come from glTF files"
+                ),
+            )]
+        }
+        Ok(MeshAsset::File(path)) => path,
+        // The reference itself is engine-core's to report; this pass would
+        // only say it twice.
+        Err(_) => return Vec::new(),
+    };
+
+    let rig = match crate::gltf_skin::load_rig(&path) {
+        Ok(rig) => rig,
+        // A file that will not parse is already reported against whatever
+        // `Mesh` references it — and if nothing does, the mismatch rule fired.
+        Err(_) => return Vec::new(),
+    };
+
+    let mut errors = Vec::new();
+
+    match &rig.skin {
+        None => errors.push(EngineError::new(
+            engine_core::codes::MESH_HAS_NO_SKIN,
+            format!(
+                "glTF file {asset:?} carries no skin, so a skeletal player on it \
+                 could only draw the rest pose forever"
+            ),
+        )),
+        Some(skin) if skin.joints.len() > engine_core::skeleton::MAX_JOINTS => {
+            // Before a device exists, rather than a character that renders
+            // correctly up to joint 128 and explodes past it.
+            errors.push(EngineError::new(
+                engine_core::codes::TOO_MANY_JOINTS,
+                format!(
+                    "glTF file {asset:?} has a skin with {} joints; the joint palette \
+                     holds {}",
+                    skin.joints.len(),
+                    engine_core::skeleton::MAX_JOINTS
+                ),
+            ));
+        }
+        Some(_) => {}
+    }
+
+    if rig.clip_named(clip).is_none() {
+        errors.push(
+            EngineError::new(
+                engine_core::codes::UNKNOWN_CLIP,
+                format!(
+                    "glTF file {asset:?} has no animation named {clip:?} (engine \
+                     list-animations {asset} lists them)"
+                ),
+            )
+            .suggest_from(clip, rig.clip_names()),
+        );
+    }
+
+    errors
+}
+
+/// Do a `HudImage`'s nine-slice insets fit the image they cut up (M31)?
+///
+/// Only called once the texture is known to decode, so the load here is the
+/// cached one. Reports both dimensions in the message, because "too large" is
+/// unactionable without the size it is too large for.
+fn check_slice(
+    image: &engine_core::components::HudImage,
+    base_dir: &Path,
+    entity: &str,
+) -> Option<EngineError> {
+    let path = engine_core::texture::resolve_texture(&image.texture, base_dir).ok()?;
+    let texture =
+        crate::texture::load_texture(&path, engine_core::texture::ColorSpace::Srgb).ok()?;
+    let [left, top, right, bottom] = image.slice;
+    let (horizontal, vertical) = (left + right, top + bottom);
+    if horizontal <= texture.width as f32 && vertical <= texture.height as f32 {
+        return None;
+    }
+    Some(
+        EngineError::new(
+            engine_core::codes::HUD_IMAGE_SLICE_TOO_LARGE,
+            format!(
+                "the HudImage on {entity:?} slices [{left}, {top}, {right}, {bottom}] out of \
+                 {:?}, which is {}×{}; left+right ({horizontal}) must fit the width and \
+                 top+bottom ({vertical}) the height",
+                image.texture, texture.width, texture.height
+            ),
+        )
+        .entity(entity)
+        .component("HudImage")
+        .field("slice"),
+    )
 }
 
 /// The same for a texture: decode it, which is also where `texture_too_large`

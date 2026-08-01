@@ -139,6 +139,48 @@ registry! {
     ANIMATION_ON_DYNAMIC_BODY = "animation_on_dynamic_body", Input,
         "a clip animates the Transform of a dynamic RigidBody; make it kinematic";
 
+    // ── Skeletal animation (M30) ───────────────────────────────────────
+    CLIP_NEEDS_FRAGMENT = "clip_needs_fragment", Input,
+        "a glTF clip reference must name a clip: path#ClipName";
+    UNKNOWN_CLIP = "unknown_clip", Input,
+        "a #ClipName fragment names no animation in that glTF file";
+    MESH_HAS_NO_SKIN = "mesh_has_no_skin", Input,
+        "a skeletal AnimationPlayer's glTF file carries no skin";
+    SKELETAL_PLAYER_MESH_MISMATCH = "skeletal_player_mesh_mismatch", Input,
+        "a skeletal AnimationPlayer and its entity's Mesh name different files";
+    TOO_MANY_JOINTS = "too_many_joints", Input,
+        "a skin has more joints than the fixed-size palette holds";
+
+    // ── Locomotion and foot planting (M32) ─────────────────────────────
+    ANIMATION_STRIDE_WITHOUT_TRANSFORM = "animation_stride_without_transform", Input,
+        "an AnimationPlayer sets stride but its entity has no Transform to measure";
+    FOOT_PLANT_WITHOUT_SKIN = "foot_plant_without_skin", Input,
+        "a FootPlant is on an entity whose Mesh carries no skin";
+    FOOT_PLANT_GROUND_NOT_FOUND = "foot_plant_ground_not_found", Input,
+        "a FootPlant's ground names no entity in the scene";
+    FOOT_PLANT_GROUND_NOT_TERRAIN = "foot_plant_ground_not_terrain", Input,
+        "a FootPlant's ground names an entity with no Terrain";
+    FOOT_PLANT_NON_UNIFORM_SCALE = "foot_plant_non_uniform_scale", Input,
+        "a planted character's Transform.scale must be uniform";
+    FOOT_PLANT_CHAIN_TOO_LONG = "foot_plant_chain_too_long", Input,
+        "a foot's chain reaches past the rig's root";
+    TOO_MANY_PLANTED_FEET = "too_many_planted_feet", Input,
+        "a FootPlant lists more feet than the solver runs";
+    UNKNOWN_JOINT = "unknown_joint", Input,
+        "a joint name is not in the entity's rig";
+
+    // ── Skinned collider proxies (M33) ─────────────────────────────────
+    SKINNED_COLLIDER_WITHOUT_SKIN = "skinned_collider_without_skin", Input,
+        "a SkinnedCollider is on an entity whose Mesh carries no skin";
+    SKINNED_COLLIDER_NON_UNIFORM_SCALE = "skinned_collider_non_uniform_scale", Input,
+        "a proxied character's Transform.scale must be uniform";
+    DUPLICATE_COLLIDER_PART = "duplicate_collider_part", Input,
+        "two parts of one SkinnedCollider report under the same name";
+    TOO_MANY_COLLIDER_PARTS = "too_many_collider_parts", Input,
+        "a SkinnedCollider lists more parts than the physics world builds";
+    COLLIDER_PART_SHAPE_UNSUPPORTED = "collider_part_shape_unsupported", Input,
+        "a SkinnedCollider part names a mesh shape, which a proxy cannot be";
+
     // ── Breaking (M14) ─────────────────────────────────────────────────
     BREAKABLE_WITHOUT_COLLIDER = "breakable_without_collider", Input,
         "a Breakable sets impulse_threshold but the entity has no Collider to be hit on";
@@ -206,6 +248,34 @@ registry! {
     CLOUD_TOO_COMPLEX = "cloud_too_complex", Input,
         "a Cloud's parameters would generate more vertices than the engine will grow";
 
+    // ── Meadows (M29) ──────────────────────────────────────────────────
+    MEADOW_WITH_MESH = "meadow_with_mesh", Input,
+        "a Meadow entity owns its own geometry; it may not also have a Mesh or a Material";
+    MEADOW_TOO_COMPLEX = "meadow_too_complex", Input,
+        "a Meadow's density and footprint would grow more triangles than the engine will draw";
+    MEADOW_TERRAIN_NOT_FOUND = "meadow_terrain_not_found", Input,
+        "a Meadow's \"terrain\" names no entity in the scene";
+    MEADOW_TERRAIN_INVALID = "meadow_terrain_invalid", Input,
+        "a Meadow's \"terrain\" must name an entity that has a Terrain component";
+    MEADOW_STAGES_INVALID = "meadow_stages_invalid", Input,
+        "a Meadow needs at least two life-cycle stages with strictly increasing \"at\"";
+    TOO_MANY_GROWTH_STAGES = "too_many_growth_stages", Input,
+        "a Meadow has more life-cycle stages than the shader's table holds";
+
+    // ── UI system (M31) ────────────────────────────────────────────────
+    HUD_PARENT_NOT_FOUND = "hud_parent_not_found", Input,
+        "a HUD element's \"parent\" names no entity in the scene";
+    HUD_PARENT_NOT_PANEL = "hud_parent_not_panel", Input,
+        "a HUD element's \"parent\" must name an entity that has a HudPanel";
+    HUD_PARENT_CYCLE = "hud_parent_cycle", Input,
+        "a chain of HUD \"parent\" references loops back on itself";
+    HUD_NESTING_TOO_DEEP = "hud_nesting_too_deep", Input,
+        "a HUD element nests deeper than the layout engine will resolve";
+    HUD_INTERACT_WITHOUT_ELEMENT = "hud_interact_without_element", Input,
+        "a HudInteract needs a HudPanel, HudRect, HudImage or HudText on the same entity to be the hit box";
+    HUD_IMAGE_SLICE_TOO_LARGE = "hud_image_slice_too_large", Input,
+        "a HudImage's nine-slice insets are larger than the source image";
+
     // ── Input (M11) ────────────────────────────────────────────────────
     INPUT_UNREADABLE = "input_unreadable", Input,
         "the input timeline file could not be read";
@@ -226,6 +296,8 @@ registry! {
         "warning: collides_with names a layer no collider is a member of";
     DAYLIGHT_OVERRIDES_SKY = "daylight_overrides_sky", Input,
         "warning: daylight computes the sky and ambient, so the authored ones are never read";
+    COLLIDER_MESH_SIZE_MISMATCH = "collider_mesh_size_mismatch", Input,
+        "warning: a Collider is a very different size from the builtin mesh it sits on";
 
     // ── Scene semantics at command time ───────────────────────────────
     SCENE_UNREADABLE = "scene_unreadable", Input,

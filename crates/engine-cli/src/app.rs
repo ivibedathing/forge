@@ -25,42 +25,55 @@ use winit::{
 };
 
 /// What to render, decided before the window exists.
+///
+/// The scene payload is boxed because it is two orders of magnitude larger
+/// than `Triangle`, and an enum is as big as its widest variant — the M0
+/// triangle would otherwise carry five kilobytes of scene fields around with
+/// it. Boxing costs one allocation for the whole process: `Content` is built
+/// once, before the window exists.
 pub enum Content {
     /// The M0 proof-of-life triangle.
     Triangle,
     /// A loaded scene, flattened to a draw list.
-    Scene {
-        items: Vec<RenderItem>,
-        /// The scene's water surfaces (M18). Refreshed per frame when a
-        /// simulation runs — a script can move a surface — and static
-        /// otherwise, exactly like `items`.
-        water: Vec<engine_core::scene::WaterItem>,
-        /// The scene's clouds (M20), refreshed on the same terms. Their
-        /// drift runs on the simulated clock below, so a viewer session and
-        /// a screenshot at the same step show the same sky.
-        clouds: Vec<engine_core::scene::CloudItem>,
-        /// The scene's roads (M23). Refreshed with `water` for the same
-        /// reason: a script can move or repaint one.
-        roads: Vec<engine_core::scene::RoadItem>,
-        camera: Camera,
-        camera_model: Mat4,
-        lights: engine_core::scene::ResolvedLights,
-        /// The scene's sky, fog, shadow and MSAA settings. The viewer honors
-        /// them so that what you fly around in is what `engine screenshot`
-        /// pins — the frame rate differs, the picture must not.
-        environment: engine_core::scene::EnvironmentSettings,
-        /// The scene's day/night block, or `None`. Kept as *settings* rather
-        /// than as resolved values because the viewer re-folds it every frame
-        /// against the fixed-step clock — a cycling day has to actually move.
-        daylight: Option<engine_core::daylight::DaylightSettings>,
-        /// The scene's HUD components; refreshed per frame when a simulation
-        /// runs (clips and scripts can drive them), static otherwise.
-        hud_items: engine_core::scene::HudItems,
-        /// Present when the scene has physics components: the viewer drives
-        /// the same fixed step through a wall-clock accumulator (the
-        /// headless path stays canonical; frame pacing may vary here).
-        simulation: Option<Simulation>,
-    },
+    Scene(Box<SceneContent>),
+}
+
+/// The scene half of [`Content`]. Split out of the enum so the variant can be
+/// boxed; the fields and their meanings are unchanged.
+pub struct SceneContent {
+    pub items: Vec<RenderItem>,
+    /// The scene's water surfaces (M18). Refreshed per frame when a
+    /// simulation runs — a script can move a surface — and static
+    /// otherwise, exactly like `items`.
+    pub water: Vec<engine_core::scene::WaterItem>,
+    /// The scene's clouds (M20), refreshed on the same terms. Their
+    /// drift runs on the simulated clock below, so a viewer session and
+    /// a screenshot at the same step show the same sky.
+    pub clouds: Vec<engine_core::scene::CloudItem>,
+    /// The scene's roads (M23). Refreshed with `water` for the same
+    /// reason: a script can move or repaint one.
+    pub roads: Vec<engine_core::scene::RoadItem>,
+    /// The scene's meadows (M29). Refreshed with `roads` for the same
+    /// reason: a script can change what a field is made of between steps.
+    pub meadows: Vec<engine_core::scene::MeadowItem>,
+    pub camera: Camera,
+    pub camera_model: Mat4,
+    pub lights: engine_core::scene::ResolvedLights,
+    /// The scene's sky, fog, shadow and MSAA settings. The viewer honors
+    /// them so that what you fly around in is what `engine screenshot`
+    /// pins — the frame rate differs, the picture must not.
+    pub environment: engine_core::scene::EnvironmentSettings,
+    /// The scene's day/night block, or `None`. Kept as *settings* rather
+    /// than as resolved values because the viewer re-folds it every frame
+    /// against the fixed-step clock — a cycling day has to actually move.
+    pub daylight: Option<engine_core::daylight::DaylightSettings>,
+    /// The scene's HUD components; refreshed per frame when a simulation
+    /// runs (clips and scripts can drive them), static otherwise.
+    pub hud_items: engine_core::ui::HudTree,
+    /// Present when the scene has physics components: the viewer drives
+    /// the same fixed step through a wall-clock accumulator (the
+    /// headless path stays canonical; frame pacing may vary here).
+    pub simulation: Option<Simulation>,
 }
 
 /// Live playback for the windowed viewer: animation sampling and/or
@@ -81,6 +94,9 @@ pub struct Simulation {
     /// Touching-state from the previous physics step, for script contact
     /// queries — same one-step latency as the headless path.
     pub contacts: engine_core::contact::ContactState,
+    /// What the pointer is doing to the overlay (M31), updated before each
+    /// step's scripts against the window's own size.
+    pub interaction: engine_core::ui::Interaction,
     pub recorder: Option<InputRecorder>,
     pub accumulator: f32,
     pub t: f32,
@@ -110,14 +126,21 @@ impl InputRecorder {
         Ok(Self { file, last: None })
     }
 
-    /// Record `held` as the set in effect from `step` onward, if it changed.
+    /// Record `held` as the state in effect from `step` onward, if it
+    /// changed. Comparison is against the **quantized** state (M28): the
+    /// cursor is what the file will say, so a hand that has not moved a
+    /// thousandth of the frame records nothing.
     fn sample(&mut self, step: u64, held: &InputState) -> Result<()> {
+        let held = &held.quantized();
         if self.last.as_ref() == Some(held) {
             return Ok(());
         }
-        // An initial empty set is the file's implicit starting state; only
-        // record it as a line when it is a *return* to empty.
-        if self.last.is_none() && held.is_empty() {
+        // Nothing held with the cursor at the centre is the file's implicit
+        // starting state; only record it as a line when it is a *return* to
+        // that. Compared against the whole default state rather than against
+        // `is_empty()`, so the first mouse movement of a session — which
+        // happens before any button is pressed — is recorded.
+        if self.last.is_none() && held == &InputState::default() {
             return Ok(());
         }
         writeln!(self.file, "{}", held.timeline_line(step))
@@ -141,9 +164,10 @@ impl InputRecorder {
 /// no rendering code of its own. Appending puts it last within each class,
 /// which draws it over a scene's own HUD; the script debug-line panel is
 /// top-left and never collides with it.
-fn with_fps_readout(hud: &engine_core::scene::HudItems, fps: &str) -> engine_core::scene::HudItems {
+fn with_fps_readout(hud: &engine_core::ui::HudTree, fps: &str) -> engine_core::ui::HudTree {
     use engine_core::components::{HudAnchor, HudRect, HudText};
     use engine_core::math::{Vec2, Vec3};
+    use engine_core::ui::{HudKind, HudNode};
 
     /// Font cell at the readout's text size — `HudText.size` snaps to integer
     /// multiples of the 8×8 font, so 16 is exactly 2×.
@@ -155,19 +179,40 @@ fn with_fps_readout(hud: &engine_core::scene::HudItems, fps: &str) -> engine_cor
 
     let mut hud = hud.clone();
     let text_width = fps.chars().count() as f32 * SIZE;
-    hud.rects.push(HudRect {
-        anchor: HudAnchor::TopRight,
-        offset: Vec2::splat(INSET),
-        size: Vec2::new(text_width + 2.0 * PAD, SIZE + 2.0 * PAD),
-        color: Vec3::new(0.01, 0.015, 0.02),
-        opacity: 0.55,
+    // Appended, so within each draw class it lands last and reads over the
+    // scene's own HUD. Both parts are children of the viewport: the readout is
+    // the viewer's, not the scene's, and parenting it into a scene's panel
+    // would let a scene move it.
+    hud.nodes.push(HudNode {
+        entity: "__fps_plate".into(),
+        kind: HudKind::Rect(HudRect {
+            anchor: HudAnchor::TopRight,
+            offset: Vec2::splat(INSET),
+            size: Vec2::new(text_width + 2.0 * PAD, SIZE + 2.0 * PAD),
+            color: Vec3::new(0.01, 0.015, 0.02),
+            opacity: 0.55,
+            parent: None,
+            visible: true,
+            stretch: [false, false],
+        }),
+        interact: None,
     });
-    hud.texts.push(HudText {
-        text: fps.to_string(),
-        anchor: HudAnchor::TopRight,
-        offset: Vec2::splat(INSET + PAD),
-        size: SIZE,
-        color: Vec3::ONE,
+    hud.nodes.push(HudNode {
+        entity: "__fps_text".into(),
+        kind: HudKind::Text(HudText {
+            text: fps.to_string(),
+            anchor: HudAnchor::TopRight,
+            offset: Vec2::splat(INSET + PAD),
+            size: SIZE,
+            color: Vec3::ONE,
+            parent: None,
+            visible: true,
+            stretch: [false, false],
+            align: Default::default(),
+            wrap: 0.0,
+            line_gap: 0.0,
+        }),
+        interact: None,
     });
     hud
 }
@@ -176,7 +221,10 @@ fn with_fps_readout(hud: &engine_core::scene::HudItems, fps: &str) -> engine_cor
 enum Paint {
     Triangle(Renderer),
     Scene {
-        renderer: SceneRenderer,
+        /// Boxed for the same reason `Content::Scene` is: a `SceneRenderer`
+        /// holds every pipeline the engine has, and `Triangle` should not be
+        /// two kilobytes wide because of it.
+        renderer: Box<SceneRenderer>,
         depth: wgpu::TextureView,
         /// The multisampled color attachment, when the scene asks for MSAA.
         /// Recreated with the depth buffer on every resize.
@@ -284,7 +332,7 @@ impl ViewerApp {
     fn redraw(&mut self) -> Result<()> {
         // Sampled before the borrows below, and only for scene content: the
         // triangle viewer is a stack proof, not a game frame.
-        let fps = matches!(self.content, Content::Scene { .. }).then(|| self.fps.tick());
+        let fps = matches!(self.content, Content::Scene(_)).then(|| self.fps.tick());
 
         let (Some(target), Some(paint)) = (self.target.as_mut(), self.paint.as_mut()) else {
             return Ok(());
@@ -308,11 +356,17 @@ impl ViewerApp {
                     depth,
                     msaa,
                 },
-                Content::Scene {
+                Content::Scene(scene),
+            ) => {
+                // Destructured back into the same names the body below has
+                // always used, so boxing the variant changed this function by
+                // exactly these two lines.
+                let SceneContent {
                     items,
                     water,
                     clouds,
                     roads,
+                    meadows,
                     camera,
                     camera_model,
                     lights,
@@ -320,8 +374,7 @@ impl ViewerApp {
                     daylight,
                     hud_items,
                     simulation,
-                },
-            ) => {
+                } = &mut **scene;
                 if let Some(sim) = simulation {
                     let now = Instant::now();
                     let dt = 1.0 / sim.scene.physics.timestep_hz.max(1) as f32;
@@ -335,11 +388,7 @@ impl ViewerApp {
 
                     // System order: sample animations → physics → render.
                     if !sim.players.is_empty() {
-                        engine_core::animation::apply_all(
-                            &mut sim.scene,
-                            &sim.players,
-                            sim.t,
-                        );
+                        engine_core::animation::apply_all(&mut sim.scene, &sim.players, sim.t);
                     }
                     if sim.physics.is_some()
                         || sim.scripts.is_some()
@@ -355,12 +404,54 @@ impl ViewerApp {
                                 }
                             }
                             if let Some(scripts) = &sim.scripts {
+                                // Where the pointer points this step (M28),
+                                // resolved exactly as the headless path
+                                // resolves it: same camera selection, same
+                                // frame, same function — so what a script
+                                // aims at while you play is what it aims at
+                                // when the timeline is replayed.
+                                let (view_width, view_height) = target.size();
+                                let view = engine_core::input::Viewport::new(
+                                    view_width,
+                                    view_height,
+                                    sim.camera_name.as_deref(),
+                                );
+                                let pointer = engine_core::input::Pointer::resolve(
+                                    &sim.held,
+                                    &view,
+                                    sim.scene
+                                        .camera(sim.camera_name.as_deref())
+                                        .ok()
+                                        .map(|(camera, transform)| (camera, transform.matrix())),
+                                );
+                                // Hit-testing against the window's own size,
+                                // before scripts — the headless path does the
+                                // identical thing against the frame it is
+                                // rendering, so a menu clicked while playing
+                                // is the menu a replayed timeline clicks.
+                                let tree = sim.scene.hud_tree(&sim.assets);
+                                if !tree.is_empty() {
+                                    let layout =
+                                        engine_core::ui::layout(&tree, view_width, view_height);
+                                    let frame = engine_core::math::Vec2::new(
+                                        view_width as f32,
+                                        view_height as f32,
+                                    );
+                                    sim.interaction.update(
+                                        &tree,
+                                        &layout,
+                                        pointer.cursor * frame,
+                                        sim.held.is_held("MouseLeft"),
+                                    );
+                                }
                                 // A failing script ends the session with a
                                 // structured error, like any render failure.
                                 match scripts.step(
                                     &mut sim.scene.world,
                                     sim.step_index,
                                     &sim.held,
+                                    &pointer,
+                                    &sim.interaction,
                                     &sim.contacts,
                                 ) {
                                     Ok(lines) => sim.hud_lines = lines,
@@ -380,7 +471,12 @@ impl ViewerApp {
                                 }
                             }
                             if let Some(physics) = &mut sim.physics {
-                                let events = physics.step(&mut sim.scene.world);
+                                // `step_index` is 0-based and incremented
+                                // below, so the time this step ends at — the
+                                // one the frame after it renders, and the one
+                                // proxies pose at (M33) — is the next index's.
+                                let events = physics
+                                    .step(&mut sim.scene.world, (sim.step_index + 1) as f32 * dt);
                                 sim.contacts.apply(&events);
                                 // Breaks apply after physics, exactly as in
                                 // the headless loop — played and simulated
@@ -413,13 +509,18 @@ impl ViewerApp {
                             sim.accumulator -= dt;
                         }
                     }
-                    if let Ok(fresh) = sim.scene.render_items(&sim.assets) {
+                    // The same whole-fixed-step clock water and daylight run
+                    // on, so a rig walks in the viewer at the pose a
+                    // screenshot at this step number would show.
+                    let posed = sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32;
+                    if let Ok(fresh) = sim.scene.render_items_at(&sim.assets, Some(posed)) {
                         *items = fresh;
                     }
                     *water = sim.scene.water_items();
                     *clouds = sim.scene.cloud_items();
                     *roads = sim.scene.road_items();
-                    *hud_items = sim.scene.hud_items();
+                    *meadows = sim.scene.meadow_items();
+                    *hud_items = sim.scene.hud_tree(&sim.assets);
                     // Scripts may drive the camera entity (a chase camera);
                     // follow it rather than the pose captured at load.
                     if let Ok((fresh_camera, fresh_transform)) =
@@ -438,9 +539,7 @@ impl ViewerApp {
                 // and its water sits at its t = 0 pose.
                 let simulated_time = simulation
                     .as_ref()
-                    .map(|sim| {
-                        sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32
-                    })
+                    .map(|sim| sim.step_index as f32 / sim.scene.physics.timestep_hz.max(1) as f32)
                     .unwrap_or(0.0);
                 // Daylight runs on that same clock, for the same reason water
                 // does: the viewer must show what a screenshot at this step
@@ -483,6 +582,7 @@ impl ViewerApp {
                             water,
                             clouds,
                             roads,
+                            meadows,
                             particles: &particles,
                             view_projection,
                             camera_position: camera_model.w_axis.truncate(),
@@ -543,15 +643,15 @@ impl ApplicationHandler for ViewerApp {
             Content::Triangle => {
                 Paint::Triangle(Renderer::new(&target.gpu.device, target.format()))
             }
-            Content::Scene { environment, .. } => {
+            Content::Scene(ref scene) => {
                 let (width, height) = target.size();
-                let samples = environment.samples.max(1);
+                let samples = scene.environment.samples.max(1);
                 Paint::Scene {
-                    renderer: SceneRenderer::with_samples(
+                    renderer: Box::new(SceneRenderer::with_samples(
                         &target.gpu.device,
                         target.format(),
                         samples,
-                    ),
+                    )),
                     depth: scene_renderer::depth_texture_multisampled(
                         &target.gpu.device,
                         width,
@@ -584,16 +684,62 @@ impl ApplicationHandler for ViewerApp {
             // fixed step samples. Keys outside the engine's allowlist are
             // dropped inside `press`.
             WindowEvent::KeyboardInput { event: key, .. } => {
-                if let Content::Scene {
-                    simulation: Some(sim),
-                    ..
-                } = &mut self.content
-                {
+                if let Some(sim) = match &mut self.content {
+                    Content::Scene(scene) => scene.simulation.as_mut(),
+                    Content::Triangle => None,
+                } {
                     if let PhysicalKey::Code(code) = key.physical_key {
                         let name = format!("{code:?}");
                         match key.state {
                             ElementState::Pressed => sim.held.press(&name),
                             ElementState::Released => sim.held.release(&name),
+                        }
+                    }
+                }
+            }
+
+            // The mouse (M28). A cursor position is normalized against the
+            // window it arrived in, because that is the only coordinate a
+            // recorded timeline can carry across window sizes.
+            //
+            // `CursorLeft` is deliberately not handled: the cursor keeps its
+            // last position when it leaves the window, since a menu button
+            // under a pointer that slid out of frame should not appear to be
+            // clicked at the centre of the screen.
+            WindowEvent::CursorMoved { position, .. } => {
+                let size = self
+                    .window
+                    .as_ref()
+                    .map(|w| w.inner_size())
+                    .unwrap_or_default();
+                if let Some(sim) = match &mut self.content {
+                    Content::Scene(scene) => scene.simulation.as_mut(),
+                    Content::Triangle => None,
+                } {
+                    sim.held.set_cursor(engine_core::math::Vec2::new(
+                        position.x as f32 / size.width.max(1) as f32,
+                        position.y as f32 / size.height.max(1) as f32,
+                    ));
+                }
+            }
+
+            WindowEvent::MouseInput { state, button, .. } => {
+                if let Some(sim) = match &mut self.content {
+                    Content::Scene(scene) => scene.simulation.as_mut(),
+                    Content::Triangle => None,
+                } {
+                    // Buttons outside the three named ones are dropped the
+                    // way keys outside the allowlist already are.
+                    let name = match button {
+                        winit::event::MouseButton::Left => Some("MouseLeft"),
+                        winit::event::MouseButton::Right => Some("MouseRight"),
+                        winit::event::MouseButton::Middle => Some("MouseMiddle"),
+                        _ => None,
+                    };
+                    if let Some(name) = name {
+                        match state {
+                            ElementState::Pressed => sim.held.press(name),
+                            ElementState::Released => sim.held.release(name),
                         }
                     }
                 }
@@ -678,18 +824,24 @@ mod tests {
     fn the_fps_readout_occupies_only_the_top_right_corner() {
         use engine_core::components::{HudAnchor, HudRect};
         use engine_core::math::{Vec2, Vec3};
-        use engine_core::scene::HudItems;
+        use engine_core::ui::{HudKind, HudNode, HudTree};
 
         let (width, height) = (400u32, 200u32);
-        let scene_hud = HudItems {
-            rects: vec![HudRect {
-                anchor: HudAnchor::BottomLeft,
-                offset: Vec2::splat(10.0),
-                size: Vec2::new(60.0, 12.0),
-                color: Vec3::ONE,
-                opacity: 1.0,
+        let scene_hud = HudTree {
+            nodes: vec![HudNode {
+                entity: "Bar".into(),
+                kind: HudKind::Rect(HudRect {
+                    anchor: HudAnchor::BottomLeft,
+                    offset: Vec2::splat(10.0),
+                    size: Vec2::new(60.0, 12.0),
+                    color: Vec3::ONE,
+                    opacity: 1.0,
+                    parent: None,
+                    visible: true,
+                    stretch: [false, false],
+                }),
+                interact: None,
             }],
-            texts: vec![],
         };
 
         let overlay = super::with_fps_readout(&scene_hud, "FPS  60");

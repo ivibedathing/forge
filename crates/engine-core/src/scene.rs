@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use glam::Vec3;
 
 use crate::components::{
-    AmbientLight, Camera, ComponentData, DirectionalLight, HudRect, HudText, Name, PointLight,
-    Transform, MAX_POINT_LIGHTS,
+    AmbientLight, Camera, ComponentData, DirectionalLight, HudImage, HudInteract, HudPanel,
+    HudRect, HudText, Name, PointLight, Transform, MAX_POINT_LIGHTS,
 };
 use crate::daylight::DaylightSettings;
 use crate::error::{EngineError, Result};
@@ -178,6 +178,16 @@ pub struct RenderItem {
     /// on) with no second copy of any of them, and hands the editor's picking
     /// and selection a surface they already know how to handle.
     pub terrain: Option<crate::components::Terrain>,
+    /// The joint palette this draw is skinned by (M30), computed on the CPU by
+    /// [`crate::skeleton::palette`] — **empty for everything that is not a
+    /// skinned mesh**, which routes the draw onto the pipelines that compile
+    /// `mesh.wgsl` as it sits on disk.
+    ///
+    /// The entity's own `model` is *not* folded in: the vertex stage computes
+    /// `model · Σ wᵢ · palette[jᵢ] · position`, because glTF says the transform
+    /// of the node referencing a skinned mesh is ignored and the engine's
+    /// `Transform` is what places the character.
+    pub joints: Vec<glam::Mat4>,
 }
 
 /// One water surface, with its geometry resolved and its transform flattened
@@ -231,20 +241,29 @@ pub struct RoadItem {
     pub road: crate::components::Road,
 }
 
-/// The scene's screen-space overlay, extracted as plain data in draw order
-/// (M12): `rects` under `texts`, each in scene-file order. An empty overlay
-/// means no HUD pass runs at all, so pre-M12 scenes render byte-identically.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct HudItems {
-    pub rects: Vec<HudRect>,
-    pub texts: Vec<HudText>,
+/// One meadow, with its plants grown and placed (M29) — [`WaterItem`]'s
+/// sibling, separate from [`RenderItem`] for the same reasons and one more: a
+/// meadow is drawn **instanced**, so it is the only draw list whose geometry is
+/// a template plus a placement, rather than a mesh.
+///
+/// There is no `model` matrix. `patch.instances` are already in world space,
+/// because placement had to consult the terrain the meadow stands on and a
+/// plant whose height came off the ground cannot then be pushed around by a
+/// transform without leaving it.
+#[derive(Debug, Clone)]
+pub struct MeadowItem {
+    /// The source entity's stable name (invariant 4).
+    pub entity: String,
+    /// The plant template and every copy of it, shared across frames — see
+    /// [`crate::meadow::patch_for`].
+    pub patch: std::sync::Arc<crate::meadow::MeadowPatch>,
+    pub meadow: crate::components::Meadow,
 }
 
-impl HudItems {
-    pub fn is_empty(&self) -> bool {
-        self.rects.is_empty() && self.texts.is_empty()
-    }
-}
+/// The scene's screen-space overlay. M12's `HudItems { rects, texts }` became
+/// [`crate::ui::HudTree`] in M31, because the hierarchy is a `parent` name in a
+/// flat list rather than two lists split by type.
+pub use crate::ui::HudTree;
 
 /// The scene's light entities, extracted as plain data.
 ///
@@ -306,7 +325,7 @@ impl LightRig {
 
     /// Apply the no-lights fallback rule and return concrete values.
     ///
-    /// The rule is all-or-nothing (design `materials-lighting-design.md` §3):
+    /// The rule is all-or-nothing (M4's design, §3):
     /// zero light components → the documented fallback rig (white sun 1.0 +
     /// white ambient 0.15); at least one light component → exactly what the
     /// scene wrote, absent means off.
@@ -558,9 +577,12 @@ impl Scene {
         match requested {
             Some(name) => {
                 let entity = self.entity(name).ok_or_else(|| {
-                    EngineError::new(crate::codes::ENTITY_NOT_FOUND, format!("no entity named {name:?}"))
-                        .entity(name)
-                        .suggest_from(name, self.names())
+                    EngineError::new(
+                        crate::codes::ENTITY_NOT_FOUND,
+                        format!("no entity named {name:?}"),
+                    )
+                    .entity(name)
+                    .suggest_from(name, self.names())
                 })?;
 
                 let camera = self.world.get::<&Camera>(entity).map(|c| *c).map_err(|_| {
@@ -605,7 +627,32 @@ impl Scene {
     /// [`BuiltinAssets`](crate::mesh::BuiltinAssets). Entities without a `Mesh`
     /// contribute nothing; a `Mesh` whose asset cannot be loaded is an error
     /// rather than a silent omission.
-    pub fn render_items(&self, assets: &dyn crate::texture::AssetSource) -> Result<Vec<RenderItem>> {
+    pub fn render_items(
+        &self,
+        assets: &dyn crate::texture::AssetSource,
+    ) -> Result<Vec<RenderItem>> {
+        self.render_items_at(assets, None)
+    }
+
+    /// The draw list with every skinned mesh posed at scene time `time` (M30).
+    ///
+    /// `None` is the **rest pose** — a skinned mesh drawn as its file authored
+    /// it, which is what the editor's viewport shows (it shows scenes at rest)
+    /// and what an entity with a skin and no `AnimationPlayer` renders at any
+    /// time. `Some(t)` walks each player's clip through the same
+    /// speed/offset/looping arithmetic property clips use, so one clock drives
+    /// both kinds of animation.
+    ///
+    /// It is a separate entry point rather than a parameter on `render_items`
+    /// because the palette is the *only* thing in this list that depends on
+    /// time: everything else was already posed by the caller before it got
+    /// here, so twenty call sites that cannot have a skin would be threading a
+    /// number nothing reads.
+    pub fn render_items_at(
+        &self,
+        assets: &dyn crate::texture::AssetSource,
+        time: Option<f32>,
+    ) -> Result<Vec<RenderItem>> {
         let mut items = Vec::new();
 
         for (entity, mesh) in self
@@ -613,13 +660,20 @@ impl Scene {
             .query::<(Entity, &crate::components::Mesh)>()
             .iter()
         {
-            let data = assets.load_mesh(&mesh.asset).map_err(|e| {
+            let named = |e: crate::error::EngineError| match self.world.get::<&Name>(entity) {
                 // Name the entity so the agent knows which one to fix.
-                match self.world.get::<&Name>(entity) {
-                    Ok(name) => e.entity(name.0.clone()),
-                    Err(_) => e,
-                }
-            })?;
+                Ok(name) => e.entity(name.0.clone()),
+                Err(_) => e,
+            };
+            let data = assets.load_mesh(&mesh.asset).map_err(named)?;
+            let joints = if data.is_skinned() {
+                self.palette_for(entity, &mesh.asset, assets, time)
+                    .map_err(named)?
+            } else {
+                // The overwhelmingly common case, and the one that must cost
+                // nothing: no rig is even asked for.
+                Vec::new()
+            };
 
             let transform = self.transform_of(entity);
             let material = self
@@ -644,6 +698,7 @@ impl Scene {
                 material,
                 textures,
                 terrain: None,
+                joints,
             });
         }
 
@@ -683,6 +738,7 @@ impl Scene {
                 material: bark,
                 textures: bark_textures,
                 terrain: None,
+                joints: Vec::new(),
             });
             if let Some(leaves) = grown.leaves {
                 items.push(RenderItem {
@@ -692,12 +748,69 @@ impl Scene {
                     material: leaf_material,
                     textures: leaf_textures,
                     terrain: None,
+                    joints: Vec::new(),
                 });
             }
         }
         items.extend(self.terrain_items());
 
         Ok(items)
+    }
+
+    /// The joint palette for one skinned entity at scene time `time` (M30), or
+    /// an empty vector when the mesh turns out to carry no skin after all.
+    ///
+    /// A mesh with `JOINTS_0` and a file with no `skin` is a malformed export
+    /// rather than a scene error: it renders unskinned — in bind space, where
+    /// its vertices already are — instead of failing a render that validation
+    /// let through.
+    fn palette_for(
+        &self,
+        entity: Entity,
+        asset: &str,
+        assets: &dyn crate::texture::AssetSource,
+        time: Option<f32>,
+    ) -> Result<Vec<glam::Mat4>> {
+        let rig = assets.load_rig(asset)?;
+        let Some(skin) = &rig.skin else {
+            return Ok(Vec::new());
+        };
+
+        // Clip selection and the clip-local clock live in `locomotion`, which
+        // is where the physics world reads them from too (M33): a proxy that
+        // resolved the clip differently from the render would sit somewhere
+        // the character visibly is not. A `time` of `None` is the rest pose,
+        // and it still needs a real palette — the vertices are in skin space,
+        // so `global · inverse_bind` is what puts them back in bind space, and
+        // an identity palette would collapse any rig whose rest pose is not
+        // exactly its bind pose.
+        let globals = crate::locomotion::posed_globals_at(&self.world, entity, &rig, time);
+        Ok(globals
+            .into_iter()
+            .zip(&skin.joints)
+            .map(|(global, joint)| global * joint.inverse_bind)
+            .collect())
+    }
+
+    /// One skinned entity's joints in skin space at clip time `local`, with
+    /// M32's foot planting applied when the entity asks for it.
+    pub fn posed_globals(
+        &self,
+        entity: Entity,
+        skin: &crate::skeleton::SkinData,
+        clip: Option<&crate::skeleton::SkeletalClip>,
+        local: f32,
+    ) -> Vec<glam::Mat4> {
+        crate::locomotion::posed_globals(&self.world, entity, skin, clip, local)
+    }
+
+    /// An entity's `FootPlant`, for callers that need to know which joints are
+    /// feet — `engine list-joints` measuring a clip's stride, chiefly.
+    pub fn foot_plant_of(&self, entity: Entity) -> Option<crate::components::FootPlant> {
+        self.world
+            .get::<&crate::components::FootPlant>(entity)
+            .ok()
+            .map(|p| (*p).clone())
     }
 
     /// Terrain patches, as draw items with their surfaces generated (M22).
@@ -738,6 +851,7 @@ impl Scene {
                     // producer is the variant the material design defers.
                     textures: crate::texture::MaterialTextures::default(),
                     terrain: Some(terrain.clone()),
+                    joints: Vec::new(),
                 }
             })
             .collect();
@@ -782,6 +896,59 @@ impl Scene {
                 mesh: crate::water::surface_grid(water.segments),
                 model: self.transform_of(entity).matrix(),
                 water: water.clone(),
+            })
+            .collect();
+        items.sort_by(|a, b| a.entity.cmp(&b.entity));
+        items
+    }
+
+    /// Flatten the world's meadows into a draw list (M29).
+    ///
+    /// Takes no [`MeshSource`](crate::mesh::MeshSource) and cannot fail, for
+    /// water's reason: the geometry is grown from the component, not loaded.
+    ///
+    /// Time is deliberately absent, as it is for clouds — the life cycle is
+    /// evaluated in the vertex stage from the frame's own clock. That is what
+    /// keeps this a pure function of the file and keeps the patch's `Arc`
+    /// identity stable across frames, which the renderer's upload cache depends
+    /// on. A meadow whose plants were regrown on the CPU each frame would defeat
+    /// M15's geometry cache exactly as CPU wave displacement would have.
+    ///
+    /// A `terrain` naming an entity that is not a `Terrain` falls back to flat
+    /// ground here rather than failing: validation has already refused that file
+    /// (`meadow_terrain_invalid`), and the render path does not re-litigate what
+    /// `validate` owns.
+    ///
+    /// Sorted by entity name, for the reason every other draw list is.
+    pub fn meadow_items(&self) -> Vec<MeadowItem> {
+        let mut items: Vec<MeadowItem> = self
+            .world
+            .query::<(Entity, &crate::components::Meadow)>()
+            .iter()
+            .map(|(entity, meadow)| {
+                let model = self.transform_of(entity).matrix();
+                // Resolve the ground first: the borrows have to outlive the
+                // `patch_for` call that reads through them.
+                let ground_entity = meadow.terrain.as_deref().and_then(|name| self.entity(name));
+                let ground_terrain = ground_entity
+                    .and_then(|e| self.world.get::<&crate::components::Terrain>(e).ok());
+                let ground_transform = ground_entity.map(|e| self.transform_of(e));
+                let ground = match (&ground_terrain, &ground_transform) {
+                    (Some(terrain), Some(transform)) => {
+                        Some(crate::meadow::Ground { terrain, transform })
+                    }
+                    _ => None,
+                };
+
+                MeadowItem {
+                    entity: self
+                        .world
+                        .get::<&Name>(entity)
+                        .map(|n| n.0.clone())
+                        .unwrap_or_default(),
+                    patch: crate::meadow::patch_for(meadow, model, ground),
+                    meadow: meadow.clone(),
+                }
             })
             .collect();
         items.sort_by(|a, b| a.entity.cmp(&b.entity));
@@ -851,28 +1018,80 @@ impl Scene {
         items
     }
 
-    /// Extract the screen-space overlay as plain data, in draw order (M12):
-    /// every `HudRect`, then every `HudText`, each in scene-file order — text
-    /// always reads over bars, and within a class the file is the z-order.
+    /// Extract the screen-space overlay as plain data, in **scene-file order**
+    /// (M12, generalized in M31).
+    ///
+    /// The list is not in draw order any more — `ui::layout` decides that, from
+    /// the tree the `parent` names describe — but file order is still what
+    /// breaks ties among siblings, so producing it in file order is a contract
+    /// rather than a convenience.
     ///
     /// File order is recovered by sorting on entity id: `instantiate` spawns
     /// definitions sequentially into a fresh world and nothing ever despawns,
     /// so hecs ids are monotone in file order even though archetype iteration
     /// is not.
-    pub fn hud_items(&self) -> HudItems {
-        fn in_file_order<C: Clone + hecs::Component>(world: &World) -> Vec<C> {
-            let mut found: Vec<(u64, C)> = world
+    ///
+    /// `textures` resolves each `HudImage`'s PNG. A failure is *not* an error
+    /// here: the reference was already checked by `validate`, and a render path
+    /// with no asset directory (a GPU-less test) must still lay the overlay
+    /// out. An unresolved image lays out at its authored size and draws
+    /// nothing.
+    pub fn hud_tree(&self, textures: &dyn crate::texture::TextureSource) -> HudTree {
+        use crate::ui::{HudKind, HudNode};
+
+        fn in_file_order<C: Clone + hecs::Component>(world: &World) -> Vec<(u64, Entity, C)> {
+            let mut found: Vec<(u64, Entity, C)> = world
                 .query::<(Entity, &C)>()
                 .iter()
-                .map(|(entity, c)| (entity.to_bits().get(), c.clone()))
+                .map(|(entity, c)| (entity.to_bits().get(), entity, c.clone()))
                 .collect();
-            found.sort_by_key(|(bits, _)| *bits);
-            found.into_iter().map(|(_, c)| c).collect()
+            found.sort_by_key(|(bits, _, _)| *bits);
+            found
         }
 
-        HudItems {
-            rects: in_file_order::<HudRect>(&self.world),
-            texts: in_file_order::<HudText>(&self.world),
+        let name_of = |entity: Entity| {
+            self.world
+                .get::<&Name>(entity)
+                .map(|n| n.0.clone())
+                .unwrap_or_default()
+        };
+
+        let mut nodes: Vec<(u64, HudNode)> = Vec::new();
+        let mut push = |bits: u64, entity: Entity, kind: HudKind| {
+            nodes.push((
+                bits,
+                HudNode {
+                    entity: name_of(entity),
+                    kind,
+                    interact: self
+                        .world
+                        .get::<&HudInteract>(entity)
+                        .map(|i| (*i).clone())
+                        .ok(),
+                },
+            ));
+        };
+
+        for (bits, entity, panel) in in_file_order::<HudPanel>(&self.world) {
+            push(bits, entity, HudKind::Panel(panel));
+        }
+        for (bits, entity, rect) in in_file_order::<HudRect>(&self.world) {
+            push(bits, entity, HudKind::Rect(rect));
+        }
+        for (bits, entity, image) in in_file_order::<HudImage>(&self.world) {
+            let pixels = textures
+                .load_texture(&image.texture, crate::texture::ColorSpace::Srgb)
+                .ok();
+            push(bits, entity, HudKind::Image(image, pixels));
+        }
+        for (bits, entity, text) in in_file_order::<HudText>(&self.world) {
+            push(bits, entity, HudKind::Text(text));
+        }
+
+        // One flat list, back in file order across all four kinds.
+        nodes.sort_by_key(|(bits, _)| *bits);
+        HudTree {
+            nodes: nodes.into_iter().map(|(_, node)| node).collect(),
         }
     }
 
@@ -894,12 +1113,7 @@ impl Scene {
                 (*light, direction)
             });
 
-        let ambient = self
-            .world
-            .query::<&AmbientLight>()
-            .iter()
-            .next()
-            .map(|ambient| *ambient);
+        let ambient = self.world.query::<&AmbientLight>().iter().next().copied();
 
         // Point lights are plural, so unlike the sun their order is visible in
         // the uniform array — sort by entity name, the same determinism rule
@@ -1001,9 +1215,7 @@ mod tests {
             )
             .unwrap();
 
-        let err = scene
-            .render_items(&crate::mesh::BuiltinAssets)
-            .unwrap_err();
+        let err = scene.render_items(&crate::mesh::BuiltinAssets).unwrap_err();
         assert_eq!(err.error, "asset_not_found");
         assert_eq!(err.context().unwrap().entity.as_deref(), Some("Broken"));
     }

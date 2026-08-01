@@ -49,6 +49,12 @@ impl MeshSource for Textures {
     }
 }
 
+impl engine_core::skeleton::RigSource for Textures {
+    fn load_rig(&self, asset: &str) -> engine_core::error::Result<Arc<engine_core::skeleton::Rig>> {
+        BuiltinAssets.load_rig(asset)
+    }
+}
+
 impl TextureSource for Textures {
     fn load_texture(
         &self,
@@ -145,6 +151,7 @@ fn render(source: &str) -> Image {
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &[],
         &camera,
         camera_transform.matrix(),
@@ -153,7 +160,7 @@ fn render(source: &str) -> Image {
         0.0,
         SIZE,
         SIZE,
-        &scene.hud_items(),
+        &scene.hud_tree(&engine_core::mesh::BuiltinAssets),
         &[],
     )
     .expect("offscreen render failed")
@@ -405,9 +412,12 @@ fn a_normal_map_moves_the_shading_of_a_flat_surface() {
              "normal_strength": 0.0 }"#,
     ));
     for channel in 0..3 {
-        let delta =
-            flat.pixel(centre.0, centre.1)[channel].abs_diff(disabled.pixel(centre.0, centre.1)[channel]);
-        assert!(delta <= 1, "normal_strength 0 should be the geometric normal");
+        let delta = flat.pixel(centre.0, centre.1)[channel]
+            .abs_diff(disabled.pixel(centre.0, centre.1)[channel]);
+        assert!(
+            delta <= 1,
+            "normal_strength 0 should be the geometric normal"
+        );
     }
 }
 
@@ -504,7 +514,10 @@ fn alpha_cutoff_removes_pixels_and_their_shadow() {
         count
     };
     let (solid_shadow, cut_shadow) = (shadowed_floor(&solid), shadowed_floor(&cut));
-    assert!(solid_shadow > 0, "the solid card should cast a shadow at all");
+    assert!(
+        solid_shadow > 0,
+        "the solid card should cast a shadow at all"
+    );
     assert!(
         cut_shadow < solid_shadow,
         "a cut-out card must cut its shadow too, or it casts the silhouette of \
@@ -601,7 +614,10 @@ fn attenuation_tints_what_comes_through() {
     ));
 
     let centre = (SIZE / 2, SIZE / 2);
-    let (a, b) = (clear.pixel(centre.0, centre.1), green.pixel(centre.0, centre.1));
+    let (a, b) = (
+        clear.pixel(centre.0, centre.1),
+        green.pixel(centre.0, centre.1),
+    );
     assert!(
         b[1] as i32 - b[0] as i32 > a[1] as i32 - a[0] as i32,
         "a green attenuation must leave more green than red behind it \

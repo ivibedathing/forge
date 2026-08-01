@@ -8,7 +8,7 @@ use engine_core::components::Camera;
 use engine_core::math::Mat4;
 use engine_core::particles::ParticleInstance;
 use engine_core::scene::{
-    CloudItem, EnvironmentSettings, HudItems, RenderItem, ResolvedLights, RoadItem,
+    CloudItem, EnvironmentSettings, HudTree, MeadowItem, RenderItem, ResolvedLights, RoadItem,
     WaterItem,
 };
 use engine_core::{EngineError, Result};
@@ -56,6 +56,7 @@ pub fn render(
     water: &[WaterItem],
     clouds: &[CloudItem],
     roads: &[RoadItem],
+    meadows: &[MeadowItem],
     particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
@@ -64,7 +65,7 @@ pub fn render(
     time: f32,
     width: u32,
     height: u32,
-    hud: &HudItems,
+    hud: &HudTree,
     lines: &[String],
 ) -> Result<Image> {
     render_with_adapter(
@@ -72,6 +73,7 @@ pub fn render(
         water,
         clouds,
         roads,
+        meadows,
         particles,
         camera,
         camera_model,
@@ -97,6 +99,7 @@ pub fn render_with_adapter(
     water: &[WaterItem],
     clouds: &[CloudItem],
     roads: &[RoadItem],
+    meadows: &[MeadowItem],
     particles: &[ParticleInstance],
     camera: &Camera,
     camera_model: Mat4,
@@ -107,7 +110,7 @@ pub fn render_with_adapter(
     time: f32,
     width: u32,
     height: u32,
-    hud: &HudItems,
+    hud: &HudTree,
     lines: &[String],
 ) -> Result<(Image, String)> {
     let (width, height) = (width.max(1), height.max(1));
@@ -136,17 +139,15 @@ pub fn render_with_adapter(
     let depth = scene_renderer::depth_texture_multisampled(&gpu.device, width, height, samples);
     // At one sample the scene draws straight into the readback texture, which
     // is what every pre-MSAA baseline was blessed through.
-    let msaa = (samples > 1).then(|| {
-        scene_renderer::msaa_color_texture(&gpu.device, FORMAT, width, height, samples)
-    });
+    let msaa = (samples > 1)
+        .then(|| scene_renderer::msaa_color_texture(&gpu.device, FORMAT, width, height, samples));
 
     let mut renderer = SceneRenderer::with_samples(&gpu.device, FORMAT, samples);
     let view_projection =
         scene_renderer::view_projection(camera, camera_model, width as f32 / height as f32);
 
     let no_lines = lines.iter().all(|l| l.is_empty());
-    let canvas =
-        (!(hud.is_empty() && no_lines)).then(|| hud::rasterize(hud, lines, width, height));
+    let canvas = (!(hud.is_empty() && no_lines)).then(|| hud::rasterize(hud, lines, width, height));
 
     renderer.draw(
         &gpu.device,
@@ -160,6 +161,7 @@ pub fn render_with_adapter(
             water,
             clouds,
             roads,
+            meadows,
             particles,
             view_projection,
             camera_position: camera_model.w_axis.truncate(),
@@ -228,7 +230,10 @@ fn read_back(gpu: &Gpu, texture: &wgpu::Texture, width: u32, height: u32) -> Res
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .map_err(|e| {
-            EngineError::new(engine_core::codes::GPU_POLL_FAILED, format!("waiting on the GPU failed: {e}"))
+            EngineError::new(
+                engine_core::codes::GPU_POLL_FAILED,
+                format!("waiting on the GPU failed: {e}"),
+            )
         })?;
 
     let mapped = slice.get_mapped_range().map_err(|e| {

@@ -149,7 +149,10 @@ pub fn import_materials(
         // different image from the metallic-roughness one, while `orm_map`
         // packs them. When they differ, R comes from one and GB from the other,
         // and this says so rather than quietly picking a winner.
-        let mr = texture_image(&images, pbr.metallic_roughness_texture().map(|t| t.texture()));
+        let mr = texture_image(
+            &images,
+            pbr.metallic_roughness_texture().map(|t| t.texture()),
+        );
         let occlusion = texture_image(&images, source.occlusion_texture().map(|t| t.texture()));
         let packed = match (mr, occlusion) {
             (None, None) => None,
@@ -179,7 +182,12 @@ pub fn import_materials(
         }
 
         let relative = format!("{materials_dir}/{stem}_{name}.json");
-        write_material(&root.join(&relative), &material, textures_dir, materials_dir)?;
+        write_material(
+            &root.join(&relative),
+            &material,
+            textures_dir,
+            materials_dir,
+        )?;
         out.materials.push(relative);
     }
 
@@ -194,7 +202,10 @@ struct Image {
     rgba: Vec<u8>,
 }
 
-fn texture_image(images: &[gltf::image::Data], texture: Option<gltf::Texture<'_>>) -> Option<Image> {
+fn texture_image(
+    images: &[gltf::image::Data],
+    texture: Option<gltf::Texture<'_>>,
+) -> Option<Image> {
     let data = images.get(texture?.source().index())?;
     let pixels = data.pixels.as_slice();
     let channels = match data.format {
@@ -262,15 +273,16 @@ fn write_png(path: &Path, image: &Image) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| write_failed(path, e))?;
     }
-    let buffer =
-        image::RgbaImage::from_raw(image.width, image.height, image.rgba.clone()).ok_or_else(
-            || {
-                EngineError::new(
-                    engine_core::codes::ASSET_LOAD_FAILED,
-                    format!("glTF image for {} has the wrong pixel count", path.display()),
-                )
-            },
-        )?;
+    let buffer = image::RgbaImage::from_raw(image.width, image.height, image.rgba.clone())
+        .ok_or_else(|| {
+            EngineError::new(
+                engine_core::codes::ASSET_LOAD_FAILED,
+                format!(
+                    "glTF image for {} has the wrong pixel count",
+                    path.display()
+                ),
+            )
+        })?;
     buffer
         .save(path)
         .map_err(|e| write_failed(path, std::io::Error::other(e)))
@@ -285,19 +297,23 @@ fn write_material(
     materials_dir: &str,
 ) -> Result<()> {
     let mut material = material.clone();
-    for map in [
+    for reference in [
         &mut material.albedo_map,
         &mut material.orm_map,
         &mut material.normal_map,
         &mut material.emissive_map,
-    ] {
-        if let Some(reference) = map {
-            *reference = reference.replacen(
-                &format!("{textures_dir}/"),
-                &format!("{}{textures_dir}/", "../".repeat(materials_dir.split('/').count())),
-                1,
-            );
-        }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        *reference = reference.replacen(
+            &format!("{textures_dir}/"),
+            &format!(
+                "{}{textures_dir}/",
+                "../".repeat(materials_dir.split('/').count())
+            ),
+            1,
+        );
     }
 
     if let Some(parent) = path.parent() {

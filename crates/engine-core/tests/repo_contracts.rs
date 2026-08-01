@@ -59,7 +59,9 @@ fn demo_scene_is_valid() {
 /// Validate a scene that references real files, so validation must see the
 /// scene's actual location — hence the absolute path.
 fn assert_scene_validates(relative: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative);
     let display = path.display().to_string();
     let source = std::fs::read_to_string(&path).unwrap();
     let errors = engine_core::validate::validate_source(&source, &display);
@@ -128,9 +130,7 @@ fn showcase_tour_uses_every_component_the_engine_has() {
     // Components the scene is *forbidden* to carry, because its `daylight`
     // block already owns what they mean.
     let daylight = &scene["daylight"];
-    let drives = |field: &str| {
-        !daylight.is_null() && daylight[field].as_bool().unwrap_or(true)
-    };
+    let drives = |field: &str| !daylight.is_null() && daylight[field].as_bool().unwrap_or(true);
     let mut owned_by_daylight: Vec<&str> = Vec::new();
     if drives("drives_sun") {
         owned_by_daylight.push("DirectionalLight");
@@ -226,7 +226,12 @@ fn m5_broken_verify_scene_reports_every_planted_error() {
     };
 
     // One run reports all of them — never a drip-feed.
-    assert_eq!(errors.len(), 7, "expected exactly the planted errors:\n{}", dump());
+    assert_eq!(
+        errors.len(),
+        7,
+        "expected exactly the planted errors:\n{}",
+        dump()
+    );
 
     for error in &errors {
         let context = error.context().expect("every error carries context");
@@ -249,10 +254,18 @@ fn m5_broken_verify_scene_reports_every_planted_error() {
         Some("Material")
     );
 
-    find("value_out_of_range", &|e| e.message.contains("albedo[0] is 1.5"));
-    find("value_out_of_range", &|e| e.message.contains("roughness is 1.5"));
-    find("value_out_of_range", &|e| e.message.contains("intensity is -2"));
-    find("asset_not_found", &|e| e.message.contains("does_not_exist.glb"));
+    find("value_out_of_range", &|e| {
+        e.message.contains("albedo[0] is 1.5")
+    });
+    find("value_out_of_range", &|e| {
+        e.message.contains("roughness is 1.5")
+    });
+    find("value_out_of_range", &|e| {
+        e.message.contains("intensity is -2")
+    });
+    find("asset_not_found", &|e| {
+        e.message.contains("does_not_exist.glb")
+    });
 
     let colour = find("unknown_field", &|e| {
         e.context().unwrap().field.as_deref() == Some("colour")
@@ -303,7 +316,10 @@ fn error_code_registry_matches_the_docs() {
             .iter()
             .find(|(code, _, _)| code == entry.code)
             .unwrap_or_else(|| {
-                panic!("{} is registered but missing from docs/error-codes.md", entry.code)
+                panic!(
+                    "{} is registered but missing from docs/error-codes.md",
+                    entry.code
+                )
             });
         assert_eq!(
             row.1,
@@ -340,7 +356,9 @@ impl engine_core::mesh::MeshSource for StubbedFileAssets {
     ) -> engine_core::error::Result<std::sync::Arc<engine_core::mesh::MeshData>> {
         match engine_core::mesh::BuiltinMesh::parse(asset) {
             Some(builtin) => Ok(std::sync::Arc::new(builtin?.data())),
-            None => Ok(std::sync::Arc::new(engine_core::mesh::BuiltinMesh::Cube.data())),
+            None => Ok(std::sync::Arc::new(
+                engine_core::mesh::BuiltinMesh::Cube.data(),
+            )),
         }
     }
 }
@@ -360,6 +378,17 @@ impl engine_core::texture::TextureSource for StubbedFileAssets {
             vec![255, 255, 255, 255],
             space,
         )))
+    }
+}
+
+/// And the rig half (M30). A stubbed cube has no skin, so the draw list this
+/// test counts never asks for a palette.
+impl engine_core::skeleton::RigSource for StubbedFileAssets {
+    fn load_rig(
+        &self,
+        _asset: &str,
+    ) -> engine_core::error::Result<std::sync::Arc<engine_core::skeleton::Rig>> {
+        Ok(std::sync::Arc::new(engine_core::skeleton::Rig::default()))
     }
 }
 
@@ -418,7 +447,9 @@ fn formatter_edit_of_m4_fixture_changes_exactly_one_line() {
     // scene the engine rejects, for a value the schema allows.
     let errors = engine_core::validate::validate_source(&edited, "edited.json");
     assert!(
-        errors.iter().all(|e| e.is_warning() || e.error == "asset_not_found"),
+        errors
+            .iter()
+            .all(|e| e.is_warning() || e.error == "asset_not_found"),
         "unexpected: {errors:?}"
     );
 }
@@ -439,13 +470,22 @@ fn every_committed_baseline_is_listed_in_the_manifest() {
     let mut listed: Vec<String> = Vec::new();
     for key in ["baselines", "traces"] {
         for entry in manifest[key].as_array().unwrap() {
-            let artifact = entry[if key == "baselines" { "baseline" } else { "trace" }]
-                .as_str()
-                .unwrap();
+            let artifact = entry[if key == "baselines" {
+                "baseline"
+            } else {
+                "trace"
+            }]
+            .as_str()
+            .unwrap();
             let scene = entry["scene"].as_str().unwrap();
             for relative in [artifact, scene] {
-                let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative);
-                assert!(path.exists(), "{relative} is in the manifest but not on disk");
+                let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join(relative);
+                assert!(
+                    path.exists(),
+                    "{relative} is in the manifest but not on disk"
+                );
             }
             listed.push(artifact.rsplit('/').next().unwrap().to_string());
         }
@@ -567,5 +607,135 @@ fn every_asset_a_committed_scene_references_is_committed() {
         "a committed scene references files that are not in the repo, so a fresh \
          clone cannot validate or render it:\n  {}",
         missing.join("\n  ")
+    );
+}
+
+/// `docs/component-reference.md` is generated, and this is what keeps it so.
+///
+/// Invariant 7: component schemas are derived from the Rust structs, never
+/// maintained by hand. A prose reference maintained beside them would be a
+/// second source of truth, drifting the first time someone adds a field — so
+/// the reference is rendered from the same schema `engine list-components`
+/// publishes, and this test fails when the committed file falls behind.
+#[test]
+fn checked_in_component_reference_matches_the_code() {
+    let committed = repo_file("docs/component-reference.md");
+    let generated = engine_core::schema::component_reference();
+    assert_eq!(
+        committed, generated,
+        "docs/component-reference.md is stale — regenerate it with \
+         `engine list-components --markdown > docs/component-reference.md`"
+    );
+}
+
+/// Every component the engine has appears in the reference.
+///
+/// The equality test above would also catch this, but it fails with a diff of
+/// two 800-line strings. This one names the missing component.
+#[test]
+fn component_reference_documents_every_component() {
+    let reference = repo_file("docs/component-reference.md");
+    for name in engine_core::components::ComponentData::NAMES {
+        assert!(
+            reference.contains(&format!("\n## {name}\n")),
+            "docs/component-reference.md has no section for {name}"
+        );
+    }
+}
+
+/// The worked example in `docs/scene-format.md` is a real scene.
+///
+/// A format document whose example does not load is worse than none: it is the
+/// first thing anyone copies. The example is fenced with ```json and marked
+/// with the `<!-- validated -->` comment, so this can find it without the doc
+/// having to keep a duplicate copy on disk.
+#[test]
+fn the_scene_format_doc_example_validates() {
+    let doc = repo_file("docs/scene-format.md");
+    let marker = "<!-- validated -->";
+    let count = doc.matches(marker).count();
+    assert!(
+        count > 0,
+        "docs/scene-format.md has no {marker} example for this test to check"
+    );
+
+    for (index, section) in doc.split(marker).skip(1).enumerate() {
+        let body = section
+            .split_once("```json")
+            .and_then(|(_, rest)| rest.split_once("```"))
+            .map(|(body, _)| body)
+            .unwrap_or_else(|| panic!("{marker} #{index} is not followed by a ```json block"));
+        let errors = engine_core::validate::validate_source(body, "docs/scene-format.md");
+        let fatal: Vec<_> = errors.iter().filter(|e| !e.is_warning()).collect();
+        assert!(
+            fatal.is_empty(),
+            "the example after {marker} #{index} does not validate: {fatal:?}"
+        );
+    }
+}
+
+/// No committed scene draws one size and collides at another.
+///
+/// Six did before M34 — five of them because `builtin:sphere` was two metres
+/// across while every other primitive was one, so a collider authored to match
+/// the drawn ball had to be written at twice its visible radius, and the sixth
+/// because a radius was written as a world measurement that `Transform.scale`
+/// then multiplied again. Both render as an object half-buried in the floor,
+/// which reads as an engine bug.
+///
+/// The starter scene `engine init` scaffolds is in here deliberately: it was
+/// one of the six, and it is the first thing anyone copies.
+#[test]
+fn no_committed_scene_disagrees_with_itself_about_how_big_something_is() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let Ok(listing) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", "examples", "crates/engine-cli/src/scaffold"])
+        .output()
+    else {
+        eprintln!("skipping: no git on this machine");
+        return;
+    };
+    if !listing.status.success() {
+        eprintln!("skipping: not a git checkout");
+        return;
+    }
+
+    let mut offenders: Vec<String> = Vec::new();
+    let mut scenes = 0;
+    for scene in String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .filter(|p| {
+            p.ends_with(".json")
+            && !p.contains("baselines")
+            // Committed broken on purpose; its pass condition is elsewhere.
+            && !p.ends_with("m5_broken.json")
+        })
+    {
+        let Ok(source) = std::fs::read_to_string(root.join(scene)) else {
+            continue;
+        };
+        // Materials, animation clips and the baseline manifest live under the
+        // same globs and are not scenes.
+        if !serde_json::from_str::<serde_json::Value>(&source)
+            .is_ok_and(|v| v.get("entities").is_some())
+        {
+            continue;
+        }
+        scenes += 1;
+        offenders.extend(
+            engine_core::validate::validate_source(&source, scene)
+                .iter()
+                .filter(|e| e.error == engine_core::codes::COLLIDER_MESH_SIZE_MISMATCH)
+                .map(|e| e.to_json()),
+        );
+    }
+
+    assert!(scenes > 20, "found only {scenes} scenes; the glob is wrong");
+    assert!(
+        offenders.is_empty(),
+        "a committed scene draws one size and collides at another:\n{}",
+        offenders.join("\n")
     );
 }

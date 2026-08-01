@@ -15,8 +15,8 @@ Scene files land in `examples/scenes/verify/` (clips in `examples/scenes/verify/
 are committed, and are never edited casually afterward — they are regression fixtures. The JSON
 in this document is the canonical content; copy it verbatim when the milestone lands.
 
-Component shapes below follow the settled companion designs (`materials-lighting-design.md`,
-`physics-design.md`, `animation-system-design.md`, `gui-editor-design.md`). If implementation
+Component shapes below follow the settled companion designs for M4, M7, M8 and
+M9, pruned once built (see `designs/README.md`). If implementation
 forces a shape change, update this document in the same commit.
 
 ## The standard check, run after every milestone
@@ -59,7 +59,7 @@ standard check regresses the asset pipeline too, and M9's skeletal phase (A2) is
 
 Two identical spheres differing only in roughness (specular response is only visible on curved
 geometry — the reason `builtin:sphere` exists), an emissive beacon, the recommended sun+ambient
-rig from `materials-lighting-design.md` §3, and the M2-era ground/camera setup so the whole
+rig from M4's design §3, and the M2-era ground/camera setup so the whole
 pre-M4 stack is still in the frame.
 
 ```json
@@ -156,7 +156,7 @@ engine validate /tmp/m4_typo.json
 # Expect exit != 0 and stderr JSON containing "did_you_mean": "DirectionalLight" with file/line.
 ```
 
-Then the standard check. New headless tests from `materials-lighting-design.md` §11 (lit-face
+Then the standard check. New headless tests from M4's design §11 (lit-face
 ordering, sun flip, ambient-only, emissive ≈ `srgb_encode(emissive)`, roughness highlight
 comparison) must be in `cargo test --workspace` by the time this scene is committed.
 
@@ -310,7 +310,7 @@ test mutates it) plus `verify/m5_broken.json` for the validation panel.
 M7 is the one milestone that needs a human at the keyboard for parts of its check (gizmo
 drags); everything else stays scriptable.
 
-**Run after implementing M7 (per editor milestone E0–E2, `gui-editor-design.md` §8):**
+**Run after implementing M7 (per editor milestone E0–E2, M7's design §8):**
 
 ```bash
 git switch -c m7-editor-check
@@ -418,7 +418,7 @@ baked-scene screenshot also regresses rendering.
 }
 ```
 
-**Run after implementing M8 (per phase, `physics-design.md` §11):**
+**Run after implementing M8 (per phase, M8's design §11):**
 
 ```bash
 # M8.0 — data only (no rapier yet): scene validates, schema regenerated.
@@ -475,7 +475,7 @@ rendering (`--steps` screenshots), and Euler-degree transform conventions (write
 `examples/scenes/verify/animations/spin.anim.json`.
 
 The clip (the canonical 0°→360° spin that quaternion slerp would silently no-op — the exact
-failure this design avoids, per `animation-system-design.md` §3):
+failure this design avoids, per M9's design §3):
 
 ```json
 {
@@ -548,7 +548,7 @@ against a fixed anchor), M4 lighting rig, standard camera:
 }
 ```
 
-**Run after implementing M9 (per phase A0–A2, `animation-system-design.md` §7):**
+**Run after implementing M9 (per phase A0–A2, M9's design §7):**
 
 ```bash
 # A0 — sampling is pure and validated (no rendering involved yet):
@@ -588,7 +588,7 @@ engine diff-render examples/scenes/verify/m9_spin.json \
 
 Then the standard check. If M8 is already in, also run one combined scene check: an
 `AnimationPlayer` targeting a `dynamic` rigid body must fail validation (or whatever rule the
-open ownership question in `animation-system-design.md` §9 settled to — settle it before this
+open ownership question in M9's design §9 settled to — settle it before this
 milestone closes, and encode the answer as a test here).
 
 **What this regresses:** validation across file references (scene → clip), the screenshot
@@ -599,7 +599,7 @@ and determinism end to end — `cmp` on PNGs is the strictest check in this whol
 
 ## M10 — Scripting
 
-> **Resolved 2026-07-27: Rhai** (settled with the user; see `scripting-design.md`). Scripts
+> **Resolved 2026-07-27: Rhai** (settled with the user). Scripts
 > are `.rhai` files defining `fn step(world, step)`, run once per fixed step, before physics.
 
 **Files:** `examples/scenes/verify/m10_script.json`,
@@ -763,7 +763,7 @@ render), `world.look_at`, and the determinism promise extended over recorded inp
 
 ## M12 — HUD components: `verify/m12_hud.json`
 
-Screen-anchored `HudText` + `HudRect` components (hud-design.md), rendered by the same
+Screen-anchored `HudText` + `HudRect` components, rendered by the same
 rasterizer/overlay pass as the M11.6 `world.hud` lines. The fixture covers every anchor, a
 glyph-coverage line, rect-under-text draw order, a fractional-opacity panel, and a script
 (`verify/scripts/m12_hud.rhai`) that writes the step counter into a `HudText` and stretches a
@@ -1100,7 +1100,7 @@ schema-driven validation of 24 new fields. The GPU-free half is 12 tests in
 **Bless from a debug build.** Unlike every earlier fixture, this one is sensitive to the build
 profile: procedural geometry does enough `sin_cos` work that a release build's libm routines move
 three pixels of `m19_trees.png` and one of `showcase_90.png` by one channel step (see
-`tree-design.md` §4 — it is measured, and it is not FMA). The committed baselines are blessed with
+M19's design §4 — it is measured, and it is not FMA). The committed baselines are blessed with
 the binary `cargo test` runs, so the pinned test is exact; a release build checking them by hand
 sees those pixels.
 
@@ -1222,6 +1222,98 @@ this fixture, which the `main` binary cannot parse.
 
 ---
 
+## M27 — Water refraction: `verify/m27_water_refraction.json`
+
+A clear pool over a bed of dark bars crossed by a red and a blue rail, with two posts and a boulder
+standing through the surface. The bed is a *grid* on purpose: refraction is a displacement, so a
+uniform bed cannot show it, and the displacement runs along the view direction — bars laid across
+that axis move, bars laid along it barely do.
+
+**Two baselines from one file**, via a second camera:
+
+```
+engine screenshot verify/m27_water_refraction.json --steps 120 --out m27_water_refraction.png
+engine screenshot verify/m27_water_refraction.json --steps 120 --camera CameraGrazing \
+    --out m27_water_grazing.png
+```
+
+- `Camera` looks down at the pool at 24°, where the grid is what refraction acts on. This is the
+  frame that goes visibly wrong if the exit point is stepped along the refracted ray by the view
+  ray's path length instead of solved to the bed's depth — the bars dice into rectangular blocks.
+- `CameraGrazing` looks across at 8°, where the boulder and posts stand *in* the water. This is the
+  framing the depth-validated sample exists for: dropping the check moves ~22k pixels of it by up
+  to 99. On the overhead camera it moves **zero**, which is why the second camera is here at all.
+
+Per M22's rule both cameras aim at the subject with no terrain in frame, so both carry hard
+bit-exact pins rather than a tolerance; four consecutive sweeps came back at zero differing pixels.
+Pinned by `cli.rs::the_m27_water_refraction_fixture_pins_a_bent_bed_and_a_clean_waterline`, which
+also drops `ior` back to its default and requires the baseline to *stop* matching — a splice that
+silently did nothing would otherwise pass every other assertion.
+
+What it covers: the spliced refracting-water pipeline and its four anchors against `water.wgsl`,
+the bed-depth solve, the depth-validated sample, the IOR riding in `clock.z`, and the
+colour-copy/split-pass gate extended from `Material::refracts()` to `Water::refracts()`.
+
+**The bit-exactness half** is the A/B between binaries: every committed scene this milestone did not
+edit renders byte for byte as it did at `main`. Not compared are the ones whose *inputs* changed —
+the six showcase frames, whose pond now carries an `ior`, and this fixture, which the `main` binary
+cannot parse.
+
+---
+
+## M28 — The mouse: `verify/m28_pointer.json`
+
+A ground plane, two posts for depth, a marker disc, a sphere, and a button plate in the corner of
+the HUD, driven by `verify/m28_pointer.input.jsonl` — a committed cursor path with two held clicks.
+**Two baselines from one file**, at `--steps 40` and `--steps 80`: the first has the cursor
+mid-field with the click *away* from the button, the second has it on the plate with the button
+pressed and the sphere dropped on the marker.
+
+Per M22's rule the camera aims at its subject and there is no terrain in frame, so both carry a hard
+bit-exact pin; three consecutive renders came back `cmp`-identical.
+
+What it covers: the timeline's `cursor` field end to end, the inverse projection behind
+`world.cursor_ground` (the marker *is* the answer, drawn), `set_hud_offset` (the crosshair is two
+rects on the cursor's pixel), `world.mouse` as a held-state predicate, and a menu-style hit test in
+HUD pixels via `viewport_width`/`viewport_height`.
+
+**The bit-exactness half needed no A/B**: no renderer, shader or geometry code was touched — the
+milestone is input, script API and CLI plumbing — and `bin/verify-baselines` reported all 31
+pre-existing artifacts unchanged. (One artifact failed on the first of three sweeps and passed on
+both re-runs: the terrain/MSAA residue M22 documents.)
+## M30 — Skeletal animation: `verify/m30_skeletal.json`
+
+Two copies of `examples/meshes/rigged_arm.gltf` side by side on a plane, one with an
+`AnimationPlayer` on `#Wave` and one with none, rendered at `--time 0.4`.
+
+**The two arms are the assertion.** They share a file, a mesh and a material, so anything that made
+*both* wrong — a palette that never reached the GPU, a vertex buffer bound a slot out of order —
+would still leave them identical; only real skinning makes one bend and the other stand. And the
+bent arm's **shadow bends with it**, which is the skinned caster earning its pipeline: `shadow.wgsl`
+reads nothing but the model matrix, so without a second one a walking character casts its rest pose.
+
+Per M22's rule the camera aims at its subject rather than across a landscape, so this fixture
+carries a hard bit-exact pin (`the_m30_skeletal_fixture_pins_a_posed_rig_and_its_shadow`).
+
+What it covers: `JOINTS_0`/`WEIGHTS_0` through the loader, a skinned primitive loaded **unbaked**,
+the CPU palette on the draw list, the group-0 palette binding with its own dynamic offset, the
+vertex stage assembled from contributions, the skinned opaque pipeline, and the skinned shadow
+caster. Not covered by the fixture and covered by tests instead: the textured, transparent and
+refracting skinned variants, and the cut-out skinned caster.
+
+**Measured rather than assumed**, since M19 and M20 made CPU-generated geometry per-build-profile:
+this baseline renders **byte-identically from the debug and release binaries**. Three joints of
+slerp is not enough libm to reach a pixel. A rig with a hundred joints may not inherit that, so
+re-measure rather than quote this.
+
+**The bit-exactness half** is the A/B between binaries, and it is the milestone's structural risk
+rather than a formality: S1 rewrote the mechanism that guards M16's four untouchable lines, turning
+whole-stage replacement of the vertex stage into an assembly from per-producer contributions. All
+**29 of 29** committed render artifacts rendered byte for byte as they did at `main`, and the
+producer-less assembly is asserted equal to the stage in `mesh.wgsl` character for character.
+
+---
+
 ## Cumulative matrix
 
 What must be green after each milestone lands (columns are the checks, ⬤ = required):
@@ -1239,6 +1331,9 @@ What must be green after each milestone lands (columns are the checks, ⬤ = req
 | M19 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M23 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 | M26 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M27 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M28 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
+| M30 | ⬤ | ⬤ | ⬤ | | ⬤ | ⬤ | ⬤ | ⬤ |
 
 (M7's editor column is manual and re-run only when editor code changes; everything else is
 scriptable and belongs in CI the day M6's diff-render lands.)

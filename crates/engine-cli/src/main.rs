@@ -20,7 +20,7 @@ use engine_core::{codes, EngineError, Result, Scene};
 use engine_render::Gpu;
 use winit::event_loop::{ControlFlow, EventLoop};
 
-use crate::app::{Content, ViewerApp};
+use crate::app::{Content, SceneContent, ViewerApp};
 
 #[derive(Parser)]
 #[command(
@@ -159,13 +159,44 @@ enum Command {
         camera: Option<String>,
     },
 
-    /// Every animation clip reachable from a scene or clip file, as JSON.
+    /// Every animation clip reachable from a scene, a clip file, or a glTF.
     ListAnimations {
-        /// A scene file or a .anim.json clip file.
+        /// A scene file, a .anim.json clip file, or a .gltf/.glb.
         path: Option<PathBuf>,
         /// Print the clip-file JSON Schema instead.
         #[arg(long)]
         schema: bool,
+    },
+
+    /// The skeleton of a rigged glTF, as JSON: every joint's name, parent,
+    /// index and rest transform.
+    ///
+    /// With --time, each joint's *posed* world transform at that moment —
+    /// which is the thing a filmstrip cannot tell you. A contact sheet shows
+    /// that something moved; only this says the hand reached the doorknob.
+    ListJoints {
+        /// A scene file, or a .gltf/.glb directly.
+        path: PathBuf,
+        /// Which skinned entity, when a scene has more than one.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Pose the rig at this scene time instead of reporting the rest pose.
+        #[arg(long, allow_hyphen_values = true)]
+        time: Option<f32>,
+        /// Run the scene this many fixed steps first, then report where the
+        /// rig ended up.
+        ///
+        /// Needed by anything the *simulation* moves — a stride-driven clip's
+        /// phase is advanced by the ground its entity covers (M32), so `--time`
+        /// alone reports the pose the file was authored at rather than the one
+        /// the run reached. Absent, nothing is stepped and the report stays the
+        /// pure function of (files, time) it has always been.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
+        /// Which clip to pose with, when reading a .gltf/.glb directly. In a
+        /// scene the entity's AnimationPlayer already says.
+        #[arg(long)]
+        clip: Option<String>,
     },
 
     /// Step physics headlessly: build the world, advance N fixed steps.
@@ -230,6 +261,61 @@ enum Command {
         /// one; with several, naming one is required.
         #[arg(long)]
         entity: Option<String>,
+    },
+
+    /// Print every collider the physics world holds: shape, size, and where
+    /// it actually is (M33).
+    ///
+    /// The command skinned collider proxies are really for. A hitbox riding a
+    /// joint is invisible in a render and derived from a pose, so "is the head
+    /// where I think it is" had no answer at all; this reads the answer back
+    /// out of rapier rather than re-deriving it, so the report cannot drift
+    /// from the simulation — `road-centerline`'s argument, applied to physics.
+    ///
+    /// Component-authored colliders are listed too, because "where are the
+    /// colliders" is the question and half an answer is worse than none.
+    ListColliders {
+        scene: PathBuf,
+        /// Narrow to one entity's colliders.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Step the simulation first. A proxy follows a pose, and a
+        /// stride-driven pose is what the *run* reached rather than a function
+        /// of the file — the reason `list-joints` grew the same flag in M32.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
+        /// Replay an input timeline while stepping.
+        #[arg(long)]
+        input: Option<PathBuf>,
+    },
+
+    /// Print where every HUD element ends up on screen (M31).
+    ///
+    /// This is the command the UI system is really for. An agent authoring a
+    /// menu cannot see it move; what it needs is the answer to "where did the
+    /// Start button end up", so it can write a timeline cursor that lands on
+    /// it. `engine road-centerline` publishes the samples a ribbon was built
+    /// from for exactly this reason, and the failure it prevents is the same:
+    /// a caller re-deriving geometry the engine already computed, and the two
+    /// drifting.
+    ///
+    /// A pure function of (file, viewport) at rest, like `engine inspect`:
+    /// no `--steps`, no `--input`, no cursor. What a script has since done to
+    /// the layout is `simulate`'s question.
+    UiLayout {
+        scene: PathBuf,
+        /// The framebuffer to lay out against. A pixel-authored UI is
+        /// resolution-dependent by construction, so the size is part of the
+        /// question — these default to the same 960×540 `simulate` hit-tests
+        /// against.
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
+        /// Narrow to named elements; repeatable. Unknown names are reported
+        /// all at once.
+        #[arg(long)]
+        entity: Vec<String>,
     },
 
     /// Ask a terrain patch how high the ground is at a world XZ position.
@@ -317,6 +403,12 @@ enum Command {
         /// its own.
         #[arg(long)]
         component: Option<String>,
+        /// Print the component reference as markdown instead of JSON Schema —
+        /// the human-readable half of the same vocabulary, and how
+        /// `docs/component-reference.md` is generated. A documented stdout
+        /// exception, beside `agent-guide`.
+        #[arg(long, conflicts_with = "component")]
+        markdown: bool,
     },
 
     /// Compile the workspace, re-emitting rustc diagnostics as engine errors.
@@ -362,7 +454,16 @@ fn main() {
             camera,
             width,
             height,
-        } => screenshot(scene, out, steps, input, time, camera.as_deref(), width, height),
+        } => screenshot(
+            scene,
+            out,
+            steps,
+            input,
+            time,
+            camera.as_deref(),
+            width,
+            height,
+        ),
         Command::DiffRender {
             scene,
             baseline,
@@ -406,6 +507,13 @@ fn main() {
             camera.as_deref(),
         ),
         Command::ListAnimations { path, schema } => list_animations(path, schema),
+        Command::ListJoints {
+            path,
+            entity,
+            time,
+            steps,
+            clip,
+        } => list_joints(path, entity, time, steps, clip),
         Command::Edit {
             scene,
             watch,
@@ -434,6 +542,18 @@ fn main() {
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
+        Command::ListColliders {
+            scene,
+            entity,
+            steps,
+            input,
+        } => list_colliders(scene, entity, steps, input),
+        Command::UiLayout {
+            scene,
+            width,
+            height,
+            entity,
+        } => ui_layout(scene, width, height, entity),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
         Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Import {
@@ -447,7 +567,10 @@ fn main() {
             print!("{}", scaffold::AGENT_GUIDE);
             Ok(())
         }
-        Command::ListComponents { component } => list_components(component),
+        Command::ListComponents {
+            component,
+            markdown,
+        } => list_components(component, markdown),
         Command::Build { check } => build::build(check),
         Command::Info => info(),
         #[cfg(debug_assertions)]
@@ -561,9 +684,12 @@ pub(crate) fn report_scene_diagnostics(path: &PathBuf) -> SceneReport {
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
         Err(e) => {
-            EngineError::new(codes::SCENE_UNREADABLE, format!("could not read scene: {e}"))
-                .file(&display)
-                .emit();
+            EngineError::new(
+                codes::SCENE_UNREADABLE,
+                format!("could not read scene: {e}"),
+            )
+            .file(&display)
+            .emit();
             return SceneReport {
                 source: None,
                 errors: 1,
@@ -650,9 +776,8 @@ fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
         let is_material = parsed.as_ref().is_some_and(|v| {
             v.get("entities").is_none()
                 && v.get("tracks").is_none()
-                && v.as_object().is_some_and(|o| {
-                    o.keys().any(|k| material_fields().iter().any(|f| f == k))
-                })
+                && v.as_object()
+                    .is_some_and(|o| o.keys().any(|k| material_fields().iter().any(|f| f == k)))
         });
         if is_clip || is_material {
             let display = path.display().to_string();
@@ -682,7 +807,9 @@ fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
         };
         return Err(EngineError::new(
             codes::VALIDATION_FAILED,
-            format!("{errors} error(s) and {warnings} warning(s) across {files} file(s){strict_note}"),
+            format!(
+                "{errors} error(s) and {warnings} warning(s) across {files} file(s){strict_note}"
+            ),
         ));
     }
 
@@ -727,6 +854,77 @@ fn load_scene(path: &PathBuf) -> Result<Scene> {
         }
         last
     })
+}
+
+/// `engine list-colliders` — every collider the physics world holds (M33).
+///
+/// Read out of the built world rather than out of the components: a skinned
+/// collider proxy has no `Transform` to inspect, its placement is derived from
+/// a pose, and a second implementation of that derivation is exactly what
+/// `road-centerline` and `ui-layout` exist to prevent.
+///
+/// `--steps` runs the simulation first, for M32's reason: a stride-driven pose
+/// is what the run reached, not a function of the file, so a report that never
+/// stepped would describe a character standing still.
+fn list_colliders(
+    scene_path: PathBuf,
+    entity: Option<String>,
+    steps: u32,
+    input_path: Option<PathBuf>,
+) -> Result<()> {
+    let display = scene_path.display().to_string();
+    let mut scene = load_scene(&scene_path)?;
+    let input = simulate::load_input(input_path.as_deref())?;
+
+    let physics = simulate::run(
+        &mut scene,
+        &scene_path,
+        steps,
+        input.as_ref(),
+        &engine_core::input::Viewport::DEFAULT,
+        None,
+    )?
+    .physics;
+
+    let rows = physics.collider_report();
+    if let Some(wanted) = &entity {
+        if !rows.iter().any(|row| &row.entity == wanted) {
+            return Err(EngineError::new(
+                codes::ENTITY_NOT_FOUND,
+                format!("no entity named {wanted:?} with a collider in {display}"),
+            )
+            .entity(wanted)
+            .file(&display)
+            .suggest_from(wanted, rows.iter().map(|row| row.entity.as_str())));
+        }
+    }
+
+    let colliders: Vec<serde_json::Value> = rows
+        .iter()
+        .filter(|row| entity.as_ref().is_none_or(|wanted| &row.entity == wanted))
+        .map(|row| {
+            let mut record = serde_json::json!({
+                "entity": row.entity,
+                "shape": row.shape,
+                "dimensions": row.dimensions,
+                "position": [row.position.x, row.position.y, row.position.z],
+                "rotation": [row.rotation.x, row.rotation.y, row.rotation.z],
+                "sensor": row.sensor,
+            });
+            // Only proxies carry a part, so an ordinary collider's row is the
+            // shape it would have had if this command had existed since M8.
+            if let Some(part) = &row.part {
+                record["part"] = serde_json::json!(part);
+            }
+            record
+        })
+        .collect();
+
+    println!(
+        "{}",
+        serde_json::json!({ "steps": steps, "colliders": colliders })
+    );
+    Ok(())
 }
 
 /// `engine road-centerline` — publish a road's sampled centerline (M23).
@@ -808,6 +1006,94 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
     Ok(())
 }
 
+/// `engine ui-layout <scene> [--width W --height H] [--entity N]...` (M31).
+///
+/// Reports the rectangle the layout engine puts every HUD element in — the
+/// same function `hud::rasterize` draws from and the same one the hit test
+/// uses, so the report cannot disagree with the picture.
+///
+/// **Name-sorted**, following `simulate --entity`'s contract rather than draw
+/// order: a report is read by name, and draw order is already visible in the
+/// render. `depth` and `parent` carry the tree for anything that wants it.
+fn ui_layout(
+    scene_path: PathBuf,
+    width: Option<u32>,
+    height: Option<u32>,
+    entities: Vec<String>,
+) -> Result<()> {
+    let scene = load_scene(&scene_path)?;
+    let assets = engine_assets::AssetServer::for_scene(&scene_path);
+    let view = engine_core::input::Viewport::DEFAULT;
+    let (width, height) = (width.unwrap_or(view.width), height.unwrap_or(view.height));
+
+    let tree = scene.hud_tree(&assets);
+    let layout = engine_core::ui::layout(&tree, width, height);
+
+    // Unknown names all at once, the M25 rule — an agent fixing one typo at a
+    // time is an agent running the command four times.
+    if !entities.is_empty() {
+        let unknown: Vec<&String> = entities
+            .iter()
+            .filter(|name| tree.index_of(name).is_none())
+            .collect();
+        if !unknown.is_empty() {
+            let known: Vec<&str> = tree.nodes.iter().map(|n| n.entity.as_str()).collect();
+            let mut error = EngineError::new(
+                codes::ENTITY_NOT_FOUND,
+                format!(
+                    "no HUD element on {}",
+                    unknown
+                        .iter()
+                        .map(|n| format!("{n:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .file(scene_path.display().to_string());
+            if let Some(first) = unknown.first() {
+                error = error.entity(first.as_str()).suggest_from(first, known);
+            }
+            return Err(error);
+        }
+    }
+
+    let mut elements: Vec<serde_json::Value> = layout
+        .placed
+        .iter()
+        .filter(|placed| entities.is_empty() || entities.contains(&tree.nodes[placed.node].entity))
+        .map(|placed| {
+            let node = &tree.nodes[placed.node];
+            serde_json::json!({
+                "entity": node.entity,
+                "kind": node.kind.name(),
+                "parent": placed.parent,
+                "depth": placed.depth,
+                "rect": [
+                    placed.rect.x,
+                    placed.rect.y,
+                    placed.rect.width,
+                    placed.rect.height,
+                ],
+                "visible": placed.visible,
+                "interactive": node
+                    .interact
+                    .as_ref()
+                    .is_some_and(|interact| !interact.disabled),
+            })
+        })
+        .collect();
+    elements.sort_by(|a, b| a["entity"].as_str().cmp(&b["entity"].as_str()));
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "viewport": [width, height],
+            "elements": elements,
+        })
+    );
+    Ok(())
+}
+
 /// `engine list-components [--component NAME]` — the component vocabulary
 /// (M24).
 ///
@@ -815,7 +1101,12 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
 /// checked-in `schemas/component-schema.json` is that output, a repo-contract
 /// test enforces it, and the validation walk and the editor's widget generator
 /// both read the same document.
-fn list_components(component: Option<String>) -> Result<()> {
+fn list_components(component: Option<String>, markdown: bool) -> Result<()> {
+    if markdown {
+        print!("{}", engine_core::schema::component_reference());
+        return Ok(());
+    }
+
     let Some(name) = component else {
         print!("{}", engine_core::schema::canonical_json());
         return Ok(());
@@ -829,7 +1120,9 @@ fn list_components(component: Option<String>) -> Result<()> {
         .component(&name)
         .suggest_from(
             &name,
-            engine_core::components::ComponentData::NAMES.iter().copied(),
+            engine_core::components::ComponentData::NAMES
+                .iter()
+                .copied(),
         )
     })?;
 
@@ -1070,9 +1363,7 @@ fn import(
         let exists = serde_json::from_str::<serde_json::Value>(&source)
             .ok()
             .and_then(|v| v["entities"].as_array().cloned())
-            .is_some_and(|entities| {
-                entities.iter().any(|e| e["name"] == entity_name.as_str())
-            });
+            .is_some_and(|entities| entities.iter().any(|e| e["name"] == entity_name.as_str()));
         if exists {
             let warning = format!(
                 "{} already has an entity named {entity_name:?}; its material and \
@@ -1121,9 +1412,10 @@ fn import(
 /// than a silently wrong reference.
 fn relative_to(path: &Path, base: &Path) -> Option<String> {
     let path = path.canonicalize().ok()?;
-    let base = base.canonicalize().ok().or_else(|| {
-        std::env::current_dir().ok()
-    })?;
+    let base = base
+        .canonicalize()
+        .ok()
+        .or_else(|| std::env::current_dir().ok())?;
     let mut up = Vec::new();
     let mut candidate = base.as_path();
     loop {
@@ -1227,16 +1519,28 @@ fn diff_render(
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    let (particles, hud) = if steps > 0 {
-        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
-        (outcome.particles.instances(&scene.world), outcome.hud)
+    let (particles, hud, interaction) = if steps > 0 {
+        // The cursor is a fraction of the frame, and the frame here is the
+        // baseline's own dimensions — the same ones this render uses, so a
+        // mouse-driven fixture is pinned at the size it was blessed at.
+        let view = engine_core::input::Viewport::new(baseline.width, baseline.height, camera_name);
+        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
+        (
+            outcome.particles.instances(&scene.world),
+            outcome.hud,
+            outcome.interaction,
+        )
     } else {
-        (Vec::new(), Vec::new())
+        (
+            Vec::new(),
+            Vec::new(),
+            engine_core::ui::Interaction::default(),
+        )
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
-    let items = scene.render_items(&assets)?;
     let render_time = scene_time(time, steps, &scene);
+    let items = scene.render_items_at(&assets, Some(render_time))?;
     let (lights, environment) = scene.resolved_at(render_time);
 
     let (actual, adapter) = engine_render::offscreen::render_with_adapter(
@@ -1244,6 +1548,7 @@ fn diff_render(
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
@@ -1252,7 +1557,7 @@ fn diff_render(
         render_time,
         baseline.width,
         baseline.height,
-        &scene.hud_items(),
+        &tinted_hud(&scene, &assets, &interaction),
         &hud,
     )?;
 
@@ -1338,6 +1643,24 @@ fn scene_time(time: f32, steps: u32, scene: &engine_core::Scene) -> f32 {
     steps as f32 / scene.physics.timestep_hz.max(1) as f32
 }
 
+/// The scene's overlay with the pointer's hover and press tints applied (M31).
+///
+/// Applied here, between extraction and the render, rather than inside the
+/// rasterizer: the renderer has no business knowing what a pointer is, and
+/// `hud::rasterize` stays a pure function of (tree, lines, size). With no
+/// cursor over anything — every scene with no `HudInteract`, and every one
+/// rendered at `--steps 0` — every tint is `[1, 1, 1]` and `apply_tints` is a
+/// no-op, which is why no pre-M31 baseline can move through this path.
+fn tinted_hud(
+    scene: &engine_core::Scene,
+    assets: &engine_assets::AssetServer,
+    interaction: &engine_core::ui::Interaction,
+) -> engine_core::ui::HudTree {
+    let mut tree = scene.hud_tree(assets);
+    interaction.apply_tints(&mut tree);
+    tree
+}
+
 fn load_baseline(path: &std::path::Path) -> Result<engine_render::Image> {
     let display = path.display().to_string();
 
@@ -1406,9 +1729,8 @@ fn filmstrip(
 ) -> Result<()> {
     let mut scene = load_scene(&scene_path)?;
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
-    let end = end.unwrap_or_else(|| {
-        start + engine_core::animation::longest_duration(&players).max(0.001)
-    });
+    let end = end
+        .unwrap_or_else(|| start + engine_core::animation::longest_duration(&players).max(0.001));
 
     let frames = frames.max(1);
     let columns = columns.max(1).min(frames);
@@ -1424,7 +1746,7 @@ fn filmstrip(
             start + (end - start) * frame as f32 / (frames - 1) as f32
         };
         engine_core::animation::apply_all(&mut scene, &players, t);
-        let items = scene.render_items(&assets)?;
+        let items = scene.render_items_at(&assets, Some(t))?;
         let (lights, environment) = scene.resolved_at(t);
         // Filmstrip samples animation time only; particles advance with
         // --steps, which filmstrip does not take, so none are drawn. Water is
@@ -1437,6 +1759,7 @@ fn filmstrip(
             &scene.water_items(),
             &scene.cloud_items(),
             &scene.road_items(),
+            &scene.meadow_items(),
             &[],
             &camera,
             camera_transform.matrix(),
@@ -1445,12 +1768,11 @@ fn filmstrip(
             t,
             tile_width,
             tile_height,
-            &scene.hud_items(),
+            &scene.hud_tree(&assets),
             &[],
         )?;
-        let tile =
-            image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
-                .expect("offscreen render returns exactly width*height*4 bytes");
+        let tile = image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
+            .expect("offscreen render returns exactly width*height*4 bytes");
         let x = (frame % columns) * tile_width;
         let y = (frame / columns) * tile_height;
         image::imageops::replace(&mut sheet, &tile, i64::from(x), i64::from(y));
@@ -1499,9 +1821,21 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
     };
 
     let display = path.display().to_string();
+
+    // A glTF asked about directly (M30). Sniffing the extension rather than
+    // the contents, because a `.glb` is not text and a `.gltf` is JSON that
+    // would otherwise fall through to the scene parser.
+    if engine_core::skeleton::is_gltf_path(&display) {
+        let rig = engine_assets::load_rig(&path)?;
+        println!(
+            "{}",
+            serde_json::json!({ "clips": gltf_clip_reports(&rig, &display) })
+        );
+        return Ok(());
+    }
+
     let source = std::fs::read_to_string(&path).map_err(|e| {
-        EngineError::new(codes::SCENE_UNREADABLE, format!("could not read: {e}"))
-            .file(&display)
+        EngineError::new(codes::SCENE_UNREADABLE, format!("could not read: {e}")).file(&display)
     })?;
     let sniff: serde_json::Value = serde_json::from_str(&source).unwrap_or_default();
 
@@ -1509,6 +1843,9 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
         serde_json::json!({
             "name": clip.name,
             "source": source_path,
+            // Named since M30, when a second kind arrived: a caller reading
+            // `tracks` versus `channels` should not have to guess which.
+            "kind": "property",
             "duration": engine_core::animation::duration(clip) as f64,
             "tracks": clip.tracks.iter().map(|t| serde_json::json!({
                 "entity": t.entity,
@@ -1531,17 +1868,328 @@ fn list_animations(path: Option<PathBuf>, schema: bool) -> Result<()> {
             })?;
         vec![clip_report(&clip, &display)]
     } else {
-        // A scene: every player's clip.
+        // A scene: every player's clip, property and skeletal alike — one
+        // command answers "what animates here" whichever kind it is.
         let scene = load_scene(&path)?;
         let players = engine_core::animation::load_players(&scene, &path)?;
-        players
+        let mut clips: Vec<serde_json::Value> = players
             .iter()
             .map(|p| clip_report(&p.clip, &p.player.clip))
-            .collect()
+            .collect();
+
+        let assets = engine_assets::AssetServer::for_scene(&path);
+        for skinned in engine_core::skeleton::skinned_entities(&scene, &assets)? {
+            let Some(clip) = skinned.selected_clip() else {
+                continue;
+            };
+            clips.push(skeletal_clip_report(
+                clip,
+                &format!("{}#{}", skinned.asset, clip.name),
+                Some(&skinned.name),
+                skinned.rig.skin.as_ref(),
+            ));
+        }
+        clips
     };
 
     println!("{}", serde_json::json!({ "clips": clips }));
     Ok(())
+}
+
+/// Every clip in a glTF, reported the way a property clip is — same shape, so
+/// one `jq` expression reads both.
+fn gltf_clip_reports(rig: &engine_core::skeleton::Rig, display: &str) -> Vec<serde_json::Value> {
+    rig.clips
+        .iter()
+        .map(|clip| {
+            skeletal_clip_report(
+                clip,
+                &format!("{display}#{}", clip.name),
+                None,
+                rig.skin.as_ref(),
+            )
+        })
+        .collect()
+}
+
+/// One skeletal clip as JSON.
+///
+/// Each channel carries the `joint` it drives — **null when it targets a node
+/// the skin does not use**, which is exactly the case glTF allows and sampling
+/// ignores. An ignored channel nothing reports is invisible; an ignored
+/// channel the CLI names is a fact about the asset. `sampled` is the same
+/// judgement stated outright, so a caller need not re-derive it.
+fn skeletal_clip_report(
+    clip: &engine_core::skeleton::SkeletalClip,
+    source: &str,
+    entity: Option<&str>,
+    skin: Option<&engine_core::skeleton::SkinData>,
+) -> serde_json::Value {
+    let channels: Vec<serde_json::Value> = clip
+        .channels
+        .iter()
+        .map(|channel| {
+            let joint = skin.and_then(|skin| skin.joint_of_node(channel.node));
+            serde_json::json!({
+                "node": channel.node,
+                "node_name": channel.node_name,
+                "joint": joint,
+                "property": channel.property.as_str(),
+                "interpolation": channel.interpolation.as_str(),
+                "keys": channel.times.len(),
+                "sampled": joint.is_some() && channel.is_sampleable(),
+            })
+        })
+        .collect();
+
+    let mut report = serde_json::json!({
+        "name": clip.name,
+        "source": source,
+        "kind": "skeletal",
+        "duration": engine_core::skeleton::duration(clip) as f64,
+        "channels": channels,
+    });
+    if let Some(entity) = entity {
+        report["entity"] = serde_json::Value::String(entity.to_string());
+    }
+    report
+}
+
+/// `engine list-joints` — the command that makes M30 agent-native rather than
+/// merely present.
+///
+/// A filmstrip shows that *something* moved; it never shows that the hand
+/// reached the doorknob. This does, and it needs no `Collider` and no GPU,
+/// which is what separates it from every other way of asking where something
+/// is.
+fn list_joints(
+    path: PathBuf,
+    entity: Option<String>,
+    time: Option<f32>,
+    steps: u32,
+    clip: Option<String>,
+) -> Result<()> {
+    let display = path.display().to_string();
+
+    // A `.gltf`/`.glb` asked about directly reports the rig; a scene reports
+    // every skinned entity's, or one with `--entity`.
+    let rigs: Vec<serde_json::Value> = if engine_core::skeleton::is_gltf_path(&display) {
+        let rig = engine_assets::load_rig(&path)?;
+        let Some(skin) = rig.skin.as_ref() else {
+            return Err(EngineError::new(
+                codes::MESH_HAS_NO_SKIN,
+                format!("glTF file {display:?} carries no skin"),
+            )
+            .file(&display));
+        };
+        let selected = match &clip {
+            Some(name) => Some(rig.clip_named(name).ok_or_else(|| {
+                EngineError::new(
+                    codes::UNKNOWN_CLIP,
+                    format!("glTF file {display:?} has no animation named {name:?}"),
+                )
+                .file(&display)
+                .suggest_from(name, rig.clip_names())
+            })?),
+            None => None,
+        };
+        // No player, so scene time and clip time are the same thing — and no
+        // scene, so no `FootPlant` and nothing to plant against.
+        let globals = engine_core::skeleton::joint_globals(
+            skin,
+            selected.filter(|_| time.is_some()),
+            time.unwrap_or(0.0),
+        );
+        vec![joint_report(
+            &display,
+            None,
+            skin,
+            selected,
+            time,
+            time,
+            engine_core::components::Transform::default(),
+            globals,
+            None,
+        )]
+    } else {
+        let mut scene = load_scene(&path)?;
+        // Stepping first, when asked: a stride-driven player's phase lives in
+        // the world the run leaves behind, so a report that never stepped
+        // would describe the file rather than the run.
+        let time = if steps > 0 {
+            simulate::run(
+                &mut scene,
+                &path,
+                steps,
+                None,
+                &engine_core::input::Viewport::DEFAULT,
+                None,
+            )?;
+            Some(scene_time(time.unwrap_or(0.0), steps, &scene))
+        } else {
+            time
+        };
+        let assets = engine_assets::AssetServer::for_scene(&path);
+        let skinned = engine_core::skeleton::skinned_entities(&scene, &assets)?;
+
+        if let Some(wanted) = &entity {
+            let found = skinned.iter().find(|s| &s.name == wanted).ok_or_else(|| {
+                EngineError::new(
+                    codes::UNKNOWN_ENTITY,
+                    format!("no skinned entity named {wanted:?} in {display}"),
+                )
+                .file(&display)
+                .entity(wanted)
+                .suggest_from(wanted, skinned.iter().map(|s| s.name.as_str()))
+            })?;
+            vec![entity_joint_report(&scene, found, time)]
+        } else {
+            skinned
+                .iter()
+                .map(|found| entity_joint_report(&scene, found, time))
+                .collect()
+        }
+    };
+
+    println!("{}", serde_json::json!({ "rigs": rigs }));
+    Ok(())
+}
+
+fn entity_joint_report(
+    scene: &engine_core::Scene,
+    skinned: &engine_core::skeleton::SkinnedEntity,
+    time: Option<f32>,
+) -> serde_json::Value {
+    let skin = skinned
+        .rig
+        .skin
+        .as_ref()
+        .expect("skinned_entities filtered");
+    let clip = skinned.selected_clip();
+    // The player's speed, offset and looping map scene time onto clip time, so
+    // `--time` here means what it means everywhere else — and the report
+    // carries both, because "why is the pose the same at 0 and at 1" is
+    // answered by the wrap, not by the joints.
+    let clip_time = time.map(|t| skinned.local_time(t));
+    // Through the same seam the renderer poses with (M32), so a planted foot
+    // is reported where it is drawn.
+    let globals = scene.posed_globals(
+        skinned.entity,
+        skin,
+        clip.filter(|_| clip_time.is_some()),
+        clip_time.unwrap_or(0.0),
+    );
+
+    // The stride this clip actually covers, when the entity names its feet.
+    // This is the number `AnimationPlayer.stride` wants, and measuring it is
+    // the alternative to tuning it against a filmstrip.
+    let stride = clip.and_then(|clip| {
+        let plant = scene.foot_plant_of(skinned.entity)?;
+        let feet: Vec<usize> = plant
+            .feet
+            .iter()
+            .filter_map(|foot| skin.joint_named(&foot.ankle))
+            .collect();
+        let metres = engine_core::locomotion::measure_stride(
+            skin,
+            clip,
+            &feet,
+            engine_core::locomotion::STRIDE_SAMPLES,
+        )?;
+        let names: Vec<&str> = plant.feet.iter().map(|f| f.ankle.as_str()).collect();
+        Some(serde_json::json!({
+            "measured": metres as f64,
+            "feet": names,
+            "samples": engine_core::locomotion::STRIDE_SAMPLES,
+        }))
+    });
+
+    joint_report(
+        &skinned.asset,
+        Some(&skinned.name),
+        skin,
+        clip,
+        time,
+        clip_time,
+        skinned.transform,
+        globals,
+        stride,
+    )
+}
+
+/// One rig as JSON: the joints in the skin's own order, each with its index.
+///
+/// Order is the skin's, never sorted — a joint's index is written into the
+/// vertex data, so it is a fact about the asset rather than a presentation
+/// choice, and carrying `index` is how the report says so.
+#[allow(clippy::too_many_arguments)]
+fn joint_report(
+    asset: &str,
+    entity: Option<&str>,
+    skin: &engine_core::skeleton::SkinData,
+    clip: Option<&engine_core::skeleton::SkeletalClip>,
+    time: Option<f32>,
+    clip_time: Option<f32>,
+    transform: engine_core::components::Transform,
+    // Posed by the caller — without `--time`, the rest pose; with it, the pose
+    // at that moment, planted when the entity asks for it (M32).
+    globals: Vec<glam::Mat4>,
+    stride: Option<serde_json::Value>,
+) -> serde_json::Value {
+    // glTF ignores the skinned mesh node's own transform, so the entity's
+    // `Transform` is what puts the rig in the world — and world coordinates
+    // are what a caller assigns to something they want in that hand.
+    let model = transform.matrix();
+
+    let joints: Vec<serde_json::Value> = skin
+        .joints
+        .iter()
+        .zip(&globals)
+        .enumerate()
+        .map(|(index, (joint, global))| {
+            let world = model * *global;
+            let (scale, rotation, translation) = world.to_scale_rotation_translation();
+            serde_json::json!({
+                "index": index,
+                "name": joint.name,
+                "parent": joint.parent,
+                "parent_name": joint.parent.map(|p| skin.joints[p].name.clone()),
+                "rest": {
+                    "position": joint.rest.translation.to_array(),
+                    "rotation": joint.rest.rotation.to_array(),
+                    "scale": joint.rest.scale.to_array(),
+                },
+                "world": {
+                    "position": translation.to_array(),
+                    "rotation": rotation.to_array(),
+                    "scale": scale.to_array(),
+                },
+            })
+        })
+        .collect();
+
+    let mut report = serde_json::json!({
+        "asset": asset,
+        "skin": skin.name,
+        "joint_count": skin.joints.len(),
+        "joints": joints,
+    });
+    if let Some(entity) = entity {
+        report["entity"] = serde_json::Value::String(entity.to_string());
+    }
+    if let Some(clip) = clip {
+        report["clip"] = serde_json::Value::String(clip.name.clone());
+    }
+    if let Some(time) = time {
+        report["time"] = serde_json::json!(time as f64);
+    }
+    if let Some(clip_time) = clip_time {
+        report["clip_time"] = serde_json::json!(clip_time as f64);
+    }
+    if let Some(stride) = stride {
+        report["stride"] = stride;
+    }
+    report
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1562,17 +2210,28 @@ fn screenshot(
     if !players.is_empty() {
         engine_core::animation::apply_all(&mut scene, &players, time);
     }
-    let (particles, hud) = if steps > 0 {
-        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), None)?;
-        (outcome.particles.instances(&scene.world), outcome.hud)
+    let (particles, hud, interaction) = if steps > 0 {
+        // The frame the cursor is measured in is the one about to be
+        // rendered (M28).
+        let view = engine_core::input::Viewport::new(width, height, camera_name);
+        let outcome = simulate::run(&mut scene, &scene_path, steps, input.as_ref(), &view, None)?;
+        (
+            outcome.particles.instances(&scene.world),
+            outcome.hud,
+            outcome.interaction,
+        )
     } else {
-        (Vec::new(), Vec::new())
+        (
+            Vec::new(),
+            Vec::new(),
+            engine_core::ui::Interaction::default(),
+        )
     };
     let (camera, camera_transform) = scene.camera(camera_name)?;
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
-    let items = scene.render_items(&assets)?;
-    let drawn = items.len();
     let render_time = scene_time(time, steps, &scene);
+    let items = scene.render_items_at(&assets, Some(render_time))?;
+    let drawn = items.len();
     let (lights, environment) = scene.resolved_at(render_time);
 
     let image = engine_render::offscreen::render(
@@ -1580,6 +2239,7 @@ fn screenshot(
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &particles,
         &camera,
         camera_transform.matrix(),
@@ -1588,7 +2248,7 @@ fn screenshot(
         render_time,
         width,
         height,
-        &scene.hud_items(),
+        &tinted_hud(&scene, &assets, &interaction),
         &hud,
     )?;
 
@@ -1636,26 +2296,26 @@ fn run_scene(
     // against its own fixed-step clock, so what it stores is the scene as
     // authored, not the scene at one instant.
     let roads = scene.road_items();
+    let meadows = scene.meadow_items();
     let lights = scene.lights().resolved();
     let environment = scene.environment;
     let daylight = scene.daylight.clone();
-    let hud_items = scene.hud_items();
+    let hud_items = scene.hud_tree(&assets);
     let title = format!("engine — {}", scene.name);
 
     // Physics and animated scenes come alive in the viewer; static scenes
     // stay static (unless a recording was asked for, which needs the step
     // clock running to have steps to record against).
     let players = engine_core::animation::load_players(&scene, &scene_path)?;
-    let scripts =
-        engine_script::ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            scene.physics.timestep_hz,
-            scene.daylight.clone(),
-        )?;
+    let scripts = engine_script::ScriptHost::build(
+        &scene.world,
+        &scene_path,
+        scene.physics.timestep_hz,
+        scene.daylight.clone(),
+        &assets,
+    )?;
     let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
-    let has_emitters =
-        engine_core::particles::ParticleSystem::scene_has_emitters(&scene.world);
+    let has_emitters = engine_core::particles::ParticleSystem::scene_has_emitters(&scene.world);
     let simulation = if has_physics
         || has_emitters
         || !players.is_empty()
@@ -1663,7 +2323,11 @@ fn run_scene(
         || record_input.is_some()
     {
         let physics = if has_physics {
-            Some(engine_physics::PhysicsWorld::build(&scene.world, &scene.physics, &assets)?)
+            Some(engine_physics::PhysicsWorld::build(
+                &scene.world,
+                &scene.physics,
+                &assets,
+            )?)
         } else {
             None
         };
@@ -1682,6 +2346,7 @@ fn run_scene(
             camera_name: camera_name.map(String::from),
             held: engine_core::input::InputState::default(),
             contacts: engine_core::contact::ContactState::default(),
+            interaction: engine_core::ui::Interaction::default(),
             recorder,
             accumulator: 0.0,
             t: 0.0,
@@ -1697,11 +2362,12 @@ fn run_scene(
         title,
         width,
         height,
-        Content::Scene {
+        Content::Scene(Box::new(SceneContent {
             items,
             water,
             clouds,
             roads,
+            meadows,
             camera,
             camera_model: camera_transform.matrix(),
             lights,
@@ -1709,7 +2375,7 @@ fn run_scene(
             daylight,
             hud_items,
             simulation,
-        },
+        })),
     ))
 }
 
@@ -1735,7 +2401,10 @@ fn run_app(mut app: ViewerApp) -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     event_loop.run_app(&mut app).map_err(|e| {
-        EngineError::new(codes::EVENT_LOOP_FAILED, format!("the event loop failed: {e}"))
+        EngineError::new(
+            codes::EVENT_LOOP_FAILED,
+            format!("the event loop failed: {e}"),
+        )
     })?;
 
     // A render error inside the loop exits it cleanly; surface it here.

@@ -27,9 +27,19 @@ pub struct Name(pub String);
 /// All three fields are optional in JSON; omitting one gives the identity
 /// value, so a scene can say `{"type": "Transform", "position": [0, 3, 0]}`
 /// without restating a rotation and scale it does not care about.
+///
+/// **One world unit is one metre**, and that is the convention every other
+/// number in the format is quoted against: gravity is `-9.81` because a body
+/// falls 9.81 m/s², `Tree.height: 6.0` is a six-metre tree, and a `Wheel`
+/// 0.35 m in radius belongs under a car 1.7 m wide. Time is seconds and mass
+/// is kilograms, so `Collider.density` is kg/m³ — note its default of `1.0`
+/// is *not* a plausible material, and a body meant to be pushed by forces
+/// wants a real one (the demo car's box chassis carries `350`, which is how
+/// 4.3 m³ becomes 1.5 t).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Transform {
+    /// World-space `[x, y, z]` **in metres**. +Y is up.
     #[schemars(with = "[f32; 3]")]
     pub position: Vec3,
 
@@ -43,6 +53,18 @@ pub struct Transform {
     #[schemars(with = "[f32; 3]")]
     pub rotation: Vec3,
 
+    /// Multiplier on the entity's own geometry, per axis. Identity is
+    /// `[1, 1, 1]`.
+    ///
+    /// **Every `builtin:` primitive is one metre across at scale 1**, so on
+    /// those this field reads directly as a size in metres: a
+    /// `builtin:cube` at `[1.7, 0.7, 3.6]` is a car-sized box, and a
+    /// `builtin:sphere` at `[0.9, 0.9, 0.9]` is 0.9 m across — *not* 1.8.
+    /// The recipes size the same way (`Terrain`, `Water` and `Meadow` take
+    /// their footprint from `scale` in XZ), and it also multiplies
+    /// `Collider` dimensions, which is why a cuboid collider matching a
+    /// builtin cube is authored as `half_extents: [0.5, 0.5, 0.5]` in
+    /// *local* units rather than in metres.
     #[schemars(with = "[f32; 3]")]
     pub scale: Vec3,
 }
@@ -181,7 +203,7 @@ pub struct Material {
     /// with the diffuse term scaled by `1 - transmission` (light that went
     /// through did not come back). There is no refraction and no
     /// scene-color sampling, so what is behind the surface is not bent or
-    /// tinted by its thickness — see `materials-lighting-design.md`.
+    /// tinted by its thickness.
     #[schemars(range(min = 0.0, max = 1.0))]
     pub transmission: f32,
 
@@ -687,18 +709,25 @@ fn half() -> f32 {
     0.5
 }
 
-/// Plays an animation clip against scene time (M9).
+/// Plays an animation clip against scene time (M9), or against ground
+/// covered (M32).
 ///
-/// `clip` is a relative path to a property clip (`*.anim.json`); a
-/// `path#ClipName` glTF fragment is reserved for skeletal clips (not yet
-/// supported). A player in the file is playing — there is no play/pause
-/// runtime state, because pose is a pure function of (files, time).
+/// `clip` is a relative path to a property clip (`*.anim.json`), or a
+/// `path#ClipName` glTF fragment naming a skeletal clip in the entity's own
+/// mesh file (M30). A player in the file is playing — there is no play/pause
+/// runtime state.
+///
+/// The clock is scene time by default, which keeps the pose a pure function
+/// of (files, time). Setting `stride` swaps that clock for **distance
+/// travelled**, and `phase` is where the clip has got to: still a field in
+/// the file, so nothing moves into hidden state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AnimationPlayer {
     pub clip: String,
 
-    /// Time multiplier; local time = `t * speed + start_offset`.
+    /// Time multiplier; local time = `t * speed + start_offset`, or
+    /// `phase * speed + start_offset` when `stride` is set.
     #[serde(default = "one")]
     pub speed: f32,
 
@@ -708,6 +737,31 @@ pub struct AnimationPlayer {
 
     #[serde(default)]
     pub start_offset: f32,
+
+    /// Metres of ground one **cycle** of this clip covers (M32).
+    ///
+    /// `0` — the default — is the M9 behaviour: scene time drives the clip.
+    /// Above zero the clip is driven by the entity's horizontal displacement
+    /// instead, advancing `distance / stride` cycles per fixed step, which is
+    /// what stops a walk cycle sliding when the character's speed changes.
+    /// `engine list-joints` measures the right value off the clip itself.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub stride: f32,
+
+    /// How far this player has got, in **cycles** of its clip, when `stride`
+    /// drives it (M32). Ignored otherwise.
+    ///
+    /// Cycles rather than seconds so the locomotion system needs no clip
+    /// duration to advance it: one step covering `d` metres adds `d / stride`,
+    /// and nothing has to open the clip file to know that. The engine writes
+    /// it back every fixed step and the change-based bake splices it, so where
+    /// a character is in its stride survives a bake the same way where it is
+    /// standing does. A looping player's phase is reduced into `[0, 1)` as it
+    /// is stored.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub phase: f32,
 }
 
 /// Where a HUD element attaches on screen (M12).
@@ -729,27 +783,71 @@ pub enum HudAnchor {
     Center,
 }
 
-/// A screen-space text label (M12): one line of the built-in 8×8 pixel font,
+/// How a [`HudPanel`] arranges its children (M31).
+///
+/// NOTE (schemars): variants carry no doc comments on purpose. A doc comment
+/// on a *variant* turns the generated schema from a flat `"enum": [...]` into
+/// oneOf/const, which blinds the validation walk's closed-vocabulary check —
+/// the same trap `ColliderShapeKind` documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HudLayout {
+    #[default]
+    Free,
+    Row,
+    Column,
+}
+
+/// Cross-axis alignment of a [`HudPanel`]'s children (M31). See [`HudLayout`]
+/// for why the variants are undocumented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HudAlign {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+/// Horizontal alignment of text within its own box (M31). See [`HudLayout`]
+/// for why the variants are undocumented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HudTextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// A screen-space text label (M12): lines of the built-in 8×8 pixel font,
 /// drawn over the 3D scene after lighting, independent of any camera.
 ///
 /// Needs no `Transform` — placement is `anchor` + `offset` in framebuffer
 /// pixels, which is what the agent sees in the PNG. Text is always opaque
 /// and never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs
 /// outside the font's coverage render as a filled box: visibly wrong in the
-/// screenshot, never a panic. Draw order is file order, and all text draws
-/// over all `HudRect`s.
+/// screenshot, never a panic.
+///
+/// M31 adds `parent`, `visible` and `stretch` (shared by every element in the
+/// family), plus `align`, `wrap` and `line_gap`. Every one defaults to the M12
+/// behaviour: no parent means a child of the viewport placed by exactly the
+/// M12 anchor arithmetic, and `wrap: 0` means the single unwrapped line it has
+/// always been.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HudText {
-    /// One line; no wrapping. Scripts may rewrite it via
-    /// `world.set_hud_text` — an empty string is a legal rest value for a
-    /// script-driven readout.
+    /// The label. `\n` breaks a line explicitly; `wrap` breaks it
+    /// automatically. Scripts may rewrite it via `world.set_hud_text` — an
+    /// empty string is a legal rest value for a script-driven readout.
     pub text: String,
 
     #[serde(default)]
     pub anchor: HudAnchor,
 
-    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    /// Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or
+    /// `column` parent this is a nudge on top of the computed position rather
+    /// than the position itself.
     #[serde(default)]
     #[schemars(with = "[f32; 2]")]
     pub offset: Vec2,
@@ -765,6 +863,39 @@ pub struct HudText {
     #[serde(default = "white")]
     #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub color: Vec3,
+
+    /// The name of an entity carrying a [`HudPanel`] to place this inside.
+    /// Absent (the default) means a child of the viewport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+
+    /// Drawn and hit-testable when true (the default). Hiding a panel hides
+    /// its whole subtree — one boolean is how a menu opens and closes.
+    #[serde(default = "yes")]
+    pub visible: bool,
+
+    /// Fill the parent's content box on `[x, y]`, ignoring this element's own
+    /// size on that axis. Two booleans rather than a `"fill"` string in a
+    /// numeric field, which would break the schema-driven walk.
+    #[serde(default)]
+    pub stretch: [bool; 2],
+
+    /// Alignment of each line within the text's own box, which differs from
+    /// the box only when the text is stretched or wrapped.
+    #[serde(default)]
+    pub align: HudTextAlign,
+
+    /// Wrap width in pixels; `0` (the default) is no wrapping. Breaks on
+    /// spaces — a word longer than `wrap` overflows rather than splitting,
+    /// since a mid-word break in a fixed-width font reads as corruption.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub wrap: f32,
+
+    /// Extra pixels between lines, on top of the glyph cell.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub line_gap: f32,
 }
 
 fn hud_text_size() -> f32 {
@@ -776,22 +907,27 @@ fn white() -> Vec3 {
 }
 
 /// A screen-space solid rectangle (M12): the primitive behind health bars,
-/// speed bars, and backdrops. Drawn before all `HudText`, file order within
-/// rects.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// speed bars, and backdrops. Drawn with the panels and images, before all
+/// `HudText`, file order within the class.
+///
+/// M31 adds only the shared `parent`/`visible`/`stretch`; a rect stays the
+/// flat script-driven bar it has always been.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HudRect {
     #[serde(default)]
     pub anchor: HudAnchor,
 
-    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    /// Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or
+    /// `column` parent this is a nudge on top of the computed position.
     #[serde(default)]
     #[schemars(with = "[f32; 2]")]
     pub offset: Vec2,
 
     /// `[width, height]` in pixels, each `>= 0` — zero is legal so a
     /// script-driven bar can be empty. Scripts resize via
-    /// `world.set_hud_rect_size`.
+    /// `world.set_hud_rect_size` or `world.set_hud_size`. Ignored on an axis
+    /// where `stretch` is true.
     #[schemars(with = "[f32; 2]", inner(range(min = 0.0)))]
     pub size: Vec2,
 
@@ -806,6 +942,203 @@ pub struct HudRect {
     #[serde(default = "one")]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub opacity: f32,
+
+    /// The name of an entity carrying a [`HudPanel`] to place this inside.
+    /// Absent (the default) means a child of the viewport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+
+    /// Drawn and hit-testable when true (the default).
+    #[serde(default = "yes")]
+    pub visible: bool,
+
+    /// Fill the parent's content box on `[x, y]`, ignoring `size` on that
+    /// axis — the full-screen dim backdrop, and the bar spanning a column.
+    #[serde(default)]
+    pub stretch: [bool; 2],
+}
+
+/// A screen-space container that lays its children out (M31).
+///
+/// This is the component that removes hand-computed pixel offsets. Children
+/// name it in their `parent`; `layout` decides whether they are stacked in a
+/// `row`, a `column`, or placed `free` by their own anchors relative to this
+/// panel's content box.
+///
+/// **Absent `width`/`height` means hug contents** — the panel is exactly its
+/// children's extent plus `padding`. That is the default because it is the
+/// case that makes a dialog authorable: the box follows the text instead of
+/// the text being fitted to a box someone solved by hand.
+///
+/// `opacity` defaults to **0**, so a bare `HudPanel` is an invisible layout
+/// group; set it and the same component is the dialog's backdrop. One
+/// component rather than a container plus a rect whose size would have to be
+/// kept in agreement with it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudPanel {
+    #[serde(default)]
+    pub anchor: HudAnchor,
+
+    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    #[serde(default)]
+    #[schemars(with = "[f32; 2]")]
+    pub offset: Vec2,
+
+    #[serde(default)]
+    pub layout: HudLayout,
+
+    /// Uniform inset in pixels between this panel's edge and its content box.
+    /// Per-side padding is the obvious next field and costs nothing to add
+    /// later; M12's "no z field until something needs it" applies.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub padding: f32,
+
+    /// Pixels between children along the main axis of a `row`/`column`.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub gap: f32,
+
+    /// Cross-axis alignment of children in a `row`/`column`.
+    #[serde(default)]
+    pub align: HudAlign,
+
+    /// Fixed width in pixels. Absent hugs the children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub width: Option<f32>,
+
+    /// Fixed height in pixels. Absent hugs the children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub height: Option<f32>,
+
+    /// Background colour, linear RGB in `[0, 1]`. Only visible at
+    /// `opacity > 0`.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// `[0, 1]`, defaulting to **0** — an invisible layout group.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: f32,
+
+    /// The name of another [`HudPanel`] entity to nest inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+
+    /// Drawn and hit-testable when true (the default). A hidden panel hides
+    /// its whole subtree.
+    #[serde(default = "yes")]
+    pub visible: bool,
+
+    /// Fill the parent's content box on `[x, y]`, ignoring `width`/`height`
+    /// and hug sizing on that axis.
+    #[serde(default)]
+    pub stretch: [bool; 2],
+}
+
+/// A screen-space textured rectangle (M31): icons, logos, framed panels.
+///
+/// `texture` is a PNG relative to the scene file, loaded through the same
+/// `TextureSource` and `(asset, space)` cache the material system uses, in
+/// sRGB — so `texture_too_large` fires from `validate`, before a device
+/// exists. Only the base level is read: the overlay draws at most one
+/// destination pixel per texel band and never minifies below it, so a mip
+/// level selection would have no correct answer at this scale.
+///
+/// Sampling is **nearest-neighbour**, written out in `engine-core` like every
+/// other generator here — a render sits under a baseline, so the filter is a
+/// format contract, and nearest is exactly reproducible where a bilinear
+/// filter is a float-rounding question.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudImage {
+    /// A `.png` path relative to the scene file (invariant 3).
+    pub texture: String,
+
+    #[serde(default)]
+    pub anchor: HudAnchor,
+
+    /// Pixels inward from `anchor` (see [`HudAnchor`]).
+    #[serde(default)]
+    #[schemars(with = "[f32; 2]")]
+    pub offset: Vec2,
+
+    /// `[width, height]` in destination pixels. Ignored on an axis where
+    /// `stretch` is true.
+    #[schemars(with = "[f32; 2]", inner(range(min = 0.0)))]
+    pub size: Vec2,
+
+    /// Nine-slice insets in **source** pixels, `[left, top, right, bottom]`.
+    /// The default `[0, 0, 0, 0]` is a plain stretch. Corners are copied
+    /// 1:1, edges tile along their axis and the centre tiles both ways —
+    /// tiling rather than stretching, because tiling at nearest is exact
+    /// where stretching at nearest is a moiré pattern.
+    #[serde(default)]
+    #[schemars(inner(range(min = 0.0)))]
+    pub slice: [f32; 4],
+
+    /// Multiplies the decoded texel in linear space, so one grey frame
+    /// texture serves a red panel and a blue one — the material system's
+    /// authoring rule for `albedo_map`, here for the same reason.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub tint: Vec3,
+
+    /// `[0, 1]`, multiplied onto the texture's own alpha.
+    #[serde(default = "one")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: f32,
+
+    /// The name of an entity carrying a [`HudPanel`] to place this inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+
+    /// Drawn and hit-testable when true (the default).
+    #[serde(default = "yes")]
+    pub visible: bool,
+
+    /// Fill the parent's content box on `[x, y]`, ignoring `size`.
+    #[serde(default)]
+    pub stretch: [bool; 2],
+}
+
+/// Makes the HUD element on its own entity clickable (M31).
+///
+/// Carries no geometry: the hit box is that element's laid-out rectangle. An
+/// entity with a `HudInteract` and no `HudPanel`/`HudRect`/`HudImage`/
+/// `HudText` is `hud_interact_without_element`.
+///
+/// A separate component rather than an `interactive: true` flag on each of
+/// four components, because the flag would be four fields that must stay in
+/// agreement, and because the tints belong next to it.
+///
+/// The tints multiply the element's own colour (clamped to `[0, 1]` after
+/// multiplying) and default to `[1, 1, 1]` — no change — so adding a
+/// `HudInteract` moves no pixel until a cursor arrives. They exist so the
+/// ordinary case, a button that lights up under the pointer, needs no script
+/// at all; anything richer is a script writing colours.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudInteract {
+    /// Colour multiplier while the cursor is over this element. Unbounded
+    /// above — a hover tint brightens.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0)))]
+    pub hover_tint: Vec3,
+
+    /// Colour multiplier while a button is held down on this element.
+    #[serde(default = "white")]
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0)))]
+    pub press_tint: Vec3,
+
+    /// Excluded from hit-testing when true, so it never hovers, presses or
+    /// clicks — and never blocks what is under it either.
+    #[serde(default)]
+    pub disabled: bool,
 }
 
 /// One piece a `Breakable` entity shatters into (M14).
@@ -864,7 +1197,7 @@ fn half_cube() -> Vec3 {
 /// dynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),
 /// each inheriting the parent's `Material` and motion. Fragments are
 /// ordinary entities afterwards: they render, trace, and bake like anything
-/// else. See `breaking-design.md`.
+/// else.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Breakable {
@@ -886,7 +1219,7 @@ pub struct Breakable {
 /// `source` is a relative `.rhai` path defining `fn step(world, step)`.
 /// Scripts mutate the world through a small registered API and never invent
 /// state of their own — baked output after a scripted run is an ordinary
-/// scene file. See `scripting-design.md`.
+/// scene file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Script {
@@ -1555,7 +1888,7 @@ impl Tree {
 /// Fresnel-weighted view term, absorption of what is behind the surface with
 /// depth (`shallow_color` → `deep_color`), and foam where the water meets
 /// geometry or folds at a crest. What it does *not* do is refract — the bed of
-/// a pond is not displaced by the ripples above it (`water-design.md` §8).
+/// a pond is not displaced by the ripples above it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Water {
@@ -1648,6 +1981,30 @@ pub struct Water {
     /// scattered light, so it is opaque where it appears.
     #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub foam_color: Vec3,
+
+    /// Index of refraction, `1.0` (the default) being no bending at all — the
+    /// pre-M27 surface, which absorbs and tints what is behind it but never
+    /// moves it. Range `[1, 3]`; water is 1.33.
+    ///
+    /// Unlike [`Material::ior`] this needs no companion `thickness`: the shader
+    /// already measures how far the view ray travels through the body to reach
+    /// the bed, so the bend scales with the water's own depth and a pond bends
+    /// its bed most where it is deepest. It also cannot change how *deep* the
+    /// water looks — absorption stays [`Water::depth_fade`]'s job — so it can
+    /// be turned on in a tuned scene without re-tuning it.
+    #[schemars(range(min = 1.0, max = 3.0))]
+    pub ior: f32,
+}
+
+impl Water {
+    /// Whether this surface bends what is behind it, and so needs the opaque
+    /// colour copy and the refracting pipeline variant (M27).
+    ///
+    /// The default `1.0` is exactly "no", which is what lets every water
+    /// baseline blessed before this milestone keep compiling the M18 shader.
+    pub fn refracts(&self) -> bool {
+        self.ior != 1.0
+    }
 }
 
 impl Default for Water {
@@ -1668,6 +2025,7 @@ impl Default for Water {
             crest_foam: 0.0,
             shore_foam: 0.0,
             foam_color: Vec3::new(0.86, 0.90, 0.92),
+            ior: 1.0,
         }
     }
 }
@@ -2346,6 +2704,520 @@ impl Default for Road {
     }
 }
 
+/// One keyframe of a [`Meadow`]'s life cycle.
+///
+/// All seven fields are required. A half-specified keyframe is an error rather
+/// than a fade to black — M21's palette wrote that rule down, and a meadow's
+/// table is read the same way: linearly interpolated, and **wrapping** from the
+/// last keyframe back round to the first, so the cycle closes without anyone
+/// having to author phase 1.0 as a copy of phase 0.0.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrowthStage {
+    /// Where in the cycle this keyframe sits, `[0, 1)`. Strictly increasing
+    /// down the table (`meadow_stages_invalid`).
+    #[schemars(range(min = 0.0, max = 0.999))]
+    pub at: f32,
+
+    /// Plant height as a fraction of [`Meadow::height`], `>= 0`. `0` is a plant
+    /// that is not there, which is what the seed keyframe says.
+    #[schemars(range(min = 0.0))]
+    pub height: f32,
+
+    /// Blade width as a fraction of [`Meadow::blade_width`], `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub width: f32,
+
+    /// Degrees the plant leans from vertical at its tip. The bend is a
+    /// cantilever — the tip leans this far and the root not at all — so a large
+    /// value at the end of the cycle is the plant collapsing rather than
+    /// tipping over rigidly. `[0, 90]`.
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub lean: f32,
+
+    /// How much of [`Meadow::wind`] reaches the plant at this stage, `>= 0`.
+    ///
+    /// This is what separates green grass that flows from dry stalks that
+    /// stand, and it is nearly free — the wind term is already in the vertex
+    /// stage.
+    #[schemars(range(min = 0.0))]
+    pub sway: f32,
+
+    /// Linear RGB at the plant's base, each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// Linear RGB at the plant's tip, each component `[0, 1]`.
+    ///
+    /// Two colours rather than one because senescence runs tip-downward in real
+    /// grass: a stand going over turns straw at the top while its base is still
+    /// green, and a single flat colour per stage looks painted on.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub tip_color: Vec3,
+}
+
+/// Ground cover that grows, seeds and dies on a loop: grass, weeds, wildflowers
+/// and the dry stand they turn into.
+///
+/// A recipe rather than a mesh reference, like [`Tree`] and [`Cloud`] — the
+/// engine grows one plant and scatters copies of it over the footprint
+/// `Transform.scale` gives, so a `Meadow` entity carries **no** `Mesh` and
+/// **no** `Material` (`meadow_with_mesh`).
+///
+/// **It is the first recipe in this engine whose subject changes shape over
+/// time.** A sprout is not a small blade of grass. The resolution is that the
+/// geometry is static and the *life cycle lives in the vertex stage*: the plant
+/// is built once carrying every organ any stage will need, and each organ scales
+/// to nothing outside the phase window it belongs to. See
+/// `designs/meadow-design.md`.
+///
+/// The cycle runs on the scene clock, so it can be sped up:
+/// [`cycle_length`](Meadow::cycle_length) `: 3.0` runs a whole generation in
+/// three seconds. **`0` — the default — freezes the field** at
+/// [`phase`](Meadow::phase), the way `daylight.day_length: 0` freezes the day:
+/// most scenes want a dial, not motion, and a frozen field is reproducible with
+/// no `--time` at all.
+///
+/// Every generation **reseeds** rather than regrowing: a plant's position within
+/// its own cell, its height and its lean all shift a little each time round, so
+/// the dead stalk and the sprout that replaces it are not collinear. That costs
+/// one integer hash in the shader and no state anywhere.
+///
+/// A meadow is scenery: no `Collider`, no shadow cast (a 2048² map cannot
+/// resolve a blade of grass, and what it would record is noise that crawls),
+/// and no `PointLight` contribution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Meadow {
+    /// Seeds placement and the template's blades. Two meadows with the same
+    /// parameters and different seeds are different fields.
+    ///
+    /// The generator's xorshift and the shader's reseed hash are both written
+    /// out in this repo, so a given seed means the same field across dependency
+    /// upgrades — a meadow render sits under a `diff-render` baseline, which
+    /// makes both a format contract.
+    pub seed: u32,
+
+    /// Plants per square metre of footprint, `>= 0`.
+    ///
+    /// The footprint is `Transform.scale` in XZ, so the plant count is
+    /// `density × area`, rounded up to a square grid. `0` is an empty field,
+    /// which is a legitimate thing to animate toward.
+    #[schemars(range(min = 0.0))]
+    pub density: f32,
+
+    /// Height of a fully grown plant in metres, `> 0`. `Transform.scale.y`
+    /// multiplies it, the way it multiplies a [`Terrain`]'s relief.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub height: f32,
+
+    /// Blades in one plant. `[1, 12]`; `3`–`5` reads as a tuft.
+    #[schemars(range(min = 1, max = 12))]
+    pub blades: u32,
+
+    /// Lengthwise segments per blade — how finely a blade can curve as it leans
+    /// and bends in the wind. `[1, 8]`.
+    ///
+    /// Together with [`blades`](Meadow::blades) this sets the per-plant
+    /// triangle count, and the product with the plant count is what
+    /// `meadow_too_complex` bounds.
+    #[schemars(range(min = 1, max = 8))]
+    pub segments: u32,
+
+    /// Width of a blade at its base, in metres, `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub blade_width: f32,
+
+    /// Degrees the outermost blades splay from vertical, `[0, 90]`. Blade 0
+    /// stays near upright, which is what gives a tuft a centre rather than a
+    /// hole.
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub splay: f32,
+
+    /// Size of the flower and seed heads, in metres, `>= 0`. `0` grows a plant
+    /// that never flowers.
+    #[schemars(range(min = 0.0))]
+    pub head_size: f32,
+
+    /// How much plant height varies between plants, as a fraction, `[0, 1)`.
+    /// `0` is a lawn.
+    #[schemars(range(min = 0.0, max = 0.99))]
+    pub size_jitter: f32,
+
+    /// Seconds one full life cycle takes, `>= 0`.
+    ///
+    /// **`0` freezes the field** at [`phase`](Meadow::phase) — the default, and
+    /// `daylight.day_length: 0`'s reasoning exactly.
+    #[schemars(range(min = 0.0))]
+    pub cycle_length: f32,
+
+    /// Where the cycle starts, `[0, 1)` — and where a frozen field sits. The
+    /// default is mature green, so `{"type": "Meadow"}` alone puts a working
+    /// field of grass in a scene.
+    #[schemars(range(min = 0.0, max = 0.999))]
+    pub phase: f32,
+
+    /// How far plants desync from each other, `[0, 1]`.
+    ///
+    /// `0` marches the whole field in lockstep; `1` spreads offsets across the
+    /// whole cycle, so every stage is present at every moment and the field
+    /// never appears to change. A real meadow browns together with variation,
+    /// which is why the default is near the low end.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub stagger: f32,
+
+    /// How far the wind bends a plant at full sway, in degrees, `>= 0`. `0` is
+    /// still air.
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub wind: f32,
+
+    /// How fast gusts travel across the field, in metres per second, `>= 0`.
+    ///
+    /// Gusts are a travelling wave, not a per-plant shimmer: sampling the noise
+    /// against a moving coordinate is what makes wind cross a meadow visibly.
+    #[schemars(range(min = 0.0))]
+    pub wind_speed: f32,
+
+    /// Which way the wind blows, in degrees — `0` toward −Z, the engine's
+    /// forward convention, shared with `Water`'s wave directions.
+    pub wind_direction: f32,
+
+    /// Steepest ground grass will grow on, in degrees, `[0, 90]`. Plants on
+    /// steeper ground are dropped; `90` keeps everything.
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub max_slope: f32,
+
+    /// The [`Terrain`] entity this meadow stands on, by name.
+    ///
+    /// Each plant's altitude is sampled from that patch through the same
+    /// function `world.terrain_height` and `engine terrain-height` call, so
+    /// there is one implementation of "where is the ground" and nothing to keep
+    /// in agreement. Absent, the field is flat at the entity's own Y.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terrain: Option<String>,
+
+    /// Linear RGB of the flower head, each component `[0, 1]`. What stops the
+    /// weed stage from being nothing but taller grass.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub flower_color: Vec3,
+
+    /// The life cycle, as keyframes over `phase`. At least two, at most
+    /// [`MAX_GROWTH_STAGES`](crate::meadow::MAX_GROWTH_STAGES), strictly
+    /// increasing in `at`.
+    ///
+    /// The default is the full seed → sprout → grass → weeds → dry → collapse
+    /// cycle, so a meadow is worth looking at before anything is authored.
+    pub stages: Vec<GrowthStage>,
+}
+
+impl Default for Meadow {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            density: 24.0,
+            height: 0.45,
+            blades: 5,
+            segments: 4,
+            blade_width: 0.007,
+            splay: 54.0,
+            head_size: 0.018,
+            size_jitter: 0.35,
+            cycle_length: 0.0,
+            phase: 0.42,
+            stagger: 0.25,
+            wind: 9.0,
+            wind_speed: 3.5,
+            wind_direction: 0.0,
+            max_slope: 38.0,
+            terrain: None,
+            flower_color: Vec3::new(0.40, 0.37, 0.17),
+            stages: Meadow::default_stages(),
+        }
+    }
+}
+
+impl Meadow {
+    /// The default life cycle: six keyframes from bare ground back to bare
+    /// ground, in linear RGB.
+    ///
+    /// The table wraps, so there is no phase-1.0 entry — the collapse keyframe
+    /// interpolates round to the seed keyframe on its own.
+    pub fn default_stages() -> Vec<GrowthStage> {
+        vec![
+            // Seed: nothing above ground.
+            GrowthStage {
+                at: 0.0,
+                height: 0.0,
+                width: 0.5,
+                lean: 0.0,
+                sway: 0.0,
+                color: Vec3::new(0.13, 0.10, 0.05),
+                tip_color: Vec3::new(0.16, 0.13, 0.07),
+            },
+            // Sprout: short, soft, and the bright yellow-green of new growth.
+            GrowthStage {
+                at: 0.09,
+                height: 0.16,
+                width: 0.7,
+                lean: 10.0,
+                sway: 0.5,
+                color: Vec3::new(0.16, 0.34, 0.07),
+                tip_color: Vec3::new(0.31, 0.55, 0.13),
+            },
+            // Grass: full height, saturated, moving.
+            GrowthStage {
+                at: 0.31,
+                height: 0.86,
+                width: 1.0,
+                lean: 17.0,
+                sway: 1.0,
+                color: Vec3::new(0.06, 0.19, 0.04),
+                tip_color: Vec3::new(0.17, 0.40, 0.09),
+            },
+            // Weeds: the tallest and coarsest it gets, flower heads open,
+            // colour drifting olive.
+            GrowthStage {
+                at: 0.53,
+                height: 1.0,
+                width: 1.05,
+                lean: 21.0,
+                sway: 0.9,
+                color: Vec3::new(0.09, 0.20, 0.05),
+                tip_color: Vec3::new(0.30, 0.36, 0.10),
+            },
+            // Dry: standing straw, stiff, seed heads out.
+            GrowthStage {
+                at: 0.76,
+                height: 0.95,
+                width: 0.92,
+                lean: 27.0,
+                sway: 0.4,
+                color: Vec3::new(0.22, 0.18, 0.07),
+                tip_color: Vec3::new(0.62, 0.51, 0.19),
+            },
+            // Collapse: gone over, grey-brown, on its way back into the ground.
+            GrowthStage {
+                at: 0.91,
+                height: 0.62,
+                width: 0.8,
+                lean: 71.0,
+                sway: 0.25,
+                color: Vec3::new(0.14, 0.11, 0.06),
+                tip_color: Vec3::new(0.26, 0.21, 0.11),
+            },
+        ]
+    }
+}
+
+/// The most feet one solver run plants, and the ceiling on `FootPlant.feet`.
+///
+/// Bounded for the reason `MAX_POINT_LIGHTS` and `MAX_ROAD_KERBS` are: a fixed
+/// small number is a budget an agent can be told about, and the alternative to
+/// refusing the fifth foot is a rig that plants four and silently ignores the
+/// rest. Four covers a quadruped, which is the most legs anything in this
+/// engine has.
+pub const MAX_PLANTED_FEET: usize = 4;
+
+/// One foot of a [`FootPlant`]: which joint it is, and how far up the chain
+/// the solver may rotate to reach the ground.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlantedFoot {
+    /// The ankle joint — the end of the chain, the thing put on the ground.
+    pub ankle: String,
+
+    /// How many joints **above** the ankle rotate to reach the target. `2` is
+    /// the ordinary leg (knee and hip) and is what the two-bone solve means;
+    /// `1` bends a single hinge and is what a stubby prop leg wants.
+    #[serde(default = "two")]
+    #[schemars(range(min = 1, max = 2))]
+    pub chain: u32,
+
+    /// Metres from the ankle joint down to the bottom of the foot, so the sole
+    /// meets the ground rather than the joint being buried in it.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub sole: f32,
+}
+
+fn two() -> u32 {
+    2
+}
+
+/// Puts a skinned character's feet on the terrain under them (M32).
+///
+/// A post-pass over the posed skeleton: each named ankle is moved to the
+/// ground beneath where the clip put it, the joints above it rotate to follow
+/// (two-bone IK), the hips drop when a leg cannot reach, and the sole tilts to
+/// the slope. It runs wherever the pose does, so `engine list-joints --time`
+/// reports the planted rig and the render draws it — one answer, not two.
+///
+/// The ground is a `Terrain` entity named in `ground`, and that is a purity
+/// decision rather than a convenience: planting against the *physics* world
+/// would make the pose a function of the simulation, and the pose being a pure
+/// function of (files, time) is what lets `list-joints` answer at all. The cost
+/// is that a character cannot stand on a crate — see
+/// `designs/locomotion-design.md` §5.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FootPlant {
+    /// The feet to plant, at most [`MAX_PLANTED_FEET`].
+    pub feet: Vec<PlantedFoot>,
+
+    /// The entity carrying the `Terrain` these feet stand on.
+    pub ground: String,
+
+    /// The joint lowered when a leg cannot reach its target — the pelvis, in
+    /// a humanoid. Absent, the deficit is simply clamped: one foot plants and
+    /// the other stretches, which is bounded but reads as wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hips: Option<String>,
+
+    /// How far below the animated ankle a target may be, in metres. This is
+    /// what keeps a foot in mid-swing from being dragged to the floor:
+    /// planting is a *correction*, and a correction with no ceiling is a
+    /// different animation.
+    #[serde(default = "half")]
+    #[schemars(range(min = 0.0))]
+    pub max_drop: f32,
+
+    /// And how far above it.
+    #[serde(default = "half")]
+    #[schemars(range(min = 0.0))]
+    pub max_lift: f32,
+
+    /// Degrees the sole may tilt to meet the ground's normal. `0` leaves the
+    /// foot's animated orientation alone, which is right for a character that
+    /// only ever walks on the flat.
+    #[serde(default = "thirty")]
+    #[schemars(range(min = 0.0, max = 90.0))]
+    pub align: f32,
+}
+
+fn thirty() -> f32 {
+    30.0
+}
+
+/// The most proxies one skinned entity may carry, and the ceiling on
+/// [`SkinnedCollider::parts`].
+///
+/// Bounded for `MAX_PLANTED_FEET`'s reason, at a number sized to the job: a
+/// humanoid hitbox set is head, torso, pelvis, two arms in two pieces each,
+/// two legs in two pieces each, hands and feet — fifteen. Thirty-two leaves
+/// room for a detailed rig and still refuses the runaway case, which here is a
+/// proxy per joint on a rig that has a hundred of them.
+pub const MAX_COLLIDER_PARTS: usize = 32;
+
+/// One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's
+/// frame (M33).
+///
+/// Flat and discriminated by `shape`, exactly as [`Collider`] is and for the
+/// same reasons — the schema-driven walk and the editor's generated inspector
+/// both read flat structs, and `jq` and an LLM both write them. `cuboid`,
+/// `sphere` and `capsule` only: `trimesh` and `convex_hull` describe a
+/// specific mesh, and a proxy exists precisely because that mesh lives on the
+/// GPU where physics cannot reach it (`collider_part_shape_unsupported`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ColliderPart {
+    /// The joint this proxy rides. Its posed world transform, times `offset`
+    /// and `rotation`, is where the shape is each step.
+    pub joint: String,
+
+    pub shape: ColliderShapeKind,
+
+    /// What reports call this part. Absent, the joint's name — which is right
+    /// for the ordinary one-proxy-per-joint set and wrong the moment a limb
+    /// takes two, hence the field. Unique within the component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// `cuboid` only. Each component `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<[f32; 3]>")]
+    pub half_extents: Option<Vec3>,
+
+    /// `sphere` and `capsule`. `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
+
+    /// `capsule` only: half the cylindrical section's height. `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub half_height: Option<f32>,
+
+    /// Metres from the joint's origin, **in the joint's own frame**, so a
+    /// proxy is authored against the bone rather than against the world.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub offset: Vec3,
+
+    /// Euler degrees in the joint's frame. A capsule's axis is local **+Y**
+    /// (rapier's, and `builtin:cylinder`'s), and this is what turns it onto a
+    /// bone that runs some other way.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub rotation: Vec3,
+
+    /// Sensors detect overlaps but exert no forces — `Collider.sensor`,
+    /// meaning the same thing. Per part rather than per component, because a
+    /// sword's blade and its guard want opposite answers.
+    #[serde(default)]
+    pub sensor: bool,
+}
+
+impl ColliderPart {
+    /// What reports call this part: its `name`, or the joint it rides.
+    pub fn part_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.joint)
+    }
+}
+
+/// Collision proxies that follow a skinned character's pose (M33).
+///
+/// M30 said a skinned mesh is visual and physics sees only the entity's own
+/// `Collider`; this is the one item of that reversed. Each part is re-posed
+/// every fixed step from the same joint globals the render and
+/// `engine list-joints` use, so a hitbox cannot disagree with the picture
+/// about where a head is.
+///
+/// **The pose drives the proxies and nothing reads them back** — they are
+/// kinematic, so they are hit, they push dynamic bodies, and they report
+/// contacts, but they never move a joint. That is what keeps M30's claim that
+/// the pose is a pure function of (files, time) true, and it is why a proxy
+/// holds a character up exactly as much as a moving wall holds up the hand
+/// pushing it: not at all. What a character stands on is still its own
+/// `Collider`.
+///
+/// Layers, friction and restitution sit here rather than on each part: "bullets
+/// hit hitboxes" is a statement about the character, and per-part copies would
+/// be four more strings to keep in agreement per part.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SkinnedCollider {
+    /// The proxies, at most [`MAX_COLLIDER_PARTS`].
+    pub parts: Vec<ColliderPart>,
+
+    /// Collision layers every part belongs to. Absent = every layer, exactly
+    /// as on `Collider`. Empty is an error — omit the field instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
+
+    /// Only interact with colliders belonging to these layers. Absent =
+    /// interact with everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collides_with: Option<Vec<String>>,
+
+    /// `>= 0`.
+    #[serde(default = "half")]
+    #[schemars(range(min = 0.0))]
+    pub friction: f32,
+
+    /// Bounciness, `[0, 1]`, max-combined like `Collider.restitution`.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub restitution: f32,
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
@@ -2415,12 +3287,18 @@ components!(
     Wheel,
     HudText,
     HudRect,
+    HudPanel,
+    HudImage,
+    HudInteract,
     ParticleEmitter,
     Tree,
     Water,
     Cloud,
     Terrain,
     Road,
+    Meadow,
+    FootPlant,
+    SkinnedCollider,
 );
 
 #[cfg(test)]
@@ -2512,12 +3390,18 @@ mod tests {
                 "Wheel",
                 "HudText",
                 "HudRect",
+                "HudPanel",
+                "HudImage",
+                "HudInteract",
                 "ParticleEmitter",
                 "Tree",
                 "Water",
                 "Cloud",
                 "Terrain",
-                "Road"
+                "Road",
+                "Meadow",
+                "FootPlant",
+                "SkinnedCollider"
             ]
         );
     }

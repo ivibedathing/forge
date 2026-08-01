@@ -24,11 +24,15 @@ that breaks a rule here fails the build before it ships.
   nothing else, ever. Even an internal panic speaks this protocol (the panic
   hook re-renders it as `internal_panic`, backtrace escaped inside the JSON
   string when `RUST_BACKTRACE` is set).
-- `--help`, `--version`, and `engine agent-guide` are documentation, not
-  results, and are exempt: human-readable prose, exit 0. `agent-guide` prints
-  the markdown orientation an agent needs to work here, which is the one thing
-  a caller wants unwrapped — a JSON string holding a 200-line document with
-  every newline escaped serves nobody.
+- `--help`, `--version`, `engine agent-guide`, and
+  `engine list-components --markdown` are documentation, not results, and are
+  exempt: human-readable prose, exit 0. `agent-guide` prints the markdown
+  orientation an agent needs to work here, which is the one thing a caller
+  wants unwrapped — a JSON string holding a 200-line document with every
+  newline escaped serves nobody. `list-components --markdown` is the same
+  vocabulary the flagless form emits as JSON Schema, rendered for reading;
+  it is how `docs/component-reference.md` is generated, and a repo contract
+  test fails when that file falls behind.
 
 ## Exit codes
 
@@ -97,12 +101,17 @@ engine simulate <scene.json> --steps N [--input f.input.jsonl]
                 [--bake out.json] [--trace t.jsonl] [--entity Name]...
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine filmstrip <scene.json> --out strip.png [--start/--end/--frames/--columns]
-engine list-animations <scene-or-clip> [--schema]
+engine list-animations <scene-or-clip-or-gltf> [--schema]
+engine list-joints <scene-or-gltf> [--entity Name] [--time T] [--clip Name]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
+engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
+                                             # every collider physics holds, and where
+engine ui-layout <scene.json> [--width W --height H] [--entity Name]...  # where the UI landed
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
 engine list-components [--component Name]    # scene + component JSON Schemas
+engine list-components --markdown            # the same vocabulary, as prose
 engine info                                  # selected GPU adapter
 engine init [dir] [--force]                  # scaffold a project; refuses a non-empty dir
 engine agent-guide                           # the agent orientation, as markdown
@@ -206,8 +215,12 @@ Pose is a pure function of (files, time): `--time T` on `screenshot` and
 equal times give byte-identical PNGs. `engine filmstrip` tiles N frames over
 a time range into one contact-sheet PNG (default range: the longest clip in
 the scene). `engine list-animations` dumps every clip reachable from a scene
-(or a single `.anim.json`) as JSON — name, duration, track targets — and
-`--schema` prints the clip-file JSON Schema. `engine validate` accepts clip
+(or a single `.anim.json`, or a `.gltf`/`.glb`) as JSON — name, duration,
+track or channel targets — and `--schema` prints the clip-file JSON Schema.
+`engine list-joints` does the same for a rig: every joint's name, parent,
+index and rest transform, plus its **posed world transform** under `--time`.
+That is the half a filmstrip cannot give you — a contact sheet shows that
+something moved, never that the hand reached the doorknob. `engine validate` accepts clip
 files directly (structural checks; entity-name resolution needs a scene and
 happens when validating the scene). Ordering everywhere: sample animations →
 physics (`--steps`) → render.
@@ -259,22 +272,41 @@ exactly the post-break world — pinned bit-exact by CLI test. A thresholded
 
 ## Input
 
-Keyboard input is sampled per fixed step — scripts ask `world.key("ArrowUp")`
-— and exists headlessly only as an `*.input.jsonl` timeline: sparse JSONL
-keyframes of the *complete* held set, each in effect from its `step` (0-based)
-until the next line, nothing held before the first:
+Keyboard and mouse input is sampled per fixed step — scripts ask
+`world.key("ArrowUp")` and `world.mouse("MouseLeft")` — and exists headlessly
+only as an `*.input.jsonl` timeline: sparse JSONL keyframes of the *complete*
+held set, each in effect from its `step` (0-based) until the next line,
+nothing held before the first:
 
 ```jsonl
 {"step": 0, "held": ["ArrowUp"]}
-{"step": 120, "held": ["ArrowUp", "ArrowLeft"]}
-{"step": 300, "held": []}
+{"step": 120, "held": ["ArrowUp", "ArrowLeft"], "cursor": [0.62, 0.41]}
+{"step": 300, "held": ["MouseLeft"], "cursor": [0.62, 0.41]}
 ```
 
 Key names are the W3C `KeyboardEvent.code` values from a curated allowlist
-(arrows, `KeyA`–`KeyZ`, `Digit0`–`Digit9`, `Space`, `Enter`, shift/control);
-an unknown name is `unknown_key` with `did_you_mean`, malformed lines are
-`input_parse_error`, non-increasing steps are `unsorted_input_steps` — every
-error at once, with the timeline's file/line.
+(arrows, `KeyA`–`KeyZ`, `Digit0`–`Digit9`, `Space`, `Enter`, `Escape`,
+shift/control); the three mouse buttons are `MouseLeft`, `MouseRight` and
+`MouseMiddle`, and they ride the same `held` array, since a keyframe is one
+complete snapshot of what the player is doing. An unknown name is
+`unknown_key` with `did_you_mean`, malformed lines are `input_parse_error`,
+non-increasing steps are `unsorted_input_steps` — every error at once, with
+the timeline's file/line.
+
+**`cursor` is optional and is a fraction of the frame**, `[x, y]` in `[0, 1]`
+with the origin at the top-left corner — not pixels, because a timeline
+outlives the window it was recorded in. Values outside the range clamp to the
+edge; an **absent `cursor` is the centre of the frame** (`[0.5, 0.5]`), so
+every pre-M28 timeline parses unchanged and means what it always meant.
+Recorded cursors are quantized to three decimals, which is what the file says
+and therefore what replays.
+
+The ray through the cursor depends on the frame's **aspect**, so a
+mouse-driven run is a function of `--width`/`--height` as well as of the
+scene, the steps and the timeline. `screenshot` uses its own frame,
+`diff-render` uses the baseline's, and `simulate`/`raycast` — which render
+nothing — use a documented default of **960×540**. See
+`designs/mouse-input-design.md` §5.
 
 `--input <f>` on `simulate` / `screenshot` / `diff-render` / `raycast`
 replays a timeline while stepping; the same timeline twice is byte-identical
@@ -296,6 +328,22 @@ make_car_track.py` is the worked example: it writes the road, asks where it
 went, and writes the scene again with the barriers on it. With no `--entity`
 the scene must contain exactly one road; naming one that is not there is
 `entity_not_found` with a `did_you_mean`.
+
+`engine list-colliders` prints `steps` and one `colliders` array, name-sorted:
+each row's `entity`, `shape` (`sphere`/`cuboid`/`capsule`/`trimesh`/
+`convex_hull`/`other`), its `dimensions` in the file's own terms (a sphere's
+radius; a cuboid's three half-extents; a capsule's half-height and radius; a
+mesh shape's is its geometry, so the array is empty), world `position` and
+`rotation` (Euler XYZ degrees), and `sensor`. A skinned collider proxy (M33)
+carries a `part` as well — the name it reports under, which no other row has.
+
+The rows are read back out of the built physics world rather than re-derived
+from the components, which is what makes it impossible for the report and the
+simulation to disagree: `road-centerline`'s argument, applied to physics. That
+matters most for a proxy, whose placement comes from a *pose* and which appears
+in no render at all. `--steps N` runs the simulation first, because a
+stride-driven pose is what the run reached rather than a function of the file —
+`list-joints` grew the same flag in M32 for the same reason.
 
 ## The render digest
 

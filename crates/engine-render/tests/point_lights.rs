@@ -35,6 +35,7 @@ fn render(source: &str) -> Image {
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &[],
         &camera,
         camera_transform.matrix(),
@@ -43,7 +44,7 @@ fn render(source: &str) -> Image {
         0.0,
         SIZE,
         SIZE,
-        &scene.hud_items(),
+        &scene.hud_tree(&engine_core::mesh::BuiltinAssets),
         &[],
     )
     .expect("offscreen render failed")

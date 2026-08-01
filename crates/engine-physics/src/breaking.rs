@@ -129,19 +129,19 @@ pub fn apply_breaks(
 
             // Rigid-body kinematics: a point on a spinning parent moves at
             // v + ω x r, so fragments fly apart the way the parent moved.
-            let mut velocity =
-                linear + angular_radians.cross(position - transform.position);
+            let mut velocity = linear + angular_radians.cross(position - transform.position);
             if let Some(explosion) = pending_break.kick {
                 let delta = position - explosion.center;
                 let distance = delta.length();
                 if distance < explosion.radius {
-                    let magnitude =
-                        explosion.impulse * (1.0 - distance / explosion.radius);
+                    let magnitude = explosion.impulse * (1.0 - distance / explosion.radius);
                     let extents = fragment.half_extents * fragment_transform.scale;
-                    let mass =
-                        fragment.density * 8.0 * (extents.x * extents.y * extents.z).abs();
-                    let direction =
-                        if distance > 1e-6 { delta / distance } else { Vec3::Y };
+                    let mass = fragment.density * 8.0 * (extents.x * extents.y * extents.z).abs();
+                    let direction = if distance > 1e-6 {
+                        delta / distance
+                    } else {
+                        Vec3::Y
+                    };
                     if mass > 0.0 {
                         velocity += direction * (magnitude / mass);
                     }
@@ -243,7 +243,12 @@ mod tests {
 
     fn scene(source: &str) -> (Scene, PhysicsWorld) {
         let mut scene = Scene::from_source(source, "test.json").unwrap();
-        let physics = PhysicsWorld::build(&scene.world, &PhysicsSettings::default(), &engine_core::mesh::BuiltinAssets).unwrap();
+        let physics = PhysicsWorld::build(
+            &scene.world,
+            &PhysicsSettings::default(),
+            &engine_core::mesh::BuiltinAssets,
+        )
+        .unwrap();
         let _ = &mut scene;
         (scene, physics)
     }
@@ -255,7 +260,7 @@ mod tests {
     ) -> Vec<BreakEvent> {
         let mut events = Vec::new();
         for _ in 0..steps {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
             events.extend(apply_breaks(&mut scene.world, physics, &[]).unwrap());
         }
         events
@@ -278,7 +283,11 @@ mod tests {
         assert_eq!(events.len(), 1, "exactly one break: {events:?}");
         assert_eq!(events[0].entity, "Crate");
         assert_eq!(
-            events[0].fragments.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            events[0]
+                .fragments
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
             ["Crate.frag0", "Crate.frag1"]
         );
 
@@ -288,7 +297,11 @@ mod tests {
             let body = scene.world.get::<&RigidBody>(entity).unwrap();
             assert_eq!(body.body, BodyKind::Dynamic);
             let material = scene.world.get::<&Material>(entity).unwrap();
-            assert_eq!(material.albedo, Vec3::new(0.8, 0.5, 0.2), "parent material copied");
+            assert_eq!(
+                material.albedo,
+                Vec3::new(0.8, 0.5, 0.2),
+                "parent material copied"
+            );
             let transform = scene.world.get::<&Transform>(entity).unwrap();
             assert!(
                 transform.position.y > 0.0 && transform.position.y < 1.5,
@@ -301,11 +314,17 @@ mod tests {
     #[test]
     fn a_soft_touch_stays_whole() {
         let gentle = CRATE_DROP
-            .replace("\"impulse_threshold\": 5.0", "\"impulse_threshold\": 10000.0")
+            .replace(
+                "\"impulse_threshold\": 5.0",
+                "\"impulse_threshold\": 10000.0",
+            )
             .replace("[0.0, 5.0, 0.0]", "[0.0, 1.6, 0.0]");
         let (mut scene, mut physics) = scene(&gentle);
         let events = step_and_break(&mut scene, &mut physics, 300);
-        assert!(events.is_empty(), "nothing reaches 10000 kg·m/s: {events:?}");
+        assert!(
+            events.is_empty(),
+            "nothing reaches 10000 kg·m/s: {events:?}"
+        );
         assert!(find(&scene, "Crate").is_some());
     }
 
@@ -317,8 +336,7 @@ mod tests {
                {"type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5]},"#,
         );
         let (mut scene, mut physics) = scene(&source);
-        let events =
-            apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
+        let events = apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
         assert_eq!(events.len(), 1);
         for (name, _) in &events[0].fragments {
             let entity = find(&scene, name).unwrap();
@@ -334,8 +352,7 @@ mod tests {
     #[test]
     fn a_forced_break_of_a_non_breakable_is_skipped() {
         let (mut scene, mut physics) = scene(CRATE_DROP);
-        let events =
-            apply_breaks(&mut scene.world, &mut physics, &["Ball".to_string()]).unwrap();
+        let events = apply_breaks(&mut scene.world, &mut physics, &["Ball".to_string()]).unwrap();
         assert!(events.is_empty());
         assert!(find(&scene, "Ball").is_some());
     }
@@ -349,7 +366,7 @@ mod tests {
             radius: 5.0,
             impulse: 50.0,
         });
-        physics.step(&mut scene.world);
+        physics.step(&mut scene.world, 0.0);
         let events = apply_breaks(&mut scene.world, &mut physics, &[]).unwrap();
 
         assert_eq!(events.len(), 1, "the blast breaks the crate: {events:?}");
@@ -384,10 +401,13 @@ mod tests {
                {"name": "Ball", "components": ["#,
         );
         let (mut scene, mut physics) = scene(&source);
-        let events =
-            apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
+        let events = apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
         assert_eq!(
-            events[0].fragments.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            events[0]
+                .fragments
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
             ["Crate.frag0_2", "Crate.frag1"],
             "a taken name gets a deterministic suffix"
         );

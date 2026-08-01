@@ -174,7 +174,7 @@
     {
       "name": "LampHead",
       "components": [
-        { "type": "Transform", "position": [5.6, 3.85, 6.4], "scale": [0.42, 0.42, 0.42] },
+        { "type": "Transform", "position": [5.6, 3.85, 6.4], "scale": [0.84, 0.84, 0.84] },
         { "type": "Mesh", "asset": "builtin:sphere" },
         {
           "type": "Material",
@@ -189,7 +189,7 @@
     {
       "name": "Boulder",
       "components": [
-        { "type": "Transform", "position": [-4.2, -0.1, 7.6], "scale": [1.5, 1.05, 1.35] },
+        { "type": "Transform", "position": [-4.2, -0.1, 7.6], "scale": [3.0, 2.10, 2.70] },
         { "type": "Mesh", "asset": "builtin:sphere" },
         { "type": "Material", "albedo": [0.32, 0.31, 0.29], "roughness": 0.82 }
       ]

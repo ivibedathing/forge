@@ -229,7 +229,12 @@ pub fn resolve_texture(asset: &str, base_dir: &Path) -> Result<PathBuf> {
                 resolved.display()
             ),
         )
-        .suggest_from(asset, sibling_textures(asset, &resolved).iter().map(String::as_str)));
+        .suggest_from(
+            asset,
+            sibling_textures(asset, &resolved)
+                .iter()
+                .map(String::as_str),
+        ));
     }
 
     Ok(resolved)
@@ -246,7 +251,9 @@ fn sibling_textures(asset: &str, resolved: &Path) -> Vec<String> {
         return candidates;
     };
 
-    let prefix = Path::new(asset).parent().filter(|p| !p.as_os_str().is_empty());
+    let prefix = Path::new(asset)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty());
     for entry in entries.flatten() {
         if !entry.path().is_file() {
             continue;
@@ -298,12 +305,19 @@ pub trait TextureSource {
     fn load_texture(&self, asset: &str, space: ColorSpace) -> Result<Arc<TextureData>>;
 }
 
-/// Everything the draw list needs to resolve: geometry and textures.
+/// Everything the draw list needs to resolve: geometry, textures, and — since
+/// M30 — the rig behind a skinned mesh.
 ///
-/// One parameter rather than two, with a blanket impl, so every existing caller
-/// of `Scene::render_items` keeps passing exactly what it passed before.
-pub trait AssetSource: crate::mesh::MeshSource + TextureSource {}
-impl<T: crate::mesh::MeshSource + TextureSource + ?Sized> AssetSource for T {}
+/// One parameter rather than three, with a blanket impl, so every existing
+/// caller of `Scene::render_items` keeps passing exactly what it passed before.
+pub trait AssetSource:
+    crate::mesh::MeshSource + TextureSource + crate::skeleton::RigSource
+{
+}
+impl<T: crate::mesh::MeshSource + TextureSource + crate::skeleton::RigSource + ?Sized> AssetSource
+    for T
+{
+}
 
 /// The four maps a material can carry, resolved to shared pixels (M26).
 ///
@@ -432,7 +446,10 @@ mod tests {
         assert_eq!(texture.level_size(3), (1, 1));
         assert_eq!(texture.mips[3].len(), 4);
         // A constant image stays constant at every level.
-        assert!(texture.mips.iter().all(|level| level.iter().all(|&b| b == 7)));
+        assert!(texture
+            .mips
+            .iter()
+            .all(|level| level.iter().all(|&b| b == 7)));
     }
 
     #[test]

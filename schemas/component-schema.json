@@ -21,6 +21,95 @@
           }
         ]
       },
+      "ColliderPart": {
+        "additionalProperties": false,
+        "description": "One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's\nframe (M33).\n\nFlat and discriminated by `shape`, exactly as [`Collider`] is and for the\nsame reasons — the schema-driven walk and the editor's generated inspector\nboth read flat structs, and `jq` and an LLM both write them. `cuboid`,\n`sphere` and `capsule` only: `trimesh` and `convex_hull` describe a\nspecific mesh, and a proxy exists precisely because that mesh lives on the\nGPU where physics cannot reach it (`collider_part_shape_unsupported`).",
+        "properties": {
+          "half_extents": {
+            "description": "`cuboid` only. Each component `> 0`.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "half_height": {
+            "description": "`capsule` only: half the cylindrical section's height. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "joint": {
+            "description": "The joint this proxy rides. Its posed world transform, times `offset`\nand `rotation`, is where the shape is each step.",
+            "type": "string"
+          },
+          "name": {
+            "description": "What reports call this part. Absent, the joint's name — which is right\nfor the ordinary one-proxy-per-joint set and wrong the moment a limb\ntakes two, hence the field. Unique within the component.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Metres from the joint's origin, **in the joint's own frame**, so a\nproxy is authored against the bone rather than against the world.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "radius": {
+            "description": "`sphere` and `capsule`. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Euler degrees in the joint's frame. A capsule's axis is local **+Y**\n(rapier's, and `builtin:cylinder`'s), and this is what turns it onto a\nbone that runs some other way.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sensor": {
+            "default": false,
+            "description": "Sensors detect overlaps but exert no forces — `Collider.sensor`,\nmeaning the same thing. Per part rather than per component, because a\nsword's blade and its guard want opposite answers.",
+            "type": "boolean"
+          },
+          "shape": {
+            "$ref": "#/$defs/ColliderShapeKind"
+          }
+        },
+        "required": [
+          "joint",
+          "shape"
+        ],
+        "type": "object"
+      },
       "ColliderShapeKind": {
         "description": "The collision shape kinds `Collider.shape` may name.",
         "enum": [
@@ -111,6 +200,87 @@
         ],
         "type": "object"
       },
+      "GrowthStage": {
+        "additionalProperties": false,
+        "description": "One keyframe of a [`Meadow`]'s life cycle.\n\nAll seven fields are required. A half-specified keyframe is an error rather\nthan a fade to black — M21's palette wrote that rule down, and a meadow's\ntable is read the same way: linearly interpolated, and **wrapping** from the\nlast keyframe back round to the first, so the cycle closes without anyone\nhaving to author phase 1.0 as a copy of phase 0.0.",
+        "properties": {
+          "at": {
+            "description": "Where in the cycle this keyframe sits, `[0, 1)`. Strictly increasing\ndown the table (`meadow_stages_invalid`).",
+            "format": "float",
+            "maximum": 0.999,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "color": {
+            "description": "Linear RGB at the plant's base, each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "height": {
+            "description": "Plant height as a fraction of [`Meadow::height`], `>= 0`. `0` is a plant\nthat is not there, which is what the seed keyframe says.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "lean": {
+            "description": "Degrees the plant leans from vertical at its tip. The bend is a\ncantilever — the tip leans this far and the root not at all — so a large\nvalue at the end of the cycle is the plant collapsing rather than\ntipping over rigidly. `[0, 90]`.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "sway": {
+            "description": "How much of [`Meadow::wind`] reaches the plant at this stage, `>= 0`.\n\nThis is what separates green grass that flows from dry stalks that\nstand, and it is nearly free — the wind term is already in the vertex\nstage.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tip_color": {
+            "description": "Linear RGB at the plant's tip, each component `[0, 1]`.\n\nTwo colours rather than one because senescence runs tip-downward in real\ngrass: a stand going over turns straw at the top while its base is still\ngreen, and a single flat colour per stage looks painted on.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "width": {
+            "description": "Blade width as a fraction of [`Meadow::blade_width`], `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "at",
+          "height",
+          "width",
+          "lean",
+          "sway",
+          "color",
+          "tip_color"
+        ],
+        "type": "object"
+      },
+      "HudAlign": {
+        "description": "Cross-axis alignment of a [`HudPanel`]'s children (M31). See [`HudLayout`]\nfor why the variants are undocumented.",
+        "enum": [
+          "start",
+          "center",
+          "end"
+        ],
+        "type": "string"
+      },
       "HudAnchor": {
         "description": "Where a HUD element attaches on screen (M12).\n\n`offset` is measured **inward** from the anchor: from a right anchor,\n`offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;\nfrom `center` it is the usual +x-right / +y-down applied to the element's\ncenter. The anchored point is the element's matching corner (its center\nfor `center`), so `offset: [0, 0]` puts the element flush against its\ncorner at any resolution.",
         "enum": [
@@ -122,6 +292,24 @@
         ],
         "type": "string"
       },
+      "HudLayout": {
+        "description": "How a [`HudPanel`] arranges its children (M31).\n\nNOTE (schemars): variants carry no doc comments on purpose. A doc comment\non a *variant* turns the generated schema from a flat `\"enum\": [...]` into\noneOf/const, which blinds the validation walk's closed-vocabulary check —\nthe same trap `ColliderShapeKind` documents.",
+        "enum": [
+          "free",
+          "row",
+          "column"
+        ],
+        "type": "string"
+      },
+      "HudTextAlign": {
+        "description": "Horizontal alignment of text within its own box (M31). See [`HudLayout`]\nfor why the variants are undocumented.",
+        "enum": [
+          "left",
+          "center",
+          "right"
+        ],
+        "type": "string"
+      },
       "ParticleBlend": {
         "description": "How a particle's color combines with what is already on screen.\n\nNOTE: leave these variants undocumented. A doc comment on an enum *variant*\nmakes schemars emit oneOf/const instead of a flat `\"enum\": [...]`, which\nblinds the validation walk's closed-vocabulary check — the same trap\n[`ColliderShapeKind`] carries a note about.",
         "enum": [
@@ -129,6 +317,35 @@
           "additive"
         ],
         "type": "string"
+      },
+      "PlantedFoot": {
+        "additionalProperties": false,
+        "description": "One foot of a [`FootPlant`]: which joint it is, and how far up the chain\nthe solver may rotate to reach the ground.",
+        "properties": {
+          "ankle": {
+            "description": "The ankle joint — the end of the chain, the thing put on the ground.",
+            "type": "string"
+          },
+          "chain": {
+            "default": 2,
+            "description": "How many joints **above** the ankle rotate to reach the target. `2` is\nthe ordinary leg (knee and hip) and is what the two-bone solve means;\n`1` bends a single hinge and is what a stubby prop leg wants.",
+            "format": "uint32",
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sole": {
+            "default": 0.0,
+            "description": "Metres from the ankle joint down to the bottom of the foot, so the sole\nmeets the ground rather than the joint being buried in it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "ankle"
+        ],
+        "type": "object"
       },
       "RoadMarkings": {
         "additionalProperties": false,
@@ -416,7 +633,7 @@
     "oneOf": [
       {
         "additionalProperties": false,
-        "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.",
+        "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.\n\n**One world unit is one metre**, and that is the convention every other\nnumber in the format is quoted against: gravity is `-9.81` because a body\nfalls 9.81 m/s², `Tree.height: 6.0` is a six-metre tree, and a `Wheel`\n0.35 m in radius belongs under a car 1.7 m wide. Time is seconds and mass\nis kilograms, so `Collider.density` is kg/m³ — note its default of `1.0`\nis *not* a plausible material, and a body meant to be pushed by forces\nwants a real one (the demo car's box chassis carries `350`, which is how\n4.3 m³ becomes 1.5 t).",
         "properties": {
           "position": {
             "default": [
@@ -424,6 +641,7 @@
               0.0,
               0.0
             ],
+            "description": "World-space `[x, y, z]` **in metres**. +Y is up.",
             "items": {
               "format": "float",
               "type": "number"
@@ -453,6 +671,7 @@
               1.0,
               1.0
             ],
+            "description": "Multiplier on the entity's own geometry, per axis. Identity is\n`[1, 1, 1]`.\n\n**Every `builtin:` primitive is one metre across at scale 1**, so on\nthose this field reads directly as a size in metres: a\n`builtin:cube` at `[1.7, 0.7, 3.6]` is a car-sized box, and a\n`builtin:sphere` at `[0.9, 0.9, 0.9]` is 0.9 m across — *not* 1.8.\nThe recipes size the same way (`Terrain`, `Water` and `Meadow` take\ntheir footprint from `scale` in XZ), and it also multiplies\n`Collider` dimensions, which is why a cuboid collider matching a\nbuiltin cube is authored as `half_extents: [0.5, 0.5, 0.5]` in\n*local* units rather than in metres.",
             "items": {
               "format": "float",
               "type": "number"
@@ -676,7 +895,7 @@
           },
           "transmission": {
             "default": 0.0,
-            "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness — see `materials-lighting-design.md`.",
+            "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness.",
             "format": "float",
             "maximum": 1.0,
             "minimum": 0.0,
@@ -1050,7 +1269,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse. See `breaking-design.md`.",
+        "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse.",
         "properties": {
           "fragments": {
             "description": "What the entity becomes. At least one.",
@@ -1082,7 +1301,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Plays an animation clip against scene time (M9).\n\n`clip` is a relative path to a property clip (`*.anim.json`); a\n`path#ClipName` glTF fragment is reserved for skeletal clips (not yet\nsupported). A player in the file is playing — there is no play/pause\nruntime state, because pose is a pure function of (files, time).",
+        "description": "Plays an animation clip against scene time (M9), or against ground\ncovered (M32).\n\n`clip` is a relative path to a property clip (`*.anim.json`), or a\n`path#ClipName` glTF fragment naming a skeletal clip in the entity's own\nmesh file (M30). A player in the file is playing — there is no play/pause\nruntime state.\n\nThe clock is scene time by default, which keeps the pose a pure function\nof (files, time). Setting `stride` swaps that clock for **distance\ntravelled**, and `phase` is where the clip has got to: still a field in\nthe file, so nothing moves into hidden state.",
         "properties": {
           "clip": {
             "type": "string"
@@ -1092,15 +1311,29 @@
             "description": "Wrap by clip duration; when false, clamp to the final pose.",
             "type": "boolean"
           },
+          "phase": {
+            "default": 0.0,
+            "description": "How far this player has got, in **cycles** of its clip, when `stride`\ndrives it (M32). Ignored otherwise.\n\nCycles rather than seconds so the locomotion system needs no clip\nduration to advance it: one step covering `d` metres adds `d / stride`,\nand nothing has to open the clip file to know that. The engine writes\nit back every fixed step and the change-based bake splices it, so where\na character is in its stride survives a bake the same way where it is\nstanding does. A looping player's phase is reduced into `[0, 1)` as it\nis stored.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
           "speed": {
             "default": 1.0,
-            "description": "Time multiplier; local time = `t * speed + start_offset`.",
+            "description": "Time multiplier; local time = `t * speed + start_offset`, or\n`phase * speed + start_offset` when `stride` is set.",
             "format": "float",
             "type": "number"
           },
           "start_offset": {
             "default": 0.0,
             "format": "float",
+            "type": "number"
+          },
+          "stride": {
+            "default": 0.0,
+            "description": "Metres of ground one **cycle** of this clip covers (M32).\n\n`0` — the default — is the M9 behaviour: scene time drives the clip.\nAbove zero the clip is driven by the entity's horizontal displacement\ninstead, advancing `distance / stride` cycles per fixed step, which is\nwhat stops a walk cycle sliding when the character's speed changes.\n`engine list-joints` measures the right value off the clip itself.",
+            "format": "float",
+            "minimum": 0.0,
             "type": "number"
           },
           "type": {
@@ -1116,7 +1349,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "Gameplay logic as data (M10): a Rhai script run once per fixed step.\n\n`source` is a relative `.rhai` path defining `fn step(world, step)`.\nScripts mutate the world through a small registered API and never invent\nstate of their own — baked output after a scripted run is an ordinary\nscene file. See `scripting-design.md`.",
+        "description": "Gameplay logic as data (M10): a Rhai script run once per fixed step.\n\n`source` is a relative `.rhai` path defining `fn step(world, step)`.\nScripts mutate the world through a small registered API and never invent\nstate of their own — baked output after a scripted run is an ordinary\nscene file.",
         "properties": {
           "source": {
             "type": "string"
@@ -1250,8 +1483,13 @@
       },
       {
         "additionalProperties": false,
-        "description": "A screen-space text label (M12): one line of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic. Draw order is file order, and all text draws\nover all `HudRect`s.",
+        "description": "A screen-space text label (M12): lines of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic.\n\nM31 adds `parent`, `visible` and `stretch` (shared by every element in the\nfamily), plus `align`, `wrap` and `line_gap`. Every one defaults to the M12\nbehaviour: no parent means a child of the viewport placed by exactly the\nM12 anchor arithmetic, and `wrap: 0` means the single unwrapped line it has\nalways been.",
         "properties": {
+          "align": {
+            "$ref": "#/$defs/HudTextAlign",
+            "default": "left",
+            "description": "Alignment of each line within the text's own box, which differs from\nthe box only when the text is stretched or wrapped."
+          },
           "anchor": {
             "$ref": "#/$defs/HudAnchor",
             "default": "top_left"
@@ -1273,12 +1511,19 @@
             "minItems": 3,
             "type": "array"
           },
+          "line_gap": {
+            "default": 0.0,
+            "description": "Extra pixels between lines, on top of the glyph cell.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
           "offset": {
             "default": [
               0.0,
               0.0
             ],
-            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or\n`column` parent this is a nudge on top of the computed position rather\nthan the position itself.",
             "items": {
               "format": "float",
               "type": "number"
@@ -1287,6 +1532,13 @@
             "minItems": 2,
             "type": "array"
           },
+          "parent": {
+            "description": "The name of an entity carrying a [`HudPanel`] to place this inside.\nAbsent (the default) means a child of the viewport.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "size": {
             "default": 16.0,
             "description": "Glyph height in pixels, `>= 4`. The 8×8 font renders at integer\nscale `max(1, round(size / 8))`, so `16` means exactly 2× glyphs.",
@@ -1294,13 +1546,38 @@
             "minimum": 4.0,
             "type": "number"
           },
+          "stretch": {
+            "default": [
+              false,
+              false
+            ],
+            "description": "Fill the parent's content box on `[x, y]`, ignoring this element's own\nsize on that axis. Two booleans rather than a `\"fill\"` string in a\nnumeric field, which would break the schema-driven walk.",
+            "items": {
+              "type": "boolean"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
           "text": {
-            "description": "One line; no wrapping. Scripts may rewrite it via\n`world.set_hud_text` — an empty string is a legal rest value for a\nscript-driven readout.",
+            "description": "The label. `\\n` breaks a line explicitly; `wrap` breaks it\nautomatically. Scripts may rewrite it via `world.set_hud_text` — an\nempty string is a legal rest value for a script-driven readout.",
             "type": "string"
           },
           "type": {
             "const": "HudText",
             "type": "string"
+          },
+          "visible": {
+            "default": true,
+            "description": "Drawn and hit-testable when true (the default). Hiding a panel hides\nits whole subtree — one boolean is how a menu opens and closes.",
+            "type": "boolean"
+          },
+          "wrap": {
+            "default": 0.0,
+            "description": "Wrap width in pixels; `0` (the default) is no wrapping. Breaks on\nspaces — a word longer than `wrap` overflows rather than splitting,\nsince a mid-word break in a fixed-width font reads as corruption.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
           }
         },
         "required": [
@@ -1311,7 +1588,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn before all `HudText`, file order within\nrects.",
+        "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn with the panels and images, before all\n`HudText`, file order within the class.\n\nM31 adds only the shared `parent`/`visible`/`stretch`; a rect stays the\nflat script-driven bar it has always been.",
         "properties": {
           "anchor": {
             "$ref": "#/$defs/HudAnchor",
@@ -1339,7 +1616,7 @@
               0.0,
               0.0
             ],
-            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or\n`column` parent this is a nudge on top of the computed position.",
             "items": {
               "format": "float",
               "type": "number"
@@ -1356,8 +1633,15 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "parent": {
+            "description": "The name of an entity carrying a [`HudPanel`] to place this inside.\nAbsent (the default) means a child of the viewport.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "size": {
-            "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size`.",
+            "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size` or `world.set_hud_size`. Ignored on an axis\nwhere `stretch` is true.",
             "items": {
               "format": "float",
               "minimum": 0.0,
@@ -1367,14 +1651,322 @@
             "minItems": 2,
             "type": "array"
           },
+          "stretch": {
+            "default": [
+              false,
+              false
+            ],
+            "description": "Fill the parent's content box on `[x, y]`, ignoring `size` on that\naxis — the full-screen dim backdrop, and the bar spanning a column.",
+            "items": {
+              "type": "boolean"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
           "type": {
             "const": "HudRect",
             "type": "string"
+          },
+          "visible": {
+            "default": true,
+            "description": "Drawn and hit-testable when true (the default).",
+            "type": "boolean"
           }
         },
         "required": [
           "type",
           "size"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A screen-space container that lays its children out (M31).\n\nThis is the component that removes hand-computed pixel offsets. Children\nname it in their `parent`; `layout` decides whether they are stacked in a\n`row`, a `column`, or placed `free` by their own anchors relative to this\npanel's content box.\n\n**Absent `width`/`height` means hug contents** — the panel is exactly its\nchildren's extent plus `padding`. That is the default because it is the\ncase that makes a dialog authorable: the box follows the text instead of\nthe text being fitted to a box someone solved by hand.\n\n`opacity` defaults to **0**, so a bare `HudPanel` is an invisible layout\ngroup; set it and the same component is the dialog's backdrop. One\ncomponent rather than a container plus a rect whose size would have to be\nkept in agreement with it.",
+        "properties": {
+          "align": {
+            "$ref": "#/$defs/HudAlign",
+            "default": "start",
+            "description": "Cross-axis alignment of children in a `row`/`column`."
+          },
+          "anchor": {
+            "$ref": "#/$defs/HudAnchor",
+            "default": "top_left"
+          },
+          "color": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Background colour, linear RGB in `[0, 1]`. Only visible at\n`opacity > 0`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "gap": {
+            "default": 0.0,
+            "description": "Pixels between children along the main axis of a `row`/`column`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "height": {
+            "description": "Fixed height in pixels. Absent hugs the children.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "layout": {
+            "$ref": "#/$defs/HudLayout",
+            "default": "free"
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "opacity": {
+            "default": 0.0,
+            "description": "`[0, 1]`, defaulting to **0** — an invisible layout group.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "padding": {
+            "default": 0.0,
+            "description": "Uniform inset in pixels between this panel's edge and its content box.\nPer-side padding is the obvious next field and costs nothing to add\nlater; M12's \"no z field until something needs it\" applies.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "parent": {
+            "description": "The name of another [`HudPanel`] entity to nest inside.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stretch": {
+            "default": [
+              false,
+              false
+            ],
+            "description": "Fill the parent's content box on `[x, y]`, ignoring `width`/`height`\nand hug sizing on that axis.",
+            "items": {
+              "type": "boolean"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": {
+            "const": "HudPanel",
+            "type": "string"
+          },
+          "visible": {
+            "default": true,
+            "description": "Drawn and hit-testable when true (the default). A hidden panel hides\nits whole subtree.",
+            "type": "boolean"
+          },
+          "width": {
+            "description": "Fixed width in pixels. Absent hugs the children.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A screen-space textured rectangle (M31): icons, logos, framed panels.\n\n`texture` is a PNG relative to the scene file, loaded through the same\n`TextureSource` and `(asset, space)` cache the material system uses, in\nsRGB — so `texture_too_large` fires from `validate`, before a device\nexists. Only the base level is read: the overlay draws at most one\ndestination pixel per texel band and never minifies below it, so a mip\nlevel selection would have no correct answer at this scale.\n\nSampling is **nearest-neighbour**, written out in `engine-core` like every\nother generator here — a render sits under a baseline, so the filter is a\nformat contract, and nearest is exactly reproducible where a bilinear\nfilter is a float-rounding question.",
+        "properties": {
+          "anchor": {
+            "$ref": "#/$defs/HudAnchor",
+            "default": "top_left"
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "opacity": {
+            "default": 1.0,
+            "description": "`[0, 1]`, multiplied onto the texture's own alpha.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "parent": {
+            "description": "The name of an entity carrying a [`HudPanel`] to place this inside.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "description": "`[width, height]` in destination pixels. Ignored on an axis where\n`stretch` is true.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "slice": {
+            "default": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Nine-slice insets in **source** pixels, `[left, top, right, bottom]`.\nThe default `[0, 0, 0, 0]` is a plain stretch. Corners are copied\n1:1, edges tile along their axis and the centre tiles both ways —\ntiling rather than stretching, because tiling at nearest is exact\nwhere stretching at nearest is a moiré pattern.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "stretch": {
+            "default": [
+              false,
+              false
+            ],
+            "description": "Fill the parent's content box on `[x, y]`, ignoring `size`.",
+            "items": {
+              "type": "boolean"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "texture": {
+            "description": "A `.png` path relative to the scene file (invariant 3).",
+            "type": "string"
+          },
+          "tint": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Multiplies the decoded texel in linear space, so one grey frame\ntexture serves a red panel and a blue one — the material system's\nauthoring rule for `albedo_map`, here for the same reason.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": {
+            "const": "HudImage",
+            "type": "string"
+          },
+          "visible": {
+            "default": true,
+            "description": "Drawn and hit-testable when true (the default).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type",
+          "texture",
+          "size"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Makes the HUD element on its own entity clickable (M31).\n\nCarries no geometry: the hit box is that element's laid-out rectangle. An\nentity with a `HudInteract` and no `HudPanel`/`HudRect`/`HudImage`/\n`HudText` is `hud_interact_without_element`.\n\nA separate component rather than an `interactive: true` flag on each of\nfour components, because the flag would be four fields that must stay in\nagreement, and because the tints belong next to it.\n\nThe tints multiply the element's own colour (clamped to `[0, 1]` after\nmultiplying) and default to `[1, 1, 1]` — no change — so adding a\n`HudInteract` moves no pixel until a cursor arrives. They exist so the\nordinary case, a button that lights up under the pointer, needs no script\nat all; anything richer is a script writing colours.",
+        "properties": {
+          "disabled": {
+            "default": false,
+            "description": "Excluded from hit-testing when true, so it never hovers, presses or\nclicks — and never blocks what is under it either.",
+            "type": "boolean"
+          },
+          "hover_tint": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Colour multiplier while the cursor is over this element. Unbounded\nabove — a hover tint brightens.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "press_tint": {
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "description": "Colour multiplier while a button is held down on this element.",
+            "items": {
+              "format": "float",
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": {
+            "const": "HudInteract",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
         ],
         "type": "object"
       },
@@ -1783,7 +2375,7 @@
       },
       {
         "additionalProperties": false,
-        "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
+        "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it.",
         "properties": {
           "crest_foam": {
             "default": 0.0,
@@ -1848,6 +2440,14 @@
             "maxItems": 3,
             "minItems": 3,
             "type": "array"
+          },
+          "ior": {
+            "default": 1.0,
+            "description": "Index of refraction, `1.0` (the default) being no bending at all — the\npre-M27 surface, which absorbs and tints what is behind it but never\nmoves it. Range `[1, 3]`; water is 1.33.\n\nUnlike [`Material::ior`] this needs no companion `thickness`: the shader\nalready measures how far the view ray travels through the body to reach\nthe bed, so the bend scales with the water's own depth and a pond bends\nits bed most where it is deepest. It also cannot change how *deep* the\nwater looks — absorption stays [`Water::depth_fade`]'s job — so it can\nbe turned on in a tuned scene without re-tuning it.",
+            "format": "float",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "type": "number"
           },
           "opacity": {
             "default": 0.9399999976158142,
@@ -2353,6 +2953,387 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Ground cover that grows, seeds and dies on a loop: grass, weeds, wildflowers\nand the dry stand they turn into.\n\nA recipe rather than a mesh reference, like [`Tree`] and [`Cloud`] — the\nengine grows one plant and scatters copies of it over the footprint\n`Transform.scale` gives, so a `Meadow` entity carries **no** `Mesh` and\n**no** `Material` (`meadow_with_mesh`).\n\n**It is the first recipe in this engine whose subject changes shape over\ntime.** A sprout is not a small blade of grass. The resolution is that the\ngeometry is static and the *life cycle lives in the vertex stage*: the plant\nis built once carrying every organ any stage will need, and each organ scales\nto nothing outside the phase window it belongs to. See\n`designs/meadow-design.md`.\n\nThe cycle runs on the scene clock, so it can be sped up:\n[`cycle_length`](Meadow::cycle_length) `: 3.0` runs a whole generation in\nthree seconds. **`0` — the default — freezes the field** at\n[`phase`](Meadow::phase), the way `daylight.day_length: 0` freezes the day:\nmost scenes want a dial, not motion, and a frozen field is reproducible with\nno `--time` at all.\n\nEvery generation **reseeds** rather than regrowing: a plant's position within\nits own cell, its height and its lean all shift a little each time round, so\nthe dead stalk and the sprout that replaces it are not collinear. That costs\none integer hash in the shader and no state anywhere.\n\nA meadow is scenery: no `Collider`, no shadow cast (a 2048² map cannot\nresolve a blade of grass, and what it would record is noise that crawls),\nand no `PointLight` contribution.",
+        "properties": {
+          "blade_width": {
+            "default": 0.007000000216066837,
+            "description": "Width of a blade at its base, in metres, `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "blades": {
+            "default": 5,
+            "description": "Blades in one plant. `[1, 12]`; `3`–`5` reads as a tuft.",
+            "format": "uint32",
+            "maximum": 12,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "cycle_length": {
+            "default": 0.0,
+            "description": "Seconds one full life cycle takes, `>= 0`.\n\n**`0` freezes the field** at [`phase`](Meadow::phase) — the default, and\n`daylight.day_length: 0`'s reasoning exactly.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "density": {
+            "default": 24.0,
+            "description": "Plants per square metre of footprint, `>= 0`.\n\nThe footprint is `Transform.scale` in XZ, so the plant count is\n`density × area`, rounded up to a square grid. `0` is an empty field,\nwhich is a legitimate thing to animate toward.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "flower_color": {
+            "default": [
+              0.4000000059604645,
+              0.3700000047683716,
+              0.17000000178813934
+            ],
+            "description": "Linear RGB of the flower head, each component `[0, 1]`. What stops the\nweed stage from being nothing but taller grass.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "head_size": {
+            "default": 0.017999999225139618,
+            "description": "Size of the flower and seed heads, in metres, `>= 0`. `0` grows a plant\nthat never flowers.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "height": {
+            "default": 0.44999998807907104,
+            "description": "Height of a fully grown plant in metres, `> 0`. `Transform.scale.y`\nmultiplies it, the way it multiplies a [`Terrain`]'s relief.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "max_slope": {
+            "default": 38.0,
+            "description": "Steepest ground grass will grow on, in degrees, `[0, 90]`. Plants on\nsteeper ground are dropped; `90` keeps everything.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "phase": {
+            "default": 0.41999998688697815,
+            "description": "Where the cycle starts, `[0, 1)` — and where a frozen field sits. The\ndefault is mature green, so `{\"type\": \"Meadow\"}` alone puts a working\nfield of grass in a scene.",
+            "format": "float",
+            "maximum": 0.999,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "default": 0,
+            "description": "Seeds placement and the template's blades. Two meadows with the same\nparameters and different seeds are different fields.\n\nThe generator's xorshift and the shader's reseed hash are both written\nout in this repo, so a given seed means the same field across dependency\nupgrades — a meadow render sits under a `diff-render` baseline, which\nmakes both a format contract.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "segments": {
+            "default": 4,
+            "description": "Lengthwise segments per blade — how finely a blade can curve as it leans\nand bends in the wind. `[1, 8]`.\n\nTogether with [`blades`](Meadow::blades) this sets the per-plant\ntriangle count, and the product with the plant count is what\n`meadow_too_complex` bounds.",
+            "format": "uint32",
+            "maximum": 8,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "size_jitter": {
+            "default": 0.3499999940395355,
+            "description": "How much plant height varies between plants, as a fraction, `[0, 1)`.\n`0` is a lawn.",
+            "format": "float",
+            "maximum": 0.99,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "splay": {
+            "default": 54.0,
+            "description": "Degrees the outermost blades splay from vertical, `[0, 90]`. Blade 0\nstays near upright, which is what gives a tuft a centre rather than a\nhole.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "stages": {
+            "default": [
+              {
+                "at": 0.0,
+                "color": [
+                  0.12999999523162842,
+                  0.10000000149011612,
+                  0.05000000074505806
+                ],
+                "height": 0.0,
+                "lean": 0.0,
+                "sway": 0.0,
+                "tip_color": [
+                  0.1599999964237213,
+                  0.12999999523162842,
+                  0.07000000029802322
+                ],
+                "width": 0.5
+              },
+              {
+                "at": 0.09000000357627869,
+                "color": [
+                  0.1599999964237213,
+                  0.3400000035762787,
+                  0.07000000029802322
+                ],
+                "height": 0.1599999964237213,
+                "lean": 10.0,
+                "sway": 0.5,
+                "tip_color": [
+                  0.3100000023841858,
+                  0.550000011920929,
+                  0.12999999523162842
+                ],
+                "width": 0.699999988079071
+              },
+              {
+                "at": 0.3100000023841858,
+                "color": [
+                  0.05999999865889549,
+                  0.1899999976158142,
+                  0.03999999910593033
+                ],
+                "height": 0.8600000143051147,
+                "lean": 17.0,
+                "sway": 1.0,
+                "tip_color": [
+                  0.17000000178813934,
+                  0.4000000059604645,
+                  0.09000000357627869
+                ],
+                "width": 1.0
+              },
+              {
+                "at": 0.5299999713897705,
+                "color": [
+                  0.09000000357627869,
+                  0.20000000298023224,
+                  0.05000000074505806
+                ],
+                "height": 1.0,
+                "lean": 21.0,
+                "sway": 0.8999999761581421,
+                "tip_color": [
+                  0.30000001192092896,
+                  0.36000001430511475,
+                  0.10000000149011612
+                ],
+                "width": 1.0499999523162842
+              },
+              {
+                "at": 0.7599999904632568,
+                "color": [
+                  0.2199999988079071,
+                  0.18000000715255737,
+                  0.07000000029802322
+                ],
+                "height": 0.949999988079071,
+                "lean": 27.0,
+                "sway": 0.4000000059604645,
+                "tip_color": [
+                  0.6200000047683716,
+                  0.5099999904632568,
+                  0.1899999976158142
+                ],
+                "width": 0.9200000166893005
+              },
+              {
+                "at": 0.9100000262260437,
+                "color": [
+                  0.14000000059604645,
+                  0.10999999940395355,
+                  0.05999999865889549
+                ],
+                "height": 0.6200000047683716,
+                "lean": 71.0,
+                "sway": 0.25,
+                "tip_color": [
+                  0.25999999046325684,
+                  0.20999999344348907,
+                  0.10999999940395355
+                ],
+                "width": 0.800000011920929
+              }
+            ],
+            "description": "The life cycle, as keyframes over `phase`. At least two, at most\n[`MAX_GROWTH_STAGES`](crate::meadow::MAX_GROWTH_STAGES), strictly\nincreasing in `at`.\n\nThe default is the full seed → sprout → grass → weeds → dry → collapse\ncycle, so a meadow is worth looking at before anything is authored.",
+            "items": {
+              "$ref": "#/$defs/GrowthStage"
+            },
+            "type": "array"
+          },
+          "stagger": {
+            "default": 0.25,
+            "description": "How far plants desync from each other, `[0, 1]`.\n\n`0` marches the whole field in lockstep; `1` spreads offsets across the\nwhole cycle, so every stage is present at every moment and the field\nnever appears to change. A real meadow browns together with variation,\nwhich is why the default is near the low end.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "terrain": {
+            "description": "The [`Terrain`] entity this meadow stands on, by name.\n\nEach plant's altitude is sampled from that patch through the same\nfunction `world.terrain_height` and `engine terrain-height` call, so\nthere is one implementation of \"where is the ground\" and nothing to keep\nin agreement. Absent, the field is flat at the entity's own Y.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "Meadow",
+            "type": "string"
+          },
+          "wind": {
+            "default": 9.0,
+            "description": "How far the wind bends a plant at full sway, in degrees, `>= 0`. `0` is\nstill air.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "wind_direction": {
+            "default": 0.0,
+            "description": "Which way the wind blows, in degrees — `0` toward −Z, the engine's\nforward convention, shared with `Water`'s wave directions.",
+            "format": "float",
+            "type": "number"
+          },
+          "wind_speed": {
+            "default": 3.5,
+            "description": "How fast gusts travel across the field, in metres per second, `>= 0`.\n\nGusts are a travelling wave, not a per-plant shimmer: sampling the noise\nagainst a moving coordinate is what makes wind cross a meadow visibly.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Puts a skinned character's feet on the terrain under them (M32).\n\nA post-pass over the posed skeleton: each named ankle is moved to the\nground beneath where the clip put it, the joints above it rotate to follow\n(two-bone IK), the hips drop when a leg cannot reach, and the sole tilts to\nthe slope. It runs wherever the pose does, so `engine list-joints --time`\nreports the planted rig and the render draws it — one answer, not two.\n\nThe ground is a `Terrain` entity named in `ground`, and that is a purity\ndecision rather than a convenience: planting against the *physics* world\nwould make the pose a function of the simulation, and the pose being a pure\nfunction of (files, time) is what lets `list-joints` answer at all. The cost\nis that a character cannot stand on a crate — see\n`designs/locomotion-design.md` §5.",
+        "properties": {
+          "align": {
+            "default": 30.0,
+            "description": "Degrees the sole may tilt to meet the ground's normal. `0` leaves the\nfoot's animated orientation alone, which is right for a character that\nonly ever walks on the flat.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "feet": {
+            "description": "The feet to plant, at most [`MAX_PLANTED_FEET`].",
+            "items": {
+              "$ref": "#/$defs/PlantedFoot"
+            },
+            "type": "array"
+          },
+          "ground": {
+            "description": "The entity carrying the `Terrain` these feet stand on.",
+            "type": "string"
+          },
+          "hips": {
+            "description": "The joint lowered when a leg cannot reach its target — the pelvis, in\na humanoid. Absent, the deficit is simply clamped: one foot plants and\nthe other stretches, which is bounded but reads as wrong.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_drop": {
+            "default": 0.5,
+            "description": "How far below the animated ankle a target may be, in metres. This is\nwhat keeps a foot in mid-swing from being dragged to the floor:\nplanting is a *correction*, and a correction with no ceiling is a\ndifferent animation.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "max_lift": {
+            "default": 0.5,
+            "description": "And how far above it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": {
+            "const": "FootPlant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "feet",
+          "ground"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Collision proxies that follow a skinned character's pose (M33).\n\nM30 said a skinned mesh is visual and physics sees only the entity's own\n`Collider`; this is the one item of that reversed. Each part is re-posed\nevery fixed step from the same joint globals the render and\n`engine list-joints` use, so a hitbox cannot disagree with the picture\nabout where a head is.\n\n**The pose drives the proxies and nothing reads them back** — they are\nkinematic, so they are hit, they push dynamic bodies, and they report\ncontacts, but they never move a joint. That is what keeps M30's claim that\nthe pose is a pure function of (files, time) true, and it is why a proxy\nholds a character up exactly as much as a moving wall holds up the hand\npushing it: not at all. What a character stands on is still its own\n`Collider`.\n\nLayers, friction and restitution sit here rather than on each part: \"bullets\nhit hitboxes\" is a statement about the character, and per-part copies would\nbe four more strings to keep in agreement per part.",
+        "properties": {
+          "collides_with": {
+            "description": "Only interact with colliders belonging to these layers. Absent =\ninteract with everything.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "friction": {
+            "default": 0.5,
+            "description": "`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "layers": {
+            "description": "Collision layers every part belongs to. Absent = every layer, exactly\nas on `Collider`. Empty is an error — omit the field instead.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "parts": {
+            "description": "The proxies, at most [`MAX_COLLIDER_PARTS`].",
+            "items": {
+              "$ref": "#/$defs/ColliderPart"
+            },
+            "type": "array"
+          },
+          "restitution": {
+            "default": 0.0,
+            "description": "Bounciness, `[0, 1]`, max-combined like `Collider.restitution`.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": {
+            "const": "SkinnedCollider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "parts"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -2373,12 +3354,18 @@
     "Wheel",
     "HudText",
     "HudRect",
+    "HudPanel",
+    "HudImage",
+    "HudInteract",
     "ParticleEmitter",
     "Tree",
     "Water",
     "Cloud",
     "Terrain",
-    "Road"
+    "Road",
+    "Meadow",
+    "FootPlant",
+    "SkinnedCollider"
   ],
   "scene": {
     "$defs": {
@@ -2402,6 +3389,95 @@
           }
         ]
       },
+      "ColliderPart": {
+        "additionalProperties": false,
+        "description": "One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's\nframe (M33).\n\nFlat and discriminated by `shape`, exactly as [`Collider`] is and for the\nsame reasons — the schema-driven walk and the editor's generated inspector\nboth read flat structs, and `jq` and an LLM both write them. `cuboid`,\n`sphere` and `capsule` only: `trimesh` and `convex_hull` describe a\nspecific mesh, and a proxy exists precisely because that mesh lives on the\nGPU where physics cannot reach it (`collider_part_shape_unsupported`).",
+        "properties": {
+          "half_extents": {
+            "description": "`cuboid` only. Each component `> 0`.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "half_height": {
+            "description": "`capsule` only: half the cylindrical section's height. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "joint": {
+            "description": "The joint this proxy rides. Its posed world transform, times `offset`\nand `rotation`, is where the shape is each step.",
+            "type": "string"
+          },
+          "name": {
+            "description": "What reports call this part. Absent, the joint's name — which is right\nfor the ordinary one-proxy-per-joint set and wrong the moment a limb\ntakes two, hence the field. Unique within the component.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Metres from the joint's origin, **in the joint's own frame**, so a\nproxy is authored against the bone rather than against the world.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "radius": {
+            "description": "`sphere` and `capsule`. `> 0`.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Euler degrees in the joint's frame. A capsule's axis is local **+Y**\n(rapier's, and `builtin:cylinder`'s), and this is what turns it onto a\nbone that runs some other way.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "sensor": {
+            "default": false,
+            "description": "Sensors detect overlaps but exert no forces — `Collider.sensor`,\nmeaning the same thing. Per part rather than per component, because a\nsword's blade and its guard want opposite answers.",
+            "type": "boolean"
+          },
+          "shape": {
+            "$ref": "#/$defs/ColliderShapeKind"
+          }
+        },
+        "required": [
+          "joint",
+          "shape"
+        ],
+        "type": "object"
+      },
       "ColliderShapeKind": {
         "description": "The collision shape kinds `Collider.shape` may name.",
         "enum": [
@@ -2418,7 +3494,7 @@
         "oneOf": [
           {
             "additionalProperties": false,
-            "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.",
+            "description": "Position, orientation, and scale.\n\nAll three fields are optional in JSON; omitting one gives the identity\nvalue, so a scene can say `{\"type\": \"Transform\", \"position\": [0, 3, 0]}`\nwithout restating a rotation and scale it does not care about.\n\n**One world unit is one metre**, and that is the convention every other\nnumber in the format is quoted against: gravity is `-9.81` because a body\nfalls 9.81 m/s², `Tree.height: 6.0` is a six-metre tree, and a `Wheel`\n0.35 m in radius belongs under a car 1.7 m wide. Time is seconds and mass\nis kilograms, so `Collider.density` is kg/m³ — note its default of `1.0`\nis *not* a plausible material, and a body meant to be pushed by forces\nwants a real one (the demo car's box chassis carries `350`, which is how\n4.3 m³ becomes 1.5 t).",
             "properties": {
               "position": {
                 "default": [
@@ -2426,6 +3502,7 @@
                   0.0,
                   0.0
                 ],
+                "description": "World-space `[x, y, z]` **in metres**. +Y is up.",
                 "items": {
                   "format": "float",
                   "type": "number"
@@ -2455,6 +3532,7 @@
                   1.0,
                   1.0
                 ],
+                "description": "Multiplier on the entity's own geometry, per axis. Identity is\n`[1, 1, 1]`.\n\n**Every `builtin:` primitive is one metre across at scale 1**, so on\nthose this field reads directly as a size in metres: a\n`builtin:cube` at `[1.7, 0.7, 3.6]` is a car-sized box, and a\n`builtin:sphere` at `[0.9, 0.9, 0.9]` is 0.9 m across — *not* 1.8.\nThe recipes size the same way (`Terrain`, `Water` and `Meadow` take\ntheir footprint from `scale` in XZ), and it also multiplies\n`Collider` dimensions, which is why a cuboid collider matching a\nbuiltin cube is authored as `half_extents: [0.5, 0.5, 0.5]` in\n*local* units rather than in metres.",
                 "items": {
                   "format": "float",
                   "type": "number"
@@ -2678,7 +3756,7 @@
               },
               "transmission": {
                 "default": 0.0,
-                "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness — see `materials-lighting-design.md`.",
+                "description": "How much light passes *through* the surface instead of scattering off\nit: `0` = opaque, `1` = clear glass. Range `[0, 1]`.\n\nUnlike [`Material::alpha`] this is view-dependent and keeps the\nspecular lobe, which is the whole difference between a transparent\nobject and a faded one: a water surface seen edge-on reflects the sky\nand hides its bottom, and seen from overhead it does neither. The\napproximation is a Fresnel lerp back toward opaque at grazing angles,\nwith the diffuse term scaled by `1 - transmission` (light that went\nthrough did not come back). There is no refraction and no\nscene-color sampling, so what is behind the surface is not bent or\ntinted by its thickness.",
                 "format": "float",
                 "maximum": 1.0,
                 "minimum": 0.0,
@@ -3052,7 +4130,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse. See `breaking-design.md`.",
+            "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse.",
             "properties": {
               "fragments": {
                 "description": "What the entity becomes. At least one.",
@@ -3084,7 +4162,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Plays an animation clip against scene time (M9).\n\n`clip` is a relative path to a property clip (`*.anim.json`); a\n`path#ClipName` glTF fragment is reserved for skeletal clips (not yet\nsupported). A player in the file is playing — there is no play/pause\nruntime state, because pose is a pure function of (files, time).",
+            "description": "Plays an animation clip against scene time (M9), or against ground\ncovered (M32).\n\n`clip` is a relative path to a property clip (`*.anim.json`), or a\n`path#ClipName` glTF fragment naming a skeletal clip in the entity's own\nmesh file (M30). A player in the file is playing — there is no play/pause\nruntime state.\n\nThe clock is scene time by default, which keeps the pose a pure function\nof (files, time). Setting `stride` swaps that clock for **distance\ntravelled**, and `phase` is where the clip has got to: still a field in\nthe file, so nothing moves into hidden state.",
             "properties": {
               "clip": {
                 "type": "string"
@@ -3094,15 +4172,29 @@
                 "description": "Wrap by clip duration; when false, clamp to the final pose.",
                 "type": "boolean"
               },
+              "phase": {
+                "default": 0.0,
+                "description": "How far this player has got, in **cycles** of its clip, when `stride`\ndrives it (M32). Ignored otherwise.\n\nCycles rather than seconds so the locomotion system needs no clip\nduration to advance it: one step covering `d` metres adds `d / stride`,\nand nothing has to open the clip file to know that. The engine writes\nit back every fixed step and the change-based bake splices it, so where\na character is in its stride survives a bake the same way where it is\nstanding does. A looping player's phase is reduced into `[0, 1)` as it\nis stored.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
               "speed": {
                 "default": 1.0,
-                "description": "Time multiplier; local time = `t * speed + start_offset`.",
+                "description": "Time multiplier; local time = `t * speed + start_offset`, or\n`phase * speed + start_offset` when `stride` is set.",
                 "format": "float",
                 "type": "number"
               },
               "start_offset": {
                 "default": 0.0,
                 "format": "float",
+                "type": "number"
+              },
+              "stride": {
+                "default": 0.0,
+                "description": "Metres of ground one **cycle** of this clip covers (M32).\n\n`0` — the default — is the M9 behaviour: scene time drives the clip.\nAbove zero the clip is driven by the entity's horizontal displacement\ninstead, advancing `distance / stride` cycles per fixed step, which is\nwhat stops a walk cycle sliding when the character's speed changes.\n`engine list-joints` measures the right value off the clip itself.",
+                "format": "float",
+                "minimum": 0.0,
                 "type": "number"
               },
               "type": {
@@ -3118,7 +4210,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "Gameplay logic as data (M10): a Rhai script run once per fixed step.\n\n`source` is a relative `.rhai` path defining `fn step(world, step)`.\nScripts mutate the world through a small registered API and never invent\nstate of their own — baked output after a scripted run is an ordinary\nscene file. See `scripting-design.md`.",
+            "description": "Gameplay logic as data (M10): a Rhai script run once per fixed step.\n\n`source` is a relative `.rhai` path defining `fn step(world, step)`.\nScripts mutate the world through a small registered API and never invent\nstate of their own — baked output after a scripted run is an ordinary\nscene file.",
             "properties": {
               "source": {
                 "type": "string"
@@ -3252,8 +4344,13 @@
           },
           {
             "additionalProperties": false,
-            "description": "A screen-space text label (M12): one line of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic. Draw order is file order, and all text draws\nover all `HudRect`s.",
+            "description": "A screen-space text label (M12): lines of the built-in 8×8 pixel font,\ndrawn over the 3D scene after lighting, independent of any camera.\n\nNeeds no `Transform` — placement is `anchor` + `offset` in framebuffer\npixels, which is what the agent sees in the PNG. Text is always opaque\nand never anti-aliased, so a HUD glyph is bit-exact in baselines. Glyphs\noutside the font's coverage render as a filled box: visibly wrong in the\nscreenshot, never a panic.\n\nM31 adds `parent`, `visible` and `stretch` (shared by every element in the\nfamily), plus `align`, `wrap` and `line_gap`. Every one defaults to the M12\nbehaviour: no parent means a child of the viewport placed by exactly the\nM12 anchor arithmetic, and `wrap: 0` means the single unwrapped line it has\nalways been.",
             "properties": {
+              "align": {
+                "$ref": "#/$defs/HudTextAlign",
+                "default": "left",
+                "description": "Alignment of each line within the text's own box, which differs from\nthe box only when the text is stretched or wrapped."
+              },
               "anchor": {
                 "$ref": "#/$defs/HudAnchor",
                 "default": "top_left"
@@ -3275,12 +4372,19 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "line_gap": {
+                "default": 0.0,
+                "description": "Extra pixels between lines, on top of the glyph cell.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
               "offset": {
                 "default": [
                   0.0,
                   0.0
                 ],
-                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or\n`column` parent this is a nudge on top of the computed position rather\nthan the position itself.",
                 "items": {
                   "format": "float",
                   "type": "number"
@@ -3289,6 +4393,13 @@
                 "minItems": 2,
                 "type": "array"
               },
+              "parent": {
+                "description": "The name of an entity carrying a [`HudPanel`] to place this inside.\nAbsent (the default) means a child of the viewport.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "size": {
                 "default": 16.0,
                 "description": "Glyph height in pixels, `>= 4`. The 8×8 font renders at integer\nscale `max(1, round(size / 8))`, so `16` means exactly 2× glyphs.",
@@ -3296,13 +4407,38 @@
                 "minimum": 4.0,
                 "type": "number"
               },
+              "stretch": {
+                "default": [
+                  false,
+                  false
+                ],
+                "description": "Fill the parent's content box on `[x, y]`, ignoring this element's own\nsize on that axis. Two booleans rather than a `\"fill\"` string in a\nnumeric field, which would break the schema-driven walk.",
+                "items": {
+                  "type": "boolean"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
               "text": {
-                "description": "One line; no wrapping. Scripts may rewrite it via\n`world.set_hud_text` — an empty string is a legal rest value for a\nscript-driven readout.",
+                "description": "The label. `\\n` breaks a line explicitly; `wrap` breaks it\nautomatically. Scripts may rewrite it via `world.set_hud_text` — an\nempty string is a legal rest value for a script-driven readout.",
                 "type": "string"
               },
               "type": {
                 "const": "HudText",
                 "type": "string"
+              },
+              "visible": {
+                "default": true,
+                "description": "Drawn and hit-testable when true (the default). Hiding a panel hides\nits whole subtree — one boolean is how a menu opens and closes.",
+                "type": "boolean"
+              },
+              "wrap": {
+                "default": 0.0,
+                "description": "Wrap width in pixels; `0` (the default) is no wrapping. Breaks on\nspaces — a word longer than `wrap` overflows rather than splitting,\nsince a mid-word break in a fixed-width font reads as corruption.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
               }
             },
             "required": [
@@ -3313,7 +4449,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn before all `HudText`, file order within\nrects.",
+            "description": "A screen-space solid rectangle (M12): the primitive behind health bars,\nspeed bars, and backdrops. Drawn with the panels and images, before all\n`HudText`, file order within the class.\n\nM31 adds only the shared `parent`/`visible`/`stretch`; a rect stays the\nflat script-driven bar it has always been.",
             "properties": {
               "anchor": {
                 "$ref": "#/$defs/HudAnchor",
@@ -3341,7 +4477,7 @@
                   0.0,
                   0.0
                 ],
-                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]). Inside a `row` or\n`column` parent this is a nudge on top of the computed position.",
                 "items": {
                   "format": "float",
                   "type": "number"
@@ -3358,8 +4494,15 @@
                 "minimum": 0.0,
                 "type": "number"
               },
+              "parent": {
+                "description": "The name of an entity carrying a [`HudPanel`] to place this inside.\nAbsent (the default) means a child of the viewport.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "size": {
-                "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size`.",
+                "description": "`[width, height]` in pixels, each `>= 0` — zero is legal so a\nscript-driven bar can be empty. Scripts resize via\n`world.set_hud_rect_size` or `world.set_hud_size`. Ignored on an axis\nwhere `stretch` is true.",
                 "items": {
                   "format": "float",
                   "minimum": 0.0,
@@ -3369,14 +4512,322 @@
                 "minItems": 2,
                 "type": "array"
               },
+              "stretch": {
+                "default": [
+                  false,
+                  false
+                ],
+                "description": "Fill the parent's content box on `[x, y]`, ignoring `size` on that\naxis — the full-screen dim backdrop, and the bar spanning a column.",
+                "items": {
+                  "type": "boolean"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
               "type": {
                 "const": "HudRect",
                 "type": "string"
+              },
+              "visible": {
+                "default": true,
+                "description": "Drawn and hit-testable when true (the default).",
+                "type": "boolean"
               }
             },
             "required": [
               "type",
               "size"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A screen-space container that lays its children out (M31).\n\nThis is the component that removes hand-computed pixel offsets. Children\nname it in their `parent`; `layout` decides whether they are stacked in a\n`row`, a `column`, or placed `free` by their own anchors relative to this\npanel's content box.\n\n**Absent `width`/`height` means hug contents** — the panel is exactly its\nchildren's extent plus `padding`. That is the default because it is the\ncase that makes a dialog authorable: the box follows the text instead of\nthe text being fitted to a box someone solved by hand.\n\n`opacity` defaults to **0**, so a bare `HudPanel` is an invisible layout\ngroup; set it and the same component is the dialog's backdrop. One\ncomponent rather than a container plus a rect whose size would have to be\nkept in agreement with it.",
+            "properties": {
+              "align": {
+                "$ref": "#/$defs/HudAlign",
+                "default": "start",
+                "description": "Cross-axis alignment of children in a `row`/`column`."
+              },
+              "anchor": {
+                "$ref": "#/$defs/HudAnchor",
+                "default": "top_left"
+              },
+              "color": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Background colour, linear RGB in `[0, 1]`. Only visible at\n`opacity > 0`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "gap": {
+                "default": 0.0,
+                "description": "Pixels between children along the main axis of a `row`/`column`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "height": {
+                "description": "Fixed height in pixels. Absent hugs the children.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "layout": {
+                "$ref": "#/$defs/HudLayout",
+                "default": "free"
+              },
+              "offset": {
+                "default": [
+                  0.0,
+                  0.0
+                ],
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "opacity": {
+                "default": 0.0,
+                "description": "`[0, 1]`, defaulting to **0** — an invisible layout group.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "padding": {
+                "default": 0.0,
+                "description": "Uniform inset in pixels between this panel's edge and its content box.\nPer-side padding is the obvious next field and costs nothing to add\nlater; M12's \"no z field until something needs it\" applies.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "parent": {
+                "description": "The name of another [`HudPanel`] entity to nest inside.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stretch": {
+                "default": [
+                  false,
+                  false
+                ],
+                "description": "Fill the parent's content box on `[x, y]`, ignoring `width`/`height`\nand hug sizing on that axis.",
+                "items": {
+                  "type": "boolean"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": {
+                "const": "HudPanel",
+                "type": "string"
+              },
+              "visible": {
+                "default": true,
+                "description": "Drawn and hit-testable when true (the default). A hidden panel hides\nits whole subtree.",
+                "type": "boolean"
+              },
+              "width": {
+                "description": "Fixed width in pixels. Absent hugs the children.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A screen-space textured rectangle (M31): icons, logos, framed panels.\n\n`texture` is a PNG relative to the scene file, loaded through the same\n`TextureSource` and `(asset, space)` cache the material system uses, in\nsRGB — so `texture_too_large` fires from `validate`, before a device\nexists. Only the base level is read: the overlay draws at most one\ndestination pixel per texel band and never minifies below it, so a mip\nlevel selection would have no correct answer at this scale.\n\nSampling is **nearest-neighbour**, written out in `engine-core` like every\nother generator here — a render sits under a baseline, so the filter is a\nformat contract, and nearest is exactly reproducible where a bilinear\nfilter is a float-rounding question.",
+            "properties": {
+              "anchor": {
+                "$ref": "#/$defs/HudAnchor",
+                "default": "top_left"
+              },
+              "offset": {
+                "default": [
+                  0.0,
+                  0.0
+                ],
+                "description": "Pixels inward from `anchor` (see [`HudAnchor`]).",
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "opacity": {
+                "default": 1.0,
+                "description": "`[0, 1]`, multiplied onto the texture's own alpha.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "parent": {
+                "description": "The name of an entity carrying a [`HudPanel`] to place this inside.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size": {
+                "description": "`[width, height]` in destination pixels. Ignored on an axis where\n`stretch` is true.",
+                "items": {
+                  "format": "float",
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "slice": {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "description": "Nine-slice insets in **source** pixels, `[left, top, right, bottom]`.\nThe default `[0, 0, 0, 0]` is a plain stretch. Corners are copied\n1:1, edges tile along their axis and the centre tiles both ways —\ntiling rather than stretching, because tiling at nearest is exact\nwhere stretching at nearest is a moiré pattern.",
+                "items": {
+                  "format": "float",
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              "stretch": {
+                "default": [
+                  false,
+                  false
+                ],
+                "description": "Fill the parent's content box on `[x, y]`, ignoring `size`.",
+                "items": {
+                  "type": "boolean"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "texture": {
+                "description": "A `.png` path relative to the scene file (invariant 3).",
+                "type": "string"
+              },
+              "tint": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Multiplies the decoded texel in linear space, so one grey frame\ntexture serves a red panel and a blue one — the material system's\nauthoring rule for `albedo_map`, here for the same reason.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": {
+                "const": "HudImage",
+                "type": "string"
+              },
+              "visible": {
+                "default": true,
+                "description": "Drawn and hit-testable when true (the default).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "type",
+              "texture",
+              "size"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Makes the HUD element on its own entity clickable (M31).\n\nCarries no geometry: the hit box is that element's laid-out rectangle. An\nentity with a `HudInteract` and no `HudPanel`/`HudRect`/`HudImage`/\n`HudText` is `hud_interact_without_element`.\n\nA separate component rather than an `interactive: true` flag on each of\nfour components, because the flag would be four fields that must stay in\nagreement, and because the tints belong next to it.\n\nThe tints multiply the element's own colour (clamped to `[0, 1]` after\nmultiplying) and default to `[1, 1, 1]` — no change — so adding a\n`HudInteract` moves no pixel until a cursor arrives. They exist so the\nordinary case, a button that lights up under the pointer, needs no script\nat all; anything richer is a script writing colours.",
+            "properties": {
+              "disabled": {
+                "default": false,
+                "description": "Excluded from hit-testing when true, so it never hovers, presses or\nclicks — and never blocks what is under it either.",
+                "type": "boolean"
+              },
+              "hover_tint": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Colour multiplier while the cursor is over this element. Unbounded\nabove — a hover tint brightens.",
+                "items": {
+                  "format": "float",
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "press_tint": {
+                "default": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "description": "Colour multiplier while a button is held down on this element.",
+                "items": {
+                  "format": "float",
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": {
+                "const": "HudInteract",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
             ],
             "type": "object"
           },
@@ -3785,7 +5236,7 @@
           },
           {
             "additionalProperties": false,
-            "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it (`water-design.md` §8).",
+            "description": "A body of water: an ocean, a lake, a pond, a canal.\n\nThe entity owns its own surface geometry — a tessellated unit grid sized by\n`Transform.scale`, exactly like a scaled `builtin:plane` — so a `Water`\nentity carries **no** `Mesh` and no `Material` (`water_with_mesh`). One\nsurface is one entity: sixteen tiles pretending to be a pond is what this\ncomponent exists to delete, and their seams are visible in any screenshot.\n\nWaves are evaluated in **world space** in the vertex stage, which has two\nconsequences worth knowing: scaling a surface never stretches its waves, and\ntwo adjacent water entities at the same height share one continuous surface\nfor free.\n\nShading is water-specific rather than a `Material`: sky reflection with a\nFresnel-weighted view term, absorption of what is behind the surface with\ndepth (`shallow_color` → `deep_color`), and foam where the water meets\ngeometry or folds at a crest. What it does *not* do is refract — the bed of\na pond is not displaced by the ripples above it.",
             "properties": {
               "crest_foam": {
                 "default": 0.0,
@@ -3850,6 +5301,14 @@
                 "maxItems": 3,
                 "minItems": 3,
                 "type": "array"
+              },
+              "ior": {
+                "default": 1.0,
+                "description": "Index of refraction, `1.0` (the default) being no bending at all — the\npre-M27 surface, which absorbs and tints what is behind it but never\nmoves it. Range `[1, 3]`; water is 1.33.\n\nUnlike [`Material::ior`] this needs no companion `thickness`: the shader\nalready measures how far the view ray travels through the body to reach\nthe bed, so the bend scales with the water's own depth and a pond bends\nits bed most where it is deepest. It also cannot change how *deep* the\nwater looks — absorption stays [`Water::depth_fade`]'s job — so it can\nbe turned on in a tuned scene without re-tuning it.",
+                "format": "float",
+                "maximum": 3.0,
+                "minimum": 1.0,
+                "type": "number"
               },
               "opacity": {
                 "default": 0.9399999976158142,
@@ -4355,6 +5814,387 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Ground cover that grows, seeds and dies on a loop: grass, weeds, wildflowers\nand the dry stand they turn into.\n\nA recipe rather than a mesh reference, like [`Tree`] and [`Cloud`] — the\nengine grows one plant and scatters copies of it over the footprint\n`Transform.scale` gives, so a `Meadow` entity carries **no** `Mesh` and\n**no** `Material` (`meadow_with_mesh`).\n\n**It is the first recipe in this engine whose subject changes shape over\ntime.** A sprout is not a small blade of grass. The resolution is that the\ngeometry is static and the *life cycle lives in the vertex stage*: the plant\nis built once carrying every organ any stage will need, and each organ scales\nto nothing outside the phase window it belongs to. See\n`designs/meadow-design.md`.\n\nThe cycle runs on the scene clock, so it can be sped up:\n[`cycle_length`](Meadow::cycle_length) `: 3.0` runs a whole generation in\nthree seconds. **`0` — the default — freezes the field** at\n[`phase`](Meadow::phase), the way `daylight.day_length: 0` freezes the day:\nmost scenes want a dial, not motion, and a frozen field is reproducible with\nno `--time` at all.\n\nEvery generation **reseeds** rather than regrowing: a plant's position within\nits own cell, its height and its lean all shift a little each time round, so\nthe dead stalk and the sprout that replaces it are not collinear. That costs\none integer hash in the shader and no state anywhere.\n\nA meadow is scenery: no `Collider`, no shadow cast (a 2048² map cannot\nresolve a blade of grass, and what it would record is noise that crawls),\nand no `PointLight` contribution.",
+            "properties": {
+              "blade_width": {
+                "default": 0.007000000216066837,
+                "description": "Width of a blade at its base, in metres, `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "blades": {
+                "default": 5,
+                "description": "Blades in one plant. `[1, 12]`; `3`–`5` reads as a tuft.",
+                "format": "uint32",
+                "maximum": 12,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "cycle_length": {
+                "default": 0.0,
+                "description": "Seconds one full life cycle takes, `>= 0`.\n\n**`0` freezes the field** at [`phase`](Meadow::phase) — the default, and\n`daylight.day_length: 0`'s reasoning exactly.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "density": {
+                "default": 24.0,
+                "description": "Plants per square metre of footprint, `>= 0`.\n\nThe footprint is `Transform.scale` in XZ, so the plant count is\n`density × area`, rounded up to a square grid. `0` is an empty field,\nwhich is a legitimate thing to animate toward.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "flower_color": {
+                "default": [
+                  0.4000000059604645,
+                  0.3700000047683716,
+                  0.17000000178813934
+                ],
+                "description": "Linear RGB of the flower head, each component `[0, 1]`. What stops the\nweed stage from being nothing but taller grass.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "head_size": {
+                "default": 0.017999999225139618,
+                "description": "Size of the flower and seed heads, in metres, `>= 0`. `0` grows a plant\nthat never flowers.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "height": {
+                "default": 0.44999998807907104,
+                "description": "Height of a fully grown plant in metres, `> 0`. `Transform.scale.y`\nmultiplies it, the way it multiplies a [`Terrain`]'s relief.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "max_slope": {
+                "default": 38.0,
+                "description": "Steepest ground grass will grow on, in degrees, `[0, 90]`. Plants on\nsteeper ground are dropped; `90` keeps everything.",
+                "format": "float",
+                "maximum": 90.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "phase": {
+                "default": 0.41999998688697815,
+                "description": "Where the cycle starts, `[0, 1)` — and where a frozen field sits. The\ndefault is mature green, so `{\"type\": \"Meadow\"}` alone puts a working\nfield of grass in a scene.",
+                "format": "float",
+                "maximum": 0.999,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "seed": {
+                "default": 0,
+                "description": "Seeds placement and the template's blades. Two meadows with the same\nparameters and different seeds are different fields.\n\nThe generator's xorshift and the shader's reseed hash are both written\nout in this repo, so a given seed means the same field across dependency\nupgrades — a meadow render sits under a `diff-render` baseline, which\nmakes both a format contract.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segments": {
+                "default": 4,
+                "description": "Lengthwise segments per blade — how finely a blade can curve as it leans\nand bends in the wind. `[1, 8]`.\n\nTogether with [`blades`](Meadow::blades) this sets the per-plant\ntriangle count, and the product with the plant count is what\n`meadow_too_complex` bounds.",
+                "format": "uint32",
+                "maximum": 8,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "size_jitter": {
+                "default": 0.3499999940395355,
+                "description": "How much plant height varies between plants, as a fraction, `[0, 1)`.\n`0` is a lawn.",
+                "format": "float",
+                "maximum": 0.99,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "splay": {
+                "default": 54.0,
+                "description": "Degrees the outermost blades splay from vertical, `[0, 90]`. Blade 0\nstays near upright, which is what gives a tuft a centre rather than a\nhole.",
+                "format": "float",
+                "maximum": 90.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "stages": {
+                "default": [
+                  {
+                    "at": 0.0,
+                    "color": [
+                      0.12999999523162842,
+                      0.10000000149011612,
+                      0.05000000074505806
+                    ],
+                    "height": 0.0,
+                    "lean": 0.0,
+                    "sway": 0.0,
+                    "tip_color": [
+                      0.1599999964237213,
+                      0.12999999523162842,
+                      0.07000000029802322
+                    ],
+                    "width": 0.5
+                  },
+                  {
+                    "at": 0.09000000357627869,
+                    "color": [
+                      0.1599999964237213,
+                      0.3400000035762787,
+                      0.07000000029802322
+                    ],
+                    "height": 0.1599999964237213,
+                    "lean": 10.0,
+                    "sway": 0.5,
+                    "tip_color": [
+                      0.3100000023841858,
+                      0.550000011920929,
+                      0.12999999523162842
+                    ],
+                    "width": 0.699999988079071
+                  },
+                  {
+                    "at": 0.3100000023841858,
+                    "color": [
+                      0.05999999865889549,
+                      0.1899999976158142,
+                      0.03999999910593033
+                    ],
+                    "height": 0.8600000143051147,
+                    "lean": 17.0,
+                    "sway": 1.0,
+                    "tip_color": [
+                      0.17000000178813934,
+                      0.4000000059604645,
+                      0.09000000357627869
+                    ],
+                    "width": 1.0
+                  },
+                  {
+                    "at": 0.5299999713897705,
+                    "color": [
+                      0.09000000357627869,
+                      0.20000000298023224,
+                      0.05000000074505806
+                    ],
+                    "height": 1.0,
+                    "lean": 21.0,
+                    "sway": 0.8999999761581421,
+                    "tip_color": [
+                      0.30000001192092896,
+                      0.36000001430511475,
+                      0.10000000149011612
+                    ],
+                    "width": 1.0499999523162842
+                  },
+                  {
+                    "at": 0.7599999904632568,
+                    "color": [
+                      0.2199999988079071,
+                      0.18000000715255737,
+                      0.07000000029802322
+                    ],
+                    "height": 0.949999988079071,
+                    "lean": 27.0,
+                    "sway": 0.4000000059604645,
+                    "tip_color": [
+                      0.6200000047683716,
+                      0.5099999904632568,
+                      0.1899999976158142
+                    ],
+                    "width": 0.9200000166893005
+                  },
+                  {
+                    "at": 0.9100000262260437,
+                    "color": [
+                      0.14000000059604645,
+                      0.10999999940395355,
+                      0.05999999865889549
+                    ],
+                    "height": 0.6200000047683716,
+                    "lean": 71.0,
+                    "sway": 0.25,
+                    "tip_color": [
+                      0.25999999046325684,
+                      0.20999999344348907,
+                      0.10999999940395355
+                    ],
+                    "width": 0.800000011920929
+                  }
+                ],
+                "description": "The life cycle, as keyframes over `phase`. At least two, at most\n[`MAX_GROWTH_STAGES`](crate::meadow::MAX_GROWTH_STAGES), strictly\nincreasing in `at`.\n\nThe default is the full seed → sprout → grass → weeds → dry → collapse\ncycle, so a meadow is worth looking at before anything is authored.",
+                "items": {
+                  "$ref": "#/$defs/GrowthStage"
+                },
+                "type": "array"
+              },
+              "stagger": {
+                "default": 0.25,
+                "description": "How far plants desync from each other, `[0, 1]`.\n\n`0` marches the whole field in lockstep; `1` spreads offsets across the\nwhole cycle, so every stage is present at every moment and the field\nnever appears to change. A real meadow browns together with variation,\nwhich is why the default is near the low end.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "terrain": {
+                "description": "The [`Terrain`] entity this meadow stands on, by name.\n\nEach plant's altitude is sampled from that patch through the same\nfunction `world.terrain_height` and `engine terrain-height` call, so\nthere is one implementation of \"where is the ground\" and nothing to keep\nin agreement. Absent, the field is flat at the entity's own Y.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "Meadow",
+                "type": "string"
+              },
+              "wind": {
+                "default": 9.0,
+                "description": "How far the wind bends a plant at full sway, in degrees, `>= 0`. `0` is\nstill air.",
+                "format": "float",
+                "maximum": 90.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "wind_direction": {
+                "default": 0.0,
+                "description": "Which way the wind blows, in degrees — `0` toward −Z, the engine's\nforward convention, shared with `Water`'s wave directions.",
+                "format": "float",
+                "type": "number"
+              },
+              "wind_speed": {
+                "default": 3.5,
+                "description": "How fast gusts travel across the field, in metres per second, `>= 0`.\n\nGusts are a travelling wave, not a per-plant shimmer: sampling the noise\nagainst a moving coordinate is what makes wind cross a meadow visibly.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Puts a skinned character's feet on the terrain under them (M32).\n\nA post-pass over the posed skeleton: each named ankle is moved to the\nground beneath where the clip put it, the joints above it rotate to follow\n(two-bone IK), the hips drop when a leg cannot reach, and the sole tilts to\nthe slope. It runs wherever the pose does, so `engine list-joints --time`\nreports the planted rig and the render draws it — one answer, not two.\n\nThe ground is a `Terrain` entity named in `ground`, and that is a purity\ndecision rather than a convenience: planting against the *physics* world\nwould make the pose a function of the simulation, and the pose being a pure\nfunction of (files, time) is what lets `list-joints` answer at all. The cost\nis that a character cannot stand on a crate — see\n`designs/locomotion-design.md` §5.",
+            "properties": {
+              "align": {
+                "default": 30.0,
+                "description": "Degrees the sole may tilt to meet the ground's normal. `0` leaves the\nfoot's animated orientation alone, which is right for a character that\nonly ever walks on the flat.",
+                "format": "float",
+                "maximum": 90.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "feet": {
+                "description": "The feet to plant, at most [`MAX_PLANTED_FEET`].",
+                "items": {
+                  "$ref": "#/$defs/PlantedFoot"
+                },
+                "type": "array"
+              },
+              "ground": {
+                "description": "The entity carrying the `Terrain` these feet stand on.",
+                "type": "string"
+              },
+              "hips": {
+                "description": "The joint lowered when a leg cannot reach its target — the pelvis, in\na humanoid. Absent, the deficit is simply clamped: one foot plants and\nthe other stretches, which is bounded but reads as wrong.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_drop": {
+                "default": 0.5,
+                "description": "How far below the animated ankle a target may be, in metres. This is\nwhat keeps a foot in mid-swing from being dragged to the floor:\nplanting is a *correction*, and a correction with no ceiling is a\ndifferent animation.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "max_lift": {
+                "default": 0.5,
+                "description": "And how far above it.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "type": {
+                "const": "FootPlant",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "feet",
+              "ground"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Collision proxies that follow a skinned character's pose (M33).\n\nM30 said a skinned mesh is visual and physics sees only the entity's own\n`Collider`; this is the one item of that reversed. Each part is re-posed\nevery fixed step from the same joint globals the render and\n`engine list-joints` use, so a hitbox cannot disagree with the picture\nabout where a head is.\n\n**The pose drives the proxies and nothing reads them back** — they are\nkinematic, so they are hit, they push dynamic bodies, and they report\ncontacts, but they never move a joint. That is what keeps M30's claim that\nthe pose is a pure function of (files, time) true, and it is why a proxy\nholds a character up exactly as much as a moving wall holds up the hand\npushing it: not at all. What a character stands on is still its own\n`Collider`.\n\nLayers, friction and restitution sit here rather than on each part: \"bullets\nhit hitboxes\" is a statement about the character, and per-part copies would\nbe four more strings to keep in agreement per part.",
+            "properties": {
+              "collides_with": {
+                "description": "Only interact with colliders belonging to these layers. Absent =\ninteract with everything.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "friction": {
+                "default": 0.5,
+                "description": "`>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "layers": {
+                "description": "Collision layers every part belongs to. Absent = every layer, exactly\nas on `Collider`. Empty is an error — omit the field instead.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "parts": {
+                "description": "The proxies, at most [`MAX_COLLIDER_PARTS`].",
+                "items": {
+                  "$ref": "#/$defs/ColliderPart"
+                },
+                "type": "array"
+              },
+              "restitution": {
+                "default": 0.0,
+                "description": "Bounciness, `[0, 1]`, max-combined like `Collider.restitution`.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "type": {
+                "const": "SkinnedCollider",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "parts"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -4733,6 +6573,87 @@
         ],
         "type": "object"
       },
+      "GrowthStage": {
+        "additionalProperties": false,
+        "description": "One keyframe of a [`Meadow`]'s life cycle.\n\nAll seven fields are required. A half-specified keyframe is an error rather\nthan a fade to black — M21's palette wrote that rule down, and a meadow's\ntable is read the same way: linearly interpolated, and **wrapping** from the\nlast keyframe back round to the first, so the cycle closes without anyone\nhaving to author phase 1.0 as a copy of phase 0.0.",
+        "properties": {
+          "at": {
+            "description": "Where in the cycle this keyframe sits, `[0, 1)`. Strictly increasing\ndown the table (`meadow_stages_invalid`).",
+            "format": "float",
+            "maximum": 0.999,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "color": {
+            "description": "Linear RGB at the plant's base, each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "height": {
+            "description": "Plant height as a fraction of [`Meadow::height`], `>= 0`. `0` is a plant\nthat is not there, which is what the seed keyframe says.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "lean": {
+            "description": "Degrees the plant leans from vertical at its tip. The bend is a\ncantilever — the tip leans this far and the root not at all — so a large\nvalue at the end of the cycle is the plant collapsing rather than\ntipping over rigidly. `[0, 90]`.",
+            "format": "float",
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "sway": {
+            "description": "How much of [`Meadow::wind`] reaches the plant at this stage, `>= 0`.\n\nThis is what separates green grass that flows from dry stalks that\nstand, and it is nearly free — the wind term is already in the vertex\nstage.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tip_color": {
+            "description": "Linear RGB at the plant's tip, each component `[0, 1]`.\n\nTwo colours rather than one because senescence runs tip-downward in real\ngrass: a stand going over turns straw at the top while its base is still\ngreen, and a single flat colour per stage looks painted on.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "width": {
+            "description": "Blade width as a fraction of [`Meadow::blade_width`], `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "at",
+          "height",
+          "width",
+          "lean",
+          "sway",
+          "color",
+          "tip_color"
+        ],
+        "type": "object"
+      },
+      "HudAlign": {
+        "description": "Cross-axis alignment of a [`HudPanel`]'s children (M31). See [`HudLayout`]\nfor why the variants are undocumented.",
+        "enum": [
+          "start",
+          "center",
+          "end"
+        ],
+        "type": "string"
+      },
       "HudAnchor": {
         "description": "Where a HUD element attaches on screen (M12).\n\n`offset` is measured **inward** from the anchor: from a right anchor,\n`offset[0]` runs leftward; from a bottom anchor, `offset[1]` runs upward;\nfrom `center` it is the usual +x-right / +y-down applied to the element's\ncenter. The anchored point is the element's matching corner (its center\nfor `center`), so `offset: [0, 0]` puts the element flush against its\ncorner at any resolution.",
         "enum": [
@@ -4741,6 +6662,24 @@
           "bottom_left",
           "bottom_right",
           "center"
+        ],
+        "type": "string"
+      },
+      "HudLayout": {
+        "description": "How a [`HudPanel`] arranges its children (M31).\n\nNOTE (schemars): variants carry no doc comments on purpose. A doc comment\non a *variant* turns the generated schema from a flat `\"enum\": [...]` into\noneOf/const, which blinds the validation walk's closed-vocabulary check —\nthe same trap `ColliderShapeKind` documents.",
+        "enum": [
+          "free",
+          "row",
+          "column"
+        ],
+        "type": "string"
+      },
+      "HudTextAlign": {
+        "description": "Horizontal alignment of text within its own box (M31). See [`HudLayout`]\nfor why the variants are undocumented.",
+        "enum": [
+          "left",
+          "center",
+          "right"
         ],
         "type": "string"
       },
@@ -4778,6 +6717,35 @@
             "type": "integer"
           }
         },
+        "type": "object"
+      },
+      "PlantedFoot": {
+        "additionalProperties": false,
+        "description": "One foot of a [`FootPlant`]: which joint it is, and how far up the chain\nthe solver may rotate to reach the ground.",
+        "properties": {
+          "ankle": {
+            "description": "The ankle joint — the end of the chain, the thing put on the ground.",
+            "type": "string"
+          },
+          "chain": {
+            "default": 2,
+            "description": "How many joints **above** the ankle rotate to reach the target. `2` is\nthe ordinary leg (knee and hip) and is what the two-bone solve means;\n`1` bends a single hinge and is what a stubby prop leg wants.",
+            "format": "uint32",
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sole": {
+            "default": 0.0,
+            "description": "Metres from the ankle joint down to the bottom of the foot, so the sole\nmeets the ground rather than the joint being buried in it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "ankle"
+        ],
         "type": "object"
       },
       "RoadMarkings": {

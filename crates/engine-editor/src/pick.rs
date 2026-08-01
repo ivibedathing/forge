@@ -12,10 +12,7 @@ use glam::{Mat4, Vec2, Vec3};
 /// `pixel` and `size` are in the viewport's own coordinates (origin
 /// top-left). Uses wgpu's 0..1 clip depth: near plane at z=0, far at z=1.
 pub fn ray_through(view_projection: Mat4, size: Vec2, pixel: Vec2) -> (Vec3, Vec3) {
-    let ndc = Vec2::new(
-        pixel.x / size.x * 2.0 - 1.0,
-        1.0 - pixel.y / size.y * 2.0,
-    );
+    let ndc = Vec2::new(pixel.x / size.x * 2.0 - 1.0, 1.0 - pixel.y / size.y * 2.0);
     let inverse = view_projection.inverse();
     let near = inverse.project_point3(Vec3::new(ndc.x, ndc.y, 0.0));
     let far = inverse.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
@@ -23,7 +20,7 @@ pub fn ray_through(view_projection: Mat4, size: Vec2, pixel: Vec2) -> (Vec3, Vec
 }
 
 /// The entity whose mesh the ray hits first, if any.
-pub fn pick<'a>(items: &'a [RenderItem], origin: Vec3, direction: Vec3) -> Option<&'a str> {
+pub fn pick(items: &[RenderItem], origin: Vec3, direction: Vec3) -> Option<&str> {
     let mut best: Option<(f32, &str)> = None;
     for item in items {
         if let Some(t) = ray_aabb(origin, direction, world_aabb(item)) {
@@ -97,6 +94,7 @@ mod tests {
             material: Material::default(),
             textures: Default::default(),
             terrain: None,
+            joints: Vec::new(),
         }
     }
 
@@ -131,7 +129,13 @@ mod tests {
             Vec2::new(800.0, 450.0),
         );
         let forward = camera.rotation() * Vec3::NEG_Z;
-        assert!((direction - forward).length() < 1e-3, "{direction:?} vs {forward:?}");
-        assert!((origin - camera.eye()).length() < 0.2, "origin near the eye");
+        assert!(
+            (direction - forward).length() < 1e-3,
+            "{direction:?} vs {forward:?}"
+        );
+        assert!(
+            (origin - camera.eye()).length() < 0.2,
+            "origin near the eye"
+        );
     }
 }

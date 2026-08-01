@@ -39,6 +39,7 @@ fn render(source: &str) -> Image {
         &scene.water_items(),
         &scene.cloud_items(),
         &scene.road_items(),
+        &scene.meadow_items(),
         &[],
         &camera,
         camera_transform.matrix(),
@@ -47,7 +48,7 @@ fn render(source: &str) -> Image {
         0.0,
         SIZE,
         SIZE,
-        &scene.hud_items(),
+        &scene.hud_tree(&engine_core::mesh::BuiltinAssets),
         &[],
     )
     .expect("offscreen render failed")
@@ -171,9 +172,7 @@ fn edge_lines_land_at_the_edge_of_the_asphalt() {
     let right = brightened.iter().filter(|&&x| x > SIZE / 2).count();
     assert!(left > 0 && right > 0, "one line per side: {brightened:?}");
     assert!(
-        !brightened
-            .iter()
-            .any(|&x| x.abs_diff(SIZE / 2) < 10),
+        !brightened.iter().any(|&x| x.abs_diff(SIZE / 2) < 10),
         "an edge line must not be painted down the middle of the road: {brightened:?}"
     );
 }

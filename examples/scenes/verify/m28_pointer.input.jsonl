@@ -1,0 +1,7 @@
+{"step": 0, "held": [], "cursor": [0.5, 0.5]}
+{"step": 10, "held": [], "cursor": [0.34, 0.62]}
+{"step": 20, "held": [], "cursor": [0.2, 0.72]}
+{"step": 30, "held": ["MouseLeft"], "cursor": [0.2, 0.72]}
+{"step": 45, "held": [], "cursor": [0.62, 0.55]}
+{"step": 60, "held": [], "cursor": [0.86, 0.9]}
+{"step": 70, "held": ["MouseLeft"], "cursor": [0.86, 0.9]}

@@ -10,8 +10,7 @@
 //!
 //! What that costs is a CPU answer to "how high is the water at (x, z)", which
 //! buoyancy and `world.water_height` will need. That is deferred with its own
-//! agreement test rather than solved here by a second copy of the formula —
-//! see `water-design.md` §6.
+//! agreement test rather than solved here by a second copy of the formula.
 //!
 //! [`Water`]: crate::components::Water
 
@@ -79,6 +78,7 @@ fn build_grid(segments: u32) -> MeshData {
         normals: Vec::with_capacity(vertices),
         uvs: Vec::with_capacity(vertices),
         indices: Vec::with_capacity(n * n * 6),
+        ..MeshData::default()
     };
 
     for i in 0..=n {

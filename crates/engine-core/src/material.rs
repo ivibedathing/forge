@@ -75,9 +75,7 @@ fn rebase(material_asset: &str, reference: &str) -> String {
     for component in dir.join(reference).components() {
         match component {
             std::path::Component::CurDir => {}
-            std::path::Component::ParentDir
-                if parts.last().is_some_and(|last| last != ".." ) =>
-            {
+            std::path::Component::ParentDir if parts.last().is_some_and(|last| last != "..") => {
                 parts.pop();
             }
             other => parts.push(other.as_os_str().to_owned()),
@@ -149,15 +147,16 @@ pub fn resolve_scene_materials(file: &mut crate::SceneFile, base_dir: &Path) -> 
             }
             match resolve_material(&asset, base_dir).and_then(|path| load_material(&path)) {
                 Ok(mut loaded) => {
-                    for map in [
+                    for reference in [
                         &mut loaded.albedo_map,
                         &mut loaded.orm_map,
                         &mut loaded.normal_map,
                         &mut loaded.emissive_map,
-                    ] {
-                        if let Some(reference) = map {
-                            *reference = rebase(&asset, reference);
-                        }
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        *reference = rebase(&asset, reference);
                     }
                     cache.insert(asset.clone(), loaded.clone());
                     let mut resolved = loaded;
@@ -188,7 +187,10 @@ mod tests {
             rebase("materials/asphalt.json", "grain.png"),
             "materials/grain.png"
         );
-        assert_eq!(rebase("asphalt.json", "textures/grain.png"), "textures/grain.png");
+        assert_eq!(
+            rebase("asphalt.json", "textures/grain.png"),
+            "textures/grain.png"
+        );
         assert_eq!(
             rebase("a/b/m.json", "../../../shared/t.png"),
             "../shared/t.png",
@@ -208,7 +210,9 @@ mod tests {
             "asset_unsupported"
         );
         assert_eq!(
-            resolve_material("materials/nope.json", dir).unwrap_err().error,
+            resolve_material("materials/nope.json", dir)
+                .unwrap_err()
+                .error,
             "asset_not_found"
         );
     }

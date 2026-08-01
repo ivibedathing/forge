@@ -7,6 +7,19 @@
 # geometry generators, the formatter, the CLI contract — still holds. Renders
 # are verified locally against baselines, which are per-adapter artifacts and
 # cannot be pinned from here.
+#
+# "No usable adapter" is not the same as "no adapter": this runner offers a
+# software GL one, which cannot render `R32Float` and so cannot build the
+# depth copy every frame allocates. `Gpu::new` refuses it by name, which is
+# what makes the skip above real — before that check the adapter reported
+# itself available, every render died inside `create_render_pipeline`, and the
+# failure was reported as an engine bug.
+#
+# For a related reason the pinned car drive
+# (`the_committed_lap_timeline_drives_the_car_around_the_track`) does not run
+# here: eleven thousand steps of a chaotic vehicle sim through a different
+# libm park the car ~53 m away, so those numbers are a per-platform artifact
+# checked on the machine class that blessed them.
 name: ci
 
 on:
@@ -22,7 +35,7 @@ jobs:
   test:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Linux windowing dependencies
         run: |
@@ -37,15 +50,29 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # The gate. Everything below it is advisory: the workspace is not
-      # currently rustfmt- or clippy-clean, and turning either into a blocking
-      # check means a first commit that reformats every crate — which is
-      # exactly the kind of wide diff this repo's ULP-sensitive shader and
-      # geometry code should not be buried under. Make them blocking on the
-      # commit that actually cleans them up, not before.
+      # The gate.
       - run: cargo test --workspace --locked
 
+      # Blocking since the M31 audit: the workspace is rustfmt-clean, so the
+      # wide reformat-every-crate diff this used to defer has already been
+      # paid. A formatting regression is now a red build.
       - run: cargo fmt --all -- --check
-        continue-on-error: true
+
+      # Blocking too, as of the commit that cleared the last 28 warnings. That
+      # change was gated behind an A/B between binaries, since several of the
+      # fixes were in geometry and validation code: 34 of 36 render artifacts
+      # byte-identical, and the two that differed are the tour frames this
+      # adapter cannot render reproducibly at all (both binaries disagree with
+      # themselves on them — see CLAUDE.md §Verification).
+      #
+      # Some warnings here are silenced with a local `#[allow]` and a written
+      # reason rather than "fixed", because the lint is wrong about them: the
+      # `!(a > b)` comparisons in validation are negated precisely so NaN
+      # fails, and `a <= b` would let it through. Read the comment before
+      # deleting an allow.
+      #
+      # Note this step has to *compile*, not merely warn: `approx_constant` and
+      # friends are deny-by-default, so a single one aborts the run for the
+      # whole crate and every later lint in it goes unreported. That happened
+      # once, and `continue-on-error` hid it for the length of a milestone.
       - run: cargo clippy --workspace --all-targets
-        continue-on-error: true

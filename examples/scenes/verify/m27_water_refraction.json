@@ -1,0 +1,159 @@
+{
+  "name": "m27_water_refraction",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.13, 0.28, 0.62],
+    "sky_horizon": [0.52, 0.63, 0.76],
+    "sky_ground": [0.14, 0.13, 0.11],
+    "shadows": true,
+    "shadow_distance": 40.0,
+    "samples": 4
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "components": [
+        { "type": "Transform", "position": [0.0, 4.6, 11.0], "rotation": [-24.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 52.0, "near": 0.1, "far": 200.0, "active": true }
+      ]
+    },
+    {
+      "name": "CameraGrazing",
+      "components": [
+        { "type": "Transform", "position": [0.0, 1.4, 11.0], "rotation": [-8.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 52.0, "near": 0.1, "far": 200.0, "active": false }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-38.0, 24.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.97, 0.9], "intensity": 1.1 }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [
+        { "type": "AmbientLight", "color": [0.55, 0.68, 0.88], "intensity": 0.34 }
+      ]
+    },
+
+    {
+      "name": "Basin",
+      "components": [
+        { "type": "Transform", "position": [0.0, -2.6, 0.0], "scale": [24.0, 2.0, 24.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.52, 0.47, 0.36], "roughness": 0.94 }
+      ]
+    },
+
+    {
+      "name": "BarA",
+      "components": [
+        { "type": "Transform", "position": [0.0, -1.5, -6.0], "scale": [18.0, 0.14, 0.9] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "BarB",
+      "components": [
+        { "type": "Transform", "position": [0.0, -1.5, -3.6], "scale": [18.0, 0.14, 0.9] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "BarC",
+      "components": [
+        { "type": "Transform", "position": [0.0, -1.5, -1.2], "scale": [18.0, 0.14, 0.9] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "BarD",
+      "components": [
+        { "type": "Transform", "position": [0.0, -1.5, 1.2], "scale": [18.0, 0.14, 0.9] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "roughness": 0.9 }
+      ]
+    },
+    {
+      "name": "BarE",
+      "components": [
+        { "type": "Transform", "position": [0.0, -1.5, 3.6], "scale": [18.0, 0.14, 0.9] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.05, 0.05, 0.06], "roughness": 0.9 }
+      ]
+    },
+
+    {
+      "name": "CrossBar",
+      "components": [
+        { "type": "Transform", "position": [-2.0, -1.5, -1.0], "scale": [0.9, 0.14, 13.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.72, 0.16, 0.11], "roughness": 0.85 }
+      ]
+    },
+    {
+      "name": "CrossBarFar",
+      "components": [
+        { "type": "Transform", "position": [3.4, -1.5, -1.0], "scale": [0.9, 0.14, 13.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.16, 0.44, 0.66], "roughness": 0.85 }
+      ]
+    },
+
+    {
+      "name": "Post",
+      "components": [
+        { "type": "Transform", "position": [-5.4, -0.2, 2.4], "scale": [0.42, 2.6, 0.42] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.26, 0.19, 0.13], "roughness": 0.86 }
+      ]
+    },
+    {
+      "name": "PostFar",
+      "components": [
+        { "type": "Transform", "position": [5.9, -0.4, -2.2], "rotation": [0.0, 0.0, 5.0],
+          "scale": [0.38, 2.4, 0.38] },
+        { "type": "Mesh", "asset": "builtin:cylinder" },
+        { "type": "Material", "albedo": [0.24, 0.18, 0.12], "roughness": 0.86 }
+      ]
+    },
+    {
+      "name": "Boulder",
+      "components": [
+        { "type": "Transform", "position": [1.2, -1.1, 4.4], "scale": [3.0, 2.2, 2.8] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.33, 0.32, 0.29], "roughness": 0.82 }
+      ]
+    },
+
+    {
+      "name": "Pool",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, -1.0], "scale": [22.0, 1.0, 20.0] },
+        { "type": "Water",
+          "segments": 192,
+          "waves": [
+            { "direction": 12.0, "wavelength": 4.2, "amplitude": 0.075, "steepness": 0.4, "speed": 1.6 },
+            { "direction": -52.0, "wavelength": 2.1, "amplitude": 0.034, "steepness": 0.28, "speed": 1.1 },
+            { "direction": 68.0, "wavelength": 1.1, "amplitude": 0.013, "steepness": 0.16, "speed": 0.8 }
+          ],
+          "detail": 0.4,
+          "detail_scale": 0.5,
+          "roughness": 0.07,
+          "shallow_color": [0.14, 0.30, 0.30],
+          "deep_color": [0.03, 0.12, 0.16],
+          "depth_fade": 9.0,
+          "opacity": 0.62,
+          "shore_foam": 0.18,
+          "foam_color": [0.87, 0.91, 0.93],
+          "ior": 1.33
+        }
+      ]
+    }
+  ]
+}

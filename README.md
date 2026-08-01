@@ -29,10 +29,12 @@ frame to `diff_pixels` so a regression is a number, not an opinion.
 
 Baselines are per-adapter artifacts: bless your own rather than expecting someone else's to match.
 
-Underneath: PBR rendering, deterministic rapier physics with traceable and bakeable simulation,
-procedural terrain, water, roads, trees and clouds, particles, property animation, sandboxed Rhai
-scripting with replayable input timelines, and a GUI editor that is strictly a live view onto the
-scene file — all driven from the `engine` CLI.
+Underneath: PBR rendering with texture-mapped materials and refraction, deterministic rapier physics
+with traceable and bakeable simulation, procedural terrain, water, roads, trees, clouds and meadows,
+particles, property animation and skeletal glTF animation, a screen-space UI system with laid-out
+panels and clickable widgets, sandboxed Rhai scripting driven by keyboard and mouse through
+replayable input timelines, and a GUI editor that is strictly a live view onto the scene file — all
+driven from the `engine` CLI.
 
 ## Install
 

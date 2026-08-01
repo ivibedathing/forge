@@ -181,7 +181,10 @@ mod tests {
         let at = image(4, 4, GRAY, &[(1, 1, [103, 100, 100, 255])]);
         let (stats, _) = diff(&at, &baseline, 3).unwrap();
         assert_eq!(stats.diff_pixels, 0, "delta == threshold must pass");
-        assert_eq!(stats.max_channel_delta, 3, "but the delta is still reported");
+        assert_eq!(
+            stats.max_channel_delta, 3,
+            "but the delta is still reported"
+        );
 
         // Off by threshold + 1: violation.
         let over = image(4, 4, GRAY, &[(1, 1, [104, 100, 100, 255])]);

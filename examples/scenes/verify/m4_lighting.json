@@ -12,7 +12,7 @@
     {
       "name": "SphereRough",
       "components": [
-        { "type": "Transform", "position": [-1.5, 1.0, 0.0] },
+        { "type": "Transform", "position": [-1.5, 1.0, 0.0], "scale": [2.0, 2.0, 2.0] },
         { "type": "Mesh", "asset": "builtin:sphere" },
         { "type": "Material", "albedo": [0.8, 0.1, 0.1], "metallic": 0.0, "roughness": 0.9 }
       ]
@@ -20,7 +20,7 @@
     {
       "name": "SphereSmooth",
       "components": [
-        { "type": "Transform", "position": [1.5, 1.0, 0.0] },
+        { "type": "Transform", "position": [1.5, 1.0, 0.0], "scale": [2.0, 2.0, 2.0] },
         { "type": "Mesh", "asset": "builtin:sphere" },
         { "type": "Material", "albedo": [0.8, 0.1, 0.1], "metallic": 0.0, "roughness": 0.1 }
       ]

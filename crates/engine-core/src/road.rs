@@ -633,6 +633,7 @@ fn build(road: &Road) -> RoadSurface {
         normals: Vec::with_capacity(centers.len() * 9),
         uvs: Vec::with_capacity(centers.len() * 9),
         indices: Vec::with_capacity(centers.len() * 8 * 6),
+        ..MeshData::default()
     };
 
     // Per-sample frame: the horizontal cross-section direction, and the surface
@@ -1024,7 +1025,10 @@ mod tests {
         let stride = 9;
         let first = &built.mesh.normals[..stride];
         let last = &built.mesh.normals[built.mesh.normals.len() - stride..];
-        assert_eq!(first, last, "the seam's two cross-sections must shade alike");
+        assert_eq!(
+            first, last,
+            "the seam's two cross-sections must shade alike"
+        );
     }
 
     #[test]
@@ -1154,8 +1158,7 @@ mod tests {
         assert!(
             problems
                 .iter()
-                .any(|(i, kind, _)| (*i == 0 || *i == 3)
-                    && *kind == RoadProblem::CornerDoesNotFit),
+                .any(|(i, kind, _)| (*i == 0 || *i == 3) && *kind == RoadProblem::CornerDoesNotFit),
             "the 40 m radius does not fit a 60 m edge: {problems:?}"
         );
         assert!(geometry_problems(&square()).is_empty());

@@ -165,7 +165,7 @@ TREE_CLEARANCE = 12.0
 TREE_SPACING = 7.5      # minimum distance between two trunks
 TREE_COUNT = 58
 
-# A species is a set of parameters, not an enum (tree-design.md), so the
+# A species is a set of parameters, not an enum (M19), so the
 # variation between two oaks is `seed` and the variation between an oak and a
 # spruce is this table. Heights carry a range and each tree draws from it.
 SPECIES = [

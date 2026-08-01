@@ -240,6 +240,464 @@ def granite_normal(size=256, strength=2.2):
     return size, size, pixels
 
 
+def normal_from(height, size, strength):
+    """Encode a height field's gradient as a tangent-space normal map.
+
+    Every relief texture here derives its normals from the *same* function that
+    drew its albedo, rather than authoring the two separately: bumps that do not
+    line up with the mottling are most of what makes a texture read as a
+    photograph glued to a surface instead of as a surface.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            dx = (height((x + 1) % size, y) - height((x - 1) % size, y)) * strength
+            dy = (height(x, (y + 1) % size) - height(x, (y - 1) % size)) * strength
+            nx, ny = -dx, -dy
+            nz = math.sqrt(max(1.0 - min(nx * nx + ny * ny, 0.98), 1e-4))
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes(
+                (
+                    int(round(max(0.0, min(1.0, nx * 0.5 + 0.5)) * 255)),
+                    int(round(max(0.0, min(1.0, ny * 0.5 + 0.5)) * 255)),
+                    int(round(max(0.0, min(1.0, nz * 0.5 + 0.5)) * 255)),
+                    255,
+                )
+            )
+    return size, size, pixels
+
+
+def grey(height, size, low, high, warmth=(1.0, 1.0, 1.0), speckle=0.0, salt=0):
+    """Encode a height field as a near-neutral sRGB albedo.
+
+    Deliberately near-neutral and bright, because `albedo_map` is **multiplied**
+    by `albedo`: a map that carried its own strong colour could only ever be
+    tinted *down* toward black, so one bark texture could not serve both an oak
+    and a birch. The map carries the relief and the material carries the hue —
+    which is how `granite.png` already serves the monolith.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            tone = low + (high - low) * max(0.0, min(1.0, height(x, y)))
+            if speckle:
+                tone += stone_noise(x, y, size, salt) * speckle - speckle * 0.5
+            tone = max(0.0, min(1.0, tone))
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes(
+                tuple(min(255, int(255 * tone * channel)) for channel in warmth) + (255,)
+            )
+    return size, size, pixels
+
+
+def bark_height(x, y, size):
+    """Bark relief: deep fissures running the length of the branch.
+
+    Which axis they run along is not a style choice. A `Tree`'s tubes carry `u`
+    around the ring and `v` along the branch, so a fissure is something that
+    varies fast in x and drifts slowly in y — transpose this and the trunk wears
+    tyre tread. The wander comes from domain-warping the stripe's phase, without
+    which the trunk is a barcode.
+    """
+    warp = (smooth(x, y, size, 64, 11) - 0.5) * 34.0
+    ridge = (0.5 + 0.5 * math.cos((x + warp) / size * math.tau * 8.0)) ** 2.2
+    # A second, finer set of splits across the broad plates. One octave alone
+    # reads as corduroy; it is the two frequencies interfering that break the
+    # trunk into plates of unequal width, which is what bark actually is.
+    fine = (smooth(x, y, size, 24, 15) - 0.5) * 16.0
+    split = (0.5 + 0.5 * math.cos((x + fine) / size * math.tau * 21.0)) ** 2.6
+    grain = 0.14 * smooth(x, y, size, 8, 12) + 0.07 * smooth(x, y, size, 3, 13)
+    return 0.58 * ridge + 0.24 * split + grain
+
+
+def bark(size=256):
+    """Fissured bark for the tour's nine trees and the campfire's two logs."""
+    return grey(
+        lambda x, y: bark_height(x, y, size),
+        size,
+        low=0.30,
+        high=0.95,
+        warmth=(1.0, 0.95, 0.88),
+        speckle=0.10,
+        salt=14,
+    )
+
+
+def bark_normal(size=256, strength=2.6):
+    return normal_from(lambda x, y: bark_height(x, y, size), size, strength)
+
+
+def crate_height(x, y, size):
+    """A framed panel of boards, for the crates station 04 breaks.
+
+    Framed rather than plain boards because `builtin:cube`'s faces do not agree
+    on which way `u` runs — it is vertical on ±X and horizontal on ±Z — so any
+    strongly directional texture draws one thing on two faces and another on the
+    other two. A border is invariant under that, and boards that change
+    direction between the side and the end of a crate are what a real crate
+    does anyway.
+    """
+    u, v = x / size, y / size
+    edge = min(u, 1.0 - u, v, 1.0 - v)
+    grain = 0.16 * smooth(x, y * 5, size, 40, 21) + 0.07 * smooth(x, y, size, 6, 22)
+    # The frame, plus the batten down the middle that keeps a crate's boards
+    # from bowing — and that keeps the panel from reading as a blank card.
+    if edge < 0.085 or abs(u - 0.5) < 0.045:
+        return 0.92 + grain
+    board = (v - 0.085) / 0.83 * 4.0
+    if abs(board - round(board)) < 0.055:
+        return 0.05 + grain * 0.3  # the gap between two boards, in shadow
+    return 0.50 + grain
+
+
+def crate(size=256):
+    return grey(
+        lambda x, y: crate_height(x, y, size),
+        size,
+        low=0.34,
+        high=0.98,
+        warmth=(1.0, 0.93, 0.82),
+        speckle=0.07,
+        salt=23,
+    )
+
+
+def crate_normal(size=256, strength=2.0):
+    return normal_from(lambda x, y: crate_height(x, y, size), size, strength)
+
+
+def plate_height(x, y, size):
+    """Pressed sheet metal: a seam around each panel, riveted along it."""
+    u, v = x / size, y / size
+    seam = max(
+        math.exp(-((min(u, 1.0 - u) / 0.020) ** 2)),
+        math.exp(-((min(v, 1.0 - v) / 0.020) ** 2)),
+    )
+    # Rivets ride the seam at a fixed spacing, so they follow it around the
+    # panel instead of drawing a second grid of their own.
+    rivet = 0.0
+    for along in (u, v):
+        phase = abs((along * 10.0) % 1.0 - 0.5)
+        rivet = max(rivet, math.exp(-((phase / 0.16) ** 2)))
+    dish = 0.06 * smooth(x, y, size, 96, 31)  # the slight oil-canning of a panel
+    return 0.72 - 0.62 * seam + 0.30 * seam * rivet + dish
+
+
+def plate_normal(size=256, strength=3.0):
+    return normal_from(lambda x, y: plate_height(x, y, size), size, strength)
+
+
+def plate_orm(size=256):
+    """The same panel's occlusion and roughness, as linear data.
+
+    R darkens the ambient term inside the seams, where a real panel gap traps
+    light. G scuffs the paint — this is the channel doing the visible work, so
+    the body reads as a used truck rather than as a tinted mirror. B is left
+    saturated: metallic is the material's business and a map that halved it
+    would silently override the file.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            u, v = x / size, y / size
+            seam = max(
+                math.exp(-((min(u, 1.0 - u) / 0.024) ** 2)),
+                math.exp(-((min(v, 1.0 - v) / 0.024) ** 2)),
+            )
+            scuff = 0.62 * smooth(x, y, size, 48, 41) + 0.38 * smooth(x, y, size, 12, 42)
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes(
+                (
+                    int(255 * (1.0 - 0.55 * seam)),
+                    int(255 * (0.52 + 0.46 * scuff)),
+                    255,
+                )
+            ) + b"\xff"
+    return size, size, pixels
+
+
+def tread_height(x, y, size):
+    """Tyre tread: lugs around the rim, split by circumferential grooves.
+
+    A wheel is a `builtin:cylinder` with its axle on Y, so `u` runs around the
+    circumference and `v` across the tread's width. Lugs are therefore periodic
+    in x — the same block spacing all the way round, at any wheel radius — and
+    the grooves that separate them are lines of constant y.
+    """
+    u, v = x / size, y / size
+    groove = max(math.exp(-(((v - centre) / 0.05) ** 2)) for centre in (0.30, 0.70))
+    # Staggered either side of the centreline, the way a real tread is, so the
+    # blocks interlock instead of drawing one ladder across the whole tyre.
+    stagger = 0.5 if 0.30 < v < 0.70 else 0.0
+    lug = (0.5 + 0.5 * math.cos(((u * 16.0) + stagger) * math.tau)) ** 0.55
+    shoulder = math.exp(-((min(v, 1.0 - v) / 0.10) ** 2))
+    return (0.30 + 0.70 * lug) * (1.0 - 0.85 * groove) * (1.0 - 0.35 * shoulder)
+
+
+def tread_normal(size=256, strength=2.2):
+    """Normals only, deliberately: tread is relief, not colour. A tyre is black
+    everywhere, so an albedo map for one would be a flat grey file."""
+    return normal_from(lambda x, y: tread_height(x, y, size), size, strength)
+
+
+def deck_height(x, y, size):
+    """The arena floor: a poured slab, jointed at the tile border.
+
+    The joint runs around the *edge* of the tile rather than across it, which
+    makes the grid invariant under `builtin:cube`'s face-by-face disagreement
+    about which way `u` runs — one tile of this is one slab whichever way it
+    lands. The pockmarks are a thresholded noise so they stay sparse: a floor
+    pitted everywhere reads as gravel.
+    """
+    u, v = x / size, y / size
+    joint = max(
+        math.exp(-((min(u, 1.0 - u) / 0.018) ** 2)),
+        math.exp(-((min(v, 1.0 - v) / 0.018) ** 2)),
+    )
+    grit = 0.20 * smooth(x, y, size, 16, 51) + 0.10 * smooth(x, y, size, 4, 52)
+    pit = max(0.0, smooth(x, y, size, 8, 53) - 0.72) * 2.0
+    return 0.70 + grit - 0.62 * joint - 0.40 * pit
+
+
+def deck_tone(x, y, size):
+    """The same slab's albedo: relief, darkened under broad patches of grime.
+
+    Grime is a *separate*, much lower frequency than the relief on purpose —
+    the floor is the largest surface in the scene, and one frequency across it
+    tiles visibly at the 3 m the joints repeat on. The blotches are what break
+    that up.
+    """
+    grime = 0.6 * smooth(x, y, size, 64, 54) + 0.4 * smooth(x, y, size, 18, 57)
+    return deck_height(x, y, size) * (0.62 + 0.50 * grime)
+
+
+def deck(size=256):
+    return grey(
+        lambda x, y: deck_tone(x, y, size),
+        size,
+        low=0.22,
+        high=0.97,
+        warmth=(0.97, 0.98, 1.0),
+        speckle=0.06,
+        salt=55,
+    )
+
+
+def deck_normal(size=256, strength=2.4):
+    return normal_from(lambda x, y: deck_height(x, y, size), size, strength)
+
+
+def deck_orm(size=256):
+    """The slab's occlusion and roughness. B is left saturated for `plate_orm`'s
+    reason: metallic is the material's business.
+
+    G is doing the visible work — grime is matte and the worn slab between the
+    grime is not, which is the whole reason a floor lit by four lamps and a sun
+    does not read as one flat sheet.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            u, v = x / size, y / size
+            joint = max(
+                math.exp(-((min(u, 1.0 - u) / 0.022) ** 2)),
+                math.exp(-((min(v, 1.0 - v) / 0.022) ** 2)),
+            )
+            grime = 0.65 * smooth(x, y, size, 80, 54) + 0.35 * smooth(x, y, size, 20, 56)
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes(
+                (
+                    int(255 * (1.0 - 0.60 * joint)),
+                    int(255 * (0.58 + 0.40 * grime)),
+                    255,
+                )
+            ) + b"\xff"
+    return size, size, pixels
+
+
+def concrete_height(x, y, size):
+    """Cast concrete, for the arena's barriers.
+
+    A chamfer around the tile edge and isotropic aggregate — deliberately
+    nothing directional. A barrier is a freestanding box seen from both sides,
+    and `builtin:cube` transposes `u` and `v` between the two faces of a pair,
+    so anything with a grain would run lengthwise on one side of a barrier and
+    up the other. Aggregate has no grain to transpose.
+    """
+    u, v = x / size, y / size
+    edge = min(u, 1.0 - u, v, 1.0 - v)
+    chamfer = math.exp(-((edge / 0.055) ** 2))
+    aggregate = 0.24 * smooth(x, y, size, 12, 61) + 0.13 * smooth(x, y, size, 5, 62)
+    void = max(0.0, smooth(x, y, size, 6, 63) - 0.80) * 3.0  # trapped air, as pits
+    return 0.68 + aggregate - 0.26 * chamfer - 0.55 * void
+
+
+def concrete(size=256):
+    return grey(
+        lambda x, y: concrete_height(x, y, size),
+        size,
+        low=0.36,
+        high=0.94,
+        warmth=(0.99, 0.99, 1.0),
+        speckle=0.10,
+        salt=64,
+    )
+
+
+def concrete_normal(size=256, strength=2.0):
+    return normal_from(lambda x, y: concrete_height(x, y, size), size, strength)
+
+
+def barrel_height(x, y, size):
+    """A pressed-steel drum: two rolling hoops, rimmed top and bottom.
+
+    Upright on a `builtin:cylinder`, `u` runs around the circumference and `v`
+    from the top cap to the bottom — so a hoop is a line of constant `v` and the
+    weld seam is a line of constant `u`. That is the same reading the tread map
+    takes, one axis apart, and it is why neither can be authored by eye.
+    """
+    u, v = x / size, y / size
+    hoop = max(math.exp(-(((v - centre) / 0.030) ** 2)) for centre in (0.24, 0.76))
+    rim = math.exp(-((min(v, 1.0 - v) / 0.035) ** 2))
+    weld = math.exp(-((abs(u - 0.5) / 0.008) ** 2))
+    dent = max(0.0, smooth(x, y, size, 10, 71) - 0.70) * 1.6
+    return 0.55 + 0.40 * hoop + 0.34 * rim + 0.10 * weld - 0.45 * dent
+
+
+def barrel(size=256):
+    """The drum's albedo — and the one map here that carries its own colour.
+
+    The rule the tour set is that maps stay near-neutral because `albedo_map` is
+    *multiplied* by `albedo`, so a coloured map can only be tinted toward black.
+    A hazard band is the case that rule cannot serve: black-and-yellow chevrons
+    are a *colour* contrast, and multiplying a bright band by a red barrel gives
+    two shades of red, which is not a warning stripe. So this file owns its hue
+    and the material tints it near-white. It stays private to the barrels for
+    exactly that reason — nothing else can reuse it.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            u, v = x / size, y / size
+            relief = barrel_height(x, y, size)
+            rust = max(0.0, smooth(x, y, size, 14, 73) - 0.60) * 1.5
+            # The drum body: red steel, going brown where it has rusted through
+            # the paint.
+            tone = 0.42 + 0.50 * relief
+            colour = [tone * 0.86, tone * 0.20, tone * 0.14]
+            if 0.355 < v < 0.645:
+                # The hazard band, feathered at its edges so the paint has one.
+                band = min(1.0, min(v - 0.355, 0.645 - v) / 0.018)
+                phase = (u * 8.0 + v * 2.4) % 1.0  # diagonal, and closes at the seam
+                stripe = (
+                    [0.98 * tone, 0.80 * tone, 0.10 * tone]
+                    if phase < 0.5
+                    else [0.10 * tone, 0.09 * tone, 0.09 * tone]
+                )
+                colour = [c * (1 - band) + s * band for c, s in zip(colour, stripe)]
+            colour = [c * (1.0 - 0.45 * rust) + 0.20 * rust for c in colour]
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes(
+                tuple(max(0, min(255, int(255 * c))) for c in colour)
+            ) + b"\xff"
+    return size, size, pixels
+
+
+def barrel_normal(size=256, strength=2.6):
+    return normal_from(lambda x, y: barrel_height(x, y, size), size, strength)
+
+
+def drone_eye(size=128):
+    """The drones' emissive mask: a round lens, four corner status lamps.
+
+    Round and corner-symmetric because it goes on a `builtin:cube`, whose faces
+    transpose `u` and `v` against each other — a slit or a bar would lie down on
+    half the drone. Multiplied by `Material.emissive`, so the *shape* lives here
+    and the colour lives in the scene; near-black elsewhere is what turns a cube
+    that glowed all over into a machine with a light on it.
+    """
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            u = x / (size - 1) * 2.0 - 1.0
+            v = y / (size - 1) * 2.0 - 1.0
+            lens = math.exp(-((math.hypot(u, v) / 0.26) ** 2))
+            lamp = 0.0
+            for cx, cy in ((-0.68, -0.68), (0.68, -0.68), (-0.68, 0.68), (0.68, 0.68)):
+                lamp = max(lamp, math.exp(-((math.hypot(u - cx, v - cy) / 0.07) ** 2)))
+            value = min(1.0, lens + 0.7 * lamp)
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes((int(255 * value),) * 3) + b"\xff"
+    return size, size, pixels
+
+
+def ui_frame():
+    """A 32x32 nine-slice panel frame for `HudImage` (M31).
+
+    Built for a 12-pixel inset on every side, which leaves an 8x8 middle. Three
+    properties matter and each is a rule the UI design states:
+
+    - The corners carry the detail (a bevel and a stud) and the edges carry
+      only a bar, so the corners survive being copied 1:1 while the edges tile.
+    - The middle is a flat, *slightly* transparent fill, so a panel drawn over
+      a 3D scene reads as a panel rather than as a hole, and so the tiling
+      middle cannot show a seam -- a constant tiles perfectly at any size.
+    - It is near-neutral and bright, because `tint` *multiplies*: a frame with
+      its own strong colour can only be tinted toward black, so one file could
+      not serve a dark menu and a warm one. The material system's authoring
+      rule for `albedo_map`, here for the same reason.
+    """
+    size = 32
+    inset = 12
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            # Distance into the border from whichever edge is nearest.
+            edge = min(x, y, size - 1 - x, size - 1 - y)
+            if edge >= inset:
+                # The tiling middle: flat, so it cannot seam.
+                value, alpha = 0.62, 0.86
+            elif edge == 0:
+                value, alpha = 0.30, 1.0  # outer keyline
+            elif edge < 3:
+                value, alpha = 0.95, 1.0  # bright bevel
+            elif edge < 6:
+                value, alpha = 0.72, 1.0
+            else:
+                value, alpha = 0.55, 0.95  # inner falloff toward the fill
+            # A stud in each corner, inside the bevel: detail that only reads
+            # correctly because corners are never scaled or tiled.
+            for cx, cy in ((6, 6), (size - 7, 6), (6, size - 7), (size - 7, size - 7)):
+                if math.hypot(x - cx, y - cy) < 2.2:
+                    value, alpha = 1.0, 1.0
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes((int(255 * value),) * 3) + bytes((int(255 * alpha),))
+    return size, size, pixels
+
+
+def ui_icon():
+    """A 16x16 opaque glyph for the tour's station card (M31).
+
+    A ring with a dot -- deliberately simple, and deliberately *not*
+    nine-sliced: an icon is drawn at its authored size, which is the case a
+    plain stretch is for.
+    """
+    size = 16
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            u = (x + 0.5) / size * 2.0 - 1.0
+            v = (y + 0.5) / size * 2.0 - 1.0
+            radius = math.hypot(u, v)
+            ring = 0.42 < radius < 0.72
+            dot = radius < 0.18
+            value = 1.0 if (ring or dot) else 0.0
+            alpha = 1.0 if (ring or dot) else 0.0
+            at = (y * size + x) * 4
+            pixels[at : at + 4] = bytes((int(255 * value),) * 3) + bytes((int(255 * alpha),))
+    return size, size, pixels
+
+
 if __name__ == "__main__":
     for name, make in [
         ("checker.png", checker),
@@ -248,6 +706,23 @@ if __name__ == "__main__":
         ("leaf.png", leaf),
         ("granite.png", granite),
         ("granite_normal.png", granite_normal),
+        ("bark.png", bark),
+        ("bark_normal.png", bark_normal),
+        ("crate.png", crate),
+        ("crate_normal.png", crate_normal),
+        ("plate_normal.png", plate_normal),
+        ("plate_orm.png", plate_orm),
+        ("tread_normal.png", tread_normal),
+        ("deck.png", deck),
+        ("deck_normal.png", deck_normal),
+        ("deck_orm.png", deck_orm),
+        ("concrete.png", concrete),
+        ("concrete_normal.png", concrete_normal),
+        ("barrel.png", barrel),
+        ("barrel_normal.png", barrel_normal),
+        ("drone_eye.png", drone_eye),
+        ("ui_frame.png", ui_frame),
+        ("ui_icon.png", ui_icon),
     ]:
         width, height, pixels = make()
         write_png(HERE / name, width, height, pixels)

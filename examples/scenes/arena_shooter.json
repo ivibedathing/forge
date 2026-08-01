@@ -49,7 +49,14 @@
             0.155,
             0.172
           ],
-          "roughness": 0.88
+          "roughness": 0.88,
+          "albedo_map": "../textures/deck.png",
+          "normal_map": "../textures/deck_normal.png",
+          "orm_map": "../textures/deck_orm.png",
+          "uv_scale": [
+            20.0,
+            20.0
+          ]
         },
         {
           "type": "Collider",
@@ -164,7 +171,13 @@
             0.31,
             0.33
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            0.839,
+            18.065
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -195,7 +208,13 @@
             0.31,
             0.33
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            18.065,
+            0.839
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -226,7 +245,13 @@
             0.115,
             0.132
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            4.194,
+            4.194
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -257,7 +282,13 @@
             0.115,
             0.132
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            4.194,
+            4.194
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -288,7 +319,13 @@
             0.115,
             0.132
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            4.194,
+            4.194
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -319,7 +356,13 @@
             0.115,
             0.132
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            4.194,
+            4.194
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -350,7 +393,13 @@
             0.31,
             0.33
           ],
-          "roughness": 0.9
+          "roughness": 0.72,
+          "normal_map": "../textures/deck_normal.png",
+          "uv_scale": [
+            1.613,
+            1.613
+          ],
+          "normal_strength": 0.55
         }
       ]
     },
@@ -381,7 +430,14 @@
             0.285,
             0.305
           ],
-          "roughness": 0.85
+          "roughness": 0.7,
+          "metallic": 0.25,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            36.5,
+            2.0
+          ]
         },
         {
           "type": "Collider",
@@ -422,7 +478,14 @@
             0.285,
             0.305
           ],
-          "roughness": 0.85
+          "roughness": 0.7,
+          "metallic": 0.25,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            2.0,
+            36.5
+          ]
         },
         {
           "type": "Collider",
@@ -463,7 +526,14 @@
             0.285,
             0.305
           ],
-          "roughness": 0.85
+          "roughness": 0.7,
+          "metallic": 0.25,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            2.0,
+            36.5
+          ]
         },
         {
           "type": "Collider",
@@ -504,7 +574,14 @@
             0.285,
             0.305
           ],
-          "roughness": 0.85
+          "roughness": 0.7,
+          "metallic": 0.25,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            36.5,
+            2.0
+          ]
         },
         {
           "type": "Collider",
@@ -540,12 +617,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -581,12 +653,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -622,12 +689,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -663,12 +725,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -704,12 +761,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -745,12 +797,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -786,12 +833,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -827,12 +869,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -868,12 +905,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -909,12 +941,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -950,12 +977,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.3,
-            0.225,
-            0.135
-          ],
-          "roughness": 0.9
+          "asset": "../materials/crate_wood.json"
         },
         {
           "type": "Collider",
@@ -996,7 +1018,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            7.5,
+            0.938
+          ]
         },
         {
           "type": "Collider",
@@ -1037,7 +1065,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            0.938,
+            6.875
+          ]
         },
         {
           "type": "Collider",
@@ -1078,7 +1112,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            0.938,
+            6.875
+          ]
         },
         {
           "type": "Collider",
@@ -1119,7 +1159,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            5.625,
+            0.938
+          ]
         },
         {
           "type": "Collider",
@@ -1160,7 +1206,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            0.938,
+            5.0
+          ]
         },
         {
           "type": "Collider",
@@ -1201,7 +1253,13 @@
             0.305,
             0.325
           ],
-          "roughness": 0.8
+          "roughness": 0.8,
+          "albedo_map": "../textures/concrete.png",
+          "normal_map": "../textures/concrete_normal.png",
+          "uv_scale": [
+            0.938,
+            5.0
+          ]
         },
         {
           "type": "Collider",
@@ -1238,21 +1296,28 @@
         {
           "type": "Material",
           "albedo": [
-            0.43,
-            0.095,
-            0.055
+            0.95,
+            0.93,
+            0.91
           ],
           "roughness": 0.45,
           "metallic": 0.25,
           "emissive": [
-            0.22,
-            0.02,
+            0.08,
+            0.012,
             0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
           "type": "RigidBody",
           "body": "dynamic",
+          "gravity_scale": 0.0,
           "linear_damping": 0.4
         },
         {
@@ -1372,21 +1437,28 @@
         {
           "type": "Material",
           "albedo": [
-            0.43,
-            0.095,
-            0.055
+            0.95,
+            0.93,
+            0.91
           ],
           "roughness": 0.45,
           "metallic": 0.25,
           "emissive": [
-            0.22,
-            0.02,
+            0.08,
+            0.012,
             0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
           "type": "RigidBody",
           "body": "dynamic",
+          "gravity_scale": 0.0,
           "linear_damping": 0.4
         },
         {
@@ -1506,21 +1578,28 @@
         {
           "type": "Material",
           "albedo": [
-            0.43,
-            0.095,
-            0.055
+            0.95,
+            0.93,
+            0.91
           ],
           "roughness": 0.45,
           "metallic": 0.25,
           "emissive": [
-            0.22,
-            0.02,
+            0.08,
+            0.012,
             0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
           "type": "RigidBody",
           "body": "dynamic",
+          "gravity_scale": 0.0,
           "linear_damping": 0.4
         },
         {
@@ -1640,21 +1719,874 @@
         {
           "type": "Material",
           "albedo": [
-            0.43,
-            0.095,
-            0.055
+            0.95,
+            0.93,
+            0.91
           ],
           "roughness": 0.45,
           "metallic": 0.25,
           "emissive": [
-            0.22,
-            0.02,
+            0.08,
+            0.012,
             0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
           "type": "RigidBody",
           "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 0.4
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.42,
+            0.5,
+            0.42
+          ],
+          "density": 60.0,
+          "friction": 0.7
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                -0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                -0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Barrel5",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -9.0,
+            50.0,
+            -2.0
+          ],
+          "scale": [
+            0.86,
+            1.24,
+            0.86
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.95,
+            0.93,
+            0.91
+          ],
+          "roughness": 0.45,
+          "metallic": 0.25,
+          "emissive": [
+            0.08,
+            0.012,
+            0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 0.4
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.42,
+            0.5,
+            0.42
+          ],
+          "density": 60.0,
+          "friction": 0.7
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                -0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                -0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Barrel6",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            50.0,
+            -2.0
+          ],
+          "scale": [
+            0.86,
+            1.24,
+            0.86
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.95,
+            0.93,
+            0.91
+          ],
+          "roughness": 0.45,
+          "metallic": 0.25,
+          "emissive": [
+            0.08,
+            0.012,
+            0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 0.4
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.42,
+            0.5,
+            0.42
+          ],
+          "density": 60.0,
+          "friction": 0.7
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                -0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                -0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Barrel7",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -3.5,
+            50.0,
+            15.0
+          ],
+          "scale": [
+            0.86,
+            1.24,
+            0.86
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.95,
+            0.93,
+            0.91
+          ],
+          "roughness": 0.45,
+          "metallic": 0.25,
+          "emissive": [
+            0.08,
+            0.012,
+            0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 0.4
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.42,
+            0.5,
+            0.42
+          ],
+          "density": 60.0,
+          "friction": 0.7
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                -0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                -0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Barrel8",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -9.0,
+            54.0,
+            -2.0
+          ],
+          "scale": [
+            0.86,
+            1.24,
+            0.86
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.95,
+            0.93,
+            0.91
+          ],
+          "roughness": 0.45,
+          "metallic": 0.25,
+          "emissive": [
+            0.08,
+            0.012,
+            0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 0.4
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.42,
+            0.5,
+            0.42
+          ],
+          "density": 60.0,
+          "friction": 0.7
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                -0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                -0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Barrel9",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            54.0,
+            -2.0
+          ],
+          "scale": [
+            0.86,
+            1.24,
+            0.86
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.95,
+            0.93,
+            0.91
+          ],
+          "roughness": 0.45,
+          "metallic": 0.25,
+          "emissive": [
+            0.08,
+            0.012,
+            0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 0.4
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.42,
+            0.5,
+            0.42
+          ],
+          "density": 60.0,
+          "friction": 0.7
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                -0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                -0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.3,
+                0.3,
+                0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.3,
+                0.3,
+                -0.3
+              ],
+              "scale": [
+                0.42,
+                0.5,
+                0.42
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 60.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Barrel10",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -9.0,
+            58.0,
+            -2.0
+          ],
+          "scale": [
+            0.86,
+            1.24,
+            0.86
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.95,
+            0.93,
+            0.91
+          ],
+          "roughness": 0.45,
+          "metallic": 0.25,
+          "emissive": [
+            0.08,
+            0.012,
+            0.0
+          ],
+          "albedo_map": "../textures/barrel.png",
+          "normal_map": "../textures/barrel_normal.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
           "linear_damping": 0.4
         },
         {
@@ -1779,7 +2711,13 @@
             0.11
           ],
           "roughness": 0.5,
-          "metallic": 0.6
+          "metallic": 0.6,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            3.75
+          ]
         },
         {
           "type": "Collider",
@@ -1804,9 +2742,9 @@
             -21.0
           ],
           "scale": [
-            0.3,
-            0.3,
-            0.3
+            0.6,
+            0.6,
+            0.6
           ]
         },
         {
@@ -1880,7 +2818,13 @@
             0.11
           ],
           "roughness": 0.5,
-          "metallic": 0.6
+          "metallic": 0.6,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            3.75
+          ]
         },
         {
           "type": "Collider",
@@ -1905,9 +2849,9 @@
             -21.0
           ],
           "scale": [
-            0.3,
-            0.3,
-            0.3
+            0.6,
+            0.6,
+            0.6
           ]
         },
         {
@@ -1981,7 +2925,13 @@
             0.11
           ],
           "roughness": 0.5,
-          "metallic": 0.6
+          "metallic": 0.6,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            3.75
+          ]
         },
         {
           "type": "Collider",
@@ -2006,9 +2956,9 @@
             21.0
           ],
           "scale": [
-            0.3,
-            0.3,
-            0.3
+            0.6,
+            0.6,
+            0.6
           ]
         },
         {
@@ -2082,7 +3032,13 @@
             0.11
           ],
           "roughness": 0.5,
-          "metallic": 0.6
+          "metallic": 0.6,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            3.75
+          ]
         },
         {
           "type": "Collider",
@@ -2107,9 +3063,9 @@
             21.0
           ],
           "scale": [
-            0.3,
-            0.3,
-            0.3
+            0.6,
+            0.6,
+            0.6
           ]
         },
         {
@@ -2215,7 +3171,13 @@
             0.62
           ],
           "roughness": 0.6,
-          "metallic": 0.1
+          "metallic": 0.1,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            2.0,
+            1.0
+          ]
         }
       ]
     },
@@ -2230,9 +3192,9 @@
             16.0
           ],
           "scale": [
-            0.32,
-            0.32,
-            0.32
+            0.64,
+            0.64,
+            0.64
           ]
         },
         {
@@ -2278,7 +3240,12 @@
             0.055
           ],
           "roughness": 0.35,
-          "metallic": 0.85
+          "metallic": 0.85,
+          "normal_map": "../textures/plate_normal.png",
+          "uv_scale": [
+            1.0,
+            2.0
+          ]
         }
       ]
     },
@@ -2315,6 +3282,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -2494,6 +3468,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -2673,6 +3654,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -2852,6 +3840,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3031,6 +4026,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3210,6 +4212,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3389,6 +4398,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3568,6 +4584,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3747,6 +4770,13 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -3926,6 +4956,5593 @@
             1.0,
             0.12,
             0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone11",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            23.0,
+            50.0,
+            -23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone12",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            23.0,
+            50.0,
+            23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone13",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -23.0,
+            50.0,
+            -23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone14",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -23.0,
+            50.0,
+            23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone15",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            25.0,
+            50.0,
+            0.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone16",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -0.0,
+            50.0,
+            -25.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone17",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -0.0,
+            50.0,
+            25.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone18",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            25.0,
+            50.0,
+            -13.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone19",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            25.0,
+            50.0,
+            13.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone20",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -25.0,
+            50.0,
+            0.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone21",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            23.0,
+            54.0,
+            23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone22",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -23.0,
+            54.0,
+            23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone23",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            23.0,
+            54.0,
+            -23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone24",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -23.0,
+            54.0,
+            -23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone25",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -0.0,
+            54.0,
+            25.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone26",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            25.0,
+            54.0,
+            -0.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone27",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -25.0,
+            54.0,
+            -0.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone28",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            13.0,
+            54.0,
+            25.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone29",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -13.0,
+            54.0,
+            25.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone30",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -0.0,
+            54.0,
+            -25.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone31",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -23.0,
+            58.0,
+            23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone32",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -23.0,
+            58.0,
+            -23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone33",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            23.0,
+            58.0,
+            23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone34",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            23.0,
+            58.0,
+            -23.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone35",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -25.0,
+            58.0,
+            -0.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone36",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            58.0,
+            25.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone37",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            58.0,
+            -25.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone38",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -25.0,
+            58.0,
+            13.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone39",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -25.0,
+            58.0,
+            -13.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "gravity_scale": 0.0,
+          "linear_damping": 1.6,
+          "locked_rotations": [
+            true,
+            true,
+            true
+          ],
+          "can_sleep": false
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 8.0,
+          "friction": 0.3
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.26,
+                -0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.26,
+                0.26,
+                -0.26
+              ],
+              "scale": [
+                0.44,
+                0.44,
+                0.44
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 8.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Drone40",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            25.0,
+            58.0,
+            -0.0
+          ],
+          "scale": [
+            0.82,
+            0.82,
+            0.82
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.075,
+            0.085,
+            0.105
+          ],
+          "roughness": 0.4,
+          "metallic": 0.35,
+          "emissive": [
+            1.0,
+            0.12,
+            0.08
+          ],
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "emissive_map": "../textures/drone_eye.png",
+          "uv_scale": [
+            1.0,
+            1.0
           ]
         },
         {
@@ -4083,9 +10700,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4119,9 +10736,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4155,9 +10772,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4191,9 +10808,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4227,9 +10844,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4263,9 +10880,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4299,9 +10916,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4335,9 +10952,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4371,9 +10988,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4407,9 +11024,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4443,9 +11060,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4479,9 +11096,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4515,9 +11132,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4551,9 +11168,9 @@
             0.0
           ],
           "scale": [
-            0.11,
-            0.11,
-            0.11
+            0.22,
+            0.22,
+            0.22
           ]
         },
         {
@@ -4789,12 +11406,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4826,12 +11438,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4863,12 +11470,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4900,12 +11502,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4937,12 +11534,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -4974,12 +11566,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -5011,12 +11598,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -5048,12 +11630,7 @@
         },
         {
           "type": "Material",
-          "albedo": [
-            0.115,
-            0.085,
-            0.062
-          ],
-          "roughness": 0.92
+          "asset": "../materials/bark.json"
         },
         {
           "type": "Tree",
@@ -5069,6 +11646,174 @@
             0.185,
             0.055
           ]
+        }
+      ]
+    },
+    {
+      "name": "Grass1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            -40.0
+          ],
+          "scale": [
+            108.0,
+            1.0,
+            17.0
+          ]
+        },
+        {
+          "type": "Meadow",
+          "terrain": "Landscape",
+          "seed": 21,
+          "density": 11.0,
+          "height": 0.62,
+          "blades": 4,
+          "segments": 3,
+          "blade_width": 0.008,
+          "head_size": 0.015,
+          "size_jitter": 0.4,
+          "splay": 58.0,
+          "max_slope": 34.0,
+          "flower_color": [
+            0.34,
+            0.3,
+            0.13
+          ],
+          "wind": 12.0,
+          "wind_direction": 24.0,
+          "wind_speed": 4.0,
+          "phase": 0.46,
+          "stagger": 0.3
+        }
+      ]
+    },
+    {
+      "name": "Grass2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            40.0
+          ],
+          "scale": [
+            108.0,
+            1.0,
+            17.0
+          ]
+        },
+        {
+          "type": "Meadow",
+          "terrain": "Landscape",
+          "seed": 34,
+          "density": 11.0,
+          "height": 0.62,
+          "blades": 4,
+          "segments": 3,
+          "blade_width": 0.008,
+          "head_size": 0.015,
+          "size_jitter": 0.4,
+          "splay": 58.0,
+          "max_slope": 34.0,
+          "flower_color": [
+            0.34,
+            0.3,
+            0.13
+          ],
+          "wind": 12.0,
+          "wind_direction": 24.0,
+          "wind_speed": 4.0,
+          "phase": 0.46,
+          "stagger": 0.3
+        }
+      ]
+    },
+    {
+      "name": "Grass3",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -40.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            17.0,
+            1.0,
+            63.0
+          ]
+        },
+        {
+          "type": "Meadow",
+          "terrain": "Landscape",
+          "seed": 47,
+          "density": 11.0,
+          "height": 0.62,
+          "blades": 4,
+          "segments": 3,
+          "blade_width": 0.008,
+          "head_size": 0.015,
+          "size_jitter": 0.4,
+          "splay": 58.0,
+          "max_slope": 34.0,
+          "flower_color": [
+            0.34,
+            0.3,
+            0.13
+          ],
+          "wind": 12.0,
+          "wind_direction": 24.0,
+          "wind_speed": 4.0,
+          "phase": 0.46,
+          "stagger": 0.3
+        }
+      ]
+    },
+    {
+      "name": "Grass4",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            40.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            17.0,
+            1.0,
+            63.0
+          ]
+        },
+        {
+          "type": "Meadow",
+          "terrain": "Landscape",
+          "seed": 58,
+          "density": 11.0,
+          "height": 0.62,
+          "blades": 4,
+          "segments": 3,
+          "blade_width": 0.008,
+          "head_size": 0.015,
+          "size_jitter": 0.4,
+          "splay": 58.0,
+          "max_slope": 34.0,
+          "flower_color": [
+            0.34,
+            0.3,
+            0.13
+          ],
+          "wind": 12.0,
+          "wind_direction": 24.0,
+          "wind_speed": 4.0,
+          "phase": 0.46,
+          "stagger": 0.3
         }
       ]
     },
@@ -5197,22 +11942,50 @@
       ]
     },
     {
-      "name": "ScoreText",
+      "name": "ScoreGroup",
       "components": [
         {
-          "type": "HudText",
-          "text": "SCORE 0",
+          "type": "HudPanel",
           "anchor": "top_left",
           "offset": [
             18.0,
             16.0
           ],
+          "layout": "column",
+          "gap": 4.0,
+          "visible": false
+        }
+      ]
+    },
+    {
+      "name": "LevelText",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "LEVEL 1",
+          "size": 16.0,
+          "color": [
+            0.85,
+            0.9,
+            1.0
+          ],
+          "parent": "ScoreGroup"
+        }
+      ]
+    },
+    {
+      "name": "ScoreText",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "SCORE 0",
           "size": 24.0,
           "color": [
             1.0,
             0.95,
             0.8
-          ]
+          ],
+          "parent": "ScoreGroup"
         }
       ]
     },
@@ -5232,7 +12005,24 @@
             1.0,
             0.62,
             0.5
-          ]
+          ],
+          "visible": false
+        }
+      ]
+    },
+    {
+      "name": "HealthGroup",
+      "components": [
+        {
+          "type": "HudPanel",
+          "anchor": "bottom_left",
+          "offset": [
+            18.0,
+            18.0
+          ],
+          "layout": "column",
+          "gap": 6.0,
+          "visible": false
         }
       ]
     },
@@ -5242,40 +12032,31 @@
         {
           "type": "HudText",
           "text": "HEALTH",
-          "anchor": "bottom_left",
-          "offset": [
-            18.0,
-            48.0
-          ],
           "size": 16.0,
           "color": [
             0.85,
             0.9,
             1.0
-          ]
+          ],
+          "parent": "HealthGroup"
         }
       ]
     },
     {
-      "name": "HealthBack",
+      "name": "HealthBar",
       "components": [
         {
-          "type": "HudRect",
-          "anchor": "bottom_left",
-          "offset": [
-            18.0,
-            18.0
-          ],
-          "size": [
-            224.0,
-            20.0
-          ],
+          "type": "HudPanel",
+          "width": 224.0,
+          "height": 20.0,
+          "padding": 3.0,
           "color": [
             0.04,
             0.05,
             0.07
           ],
-          "opacity": 0.65
+          "opacity": 0.65,
+          "parent": "HealthGroup"
         }
       ]
     },
@@ -5284,11 +12065,6 @@
       "components": [
         {
           "type": "HudRect",
-          "anchor": "bottom_left",
-          "offset": [
-            21.0,
-            21.0
-          ],
           "size": [
             218.0,
             14.0
@@ -5298,7 +12074,8 @@
             0.85,
             0.42
           ],
-          "opacity": 0.95
+          "opacity": 0.95,
+          "parent": "HealthBar"
         }
       ]
     },
@@ -5318,47 +12095,198 @@
             1.0,
             0.95,
             0.8
+          ],
+          "visible": false
+        }
+      ]
+    },
+    {
+      "name": "WaveBanner",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "WAVE 1",
+          "anchor": "center",
+          "offset": [
+            0.0,
+            -100.0
+          ],
+          "size": 32.0,
+          "align": "center",
+          "color": [
+            1.0,
+            0.72,
+            0.32
+          ],
+          "visible": false
+        }
+      ]
+    },
+    {
+      "name": "MenuRoot",
+      "components": [
+        {
+          "type": "HudPanel",
+          "anchor": "center",
+          "layout": "free",
+          "color": [
+            0.015,
+            0.02,
+            0.03
+          ],
+          "opacity": 0.92
+        }
+      ]
+    },
+    {
+      "name": "MenuFrame",
+      "components": [
+        {
+          "type": "HudImage",
+          "texture": "../textures/ui_frame.png",
+          "size": [
+            0.0,
+            0.0
+          ],
+          "slice": [
+            12.0,
+            12.0,
+            12.0,
+            12.0
+          ],
+          "tint": [
+            0.52,
+            0.6,
+            0.74
+          ],
+          "parent": "MenuRoot",
+          "stretch": [
+            true,
+            true
           ]
         }
       ]
     },
     {
-      "name": "CenterText",
+      "name": "MenuColumn",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "column",
+          "padding": 24.0,
+          "gap": 16.0,
+          "align": "center",
+          "parent": "MenuRoot"
+        }
+      ]
+    },
+    {
+      "name": "MenuTitle",
       "components": [
         {
           "type": "HudText",
-          "text": "",
-          "anchor": "center",
-          "offset": [
-            0.0,
-            -60.0
-          ],
-          "size": 40.0,
+          "text": "ARENA SHOOTER",
+          "size": 32.0,
           "color": [
             1.0,
             0.85,
             0.3
+          ],
+          "parent": "MenuColumn"
+        }
+      ]
+    },
+    {
+      "name": "MenuLine",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "WASD MOVE   MOUSE AIM   CLICK FIRE   R RELOAD   ESC PAUSE",
+          "size": 16.0,
+          "wrap": 416.0,
+          "line_gap": 5.0,
+          "align": "center",
+          "color": [
+            0.75,
+            0.82,
+            0.9
+          ],
+          "parent": "MenuColumn",
+          "stretch": [
+            true,
+            false
           ]
         }
       ]
     },
     {
-      "name": "HintText",
+      "name": "MenuButton",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "column",
+          "padding": 10.0,
+          "align": "center",
+          "color": [
+            0.1,
+            0.13,
+            0.18
+          ],
+          "opacity": 0.95,
+          "parent": "MenuColumn",
+          "stretch": [
+            true,
+            false
+          ]
+        },
+        {
+          "type": "HudInteract",
+          "hover_tint": [
+            1.9,
+            1.9,
+            1.9
+          ],
+          "press_tint": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MenuButtonText",
       "components": [
         {
           "type": "HudText",
-          "text": "WASD MOVE   ARROWS AIM   SPACE FIRE   R RELOAD",
-          "anchor": "center",
-          "offset": [
-            0.0,
-            120.0
-          ],
-          "size": 16.0,
+          "text": "PLAY",
+          "size": 24.0,
           "color": [
-            0.75,
-            0.82,
-            0.9
-          ]
+            0.9,
+            0.95,
+            1.0
+          ],
+          "parent": "MenuButton"
+        }
+      ]
+    },
+    {
+      "name": "Crosshair",
+      "components": [
+        {
+          "type": "HudImage",
+          "texture": "../textures/ui_icon.png",
+          "size": [
+            16.0,
+            16.0
+          ],
+          "tint": [
+            1.0,
+            0.85,
+            0.25
+          ],
+          "opacity": 0.9,
+          "visible": false
         }
       ]
     },

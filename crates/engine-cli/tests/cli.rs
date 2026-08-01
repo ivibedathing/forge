@@ -14,7 +14,9 @@ fn engine() -> Command {
 }
 
 fn repo_path(relative: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative)
 }
 
 /// Write a scene into a per-test temp dir and return its path.
@@ -35,9 +37,8 @@ fn stderr_lines(output: &Output) -> Vec<serde_json::Value> {
     stderr
         .lines()
         .map(|line| {
-            serde_json::from_str(line).unwrap_or_else(|e| {
-                panic!("stderr line is not a JSON object ({e}): {line:?}")
-            })
+            serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("stderr line is not a JSON object ({e}): {line:?}"))
         })
         .collect()
 }
@@ -95,8 +96,14 @@ fn validate_failure_exits_one_with_empty_stdout_and_ndjson_stderr() {
 
     let lines = stderr_lines(&output);
     let codes = codes_of(&lines);
-    assert!(codes.contains(&"unknown_component".to_string()), "{codes:?}");
-    assert!(codes.contains(&"duplicate_entity_name".to_string()), "{codes:?}");
+    assert!(
+        codes.contains(&"unknown_component".to_string()),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains(&"duplicate_entity_name".to_string()),
+        "{codes:?}"
+    );
     assert_eq!(
         codes.last().map(String::as_str),
         Some("validation_failed"),
@@ -126,9 +133,9 @@ fn validate_takes_multiple_files_and_aggregates() {
     );
 
     // Diagnostics carry the file they belong to.
-    assert!(lines
-        .iter()
-        .any(|l| l["file"].as_str().is_some_and(|f| f.contains("multi-broken"))));
+    assert!(lines.iter().any(|l| l["file"]
+        .as_str()
+        .is_some_and(|f| f.contains("multi-broken"))));
 }
 
 #[test]
@@ -195,7 +202,10 @@ fn screenshot_reports_every_validation_error_like_validate_does() {
     assert!(output.stdout.is_empty());
 
     let codes = codes_of(&stderr_lines(&output));
-    assert!(codes.contains(&"unknown_component".to_string()), "{codes:?}");
+    assert!(
+        codes.contains(&"unknown_component".to_string()),
+        "{codes:?}"
+    );
     assert!(
         codes.contains(&"duplicate_entity_name".to_string()),
         "screenshot must not drip-feed one error per run: {codes:?}"
@@ -268,7 +278,11 @@ fn panic_hook_embeds_a_backtrace_without_breaking_ndjson() {
 
     assert_eq!(output.status.code(), Some(2));
     let lines = stderr_lines(&output);
-    assert_eq!(lines.len(), 1, "the backtrace must ride escaped inside the JSON");
+    assert_eq!(
+        lines.len(),
+        1,
+        "the backtrace must ride escaped inside the JSON"
+    );
     assert!(lines[0]["message"].as_str().unwrap().contains("backtrace"));
 }
 
@@ -282,7 +296,10 @@ fn m5_broken_fixture_reports_all_planted_errors_in_one_run() {
 
     assert_eq!(output.status.code(), Some(1));
     let lines = stderr_lines(&output);
-    assert!(lines.len() >= 7, "expected all errors at once, got {lines:?}");
+    assert!(
+        lines.len() >= 7,
+        "expected all errors at once, got {lines:?}"
+    );
 
     let codes = codes_of(&lines);
     for expected in [
@@ -292,7 +309,10 @@ fn m5_broken_fixture_reports_all_planted_errors_in_one_run() {
         "unknown_field",
         "multiple_active_cameras",
     ] {
-        assert!(codes.contains(&expected.to_string()), "missing {expected}: {codes:?}");
+        assert!(
+            codes.contains(&expected.to_string()),
+            "missing {expected}: {codes:?}"
+        );
     }
     for line in &lines {
         if line["error"] != "validation_failed" {
@@ -370,8 +390,14 @@ fn broken_scene_reports_all_errors_before_any_render() {
 
     assert_eq!(output.status.code(), Some(1));
     let codes = codes_of(&stderr_lines(&output));
-    assert!(codes.contains(&"unknown_component".to_string()), "{codes:?}");
-    assert!(codes.contains(&"duplicate_entity_name".to_string()), "{codes:?}");
+    assert!(
+        codes.contains(&"unknown_component".to_string()),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains(&"duplicate_entity_name".to_string()),
+        "{codes:?}"
+    );
 }
 
 /// The §7 same-machine determinism promise as an executable claim, plus the
@@ -433,13 +459,15 @@ fn bless_then_diff_round_trip() {
         "self-diff must be deterministic: {}",
         String::from_utf8_lossy(&self_diff.stderr)
     );
-    let report: serde_json::Value =
-        serde_json::from_str(stdout_of(&self_diff).trim()).unwrap();
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&self_diff).trim()).unwrap();
     assert_eq!(report["pass"], true);
     assert_eq!(report["diff_pixels"], 0);
     assert_eq!(report["width"], 96, "render size comes from the baseline");
     assert_eq!(report["height"], 64);
-    assert!(report["diff_bounds"].is_null(), "no bounds when nothing differs");
+    assert!(
+        report["diff_bounds"].is_null(),
+        "no bounds when nothing differs"
+    );
     assert!(report["adapter"].is_string());
     assert!(diff_out.exists(), "diff image is written on pass too");
 
@@ -465,8 +493,7 @@ fn bless_then_diff_round_trip() {
     );
 
     // The report still prints on failure — the documented exception.
-    let report: serde_json::Value =
-        serde_json::from_str(stdout_of(&changed_diff).trim()).unwrap();
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&changed_diff).trim()).unwrap();
     assert_eq!(report["pass"], false);
     assert!(report["diff_pixels"].as_u64().unwrap() > 0);
     let bounds = &report["diff_bounds"];
@@ -503,10 +530,8 @@ fn bless_then_diff_round_trip() {
 fn simulation_traces_are_deterministic_and_match_the_golden() {
     let scene = repo_path("examples/scenes/verify/m8_drop.json");
     let trace = |name: &str| {
-        let path = std::env::temp_dir().join(format!(
-            "engine-m8-{}-{name}.jsonl",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("engine-m8-{}-{name}.jsonl", std::process::id()));
         let output = engine()
             .arg("simulate")
             .arg(&scene)
@@ -524,8 +549,10 @@ fn simulation_traces_are_deterministic_and_match_the_golden() {
     let second = trace("b");
     assert_eq!(first, second, "twice-run traces must be byte-identical");
 
-    let golden =
-        std::fs::read(repo_path("examples/scenes/verify/baselines/m8_drop.trace.jsonl")).unwrap();
+    let golden = std::fs::read(repo_path(
+        "examples/scenes/verify/baselines/m8_drop.trace.jsonl",
+    ))
+    .unwrap();
     assert_eq!(
         first, golden,
         "trace drifted from the committed golden — if a rapier upgrade \
@@ -646,10 +673,16 @@ fn physics_validation_errors_surface_end_to_end() {
     assert_eq!(output.status.code(), Some(1));
     let codes = codes_of(&stderr_lines(&output));
     for expected in ["unknown_body_kind", "unknown_shape"] {
-        assert!(codes.contains(&expected.to_string()), "missing {expected}: {codes:?}");
+        assert!(
+            codes.contains(&expected.to_string()),
+            "missing {expected}: {codes:?}"
+        );
     }
     let lines = stderr_lines(&output);
-    let body = lines.iter().find(|l| l["error"] == "unknown_body_kind").unwrap();
+    let body = lines
+        .iter()
+        .find(|l| l["error"] == "unknown_body_kind")
+        .unwrap();
     assert_eq!(body["did_you_mean"], "dynamic");
 }
 
@@ -698,7 +731,10 @@ fn animated_screenshots_are_time_deterministic() {
     let period = shot("t2", "2.0").unwrap();
 
     assert_ne!(t0, quarter, "the cube must visibly move by t=0.25");
-    assert_eq!(t0, period, "t=2.0 is the loop period; pose and pixels must match t=0");
+    assert_eq!(
+        t0, period,
+        "t=2.0 is the loop period; pose and pixels must match t=0"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -714,14 +750,19 @@ fn list_animations_reports_the_spin_clip() {
     assert_eq!(report["clips"][0]["name"], "spin");
     assert_eq!(report["clips"][0]["duration"], 2.0);
     assert_eq!(report["clips"][0]["tracks"][0]["entity"], "SpinCube");
-    assert_eq!(report["clips"][0]["tracks"][0]["property"], "Transform.rotation");
+    assert_eq!(
+        report["clips"][0]["tracks"][0]["property"],
+        "Transform.rotation"
+    );
 }
 
 #[test]
 fn clip_files_validate_directly() {
     let output = engine()
         .arg("validate")
-        .arg(repo_path("examples/scenes/verify/animations/spin.anim.json"))
+        .arg(repo_path(
+            "examples/scenes/verify/animations/spin.anim.json",
+        ))
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -762,14 +803,28 @@ fn animation_scene_errors_fire_with_suggestions() {
     )
     .unwrap();
 
-    let output = engine().arg("validate").arg(dir.join("scene.json")).output().unwrap();
+    let output = engine()
+        .arg("validate")
+        .arg(dir.join("scene.json"))
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let lines = stderr_lines(&output);
     let codes = codes_of(&lines);
-    for expected in ["unknown_entity", "conflicting_tracks", "animation_on_dynamic_body"] {
-        assert!(codes.contains(&expected.to_string()), "missing {expected}: {codes:?}");
+    for expected in [
+        "unknown_entity",
+        "conflicting_tracks",
+        "animation_on_dynamic_body",
+    ] {
+        assert!(
+            codes.contains(&expected.to_string()),
+            "missing {expected}: {codes:?}"
+        );
     }
-    let typo = lines.iter().find(|l| l["error"] == "unknown_entity").unwrap();
+    let typo = lines
+        .iter()
+        .find(|l| l["error"] == "unknown_entity")
+        .unwrap();
     assert_eq!(typo["did_you_mean"], "SpinCube", "{typo}");
     assert!(
         typo["file"].as_str().unwrap().contains("typo.anim.json"),
@@ -787,8 +842,8 @@ fn animation_scene_errors_fire_with_suggestions() {
 fn scripted_simulation_is_deterministic_and_sensor_observable() {
     let scene = repo_path("examples/scenes/verify/m10_script.json");
     let trace = |name: &str| {
-        let path = std::env::temp_dir()
-            .join(format!("engine-m10-{}-{name}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("engine-m10-{}-{name}.jsonl", std::process::id()));
         let output = engine()
             .arg("simulate")
             .arg(&scene)
@@ -803,7 +858,11 @@ fn scripted_simulation_is_deterministic_and_sensor_observable() {
     };
 
     let first = trace("a");
-    assert_eq!(first, trace("b"), "determinism must hold with scripts running");
+    assert_eq!(
+        first,
+        trace("b"),
+        "determinism must hold with scripts running"
+    );
     assert!(
         first.contains(r#""contact":["Elevator","TopSensor"],"started":true"#),
         "the sensor crossing must be trace-visible"
@@ -844,7 +903,10 @@ fn scripted_bake_is_a_valid_scene_with_the_moved_state() {
         .unwrap()["components"][0]["position"][1]
         .as_f64()
         .unwrap();
-    assert!((y - 2.25).abs() < 1e-3, "elevator baked at {y}, expected ~2.25");
+    assert!(
+        (y - 2.25).abs() < 1e-3,
+        "elevator baked at {y}, expected ~2.25"
+    );
     std::fs::remove_file(&out).ok();
 }
 
@@ -927,7 +989,10 @@ fn a_script_driven_particle_rate_bakes_and_revalidates() {
         .unwrap();
     assert_eq!(bad.status.code(), Some(1));
     let codes = codes_of(&stderr_lines(&bad));
-    assert!(codes.contains(&"script_runtime_error".to_string()), "{codes:?}");
+    assert!(
+        codes.contains(&"script_runtime_error".to_string()),
+        "{codes:?}"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -961,7 +1026,10 @@ fn script_runtime_errors_are_structured() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let lines = stderr_lines(&output);
-    let error = lines.iter().find(|l| l["error"] == "script_runtime_error").unwrap();
+    let error = lines
+        .iter()
+        .find(|l| l["error"] == "script_runtime_error")
+        .unwrap();
     assert!(error["file"].as_str().unwrap().ends_with("bad.rhai"));
     assert!(error["line"].is_u64());
     assert_eq!(error["entity"], "Box");
@@ -984,10 +1052,17 @@ fn script_parse_errors_fail_validation() {
     )
     .unwrap();
 
-    let output = engine().arg("validate").arg(dir.join("scene.json")).output().unwrap();
+    let output = engine()
+        .arg("validate")
+        .arg(dir.join("scene.json"))
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let codes = codes_of(&stderr_lines(&output));
-    assert!(codes.contains(&"script_parse_error".to_string()), "{codes:?}");
+    assert!(
+        codes.contains(&"script_parse_error".to_string()),
+        "{codes:?}"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -1125,18 +1200,152 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(stdout_of(&output).is_empty(), "stdout must be silent on failure");
+    assert!(
+        stdout_of(&output).is_empty(),
+        "stdout must be silent on failure"
+    );
 
     let lines = stderr_lines(&output);
     let codes = codes_of(&lines);
     assert!(codes.contains(&"unknown_key".to_string()), "{codes:?}");
-    assert!(codes.contains(&"input_parse_error".to_string()), "{codes:?}");
-    assert!(codes.contains(&"unsorted_input_steps".to_string()), "{codes:?}");
+    assert!(
+        codes.contains(&"input_parse_error".to_string()),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains(&"unsorted_input_steps".to_string()),
+        "{codes:?}"
+    );
 
     let typo = lines.iter().find(|l| l["error"] == "unknown_key").unwrap();
     assert_eq!(typo["did_you_mean"], "ArrowUp");
     assert_eq!(typo["line"], 1);
     std::fs::remove_dir_all(&dir).ok();
+}
+
+// ── The mouse (M28) ────────────────────────────────────────────────────
+
+/// The M28 fixture, end to end: the committed timeline's cursor drives a
+/// marker across the ground through the engine's own inverse projection, and
+/// a held button over the HUD's plate is a click.
+///
+/// The numbers here are *not* eyeballed — each is where the ray through that
+/// cursor meets the plane, and the two baselines
+/// (`m28_pointer_{aim,click}.png`) are the same run rendered. A regression in
+/// the ray, the aspect, or the timeline's cursor field moves them together.
+#[test]
+fn the_mouse_aims_where_the_cursor_points() {
+    let scene = repo_path("examples/scenes/verify/m28_pointer.json");
+    let timeline = repo_path("examples/scenes/verify/m28_pointer.input.jsonl");
+
+    let at = |steps: &str| {
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", steps])
+            .arg("--input")
+            .arg(&timeline)
+            .args(["--entity", "Marker", "--entity", "Held"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        serde_json::from_str::<serde_json::Value>(&stdout_of(&output)).unwrap()
+    };
+    let position = |report: &serde_json::Value, entity: &str| -> Vec<f64> {
+        report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == entity)
+            .unwrap()["position"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    };
+
+    // Step 40: the cursor is at (0.2, 0.72) — left of centre and low, so the
+    // marker sits left of the camera axis and *nearer* than the origin.
+    let aim = at("40");
+    let marker = position(&aim, "Marker");
+    assert!(marker[0] < -3.0, "left of centre: {marker:?}");
+    assert!(marker[2] > 1.0, "and short of the origin: {marker:?}");
+    // MouseLeft is held here, but not over the button — so nothing fired.
+    // A click is a position on the HUD as much as a button state.
+    assert!(
+        position(&aim, "Held")[1] < 0.0,
+        "a click away from the button is not a press"
+    );
+
+    // Step 80: the cursor is over the plate in the bottom-right corner with
+    // MouseLeft down, and the script hit-tests it in pixels and fires.
+    //
+    // Through `screenshot` at the baseline's own size, and that is the point
+    // rather than an inconvenience: a HUD element is *pixel*-sized, so which
+    // element a cursor is over depends on the frame it is over (M28 §5).
+    // `simulate` renders nothing and runs at `Viewport::DEFAULT` — 960x540,
+    // the same 16:9 aspect, so it aims the ray identically and misses this
+    // 132x26 plate by twelve pixels.
+    let shot = std::env::temp_dir().join(format!("engine-m27-{}.png", std::process::id()));
+    let output = engine()
+        .arg("screenshot")
+        .arg(&scene)
+        .arg("--out")
+        .arg(&shot)
+        .args(["--steps", "80"])
+        .arg("--input")
+        .arg(&timeline)
+        .args(["--width", "640", "--height", "360"])
+        .output()
+        .unwrap();
+    // Everything above this line is `simulate`, which renders nothing and so
+    // runs anywhere; the pixel-sized half of the claim needs a frame, and a
+    // machine with no usable GPU skips it rather than failing.
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "screenshot failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping the framed half: no usable GPU on this machine");
+        return;
+    }
+    let click: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+    let line = click["hud"][0].as_str().unwrap().to_string();
+    assert!(line.ends_with("FIRE"), "the press is on the HUD: {line}");
+
+    // And the ray is the same ray at the same aspect: the ground point the
+    // frame reports is the one `simulate` put the marker at.
+    let marker = position(&at("80"), "Marker");
+    let rounded = format!(
+        "G {} {}",
+        (marker[0] * 10.0).round() / 10.0,
+        (marker[2] * 10.0).round() / 10.0
+    );
+    assert!(
+        line.starts_with(&rounded),
+        "the aspect is all that matters to the ray: {line} vs {rounded}"
+    );
+    std::fs::remove_file(&shot).ok();
+
+    // The same timeline with the cursor field ignored would put the marker at
+    // the centre of the frame; check the "no --input at all" case does
+    // exactly that, since it is the M28 promise that keyboard-era files and
+    // no-input runs are unchanged.
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .args(["--steps", "80", "--entity", "Marker"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report: serde_json::Value = serde_json::from_str(&stdout_of(&output)).unwrap();
+    let centred = position(&report, "Marker");
+    assert!(
+        centred[0].abs() < 1e-3,
+        "no input means the cursor sits at the centre of the frame: {centred:?}"
+    );
 }
 
 /// The committed demo: replaying the recorded session drives the physical
@@ -1149,8 +1358,27 @@ fn a_broken_input_timeline_reports_every_error_at_once() {
 /// Scene and timeline are both generated (`examples/scenes/make_car_track.py`
 /// and `make_car_track_lap.py`). Regenerating either moves every number
 /// below, and `verify/baselines/m11_lap.png` with them.
+///
+/// **The numbers are a per-platform artifact**, the way a render baseline is a
+/// per-adapter one, so they are only checked on the machine class they were
+/// blessed on. Eleven thousand steps of a vehicle sim is chaotic and `sin`
+/// and `cos` disagree in their last bits between Apple's libm and glibc's:
+/// replayed on x86-64 Linux this same timeline parks the car ~53 m from where
+/// it parks here. That is not a drivetrain change to debug — it is what makes
+/// tree baselines per build profile, arriving in physics. Cross-platform
+/// agreement here would mean routing every trig call in the engine and in
+/// Rhai through one deterministic libm, which is a milestone, not a fixup.
 #[test]
 fn the_committed_lap_timeline_drives_the_car_around_the_track() {
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        eprintln!(
+            "skipping the pinned drive: recorded on aarch64 macOS, and this is {} {}",
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        );
+        return;
+    }
+
     let scene = repo_path("examples/scenes/car_track.json");
     let timeline = repo_path("examples/scenes/car_track_lap.input.jsonl");
     let dir = std::env::temp_dir().join(format!("engine-m11-lap-{}", std::process::id()));
@@ -1179,15 +1407,24 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     // crest at the end of the Kemmel climb.
     let (high_bake, _) = bake_at("1800", "high.json");
     let high = baked_position(&high_bake, "Car");
-    assert!(high[0] > 60.0, "mid-drive the car is on the far side: {high:?}");
-    assert!(high[1] > 7.0, "and up on the high part of the circuit: {high:?}");
+    assert!(
+        high[0] > 60.0,
+        "mid-drive the car is on the far side: {high:?}"
+    );
+    assert!(
+        high[1] > 7.0,
+        "and up on the high part of the circuit: {high:?}"
+    );
 
     // Mid-drive, low side: down at Stavelot, the bottom of the map. The same
     // recording reaching both is what makes the elevation real rather than
     // decorative — the car drove up there and back down on its suspension.
     let (low_bake, _) = bake_at("6600", "low.json");
     let low = baked_position(&low_bake, "Car");
-    assert!(low[1] < 2.5, "the drive descends to the low point too: {low:?}");
+    assert!(
+        low[1] < 2.5,
+        "the drive descends to the low point too: {low:?}"
+    );
     assert!(
         high[1] - low[1] > 5.0,
         "the circuit's elevation is driven, not flat: {high:?} vs {low:?}"
@@ -1199,8 +1436,14 @@ fn the_committed_lap_timeline_drives_the_car_around_the_track() {
     let end = baked_position(&end_bake, "Car");
     let (dx, dz) = (end[0] - -65.78, end[2] - -37.36);
     let distance = (dx * dx + dz * dz).sqrt();
-    assert!(distance < 8.0, "the drive must park by the start line: {end:?}");
-    assert!(end[2] < -37.36, "having crossed it, not stopped short: {end:?}");
+    assert!(
+        distance < 8.0,
+        "the drive must park by the start line: {end:?}"
+    );
+    assert!(
+        end[2] < -37.36,
+        "having crossed it, not stopped short: {end:?}"
+    );
 
     // The script's HUD is part of the pinned record: parked (speed 0), just
     // across the line onto lap 4, with three completed timed laps behind it
@@ -1279,8 +1522,14 @@ fn the_hud_rides_the_simulate_report_and_the_trace() {
         .filter(|v: &serde_json::Value| v.get("hud").is_some())
         .collect();
     assert_eq!(traced.len(), 3, "{traced:?}");
-    assert_eq!(traced[0], serde_json::json!({"step": 1, "hud": ["COUNT 0"]}));
-    assert_eq!(traced[2], serde_json::json!({"step": 3, "hud": ["COUNT 2"]}));
+    assert_eq!(
+        traced[0],
+        serde_json::json!({"step": 1, "hud": ["COUNT 0"]})
+    );
+    assert_eq!(
+        traced[2],
+        serde_json::json!({"step": 3, "hud": ["COUNT 2"]})
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -1309,7 +1558,10 @@ fn the_hud_lands_in_screenshot_pixels() {
             );
             return None;
         }
-        Some((path, serde_json::from_str::<serde_json::Value>(&stdout_of(&output)).unwrap()))
+        Some((
+            path,
+            serde_json::from_str::<serde_json::Value>(&stdout_of(&output)).unwrap(),
+        ))
     };
 
     let Some((with_hud, report)) = shot("1", "hud.png") else {
@@ -1319,7 +1571,10 @@ fn the_hud_lands_in_screenshot_pixels() {
     let (without_hud, plain_report) = shot("0", "plain.png").expect("GPU worked a moment ago");
 
     assert_eq!(report["hud"], serde_json::json!(["COUNT 0"]), "{report}");
-    assert!(plain_report.get("hud").is_none(), "no steps, no HUD: {plain_report}");
+    assert!(
+        plain_report.get("hud").is_none(),
+        "no steps, no HUD: {plain_report}"
+    );
     assert_ne!(
         std::fs::read(&with_hud).unwrap(),
         std::fs::read(&without_hud).unwrap(),
@@ -1525,7 +1780,9 @@ fn the_m17_fire_fixture_pins_additive_flame_and_firelight() {
         light["color"].is_array(),
         "a script-written light color must bake as an array, got {light}"
     );
-    let rate = component("Fire", "ParticleEmitter")["rate"].as_f64().unwrap();
+    let rate = component("Fire", "ParticleEmitter")["rate"]
+        .as_f64()
+        .unwrap();
     assert!(
         (rate - 210.0).abs() > 1e-6,
         "the flame's driven rate should have been written, got {rate}"
@@ -1675,8 +1932,7 @@ fn the_m20_cloud_fixture_pins_seeded_clouds_and_their_clock() {
             .output()
             .unwrap();
         assert_eq!(by_time.status.code(), Some(0), "{by_time:?}");
-        let report: serde_json::Value =
-            serde_json::from_str(stdout_of(&by_time).trim()).unwrap();
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&by_time).trim()).unwrap();
         assert_eq!(
             report["diff_pixels"], 0,
             "--time 2.0 must render the same sky as --steps 120 at 60 Hz: {report}"
@@ -1691,8 +1947,7 @@ fn the_m20_cloud_fixture_pins_seeded_clouds_and_their_clock() {
             .arg(&baseline)
             .output()
             .unwrap();
-        let report: serde_json::Value =
-            serde_json::from_str(stdout_of(&at_rest).trim()).unwrap();
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&at_rest).trim()).unwrap();
         assert_eq!(
             report["pass"], false,
             "a cloud at t=0 should not match a baseline blessed at t=2: {report}"
@@ -1782,7 +2037,11 @@ fn scripts_react_to_contacts_end_to_end() {
     )
     .unwrap();
 
-    let validate = engine().arg("validate").arg(dir.join("scene.json")).output().unwrap();
+    let validate = engine()
+        .arg("validate")
+        .arg(dir.join("scene.json"))
+        .output()
+        .unwrap();
     assert_eq!(validate.status.code(), Some(0), "{validate:?}");
 
     let bake = dir.join("baked.json");
@@ -1854,7 +2113,10 @@ fn particles_advance_with_steps_and_render_deterministically() {
     let unstepped = shot("0", "unstepped.png").expect("GPU worked a moment ago");
     let again = shot("60", "again.png").expect("GPU worked a moment ago");
 
-    assert_ne!(stepped, unstepped, "60 steps of particles must draw something");
+    assert_ne!(
+        stepped, unstepped,
+        "60 steps of particles must draw something"
+    );
     assert_eq!(stepped, again, "same file + steps must be byte-identical");
 }
 
@@ -1872,11 +2134,20 @@ fn emitter_integer_fields_validate_like_everything_else() {
     let output = engine().arg("validate").arg(&scene).output().unwrap();
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stdout_of(&output).is_empty(), "stdout must be silent on failure");
+    assert!(
+        stdout_of(&output).is_empty(),
+        "stdout must be silent on failure"
+    );
     let lines = stderr_lines(&output);
     let codes = codes_of(&lines);
-    assert!(codes.contains(&"invalid_field_type".to_string()), "{codes:?}");
-    assert!(codes.contains(&"value_out_of_range".to_string()), "{codes:?}");
+    assert!(
+        codes.contains(&"invalid_field_type".to_string()),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains(&"value_out_of_range".to_string()),
+        "{codes:?}"
+    );
     for line in lines.iter().filter(|l| l["error"] != "validation_failed") {
         assert!(line["line"].is_u64(), "diagnostic without a line: {line}");
     }
@@ -1911,10 +2182,8 @@ fn m13_smoke_fixture_validates_clean() {
 fn breaking_traces_are_deterministic_and_match_the_golden() {
     let scene = repo_path("examples/scenes/verify/m14_break.json");
     let trace = |name: &str| {
-        let path = std::env::temp_dir().join(format!(
-            "engine-m14-{}-{name}.jsonl",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("engine-m14-{}-{name}.jsonl", std::process::id()));
         let output = engine()
             .arg("simulate")
             .arg(&scene)
@@ -1982,7 +2251,11 @@ fn a_break_bakes_to_a_valid_scene_with_fragments() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 
     let validate = engine().arg("validate").arg(&baked).output().unwrap();
-    assert_eq!(validate.status.code(), Some(0), "the baked scene validates: {validate:?}");
+    assert_eq!(
+        validate.status.code(),
+        Some(0),
+        "the baked scene validates: {validate:?}"
+    );
 
     let root: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&baked).unwrap()).unwrap();
@@ -1992,8 +2265,14 @@ fn a_break_bakes_to_a_valid_scene_with_fragments() {
         .iter()
         .map(|e| e["name"].as_str().unwrap())
         .collect();
-    assert!(!names.contains(&"Crate"), "the broken entity is gone: {names:?}");
-    assert!(names.contains(&"Ball"), "untouched entities survive: {names:?}");
+    assert!(
+        !names.contains(&"Crate"),
+        "the broken entity is gone: {names:?}"
+    );
+    assert!(
+        names.contains(&"Ball"),
+        "untouched entities survive: {names:?}"
+    );
     for i in 0..4 {
         let name = format!("Crate.frag{i}");
         let entity = root["entities"]
@@ -2173,7 +2452,10 @@ fn a_thresholded_breakable_without_a_collider_fails_validation() {
     );
     let output = engine().arg("validate").arg(&scene).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(stdout_of(&output).is_empty(), "stdout must be empty on failure");
+    assert!(
+        stdout_of(&output).is_empty(),
+        "stdout must be empty on failure"
+    );
     let codes = codes_of(&stderr_lines(&output));
     assert!(
         codes.contains(&"breakable_without_collider".to_string()),
@@ -2197,8 +2479,8 @@ fn a_thresholded_breakable_without_a_collider_fails_validation() {
 fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
     let scene = repo_path("examples/scenes/showcase_tour.json");
     let trace = |name: &str| {
-        let path = std::env::temp_dir()
-            .join(format!("engine-tour-{}-{name}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("engine-tour-{}-{name}.jsonl", std::process::id()));
         let output = engine()
             .arg("simulate")
             .arg(&scene)
@@ -2238,9 +2520,7 @@ fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
     // is looking somewhere else when it happens.
     let breaks: Vec<(u64, &str)> = lines
         .iter()
-        .filter_map(|l| {
-            Some((l.get("step")?.as_u64()?, l.get("broke")?.as_str()?))
-        })
+        .filter_map(|l| Some((l.get("step")?.as_u64()?, l.get("broke")?.as_str()?)))
         .collect();
     for (step, what) in &breaks {
         assert!(
@@ -2256,7 +2536,10 @@ fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
         .iter()
         .find(|(_, what)| *what == "IcePillar")
         .expect("world.break_entity fires on IcePillar");
-    assert_eq!(scripted.0, 601, "a scripted break lands the step after the call");
+    assert_eq!(
+        scripted.0, 601,
+        "a scripted break lands the step after the call"
+    );
     assert!(
         breaks.iter().any(|(step, _)| (580..600).contains(step)),
         "the boulder should shatter something on impact: {breaks:?}"
@@ -2280,6 +2563,63 @@ fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
             row["entity"]
         );
     }
+}
+
+/// The tour does not end; it comes round. The director used to clamp its
+/// station index at the last one, so past step 900 the segment-local `t` swept
+/// 0→1 forever and the camera replayed the finale's own three seconds over and
+/// over while the fire, the truck and the daylight all went on moving. The key
+/// path is a closed cycle now — six legs, the last of which flies home — so
+/// one 1080-step lap puts the camera back on the key it opened with and the
+/// stations come round again with the world in the state it reached.
+///
+/// This is checked through `simulate` rather than a baseline because the
+/// second lap has no committed PNG and should not get one: what is pinned is
+/// that the camera *moves on*, not what it happens to see.
+#[test]
+fn the_showcase_tour_keeps_touring_past_its_fifteen_seconds() {
+    let scene = repo_path("examples/scenes/showcase_tour.json");
+    let camera_at = |steps: &str| -> ([f64; 3], String) {
+        let output = engine()
+            .arg("simulate")
+            .arg(&scene)
+            .args(["--steps", steps])
+            .args(["--entity", "TourCam"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+        let p = &report["entities"][0]["position"];
+        let axis = |i: usize| p[i].as_f64().expect("the camera reports a position");
+        (
+            [axis(0), axis(1), axis(2)],
+            report["hud"][0].as_str().unwrap().to_string(),
+        )
+    };
+    let apart = |a: [f64; 3], b: [f64; 3]| {
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    };
+
+    // The opening key, and where the fifteen seconds leave the camera.
+    let opening = [-27.0, 7.5, -20.5];
+    let (finale, _) = camera_at("900");
+    assert!(
+        apart(finale, opening) > 40.0,
+        "the tour should end its fifteen seconds a long way from where it began: {finale:?}"
+    );
+
+    // A lap later it is home, having travelled rather than looped in place.
+    let (home, line) = camera_at("1080");
+    assert!(
+        apart(home, opening) < 0.25,
+        "one lap should return the camera to its opening key, not to {home:?}"
+    );
+    assert_eq!(line, "TOUR LAP 2  06 THE WAY BACK");
+
+    // And the stations themselves come round: 90 steps into the new lap is
+    // the forest again, framed exactly as station 01 frames it.
+    let (_, line) = camera_at("1170");
+    assert_eq!(line, "TOUR LAP 2  01 FOREST");
 }
 
 /// The tour drives a vehicle around a world full of resting bodies — the
@@ -2521,11 +2861,12 @@ fn daylight_owns_the_sun_and_says_so() {
             ]}"#,
     );
     let output = engine().arg("validate").arg(&overridden).output().unwrap();
-    assert_eq!(output.status.code(), Some(0), "a warning must not fail: {output:?}");
     assert_eq!(
-        codes_of(&stderr_lines(&output)),
-        ["daylight_overrides_sky"]
+        output.status.code(),
+        Some(0),
+        "a warning must not fail: {output:?}"
     );
+    assert_eq!(codes_of(&stderr_lines(&output)), ["daylight_overrides_sky"]);
 
     // ...and --strict promotes it, like every other warning.
     let strict = engine()
@@ -2588,8 +2929,7 @@ fn the_m22_terrain_fixture_pins_relief_layers_and_collision() {
         .unwrap();
     assert_eq!(simulate.status.code(), Some(0), "{simulate:?}");
 
-    let trace_dir =
-        std::env::temp_dir().join(format!("engine-m22-{}", std::process::id()));
+    let trace_dir = std::env::temp_dir().join(format!("engine-m22-{}", std::process::id()));
     std::fs::create_dir_all(&trace_dir).unwrap();
     let trace_path = trace_dir.join("terrain.jsonl");
     let traced = engine()
@@ -2744,7 +3084,13 @@ fn init_scaffolds_a_scene_that_validates() {
         "the result should tell an agent what to run next: {report}"
     );
 
-    for name in ["AGENTS.md", "CLAUDE.md", ".gitignore", "first.json", "scripts/spin.rhai"] {
+    for name in [
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".gitignore",
+        "first.json",
+        "scripts/spin.rhai",
+    ] {
         assert!(dir.join(name).exists(), "{name} should have been written");
     }
 
@@ -2772,7 +3118,10 @@ fn init_refuses_a_directory_that_already_holds_files() {
 
     let output = engine().arg("init").arg(&dir).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
-    assert!(stdout_of(&output).is_empty(), "failure writes nothing to stdout");
+    assert!(
+        stdout_of(&output).is_empty(),
+        "failure writes nothing to stdout"
+    );
     assert_eq!(codes_of(&stderr_lines(&output)), ["init_target_not_empty"]);
     assert_eq!(
         std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(),
@@ -2780,19 +3129,32 @@ fn init_refuses_a_directory_that_already_holds_files() {
         "refusing must not have overwritten anything"
     );
 
-    let forced = engine().arg("init").arg(&dir).arg("--force").output().unwrap();
+    let forced = engine()
+        .arg("init")
+        .arg(&dir)
+        .arg("--force")
+        .output()
+        .unwrap();
     assert_eq!(forced.status.code(), Some(0), "{:?}", stderr_lines(&forced));
-    assert!(std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap().contains("AGENTS.md"));
+    assert!(std::fs::read_to_string(dir.join("CLAUDE.md"))
+        .unwrap()
+        .contains("AGENTS.md"));
 }
 
 #[test]
 fn agent_guide_is_documentation_not_a_result() {
     let output = engine().arg("agent-guide").output().unwrap();
     assert_eq!(output.status.code(), Some(0));
-    assert!(output.stderr.is_empty(), "documentation writes nothing to stderr");
+    assert!(
+        output.stderr.is_empty(),
+        "documentation writes nothing to stderr"
+    );
 
     let guide = stdout_of(&output);
-    assert!(guide.contains("engine screenshot"), "the guide must teach the loop");
+    assert!(
+        guide.contains("engine screenshot"),
+        "the guide must teach the loop"
+    );
     assert!(
         serde_json::from_str::<serde_json::Value>(&guide).is_err(),
         "agent-guide is markdown, a documented exception to the stdout contract"
@@ -2802,7 +3164,10 @@ fn agent_guide_is_documentation_not_a_result() {
     // source of truth, so a fix to one cannot miss the other.
     let dir = scratch_dir("guide");
     engine().arg("init").arg(&dir).output().unwrap();
-    assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), guide);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(),
+        guide
+    );
 }
 
 // ── M24: the CLI answers questions it already knows ───────────────────────
@@ -2909,7 +3274,10 @@ fn an_unknown_component_query_suggests_the_near_miss() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(stdout_of(&output).is_empty(), "failure writes nothing to stdout");
+    assert!(
+        stdout_of(&output).is_empty(),
+        "failure writes nothing to stdout"
+    );
 
     let lines = stderr_lines(&output);
     assert_eq!(codes_of(&lines), ["unknown_component_query"]);
@@ -2942,11 +3310,14 @@ fn terrain_height_is_the_sampler_scripts_ask() {
     // M22's central claim is that terrain has exactly one implementation. This
     // pins it across the two ways of asking: a script's world.terrain_height
     // and the CLI must return the same f32, not merely a similar number.
-    let scene = scene_file("terrain-sampler", &TERRAIN.replace(
-        r#"{"name":"Cam","components":["#,
-        r#"{"name":"Probe","components":[{"type":"Script","source":"probe.rhai"}]},
+    let scene = scene_file(
+        "terrain-sampler",
+        &TERRAIN.replace(
+            r#"{"name":"Cam","components":["#,
+            r#"{"name":"Probe","components":[{"type":"Script","source":"probe.rhai"}]},
     {"name":"Cam","components":["#,
-    ));
+        ),
+    );
     std::fs::write(
         scene.parent().unwrap().join("probe.rhai"),
         "fn step(world, step) { world.hud(\"h=\" + world.terrain_height(\"Ground\", -12.0, 8.0)); }\n",
@@ -2959,7 +3330,12 @@ fn terrain_height_is_the_sampler_scripts_ask() {
         .args(["--steps", "1"])
         .output()
         .unwrap();
-    assert_eq!(simulated.status.code(), Some(0), "{:?}", stderr_lines(&simulated));
+    assert_eq!(
+        simulated.status.code(),
+        Some(0),
+        "{:?}",
+        stderr_lines(&simulated)
+    );
     let report: serde_json::Value = serde_json::from_str(stdout_of(&simulated).trim()).unwrap();
     let from_script: f64 = report["hud"][0]
         .as_str()
@@ -3004,7 +3380,10 @@ fn terrain_height_names_the_candidates_when_several_patches_exist() {
     let lines = stderr_lines(&ambiguous);
     assert_eq!(codes_of(&lines), ["missing_component"]);
     let message = lines[0]["message"].as_str().unwrap();
-    assert!(message.contains("Ground") && message.contains("Island"), "{message}");
+    assert!(
+        message.contains("Ground") && message.contains("Island"),
+        "{message}"
+    );
 
     // Naming one that is not there suggests the near miss, like every other
     // name error in the engine.
@@ -3078,8 +3457,14 @@ fn inspect_fills_in_the_defaults_the_file_leaves_out() {
 
     // The Transform the file omits two thirds of comes back whole, and the
     // resolved placement is reported beside the components.
-    assert_eq!(entities[0]["transform"]["scale"], serde_json::json!([1.0, 1.0, 1.0]));
-    assert_eq!(entities[0]["transform"]["position"], serde_json::json!([1.0, 2.0, 3.0]));
+    assert_eq!(
+        entities[0]["transform"]["scale"],
+        serde_json::json!([1.0, 1.0, 1.0])
+    );
+    assert_eq!(
+        entities[0]["transform"]["position"],
+        serde_json::json!([1.0, 2.0, 3.0])
+    );
 }
 
 #[test]
@@ -3101,7 +3486,10 @@ fn inspect_reports_every_entity_name_sorted() {
     // An entity with no Transform still reports one: the identity placement is
     // what everything downstream uses for it.
     let cube = &report["entities"][1];
-    assert_eq!(cube["transform"]["scale"], serde_json::json!([1.0, 1.0, 1.0]));
+    assert_eq!(
+        cube["transform"]["scale"],
+        serde_json::json!([1.0, 1.0, 1.0])
+    );
 }
 
 #[test]
@@ -3157,17 +3545,28 @@ fn simulate_says_where_everything_ended_up() {
     assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
 
     let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
-    let entities = report["entities"].as_array().expect("the report says where things are");
+    let entities = report["entities"]
+        .as_array()
+        .expect("the report says where things are");
 
     // The trace's rule for who appears: the dynamic bodies, name-sorted. The
     // fixed floor is not one of them.
-    let names: Vec<&str> = entities.iter().map(|e| e["entity"].as_str().unwrap()).collect();
+    let names: Vec<&str> = entities
+        .iter()
+        .map(|e| e["entity"].as_str().unwrap())
+        .collect();
     assert_eq!(names, ["Ball"]);
 
     let ball = &entities[0];
     let y = ball["position"][1].as_f64().unwrap();
-    assert!((-0.6..=0.1).contains(&y), "the ball should be resting on the floor, not at {y}");
-    assert!(ball["linear_velocity"].is_array(), "a body reports its velocity");
+    assert!(
+        (-0.6..=0.1).contains(&y),
+        "the ball should be resting on the floor, not at {y}"
+    );
+    assert!(
+        ball["linear_velocity"].is_array(),
+        "a body reports its velocity"
+    );
     assert!(ball["rotation"].is_array());
 
     // Existing keys keep their meaning: this is an addition, not a reshape.
@@ -3216,14 +3615,20 @@ fn simulate_reports_every_unknown_entity_at_once() {
         .unwrap();
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stdout_of(&output).is_empty(), "failure writes nothing to stdout");
+    assert!(
+        stdout_of(&output).is_empty(),
+        "failure writes nothing to stdout"
+    );
     let lines = stderr_lines(&output);
     assert_eq!(codes_of(&lines), ["entity_not_found", "entity_not_found"]);
     let suggestions: Vec<&str> = lines
         .iter()
         .map(|l| l["did_you_mean"].as_str().unwrap())
         .collect();
-    assert!(suggestions.contains(&"Ball") && suggestions.contains(&"Floor"), "{suggestions:?}");
+    assert!(
+        suggestions.contains(&"Ball") && suggestions.contains(&"Floor"),
+        "{suggestions:?}"
+    );
 }
 
 #[test]
@@ -3264,7 +3669,10 @@ fn a_screenshot_report_says_whether_anything_is_in_the_frame() {
 
     let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
     let digest = &report["digest"];
-    assert!(digest["coverage"].as_f64().unwrap() > 0.0, "the cube is in shot");
+    assert!(
+        digest["coverage"].as_f64().unwrap() > 0.0,
+        "the cube is in shot"
+    );
     assert!(digest["mean_luminance"].as_f64().unwrap() > 0.0);
     assert_eq!(
         digest["background"].as_array().unwrap().len(),
@@ -3290,8 +3698,7 @@ fn a_screenshot_report_says_whether_anything_is_in_the_frame() {
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
 
-    let empty_report: serde_json::Value =
-        serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    let empty_report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
     assert_eq!(
         empty_report["entities_drawn"], report["entities_drawn"],
         "the same geometry was submitted both times"
@@ -3346,7 +3753,16 @@ fn a_filmstrip_reports_the_digest_of_the_sheet_it_wrote() {
         .arg(&scene)
         .arg("--out")
         .arg(&out)
-        .args(["--frames", "2", "--columns", "2", "--width", "80", "--height", "60"])
+        .args([
+            "--frames",
+            "2",
+            "--columns",
+            "2",
+            "--width",
+            "80",
+            "--height",
+            "60",
+        ])
         .output()
         .unwrap();
     if !output.status.success() {
@@ -3389,7 +3805,11 @@ fn import_writes_material_files_and_the_textures_they_reference() {
         .arg(&scene)
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("the report is one JSON object");
@@ -3466,4 +3886,1693 @@ fn import_writes_material_files_and_the_textures_they_reference() {
     }
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// M27: the water refraction fixture, from two cameras in one file.
+///
+/// Both baselines are hard bit-exact pins with no tolerance, which is
+/// deliberate and only defensible because the fixture obeys M22's rule — it
+/// aims at its subject, with no terrain anywhere in frame. Four consecutive
+/// sweeps came back at zero differing pixels.
+///
+/// The two cameras pin two different halves of the design:
+///
+/// - `Camera` looks down at the pool, where the bed's grid of bars is the
+///   thing refraction acts on. This is the frame that would go wrong if the
+///   exit point were stepped along the refracted ray by the view ray's path
+///   length instead of solved to the bed's depth — the bars scramble into
+///   blocks, which is what the first implementation drew.
+/// - `CameraGrazing` looks across it at 8°, where the boulder and the posts
+///   stand *in* the water. That is the framing the depth-validated sample
+///   exists for: dropping the check moves ~22k pixels of it by up to 99, as
+///   the water behind each object drags the object's colour out across itself.
+#[test]
+fn the_m27_water_refraction_fixture_pins_a_bent_bed_and_a_clean_waterline() {
+    let scene = repo_path("examples/scenes/verify/m27_water_refraction.json");
+
+    for (baseline, extra) in [
+        ("m27_water_refraction.png", Vec::new()),
+        ("m27_water_grazing.png", vec!["--camera", "CameraGrazing"]),
+    ] {
+        let baseline = repo_path(&format!("examples/scenes/verify/baselines/{baseline}"));
+        let diff = engine()
+            .arg("diff-render")
+            .arg(&scene)
+            .arg(&baseline)
+            .args(["--steps", "120"])
+            .args(&extra)
+            .output()
+            .unwrap();
+        if !diff.status.success() {
+            let stderr = String::from_utf8_lossy(&diff.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "diff-render failed for a non-GPU reason: {stderr}"
+            );
+            eprintln!("skipping render pin: no usable GPU on this machine");
+            return;
+        }
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+        assert_eq!(report["pass"], true, "{report}");
+        assert_eq!(report["diff_pixels"], 0, "{report}");
+    }
+
+    // The claim the whole milestone rests on: `ior` is the only reason this
+    // scene renders differently from the M18 surface. Drop it back to the
+    // default and the committed baseline must stop matching — otherwise the
+    // pins above would pass just as well with refraction wired to nothing,
+    // which is the failure mode a splice makes easy to miss.
+    let source = std::fs::read_to_string(&scene).unwrap();
+    let unrefracted = source.replace(r#""ior": 1.33"#, r#""ior": 1.0"#);
+    assert_ne!(
+        source, unrefracted,
+        "the fixture must author `ior` explicitly"
+    );
+    let plain = scene.with_file_name("m27_unrefracted.json");
+    std::fs::write(&plain, unrefracted).unwrap();
+
+    let report = engine()
+        .arg("diff-render")
+        .arg(&plain)
+        .arg(repo_path(
+            "examples/scenes/verify/baselines/m27_water_refraction.png",
+        ))
+        .args(["--steps", "120"])
+        .output()
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout_of(&report).trim()).unwrap();
+    let _ = std::fs::remove_file(&plain);
+    assert_eq!(
+        parsed["pass"], false,
+        "with `ior` back at its default the baseline must not match: {parsed}"
+    );
+}
+// ── Skeletal animation (M30 S0) ───────────────────────────────────────────
+
+/// The milestone's fixture: two copies of the rigged arm, one playing `Wave`.
+fn skeletal_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m30_skeletal.json")
+}
+
+fn json_stdout(output: &Output) -> serde_json::Value {
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_str(stdout_of(output).trim()).expect("stdout must be one JSON object")
+}
+
+#[test]
+fn the_skeletal_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(skeletal_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The M30 fixture rendered: a rigged arm mid-`Wave` beside an identical one
+/// with no player, pinned bit-exactly.
+///
+/// The two arms are the assertion. They share a file, a mesh and a material,
+/// so anything that made *both* wrong — a palette that never reached the GPU,
+/// a bind group off by a slot — would still leave them identical; only real
+/// skinning makes one bend and the other stand. And the bent arm's shadow
+/// bends with it, which is the skinned caster: `shadow.wgsl` reads nothing but
+/// the model matrix, so without a second pipeline a walking character casts
+/// its rest pose, a wrongness that reads as a renderer bug.
+///
+/// Aimed at its subject with no terrain in frame (M22's rule), so it carries a
+/// hard pin rather than a `diff_args` tolerance. Measured, not assumed: unlike
+/// tree and cloud baselines this one renders identically from the debug and
+/// release binaries — three joints of slerp is not enough libm to reach a
+/// pixel.
+#[test]
+fn the_m30_skeletal_fixture_pins_a_posed_rig_and_its_shadow() {
+    let scene = skeletal_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m30_skeletal.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--time")
+        .arg("0.4")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The pose is a pure function of (files, time), the M9 property — now on a
+/// skinned mesh, where the joints reach the GPU as a uniform rather than the
+/// components reaching it as a transform.
+#[test]
+fn a_skinned_render_is_a_pure_function_of_the_file_and_the_clock() {
+    let dir = std::env::temp_dir().join(format!("engine-m30-skin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let shot = |name: &str, time: &str| {
+        let out = dir.join(name);
+        let output = engine()
+            .arg("screenshot")
+            .arg(skeletal_scene())
+            .arg("--out")
+            .arg(&out)
+            .arg("--width")
+            .arg("160")
+            .arg("--height")
+            .arg("90")
+            .arg("--time")
+            .arg(time)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            return None;
+        }
+        Some(std::fs::read(&out).unwrap())
+    };
+
+    let Some(first) = shot("a.png", "0.4") else {
+        eprintln!("skipping render determinism: no usable GPU on this machine");
+        std::fs::remove_dir_all(&dir).ok();
+        return;
+    };
+    let again = shot("b.png", "0.4").unwrap();
+    let elsewhere = shot("c.png", "0.9").unwrap();
+
+    assert_eq!(first, again, "same file, same time, same bytes");
+    assert_ne!(
+        first, elsewhere,
+        "a different time has to pose the rig differently, or the clock is \
+         not reaching the palette at all"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `world.joint_position` / `world.joint_transform`: the two read-only getters
+/// that make a rig reachable from gameplay (M30 §8).
+///
+/// The test is the design's own worked example — parent a prop to a hand — and
+/// it asserts the two things a wrong implementation would still satisfy
+/// separately: the prop is *not* at the rig's origin (so a palette really was
+/// applied) and it *moves between steps* (so the clock reaches it).
+#[test]
+fn a_script_can_hang_a_prop_off_a_joint() {
+    let dir = repo_path("examples/meshes");
+    let script = dir.join("_m30_torch.rhai");
+    std::fs::write(
+        &script,
+        r#"fn step(world, step) {
+            let p = world.joint_position("Arm", "Hand");
+            world.set_position("Torch", p[0], p[1], p[2]);
+            let t = world.joint_transform("Arm", "Hand");
+            world.hud("pitch " + t[3]);
+        }"#,
+    )
+    .unwrap();
+    let path = dir.join("_m30_joint_script.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"rigged_arm.gltf"},
+                {"type":"AnimationPlayer","clip":"rigged_arm.gltf#Wave","looping":true},
+                {"type":"Script","source":"_m30_torch.rhai"}
+            ]},
+            {"name":"Torch","components":[
+                {"type":"Transform"},
+                {"type":"Mesh","asset":"builtin:sphere"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let at = |steps: &str| {
+        let output = engine()
+            .arg("simulate")
+            .arg(&path)
+            .arg("--steps")
+            .arg(steps)
+            .arg("--entity")
+            .arg("Torch")
+            .output()
+            .unwrap();
+        json_stdout(&output)
+    };
+    let early = at("6");
+    let later = at("30");
+
+    let position = |report: &serde_json::Value| -> Vec<f64> {
+        report["entities"][0]["position"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    };
+    let (a, b) = (position(&early), position(&later));
+
+    // The rig's root is at the origin and the hand is 2 m up it, so a prop
+    // that landed at the origin means no palette was applied at all.
+    assert!(a[1] > 0.5, "the hand is well above the ground, got {a:?}");
+    assert_ne!(
+        a, b,
+        "the clip has to move the hand between two step counts"
+    );
+    // And `joint_transform` reports an orientation, not just a place.
+    let pitch = later["hud"][0].as_str().unwrap();
+    assert!(pitch.starts_with("pitch "), "got {pitch:?}");
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A mistyped joint is a located runtime error with a suggestion, matching
+/// `world.key` — not a silent identity transform.
+#[test]
+fn a_mistyped_joint_name_is_a_located_error_with_a_suggestion() {
+    let dir = repo_path("examples/meshes");
+    let script = dir.join("_m30_typo.rhai");
+    std::fs::write(
+        &script,
+        "fn step(world, step) {\n    world.joint_position(\"Arm\", \"Hnad\");\n}",
+    )
+    .unwrap();
+    let path = dir.join("_m30_joint_typo.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"rigged_arm.gltf"},
+                {"type":"Script","source":"_m30_typo.rhai"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine()
+        .arg("simulate")
+        .arg(&path)
+        .arg("--steps")
+        .arg("1")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&script);
+
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stderr_lines(&output);
+    assert!(codes_of(&lines).contains(&"script_runtime_error".to_string()));
+    let message = lines[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("did you mean \\\"Hand\\\"") || message.contains("did you mean \"Hand\""),
+        "the error must suggest the real joint: {message}"
+    );
+    assert_eq!(lines[0]["line"], 2, "and point at the script line");
+}
+
+#[test]
+fn list_joints_reports_a_rig_out_of_a_gltf_directly() {
+    let output = engine()
+        .arg("list-joints")
+        .arg(repo_path("examples/meshes/rigged_arm.gltf"))
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let rig = &report["rigs"][0];
+
+    assert_eq!(rig["skin"], "ArmRig");
+    assert_eq!(rig["joint_count"], 3);
+    // The skin's own order, carrying its index — a joint's index is written
+    // into the vertex data, so it is a fact about the asset.
+    let names: Vec<&str> = rig["joints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Shoulder", "Elbow", "Hand"]);
+    assert_eq!(rig["joints"][2]["index"], 2);
+    assert_eq!(rig["joints"][2]["parent"], 1);
+    assert_eq!(rig["joints"][2]["parent_name"], "Elbow");
+    assert_eq!(rig["joints"][0]["parent"], serde_json::Value::Null);
+    // No `--time`: the rest pose, and no `time` key claiming otherwise.
+    assert!(rig.get("time").is_none());
+}
+
+#[test]
+fn list_joints_needs_no_collider_and_no_gpu_to_say_where_a_hand_is() {
+    // The claim the milestone makes about itself: motion verified without a
+    // pixel. The hand is somewhere different at t=0.5 than at rest, and the
+    // arm that plays no clip has not moved at all.
+    let at = |time: &str| -> serde_json::Value {
+        let output = engine()
+            .arg("list-joints")
+            .arg(skeletal_scene())
+            .arg("--time")
+            .arg(time)
+            .output()
+            .unwrap();
+        json_stdout(&output)
+    };
+
+    let hand_of = |report: &serde_json::Value, entity: &str| -> [f64; 3] {
+        let rig = report["rigs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["entity"] == entity)
+            .unwrap_or_else(|| panic!("no rig for {entity}"));
+        let joint = rig["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["name"] == "Hand")
+            .unwrap();
+        let p = joint["world"]["position"].as_array().unwrap();
+        [
+            p[0].as_f64().unwrap(),
+            p[1].as_f64().unwrap(),
+            p[2].as_f64().unwrap(),
+        ]
+    };
+
+    let rest = hand_of(&at("0"), "Arm");
+    let bent = hand_of(&at("0.5"), "Arm");
+    let back = hand_of(&at("1"), "Arm");
+
+    assert!(
+        (bent[2] - rest[2]).abs() > 0.5 && bent[1] < rest[1],
+        "the hand did not swing: {rest:?} -> {bent:?}"
+    );
+    assert!(
+        (back[1] - rest[1]).abs() < 1e-4 && (back[2] - rest[2]).abs() < 1e-4,
+        "the clip did not return: {back:?}"
+    );
+
+    // The entity's own Transform places the rig — glTF ignores the skinned
+    // mesh node's transform, so nothing out of the file competes with it.
+    assert!(
+        (rest[0] - -1.1).abs() < 1e-4,
+        "Arm is not where the scene put it"
+    );
+
+    // The arm with no player stays at rest at every time.
+    assert_eq!(hand_of(&at("0"), "Rest"), hand_of(&at("0.5"), "Rest"));
+}
+
+#[test]
+fn list_joints_narrows_to_one_entity_and_suggests_on_a_typo() {
+    let output = engine()
+        .arg("list-joints")
+        .arg(skeletal_scene())
+        .arg("--entity")
+        .arg("Arm")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    assert_eq!(report["rigs"].as_array().unwrap().len(), 1);
+    assert_eq!(report["rigs"][0]["entity"], "Arm");
+    assert_eq!(report["rigs"][0]["clip"], "Wave");
+
+    let output = engine()
+        .arg("list-joints")
+        .arg(skeletal_scene())
+        .arg("--entity")
+        .arg("Arn")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must be empty on failure");
+    let lines = stderr_lines(&output);
+    assert_eq!(codes_of(&lines), ["unknown_entity"]);
+    assert_eq!(lines[0]["did_you_mean"], "Arm");
+}
+
+#[test]
+fn list_joints_takes_a_negative_time() {
+    // M24 put `allow_hyphen_values` on the class of signed arguments; a new
+    // one joins it rather than teaching the guide to write `--time=`.
+    let output = engine()
+        .arg("list-joints")
+        .arg(skeletal_scene())
+        .arg("--time")
+        .arg("-0.5")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    assert_eq!(report["rigs"][0]["time"], -0.5);
+    // The arm's player loops a one-second clip, so the pose sampled is the
+    // wrap — reported beside the time asked for rather than in place of it.
+    assert_eq!(report["rigs"][0]["clip_time"], 0.5);
+}
+
+#[test]
+fn list_animations_reads_a_gltf_and_names_the_channel_it_ignores() {
+    let output = engine()
+        .arg("list-animations")
+        .arg(repo_path("examples/meshes/rigged_arm.gltf"))
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+
+    let names: Vec<&str> = report["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Wave", "Sway"]);
+
+    let wave = &report["clips"][0];
+    assert_eq!(wave["kind"], "skeletal");
+    assert_eq!(wave["duration"], 1.0);
+
+    // `Marker` is a node in the scene that is in no skin: glTF allows the
+    // channel, sampling ignores it, and the report names it. An ignored
+    // channel nothing reports is invisible.
+    let marker = wave["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["node_name"] == "Marker")
+        .expect("the ignored channel is reported");
+    assert_eq!(marker["joint"], serde_json::Value::Null);
+    assert_eq!(marker["sampled"], false);
+
+    let elbow = wave["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["node_name"] == "Elbow")
+        .unwrap();
+    assert_eq!(elbow["joint"], 1);
+    assert_eq!(elbow["sampled"], true);
+    assert_eq!(elbow["property"], "rotation");
+    assert_eq!(elbow["interpolation"], "linear");
+}
+
+#[test]
+fn list_animations_on_a_scene_reports_both_kinds_of_clip() {
+    let output = engine()
+        .arg("list-animations")
+        .arg(skeletal_scene())
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let clips = report["clips"].as_array().unwrap();
+    assert_eq!(clips.len(), 1, "only the arm plays a clip");
+    assert_eq!(clips[0]["kind"], "skeletal");
+    assert_eq!(clips[0]["entity"], "Arm");
+
+    // The M9 property-clip fixture still reports as it always did, now
+    // saying which kind it is.
+    let output = engine()
+        .arg("list-animations")
+        .arg(repo_path("examples/scenes/verify/m9_spin.json"))
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    assert_eq!(report["clips"][0]["kind"], "property");
+    assert!(report["clips"][0]["tracks"].is_array());
+}
+
+#[test]
+fn a_gltf_clip_reference_without_a_fragment_is_an_error_not_a_guess() {
+    // Defaulting to the only clip in the file is friendlier right up until
+    // someone exports a second one, at which point which clip plays changes
+    // silently.
+    let scene = format!(
+        r#"{{"name":"s","entities":[
+            {{"name":"Cam","components":[{{"type":"Camera","active":true}}]}},
+            {{"name":"Arm","components":[
+                {{"type":"Mesh","asset":"{arm}"}},
+                {{"type":"AnimationPlayer","clip":"{arm}"}}
+            ]}}
+        ]}}"#,
+        arm = repo_path("examples/meshes/rigged_arm.gltf")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/")
+    );
+    // An absolute path is its own error, so use a relative one: the scene
+    // goes next to the asset instead.
+    let dir = repo_path("examples/meshes");
+    let path = dir.join("_m30_fragment_check.json");
+    let relative = scene.replace(
+        &repo_path("examples/meshes/rigged_arm.gltf")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+        "rigged_arm.gltf",
+    );
+    std::fs::write(&path, relative).unwrap();
+
+    let output = engine().arg("validate").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&output));
+    assert!(
+        codes.contains(&"clip_needs_fragment".to_string()),
+        "got {codes:?}"
+    );
+}
+
+#[test]
+fn a_skeletal_player_must_name_its_entitys_own_mesh() {
+    let dir = repo_path("examples/meshes");
+    let path = dir.join("_m30_mismatch_check.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"pyramid.gltf"},
+                {"type":"AnimationPlayer","clip":"rigged_arm.gltf#Wave"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine().arg("validate").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&output));
+    assert!(
+        codes.contains(&"skeletal_player_mesh_mismatch".to_string()),
+        "got {codes:?}"
+    );
+}
+
+#[test]
+fn an_unknown_clip_fragment_suggests_a_real_one() {
+    let dir = repo_path("examples/meshes");
+    let path = dir.join("_m30_unknown_clip_check.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Arm","components":[
+                {"type":"Mesh","asset":"rigged_arm.gltf"},
+                {"type":"AnimationPlayer","clip":"rigged_arm.gltf#Wav"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine().arg("validate").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stderr_lines(&output);
+    let unknown = lines
+        .iter()
+        .find(|l| l["error"] == "unknown_clip")
+        .unwrap_or_else(|| panic!("got {:?}", codes_of(&lines)));
+    assert_eq!(unknown["did_you_mean"], "Wave");
+}
+
+#[test]
+fn a_skeletal_player_on_an_unrigged_file_says_so() {
+    let dir = repo_path("examples/meshes");
+    let path = dir.join("_m30_no_skin_check.json");
+    std::fs::write(
+        &path,
+        r#"{"name":"s","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"P","components":[
+                {"type":"Mesh","asset":"pyramid.gltf"},
+                {"type":"AnimationPlayer","clip":"pyramid.gltf#Wave"}
+            ]}
+        ]}"#,
+    )
+    .unwrap();
+
+    let output = engine().arg("validate").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let codes = codes_of(&stderr_lines(&output));
+    assert!(
+        codes.contains(&"mesh_has_no_skin".to_string()),
+        "got {codes:?}"
+    );
+}
+
+// ── The UI system (M31) ───────────────────────────────────────────────────
+
+fn ui_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m31_ui.json")
+}
+
+fn ui_timeline() -> PathBuf {
+    repo_path("examples/scenes/verify/m31_ui.input.jsonl")
+}
+
+#[test]
+fn the_ui_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(ui_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// `engine ui-layout` publishes the rectangle the renderer draws and the hit
+/// test uses, which is the whole point of the command: an agent authoring a
+/// menu cannot see it move.
+///
+/// The assertions are about *relationships*, not coordinates, so the fixture
+/// stays re-authorable: the hugging panel is exactly its column, the column's
+/// children stack in file order (not draw order — the class sort would put
+/// both buttons above both labels), and only the two buttons are interactive.
+#[test]
+fn ui_layout_reports_the_tree_it_laid_out() {
+    let report = json_stdout(
+        &engine()
+            .arg("ui-layout")
+            .arg(ui_scene())
+            .arg("--width")
+            .arg("640")
+            .arg("--height")
+            .arg("360")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(report["viewport"], serde_json::json!([640, 360]));
+
+    let of = |name: &str| {
+        report["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == name)
+            .unwrap_or_else(|| panic!("no element named {name}"))
+            .clone()
+    };
+    let rect = |name: &str| {
+        let e = of(name);
+        let r = e["rect"].as_array().unwrap().clone();
+        (
+            r[0].as_i64().unwrap(),
+            r[1].as_i64().unwrap(),
+            r[2].as_i64().unwrap(),
+            r[3].as_i64().unwrap(),
+        )
+    };
+
+    // Name-sorted, the `simulate --entity` contract.
+    let names: Vec<&str> = report["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["entity"].as_str().unwrap())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted, "elements are name-sorted");
+
+    // The backdrop stretches to the whole frame.
+    assert_eq!(rect("Dim"), (0, 0, 640, 360));
+
+    // Hug sizing: the panel *is* its column, and the nine-sliced frame
+    // stretches over exactly that. Three entities, one rectangle — which is
+    // the thing that cannot be expressed with hand-computed offsets.
+    assert_eq!(rect("Menu"), rect("Column"));
+    assert_eq!(rect("Menu"), rect("Frame"));
+
+    // Flow order is file order: title, body, then the two buttons, top to
+    // bottom. Draw order sorts panels under text, and using that ordering for
+    // the flow would stack both buttons above both labels.
+    let ys = |name: &str| rect(name).1;
+    assert!(ys("Title") < ys("Body"), "title above body");
+    assert!(ys("Body") < ys("Resume"), "body above the first button");
+    assert!(ys("Resume") < ys("Quit"), "first button above the second");
+
+    // Both buttons span the column's content width, because they stretch on
+    // the cross axis; the title does not.
+    assert_eq!(rect("Resume").2, rect("Quit").2);
+    assert_eq!(rect("Resume").2, rect("Body").2);
+
+    // Only the buttons are interactive, and every element is visible.
+    for element in report["elements"].as_array().unwrap() {
+        let name = element["entity"].as_str().unwrap();
+        let expected = name == "Resume" || name == "Quit";
+        assert_eq!(element["interactive"], expected, "{name}");
+        assert_eq!(element["visible"], true, "{name}");
+    }
+
+    // Unknown names are reported all at once, with a suggestion.
+    let bad = engine()
+        .arg("ui-layout")
+        .arg(ui_scene())
+        .arg("--entity")
+        .arg("Quitt")
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(1));
+    let error = &stderr_lines(&bad)[0];
+    assert_eq!(error["error"], "entity_not_found");
+    assert_eq!(error["did_you_mean"], "Quit");
+}
+
+/// The loop `ui-layout` exists to close, closed in a test: take the reported
+/// rectangle, turn it into the *fraction* a timeline carries, and confirm the
+/// click lands.
+///
+/// This is the one place the pixel report and the fractional cursor have to
+/// agree, and they are computed by different code — the report by the layout
+/// engine, the cursor by M28's timeline parser through `Pointer`.
+#[test]
+fn a_cursor_derived_from_the_reported_rect_hits_that_element() {
+    let (width, height) = (640u32, 360u32);
+    let report = json_stdout(
+        &engine()
+            .arg("ui-layout")
+            .arg(ui_scene())
+            .arg("--width")
+            .arg(width.to_string())
+            .arg("--height")
+            .arg(height.to_string())
+            .arg("--entity")
+            .arg("Quit")
+            .output()
+            .unwrap(),
+    );
+    let rect = report["elements"][0]["rect"].as_array().unwrap().clone();
+    let (x, y, w, h) = (
+        rect[0].as_f64().unwrap(),
+        rect[1].as_f64().unwrap(),
+        rect[2].as_f64().unwrap(),
+        rect[3].as_f64().unwrap(),
+    );
+
+    // The centre of the button, as a fraction of the frame, quantized the way
+    // a recorded timeline is.
+    let fx = ((x + w / 2.0) / f64::from(width) * 1000.0).round() / 1000.0;
+    let fy = ((y + h / 2.0) / f64::from(height) * 1000.0).round() / 1000.0;
+
+    // The committed timeline must already aim there — if this fails, the
+    // fixture's layout moved and the timeline needs re-deriving.
+    let timeline = std::fs::read_to_string(ui_timeline()).unwrap();
+    let last = timeline.lines().last().unwrap();
+    let last: serde_json::Value = serde_json::from_str(last).unwrap();
+    assert_eq!(
+        last["cursor"],
+        serde_json::json!([fx, fy]),
+        "the timeline's final cursor should be the centre of Quit"
+    );
+    assert_eq!(last["held"], serde_json::json!(["MouseLeft"]));
+}
+
+/// The fixture rendered: a menu over a 3D scene with the second button held
+/// down, pinned bit-exactly.
+///
+/// The pressed button is the assertion. It is the state hardest to reach and
+/// the one nothing else pins: it requires the timeline's cursor to have landed
+/// on the right rectangle, the press capture to have survived from the step it
+/// started on, and the press tint to have been multiplied into the panel's own
+/// colour before the rasterizer ever saw it.
+///
+/// Aimed at its subject with no terrain in frame (M22's rule), so it carries a
+/// hard pin rather than a `diff_args` tolerance.
+#[test]
+fn the_m31_ui_fixture_pins_a_pressed_button_over_a_3d_scene() {
+    let baseline = repo_path("examples/scenes/verify/baselines/m31_ui.png");
+    let diff = engine()
+        .arg("diff-render")
+        .arg(ui_scene())
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("30")
+        .arg("--input")
+        .arg(ui_timeline())
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// Adding a `HudInteract` must move no pixel until a cursor arrives on it:
+/// the tints default to `[1, 1, 1]`, so an untouched button renders exactly as
+/// it would with no interaction in the scene at all.
+///
+/// Tested against `--steps 0`, which never runs the simulation and so never
+/// touches the interaction state, versus a full run whose cursor is parked in
+/// a corner. The fixture is otherwise static — no particles, no water, no
+/// daylight — so the two frames may differ only in what the pointer did.
+///
+/// (The centre of the frame, which is where M28 puts an absent cursor, is over
+/// the first button in this fixture — so "no `--input`" is emphatically *not*
+/// the untouched case here, and using it as one is the mistake this comment
+/// exists to stop the next person repeating.)
+#[test]
+fn an_untouched_button_renders_as_if_it_had_no_interact() {
+    let dir = std::env::temp_dir().join(format!("engine-m31-untouched-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // A timeline that parks the cursor in the corner, clear of the menu.
+    let away = dir.join("away.input.jsonl");
+    std::fs::write(
+        &away,
+        "{\"step\": 0, \"held\": [], \"cursor\": [0.02, 0.02]}\n",
+    )
+    .unwrap();
+
+    let shot = |name: &str, steps: &str, input: Option<&std::path::Path>| {
+        let out = dir.join(name);
+        let mut command = engine();
+        command
+            .arg("screenshot")
+            .arg(ui_scene())
+            .arg("--out")
+            .arg(&out)
+            .arg("--steps")
+            .arg(steps)
+            .arg("--width")
+            .arg("640")
+            .arg("--height")
+            .arg("360");
+        if let Some(input) = input {
+            command.arg("--input").arg(input);
+        }
+        (command.output().unwrap(), out)
+    };
+
+    let (ran, away_png) = shot("away.png", "30", Some(&away));
+    if !ran.status.success() {
+        let stderr = String::from_utf8_lossy(&ran.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "screenshot failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    }
+    let (rest, rest_png) = shot("rest.png", "0", None);
+    assert!(rest.status.success());
+
+    assert_eq!(
+        std::fs::read(&away_png).unwrap(),
+        std::fs::read(&rest_png).unwrap(),
+        "a pointer over no interactive element tints nothing"
+    );
+}
+
+/// The other half of the same claim: a pointer that *is* over a button changes
+/// the frame. Without this, the test above would pass just as well if tinting
+/// were never wired up at all.
+#[test]
+fn a_hovered_button_is_a_different_frame_from_an_untouched_one() {
+    let dir = std::env::temp_dir().join(format!("engine-m31-hover-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, cursor: &str, held: &str| {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!("{{\"step\": 0, \"held\": [{held}], \"cursor\": {cursor}}}\n"),
+        )
+        .unwrap();
+        path
+    };
+    let away = write("away.jsonl", "[0.02, 0.02]", "");
+    // The centre of Quit, per `engine ui-layout`.
+    let over = write("over.jsonl", "[0.5, 0.653]", "");
+    let down = write("down.jsonl", "[0.5, 0.653]", "\"MouseLeft\"");
+
+    let shot = |name: &str, input: &std::path::Path| {
+        let out = dir.join(name);
+        let output = engine()
+            .arg("screenshot")
+            .arg(ui_scene())
+            .arg("--out")
+            .arg(&out)
+            .arg("--steps")
+            .arg("30")
+            .arg("--input")
+            .arg(input)
+            .arg("--width")
+            .arg("640")
+            .arg("--height")
+            .arg("360")
+            .output()
+            .unwrap();
+        (output, out)
+    };
+
+    let (first, away_png) = shot("away.png", &away);
+    if !first.status.success() {
+        let stderr = String::from_utf8_lossy(&first.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "screenshot failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    }
+    let (_, over_png) = shot("over.png", &over);
+    let (_, down_png) = shot("down.png", &down);
+
+    let away_bytes = std::fs::read(&away_png).unwrap();
+    let over_bytes = std::fs::read(&over_png).unwrap();
+    let down_bytes = std::fs::read(&down_png).unwrap();
+    assert_ne!(away_bytes, over_bytes, "hover must brighten the button");
+    assert_ne!(over_bytes, down_bytes, "press must differ from hover");
+}
+
+// ── Locomotion and foot planting (M32) ────────────────────────────────────
+
+/// The milestone's fixture: two identical walkers crossing one slope, and the
+/// only difference between them is a `FootPlant`.
+fn locomotion_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m32_locomotion.json")
+}
+
+#[test]
+fn the_locomotion_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(locomotion_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The M32 fixture rendered: two walkers mid-stride on a hillside, one with
+/// its feet planted and one without, pinned bit-exactly.
+///
+/// The two walkers are the assertion, M30's fixture logic reused — they share
+/// a file, a mesh and a clip, so anything that made both wrong would leave
+/// them identical; only real planting puts one pair of feet on the slope while
+/// the other pair sinks into it.
+///
+/// It renders at `samples: 1`, and that is deliberate rather than incidental:
+/// the fixture needs terrain in frame, which M22 measured as the end of this
+/// adapter's bit-exactness at `samples: 4`. M29's meadow hit the same wall and
+/// settled it the same way. Measured, not assumed — four consecutive renders
+/// of this scene are one image.
+#[test]
+fn the_m32_locomotion_fixture_pins_planted_feet() {
+    let scene = locomotion_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m32_locomotion.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("45")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The milestone's claim, proved without a pixel — M30's half of the story,
+/// which is the half this engine cares about most.
+///
+/// A planted ankle's world Y is the terrain height under it plus the foot's
+/// `sole`, at any moment of the clip; the unplanted twin's is whatever the
+/// animator left it at, which on a slope is inside the hill. Both facts come
+/// out of `engine list-joints` and `engine terrain-height`, neither of which
+/// renders anything.
+#[test]
+fn a_planted_ankle_stands_on_the_ground_and_an_unplanted_one_does_not() {
+    let scene = locomotion_scene();
+
+    let joints = |entity: &str, time: &str| -> serde_json::Value {
+        let output = engine()
+            .arg("list-joints")
+            .arg(&scene)
+            .arg("--entity")
+            .arg(entity)
+            .arg("--time")
+            .arg(time)
+            .output()
+            .unwrap();
+        json_stdout(&output)["rigs"][0].clone()
+    };
+    let ground_at = |x: f64, z: f64| -> f64 {
+        let output = engine()
+            .arg("terrain-height")
+            .arg(&scene)
+            .arg("--at")
+            .arg(format!("{x},{z}"))
+            .output()
+            .unwrap();
+        json_stdout(&output)["height"].as_f64().unwrap()
+    };
+    let ankle = |rig: &serde_json::Value, name: &str| -> (f64, f64, f64) {
+        let joint = rig["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["name"] == name)
+            .unwrap_or_else(|| panic!("no joint {name} in {rig}"));
+        let p = joint["world"]["position"].as_array().unwrap();
+        (
+            p[0].as_f64().unwrap(),
+            p[1].as_f64().unwrap(),
+            p[2].as_f64().unwrap(),
+        )
+    };
+
+    // The sole offset the fixture authors, in metres.
+    const SOLE: f64 = 0.09;
+    let mut off_ground = 0;
+    for time in ["0.0", "0.25", "0.5", "0.75"] {
+        let planted = joints("Planted", time);
+        let loose = joints("Loose", time);
+        for foot in ["FootL", "FootR"] {
+            let (x, y, z) = ankle(&planted, foot);
+            let wanted = ground_at(x, z) + SOLE;
+            assert!(
+                (y - wanted).abs() < 2e-3,
+                "at t={time} the planted {foot} is at y={y}, the ground under it \
+                 plus its sole is {wanted}"
+            );
+
+            let (lx, ly, lz) = ankle(&loose, foot);
+            if (ly - (ground_at(lx, lz) + SOLE)).abs() > 2e-2 {
+                off_ground += 1;
+            }
+        }
+    }
+    assert!(
+        off_ground >= 4,
+        "the unplanted walker's feet should mostly *not* be on the ground — \
+         if they were, the fixture would prove nothing ({off_ground} of 8 were off)"
+    );
+}
+
+/// The other half: a stride-driven clip advances with the ground covered, so a
+/// planted foot stays where it was put while it is the one bearing weight.
+///
+/// This is foot slide as a number, which is what the milestone is actually
+/// about. With `stride` measured off the clip the planted ankle moves under a
+/// centimetre a step through stance; with the clock driving the clip instead,
+/// the same foot travels several times that.
+#[test]
+fn a_stride_driven_walk_does_not_slide_its_feet() {
+    // Where the planted foot is after `steps` steps of the real simulation.
+    // `list-joints --steps` runs the locomotion system first, which is the
+    // only way to ask a stride-driven rig anything: its phase lives in the
+    // world the run leaves behind, not in the file's authored pose.
+    let foot_after = |steps: u32| -> Vec<(f64, f64, f64)> {
+        let output = engine()
+            .arg("list-joints")
+            .arg(locomotion_scene())
+            .arg("--entity")
+            .arg("Planted")
+            .arg("--steps")
+            .arg(steps.to_string())
+            .output()
+            .unwrap();
+        let rig = json_stdout(&output)["rigs"][0].clone();
+        ["FootL", "FootR"]
+            .iter()
+            .map(|name| {
+                let joint = rig["joints"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|j| &j["name"] == name)
+                    .unwrap();
+                let p = joint["world"]["position"].as_array().unwrap();
+                (
+                    p[0].as_f64().unwrap(),
+                    p[1].as_f64().unwrap(),
+                    p[2].as_f64().unwrap(),
+                )
+            })
+            .collect()
+    };
+
+    // Two steps apart: the walker covers 1/30 m at its scripted 1 m/s, and the
+    // foot bearing weight should have travelled essentially none of it.
+    let before = foot_after(24);
+    let after = foot_after(26);
+    let slip = before
+        .iter()
+        .zip(&after)
+        .map(|(a, b)| ((a.0 - b.0).powi(2) + (a.2 - b.2).powi(2)).sqrt())
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        slip < 0.012,
+        "the planted foot slid {slip} m over two steps; a stance foot should stay put"
+    );
+}
+
+// ── The baselines the sweep used to be the only check on ──────────────────
+//
+// `bin/verify-baselines` walks every entry in `baselines.json`, but it is a
+// thing a person runs, not a thing `cargo test` runs. Twenty-five artifacts
+// had no test behind them at all, so a change could move any of them and stay
+// green until someone remembered to sweep. These pin the nineteen that render
+// reproducibly, at 3.6 s for the lot.
+//
+// The six `showcase_*` frames are deliberately **not** here. They are not
+// byte-reproducible on this adapter — measured repeatedly at four to six
+// distinct images from six renders of an unchanged scene, on any binary — so a
+// test asserting them would fail at random, which is worse than no test. They
+// keep their `diff_args` tolerance in the manifest and stay the sweep's job.
+// See CLAUDE.md §Verification before adding them here.
+
+/// Diff-render one committed baseline and require it bit-exact.
+///
+/// Skips cleanly when this machine has no GPU, the policy every render pin
+/// here follows: baselines are per-adapter artifacts, so a machine that cannot
+/// render them has nothing to say about them.
+fn pin_baseline(scene: &str, baseline: &str, args: &[&str]) {
+    let mut command = engine();
+    command
+        .arg("diff-render")
+        .arg(repo_path(scene))
+        .arg(repo_path(baseline));
+    for arg in args {
+        // Timeline paths are repo-relative in the manifest; the test process
+        // does not promise to run from the repo root.
+        if arg.ends_with(".input.jsonl") {
+            command.arg(repo_path(arg));
+        } else {
+            command.arg(arg);
+        }
+    }
+    let diff = command.output().unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin for {baseline}: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{baseline}: {report}");
+    assert_eq!(report["diff_pixels"], 0, "{baseline}: {report}");
+}
+
+/// M4's lighting rig: the GGX shader, the two light components, and the sRGB
+/// render target that M4 settled the colour space on.
+#[test]
+fn m4_lighting_baseline_pins_the_pbr_rig() {
+    pin_baseline(
+        "examples/scenes/verify/m4_lighting.json",
+        "examples/scenes/verify/baselines/m4_lighting.png",
+        &[],
+    );
+}
+
+/// Both ends of M8's fall. `--steps 0` is the scene at rest, which is also the
+/// only thing that catches a physics build changing where bodies *start*.
+#[test]
+fn m8_drop_baselines_pin_both_ends_of_the_fall() {
+    for (steps, baseline) in [
+        ("0", "examples/scenes/verify/baselines/m8_drop_t0.png"),
+        ("300", "examples/scenes/verify/baselines/m8_drop_t300.png"),
+    ] {
+        pin_baseline(
+            "examples/scenes/verify/m8_drop.json",
+            baseline,
+            &["--steps", steps],
+        );
+    }
+}
+
+/// M9 sampled by `--time`, not `--steps`: a property clip's pose is a pure
+/// function of the clock, and this is the artifact that says so in pixels.
+#[test]
+fn m9_spin_baseline_pins_the_sampled_pose() {
+    pin_baseline(
+        "examples/scenes/verify/m9_spin.json",
+        "examples/scenes/verify/baselines/m9_t025.png",
+        &["--time", "0.25"],
+    );
+}
+
+/// M10 before and after the script has run: `--steps 0` is the authored file,
+/// `--steps 120` is what `fn step` did to it.
+#[test]
+fn m10_script_baselines_pin_both_ends_of_the_script() {
+    for (steps, baseline) in [
+        ("0", "examples/scenes/verify/baselines/m10_t0.png"),
+        ("120", "examples/scenes/verify/baselines/m10_t120.png"),
+    ] {
+        pin_baseline(
+            "examples/scenes/verify/m10_script.json",
+            baseline,
+            &["--steps", steps],
+        );
+    }
+}
+
+/// The parked car at the end of three recorded laps.
+///
+/// The lap test above pins the *drive* — positions, elevation, the HUD strings
+/// — and has named this PNG in a comment since M11 without anyone rendering
+/// it. Eleven thousand steps of vehicle physics and a render, for 1.2 s.
+#[test]
+fn m11_lap_baseline_pins_the_parked_car() {
+    pin_baseline(
+        "examples/scenes/car_track.json",
+        "examples/scenes/verify/baselines/m11_lap.png",
+        &[
+            "--steps",
+            "11634",
+            "--input",
+            "examples/scenes/car_track_lap.input.jsonl",
+        ],
+    );
+}
+
+/// M13's smoke: the seeded emitter's whole point is that a particle field can
+/// sit under a bit-exact baseline at all.
+#[test]
+fn m13_smoke_baseline_pins_the_particle_field() {
+    pin_baseline(
+        "examples/scenes/verify/m13_smoke.json",
+        "examples/scenes/verify/baselines/m13_smoke.png",
+        &["--steps", "180"],
+    );
+}
+
+/// M14 after the break: fragments are ordinary entities by the time this
+/// renders, which is the milestone's claim as a picture.
+#[test]
+fn m14_break_baseline_pins_the_debris() {
+    pin_baseline(
+        "examples/scenes/verify/m14_break.json",
+        "examples/scenes/verify/baselines/m14_break.png",
+        &["--steps", "300"],
+    );
+}
+
+/// The four hours of M21 that no test covered — noon already had one.
+///
+/// Together they pin the sun/moon handoff from both sides: 02:00 and 22:00 are
+/// moonlit, 06:30 and 18:30 sit just past the swap.
+#[test]
+fn m21_daylight_baselines_pin_the_other_four_hours() {
+    for (steps, baseline) in [
+        (
+            "120",
+            "examples/scenes/verify/baselines/m21_daylight_0200.png",
+        ),
+        (
+            "390",
+            "examples/scenes/verify/baselines/m21_daylight_0630.png",
+        ),
+        (
+            "1110",
+            "examples/scenes/verify/baselines/m21_daylight_1830.png",
+        ),
+        (
+            "1320",
+            "examples/scenes/verify/baselines/m21_daylight_2200.png",
+        ),
+    ] {
+        pin_baseline(
+            "examples/scenes/verify/m21_daylight.json",
+            baseline,
+            &["--steps", steps],
+        );
+    }
+}
+
+/// M26's texture maps, aimed at their subject with no terrain in frame, which
+/// is what lets this one carry a hard pin at all.
+#[test]
+fn m26_materials_baseline_pins_the_texture_maps() {
+    pin_baseline(
+        "examples/scenes/verify/m26_materials.json",
+        "examples/scenes/verify/baselines/m26_materials.png",
+        &[],
+    );
+}
+
+/// M27's two cameras on one file: the overhead one pins the bend, the grazing
+/// one pins the waterline the depth-copy validation exists for.
+///
+/// A test already names the overhead baseline, but only to assert it must
+/// *not* match with `ior` back at 1.0 — that pins refraction as load-bearing
+/// and says nothing about the render. This is the positive half.
+#[test]
+fn m27_water_refraction_baselines_pin_both_cameras() {
+    pin_baseline(
+        "examples/scenes/verify/m27_water_refraction.json",
+        "examples/scenes/verify/baselines/m27_water_refraction.png",
+        &["--steps", "120"],
+    );
+    pin_baseline(
+        "examples/scenes/verify/m27_water_refraction.json",
+        "examples/scenes/verify/baselines/m27_water_grazing.png",
+        &["--steps", "120", "--camera", "CameraGrazing"],
+    );
+}
+
+/// M28's two baselines from one timeline: where the pointer aimed, and what it
+/// hit when the button went down.
+#[test]
+fn m28_pointer_baselines_pin_aim_and_click() {
+    for (steps, baseline) in [
+        ("40", "examples/scenes/verify/baselines/m28_pointer_aim.png"),
+        (
+            "80",
+            "examples/scenes/verify/baselines/m28_pointer_click.png",
+        ),
+    ] {
+        pin_baseline(
+            "examples/scenes/verify/m28_pointer.json",
+            baseline,
+            &[
+                "--steps",
+                steps,
+                "--input",
+                "examples/scenes/verify/m28_pointer.input.jsonl",
+            ],
+        );
+    }
+}
+
+/// M29's field, and the reason it renders at `samples: 1`: a meadow under MSAA
+/// is not byte-reproducible on this adapter, so the fixture gives up
+/// antialiasing to keep a hard pin. If this starts failing, check `samples`
+/// before blaming the vertex stage.
+#[test]
+fn m29_meadow_baseline_pins_the_field_at_samples_1() {
+    pin_baseline(
+        "examples/scenes/verify/m29_meadow.json",
+        "examples/scenes/verify/baselines/m29_meadow.png",
+        &["--time", "0.7"],
+    );
+}
+// ── Skinned collider proxies (M33) ────────────────────────────────────────
+
+/// The milestone's fixture: two identical walkers walk into two identical
+/// crates, and the only difference between them is a `SkinnedCollider`.
+fn proxy_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m33_proxies.json")
+}
+
+#[test]
+fn the_proxy_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(proxy_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The M33 fixture rendered: one walker bulldozing a crate along, and its twin
+/// standing past a crate it walked straight through.
+///
+/// The two walkers are the assertion, M30's fixture logic for the third time —
+/// they share a file, a mesh, a clip and a crate, so anything that made both
+/// wrong would leave them identical.
+///
+/// It aims at its subject with no terrain in frame, per M22's rule, so it
+/// carries a hard bit-exact pin; four consecutive renders came back as one
+/// image, measured rather than assumed.
+#[test]
+fn the_m33_proxy_fixture_pins_a_shoved_crate() {
+    let scene = proxy_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m33_proxies.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The milestone's claim as a number, with no image read: a character whose
+/// pose the physics world can see moves what it walks into, and one whose pose
+/// it cannot see does not.
+#[test]
+fn a_proxied_walker_shoves_its_crate_and_an_unproxied_one_walks_through_its_own() {
+    let output = engine()
+        .arg("simulate")
+        .arg(proxy_scene())
+        .arg("--steps")
+        .arg("150")
+        .arg("--entity")
+        .arg("CrateHit")
+        .arg("--entity")
+        .arg("CrateMissed")
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let z_of = |name: &str| -> f64 {
+        report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == name)
+            .unwrap_or_else(|| panic!("no {name} in {report}"))["position"][2]
+            .as_f64()
+            .unwrap()
+    };
+
+    // Both crates are authored at z = -0.55 and both walkers walk into them.
+    let hit = z_of("CrateHit");
+    let missed = z_of("CrateMissed");
+    assert!(
+        hit < -1.2,
+        "the proxied walker must shove its crate well past its authored z = -0.55, \
+         it is at {hit}"
+    );
+    assert!(
+        (missed + 0.55).abs() < 1e-3,
+        "the unproxied walker must pass through its crate without touching it, \
+         but the crate moved to {missed}"
+    );
+}
+
+/// `engine list-colliders` and `engine list-joints` must agree about where a
+/// part is — the report closing the loop on itself, since a hitbox riding a
+/// joint is invisible in every render.
+///
+/// They agree to millimetres rather than exactly, and the residue is causal:
+/// this walker's clip is stride-driven, so its `phase` is advanced by the
+/// ground it covered, which physics cannot know until it has run. The proxy is
+/// therefore posed from the previous step's phase — M12's contact latency, in
+/// another place. A wrong joint, a dropped model transform or a mis-composed
+/// offset would all be off by tens of centimetres, not by two millimetres.
+#[test]
+fn list_colliders_and_list_joints_agree_about_where_a_part_is() {
+    let scene = proxy_scene();
+
+    let colliders = engine()
+        .arg("list-colliders")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Proxied")
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    let colliders = json_stdout(&colliders);
+    let hips = colliders["colliders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["part"] == "Hips")
+        .unwrap_or_else(|| panic!("no Hips proxy in {colliders}"));
+
+    let joints = engine()
+        .arg("list-joints")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Proxied")
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    let joints = json_stdout(&joints);
+    let joint = joints["rigs"][0]["joints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["name"] == "Hips")
+        .unwrap_or_else(|| panic!("no Hips joint in {joints}"));
+
+    // The Hips part carries no offset, so the two should name the same point.
+    for axis in 0..3 {
+        let from_physics = hips["position"][axis].as_f64().unwrap();
+        let from_pose = joint["world"]["position"][axis].as_f64().unwrap();
+        assert!(
+            (from_physics - from_pose).abs() < 5e-3,
+            "axis {axis}: the proxy is at {from_physics}, the joint at {from_pose}"
+        );
+    }
+
+    // Every part the component authors is built, and each is named once.
+    let parts: Vec<&str> = colliders["colliders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["part"].as_str())
+        .collect();
+    assert_eq!(parts.len(), 11, "{colliders}");
+    assert!(
+        parts.contains(&"Head") && parts.contains(&"FootR"),
+        "{parts:?}"
+    );
+}
+
+/// A shot to the head reports the head. The entity name stays an entity name —
+/// a proxy is not one, and a report that put `Proxied/Head` where an entity
+/// belongs would name something no command accepts (design §5).
+#[test]
+fn a_raycast_names_the_proxy_part_it_hit() {
+    let scene = proxy_scene();
+
+    let at_head = engine()
+        .arg("raycast")
+        .arg(&scene)
+        .arg("--from")
+        .arg("-6,1.55,-1.4833")
+        .arg("--dir")
+        .arg("1,0,0")
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    let hit = json_stdout(&at_head)["hit"].clone();
+    assert_eq!(hit["entity"], "Proxied", "{hit}");
+    assert_eq!(hit["part"], "Head", "{hit}");
+
+    // The same ray across the unproxied walker's lane finds nothing: its pose
+    // is invisible to physics, which is the whole difference between them.
+    let past_loose = engine()
+        .arg("raycast")
+        .arg(&scene)
+        .arg("--from")
+        .arg("-6,1.55,1.4833")
+        .arg("--dir")
+        .arg("1,0,0")
+        .arg("--steps")
+        .arg("150")
+        .output()
+        .unwrap();
+    assert_eq!(json_stdout(&past_loose)["hit"], serde_json::Value::Null);
+}
+
+/// `list-colliders` answers for an ordinary scene too — "where are the
+/// colliders" was unanswerable before this command, and answering it only for
+/// proxies would be half a report.
+#[test]
+fn list_colliders_reports_component_colliders_with_no_part() {
+    let output = engine()
+        .arg("list-colliders")
+        .arg(repo_path("examples/scenes/verify/m8_drop.json"))
+        .output()
+        .unwrap();
+    let report = json_stdout(&output);
+    let rows = report["colliders"].as_array().unwrap();
+    assert!(!rows.is_empty(), "{report}");
+    assert!(
+        rows.iter().all(|row| row["part"].is_null()),
+        "a scene with no SkinnedCollider has no parts: {report}"
+    );
+    let cube = rows
+        .iter()
+        .find(|row| row["entity"] == "DropCube")
+        .unwrap_or_else(|| panic!("no DropCube in {report}"));
+    assert_eq!(cube["shape"], "cuboid", "{cube}");
+    assert_eq!(
+        cube["dimensions"],
+        serde_json::json!([0.5, 0.5, 0.5]),
+        "{cube}"
+    );
+}
+
+/// A proxy on a joint the rig does not have is refused before a device or a
+/// step exists, with the near miss named — `world.key`'s manners, and
+/// `FootPlant`'s, since the failure is identical: a mistyped joint otherwise
+/// builds no hitbox at all, silently, and nothing in the render says so.
+#[test]
+fn a_proxy_on_an_unknown_joint_is_refused_with_a_suggestion() {
+    let scene = proxy_scene();
+    let source = std::fs::read_to_string(&scene).unwrap();
+    let typo = source.replace(r#""joint": "Chest""#, r#""joint": "Chset""#);
+    assert_ne!(source, typo, "the fixture must author a Chest proxy");
+
+    // Next to the original: asset paths resolve relative to the scene file.
+    let broken = scene.with_file_name("m33_broken_joint.json");
+    std::fs::write(&broken, typo).unwrap();
+    let output = engine().arg("validate").arg(&broken).output().unwrap();
+    let _ = std::fs::remove_file(&broken);
+
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr_lines(&output);
+    let unknown = errors
+        .iter()
+        .find(|e| e["error"] == "unknown_joint")
+        .unwrap_or_else(|| panic!("expected unknown_joint, got {errors:?}"));
+    assert_eq!(unknown["component"], "SkinnedCollider", "{unknown}");
+    assert_eq!(unknown["did_you_mean"], "Chest", "{unknown}");
 }

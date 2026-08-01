@@ -90,6 +90,7 @@ pub fn generate(cloud: &Cloud) -> MeshData {
             normals: Vec::with_capacity(vertex_count(cloud) as usize),
             uvs: Vec::with_capacity(vertex_count(cloud) as usize),
             indices: Vec::new(),
+            ..MeshData::default()
         },
     };
 
@@ -206,7 +207,9 @@ impl Builder<'_> {
             // `flatten` bends the profile, so more of the cluster crowds the
             // base plane; the fold afterwards is what makes that base flat.
             let low = BASE_PLANE + radius * (1.0 - BASE_SINK);
-            let high = (low + DOME_STACK * base_radius * 2.0).min(0.5 - radius).max(low);
+            let high = (low + DOME_STACK * base_radius * 2.0)
+                .min(0.5 - radius)
+                .max(low);
             let profile = (1.0 - ring).powf(1.0 + cloud.flatten);
             let y = lerp(low, high, profile) + self.jitter_signed() * (high - low) * 0.25;
 
@@ -425,8 +428,7 @@ fn build_sphere(detail: u32) -> MeshData {
             let mut midpoint = |u: u32, v: u32, positions: &mut Vec<Vec3>| -> u32 {
                 let key = (u.min(v), u.max(v));
                 *midpoints.entry(key).or_insert_with(|| {
-                    let point =
-                        ((positions[u as usize] + positions[v as usize]) * 0.5).normalize();
+                    let point = ((positions[u as usize] + positions[v as usize]) * 0.5).normalize();
                     positions.push(point);
                     positions.len() as u32 - 1
                 })
@@ -444,6 +446,7 @@ fn build_sphere(detail: u32) -> MeshData {
         normals: Vec::with_capacity(positions.len()),
         uvs: Vec::with_capacity(positions.len()),
         indices: indices.into_iter().flatten().collect(),
+        ..MeshData::default()
     };
     for point in positions {
         mesh.positions.push(point.to_array());
@@ -599,10 +602,26 @@ mod tests {
     fn vertex_count_predicts_what_generation_produces() {
         for cloud in [
             Cloud::default(),
-            Cloud { levels: 0, ..Cloud::default() },
-            Cloud { children: 0, ..Cloud::default() },
-            Cloud { lobes: 1, levels: 3, children: 2, detail: 1, ..Cloud::default() },
-            Cloud { detail: 0, lobes: 12, ..Cloud::default() },
+            Cloud {
+                levels: 0,
+                ..Cloud::default()
+            },
+            Cloud {
+                children: 0,
+                ..Cloud::default()
+            },
+            Cloud {
+                lobes: 1,
+                levels: 3,
+                children: 2,
+                detail: 1,
+                ..Cloud::default()
+            },
+            Cloud {
+                detail: 0,
+                lobes: 12,
+                ..Cloud::default()
+            },
         ] {
             let mesh = generate(&cloud);
             assert_eq!(
@@ -618,9 +637,15 @@ mod tests {
         let cloud = Cloud::default();
         let first = generate(&cloud);
         let again = generate(&cloud);
-        assert_eq!(first, again, "generation is a pure function of the component");
+        assert_eq!(
+            first, again,
+            "generation is a pure function of the component"
+        );
 
-        let other = generate(&Cloud { seed: 1, ..cloud.clone() });
+        let other = generate(&Cloud {
+            seed: 1,
+            ..cloud.clone()
+        });
         assert_eq!(
             first.positions.len(),
             other.positions.len(),
@@ -646,13 +671,23 @@ mod tests {
             ..Cloud::default()
         };
         let a = generate(&diagram);
-        let b = generate(&Cloud { seed: 99, ..diagram.clone() });
-        assert_eq!(a.positions, b.positions, "no jitter, no wobble: no randomness");
+        let b = generate(&Cloud {
+            seed: 99,
+            ..diagram.clone()
+        });
+        assert_eq!(
+            a.positions, b.positions,
+            "no jitter, no wobble: no randomness"
+        );
 
         // Children are the exception, and deliberately so: where a lobe
         // attaches is a direction draw with no parameter to turn off. A diagram
         // cloud is a diagram of the base cluster.
-        let piled = Cloud { levels: 1, children: 3, ..diagram };
+        let piled = Cloud {
+            levels: 1,
+            children: 3,
+            ..diagram
+        };
         assert_ne!(
             generate(&piled).positions,
             generate(&Cloud { seed: 99, ..piled }).positions,
@@ -662,9 +697,12 @@ mod tests {
 
     #[test]
     fn flattening_puts_a_floor_under_the_cloud() {
-        // The flat base is one of the four cues in `cloud-design.md` §1, and it
+        // The flat base is one of M20's four shape cues, and it
         // is the one a unit test can actually check.
-        let flat = generate(&Cloud { flatten: 1.0, ..Cloud::default() });
+        let flat = generate(&Cloud {
+            flatten: 1.0,
+            ..Cloud::default()
+        });
         let lowest = flat.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
         assert!(
             (lowest - BASE_PLANE).abs() < 1e-6,
@@ -672,13 +710,27 @@ mod tests {
         );
         // And it is a *floor*, not a squash: the cloud still has height.
         let highest = flat.positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
-        assert!(highest > 0.0, "the flattened cloud collapsed: top at {highest}");
+        assert!(
+            highest > 0.0,
+            "the flattened cloud collapsed: top at {highest}"
+        );
 
         // Checked across seeds, because one seed proves nothing about a scatter.
         for seed in 0..16 {
-            let cloud = generate(&Cloud { seed, flatten: 1.0, ..Cloud::default() });
-            let lowest = cloud.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
-            assert!(lowest >= BASE_PLANE - 1e-5, "seed {seed} leaked below the base");
+            let cloud = generate(&Cloud {
+                seed,
+                flatten: 1.0,
+                ..Cloud::default()
+            });
+            let lowest = cloud
+                .positions
+                .iter()
+                .map(|p| p[1])
+                .fold(f32::MAX, f32::min);
+            assert!(
+                lowest >= BASE_PLANE - 1e-5,
+                "seed {seed} leaked below the base"
+            );
         }
     }
 
@@ -688,14 +740,21 @@ mod tests {
         // cluster — visible as a wart floating beside the cloud, and easy to
         // miss in a thumbnail.
         for seed in 0..24 {
-            let cloud = Cloud { seed, levels: 3, ..Cloud::default() };
+            let cloud = Cloud {
+                seed,
+                levels: 3,
+                ..Cloud::default()
+            };
             let mesh = generate(&cloud);
             let reach = mesh
                 .positions
                 .iter()
                 .map(|p| Vec3::from_array(*p).length())
                 .fold(0.0f32, f32::max);
-            assert!(reach < 1.4, "seed {seed} reached {reach} outside the unit box");
+            assert!(
+                reach < 1.4,
+                "seed {seed} reached {reach} outside the unit box"
+            );
         }
     }
 
@@ -703,8 +762,18 @@ mod tests {
     fn children_pile_upward() {
         // `rise` is what separates a convection cell from a sea urchin. With it
         // at 1 the crown must sit clear of where the base lobes topped out.
-        let base = Cloud { levels: 0, children: 0, flatten: 1.0, ..Cloud::default() };
-        let risen = Cloud { levels: 2, children: 4, rise: 1.0, ..base.clone() };
+        let base = Cloud {
+            levels: 0,
+            children: 0,
+            flatten: 1.0,
+            ..Cloud::default()
+        };
+        let risen = Cloud {
+            levels: 2,
+            children: 4,
+            rise: 1.0,
+            ..base.clone()
+        };
         let top = |c: &Cloud| {
             generate(c)
                 .positions
@@ -724,11 +793,17 @@ mod tests {
     fn the_cache_hands_back_one_arc_per_distinct_shape() {
         // The renderer's upload cache keys on `Arc` identity; a fresh copy per
         // frame would re-upload every cloud in the sky every frame.
-        let cloud = Cloud { seed: 4242, ..Cloud::default() };
+        let cloud = Cloud {
+            seed: 4242,
+            ..Cloud::default()
+        };
         assert!(Arc::ptr_eq(&mesh_for(&cloud), &mesh_for(&cloud)));
         assert!(!Arc::ptr_eq(
             &mesh_for(&cloud),
-            &mesh_for(&Cloud { seed: 4243, ..cloud.clone() })
+            &mesh_for(&Cloud {
+                seed: 4243,
+                ..cloud.clone()
+            })
         ));
 
         // Shading is a uniform, not a vertex: two clouds that differ only in

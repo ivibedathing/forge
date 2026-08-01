@@ -137,7 +137,8 @@ impl EngineError {
 
     /// Whether this diagnostic is a warning rather than an error.
     pub fn is_warning(&self) -> bool {
-        self.context().is_some_and(|c| c.severity == Some("warning"))
+        self.context()
+            .is_some_and(|c| c.severity == Some("warning"))
     }
 
     /// The process exit code this error's registered class dictates
@@ -219,7 +220,12 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 
 /// Closest candidate to `needle` by Levenshtein distance, if within a
 /// similarity threshold that scales with word length.
-pub(crate) fn closest_match<'a>(
+///
+/// Public because a *runtime* error is not an [`EngineError`] until it leaves
+/// the script host — `world.joint_position` on a mistyped joint wants the same
+/// suggestion `suggest_from` gives, in a `rhai` error rather than a JSON one,
+/// and a second threshold would drift from this one.
+pub fn closest_match<'a>(
     needle: &str,
     candidates: impl IntoIterator<Item = &'a str>,
 ) -> Option<String> {
@@ -254,8 +260,8 @@ fn levenshtein(a: &str, b: &str) -> usize {
     for (i, row) in d.iter_mut().enumerate() {
         row[0] = i;
     }
-    for j in 0..=n {
-        d[0][j] = j;
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
     }
 
     for i in 1..=m {

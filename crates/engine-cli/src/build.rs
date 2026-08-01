@@ -41,7 +41,10 @@ pub fn build(check: bool) -> Result<()> {
     } else if translated.errors > 0 {
         Err(EngineError::new(
             codes::BUILD_FAILED,
-            format!("cargo {subcommand} failed with {} error(s)", translated.errors),
+            format!(
+                "cargo {subcommand} failed with {} error(s)",
+                translated.errors
+            ),
         ))
     } else {
         // cargo failed without emitting a single compiler diagnostic: broken

@@ -148,17 +148,16 @@ impl ParticleSystem {
             if emitter.turbulence > 0.0 {
                 let inv_scale = 1.0 / emitter.turbulence_scale;
                 for particle in &mut state.particles {
-                    let swirl = turbulence_field(
-                        particle.position * inv_scale + particle.noise_offset,
-                    ) * emitter.turbulence;
+                    let swirl =
+                        turbulence_field(particle.position * inv_scale + particle.noise_offset)
+                            * emitter.turbulence;
                     particle.velocity =
                         (particle.velocity + (emitter.acceleration + swirl) * dt) * damping;
                     particle.position += particle.velocity * dt;
                 }
             } else {
                 for particle in &mut state.particles {
-                    particle.velocity =
-                        (particle.velocity + emitter.acceleration * dt) * damping;
+                    particle.velocity = (particle.velocity + emitter.acceleration * dt) * damping;
                     particle.position += particle.velocity * dt;
                 }
             }
@@ -353,11 +352,7 @@ fn sample_cone(state: &mut u32, half_angle: f32) -> Vec3 {
     let cos_phi = 1.0 - unit(state) * (1.0 - half_angle.cos());
     let sin_phi = (1.0 - cos_phi * cos_phi).max(0.0).sqrt();
     let azimuth = unit(state) * std::f32::consts::TAU;
-    Vec3::new(
-        sin_phi * azimuth.cos(),
-        sin_phi * azimuth.sin(),
-        -cos_phi,
-    )
+    Vec3::new(sin_phi * azimuth.cos(), sin_phi * azimuth.sin(), -cos_phi)
 }
 
 #[cfg(test)]
@@ -452,8 +447,9 @@ mod tests {
     fn emission_follows_local_negative_z() {
         // The fixture rotates [90, 0, 0], which carries local −Z to world +Y
         // (the aiming convention pin). With spread 0 every particle must rise.
-        let scene =
-            scene(r#"{"type":"ParticleEmitter","rate":60.0,"spread":0.0,"speed":2.0,"lifetime":10.0}"#);
+        let scene = scene(
+            r#"{"type":"ParticleEmitter","rate":60.0,"spread":0.0,"speed":2.0,"lifetime":10.0}"#,
+        );
         let mut system = ParticleSystem::build(&scene.world);
         for _ in 0..60 {
             system.step(&scene.world, DT);
@@ -628,9 +624,8 @@ mod tests {
             .collect();
         assert!(alphas.len() > 20);
 
-        let plain = scene(
-            r#"{"type":"ParticleEmitter","rate":30.0,"speed":0.0,"lifetime":2.0,"seed":4}"#,
-        );
+        let plain =
+            scene(r#"{"type":"ParticleEmitter","rate":30.0,"speed":0.0,"lifetime":2.0,"seed":4}"#);
         let mut system = ParticleSystem::build(&plain.world);
         for _ in 0..120 {
             system.step(&plain.world, DT);
@@ -676,7 +671,10 @@ mod tests {
         // ±40% of 0.5 spans [0.30, 0.70]; a sample of dozens should cover most
         // of that without ever leaving it.
         assert!(min_size >= 0.5 * 0.6 - 1e-5, "size below the jitter floor");
-        assert!(max_size <= 0.5 * 1.4 + 1e-5, "size above the jitter ceiling");
+        assert!(
+            max_size <= 0.5 * 1.4 + 1e-5,
+            "size above the jitter ceiling"
+        );
         assert!(max_size - min_size > 0.15, "size_jitter did not spread");
 
         // Speed jitter shows up as particles born on the same step ending up at

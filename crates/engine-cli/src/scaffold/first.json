@@ -69,11 +69,11 @@
     {
       "name": "Ball",
       "components": [
-        { "type": "Transform", "position": [1.6, 6.0, 2.4], "scale": [0.8, 0.8, 0.8] },
+        { "type": "Transform", "position": [1.6, 6.0, 2.4], "scale": [1.6, 1.6, 1.6] },
         { "type": "Mesh", "asset": "builtin:sphere" },
         { "type": "Material", "albedo": [0.20, 0.32, 0.72], "roughness": 0.4 },
         { "type": "RigidBody", "body": "dynamic" },
-        { "type": "Collider", "shape": "sphere", "radius": 0.8,
+        { "type": "Collider", "shape": "sphere", "radius": 0.5,
           "friction": 0.8, "restitution": 0.35, "collides_with": ["ground"] }
       ]
     },

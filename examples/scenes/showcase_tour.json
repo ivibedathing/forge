@@ -1,3632 +1,3882 @@
 {
- "name": "showcase_tour",
- "physics": {
-  "gravity": [
-   0.0,
-   -9.81,
-   0.0
-  ],
-  "timestep_hz": 60
- },
- "daylight": {
-  "time_of_day": 16.3,
-  "day_length": 300.0,
-  "sun_elevation": 54.0,
-  "sun_azimuth": 28.0,
-  "moon_elevation": 40.0
- },
- "environment": {
-  "sky": true,
-  "fog_density": 0.0024,
-  "shadows": true,
-  "shadow_distance": 72.0,
-  "samples": 4
- },
- "entities": [
-  {
-   "name": "Ground",
-   "components": [
-    {
-     "type": "Transform",
-     "scale": [
-      200.0,
-      1.0,
-      200.0
-     ]
-    },
-    {
-     "type": "Terrain",
-     "segments": 320,
-     "seed": 3,
-     "height": 1.2,
-     "feature_scale": 38.0,
-     "octaves": 5,
-     "persistence": 0.5,
-     "warp": 0.45,
-     "texture_scale": 2.6,
-     "color_variation": 0.35,
-     "bump": 0.3,
-     "layers": [
-      {
-       "albedo": [
-        0.085,
-        0.125,
-        0.058
-       ],
-       "roughness": 0.96
-      },
-      {
-       "albedo": [
-        0.125,
-        0.135,
-        0.07
-       ],
-       "roughness": 0.96,
-       "height_range": [
-        0.45,
-        20.0
-       ],
-       "height_blend": 0.55,
-       "slope_range": [
-        0.0,
-        14.0
-       ],
-       "slope_blend": 7.0,
-       "noise": 0.9
-      },
-      {
-       "albedo": [
-        0.098,
-        0.072,
-        0.046
-       ],
-       "roughness": 0.95,
-       "slope_range": [
-        13.0,
-        90.0
-       ],
-       "slope_blend": 7.0,
-       "noise": 0.9
-      }
-     ]
-    },
-    {
-     "type": "Collider",
-     "shape": "trimesh",
-     "friction": 0.9,
-     "layers": [
-      "ground"
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Monolith",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
+  "name": "showcase_tour",
+  "physics": {
+    "gravity": [
       0.0,
-      -0.481,
+      -9.81,
       0.0
-     ],
-     "scale": [
-      4.0,
-      5.5,
-      4.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "../meshes/pyramid.gltf"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.82,
-      0.8,
-      0.83
-     ],
-     "metallic": 0.15,
-     "roughness": 0.55,
-     "albedo_map": "../textures/granite.png",
-     "normal_map": "../textures/granite_normal.png",
-     "uv_scale": [
-      2.0,
-      2.0
-     ],
-     "normal_strength": 0.8
-    },
-    {
-     "type": "Collider",
-     "shape": "convex_hull",
-     "layers": [
-      "ground"
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Beacon",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      0.0,
-      5.919,
-      0.0
-     ],
-     "scale": [
-      0.5,
-      0.5,
-      0.5
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.05,
-      0.05,
-      0.06
-     ],
-     "emissive": [
-      0.15,
-      0.85,
-      0.95
-     ]
-    },
-    {
-     "type": "AnimationPlayer",
-     "clip": "animations/tour_beacon.anim.json",
-     "looping": true
-    }
-   ]
-  },
-  {
-   "name": "OakEast",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -11.0,
-      -0.338,
-      -13.6
-     ]
-    },
-    {
-     "type": "Tree",
-     "seed": 7,
-     "height": 5.8,
-     "trunk_radius": 0.26,
-     "levels": 3,
-     "branches": 5,
-     "branch_angle": 58.0,
-     "branch_start": 0.3,
-     "length_ratio": 0.66,
-     "length_falloff": 0.3,
-     "tropism": 16.0,
-     "crook": 11.0,
-     "jitter": 0.35,
-     "taper": 0.1,
-     "leaf_size": 0.27,
-     "leaves_per_branch": 14,
-     "leaf_color": [
-      0.08,
-      0.25,
-      0.08
-     ]
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.2,
-      0.13,
-      0.07
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "OakWest",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -16.5,
-      -0.433,
-      -12.5
-     ],
-     "rotation": [
-      0.0,
-      74.0,
-      0.0
-     ]
-    },
-    {
-     "type": "Tree",
-     "seed": 23,
-     "height": 5.2,
-     "trunk_radius": 0.23,
-     "levels": 3,
-     "branches": 5,
-     "branch_angle": 62.0,
-     "branch_start": 0.28,
-     "length_ratio": 0.64,
-     "length_falloff": 0.35,
-     "tropism": 13.0,
-     "crook": 14.0,
-     "jitter": 0.4,
-     "taper": 0.1,
-     "leaf_size": 0.26,
-     "leaves_per_branch": 14,
-     "leaf_color": [
-      0.1,
-      0.27,
-      0.07
-     ]
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.21,
-      0.14,
-      0.08
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "Birch",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -15.0,
-      -0.242,
-      -6.5
-     ],
-     "rotation": [
-      0.0,
-      210.0,
-      0.0
-     ]
-    },
-    {
-     "type": "Tree",
-     "seed": 41,
-     "height": 6.4,
-     "trunk_radius": 0.15,
-     "levels": 3,
-     "branches": 4,
-     "branch_angle": 44.0,
-     "branch_start": 0.42,
-     "length_ratio": 0.6,
-     "length_falloff": 0.25,
-     "tropism": 9.0,
-     "crook": 7.0,
-     "jitter": 0.3,
-     "taper": 0.12,
-     "flare": 0.2,
-     "leaf_size": 0.22,
-     "leaves_per_branch": 15,
-     "leaf_color": [
-      0.14,
-      0.31,
-      0.09
-     ]
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.62,
-      0.6,
-      0.55
-     ],
-     "roughness": 0.85
-    }
-   ]
-  },
-  {
-   "name": "SpruceTall",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -20.5,
-      -0.293,
-      -9.0
-     ]
-    },
-    {
-     "type": "Tree",
-     "seed": 11,
-     "height": 8.6,
-     "trunk_radius": 0.21,
-     "levels": 1,
-     "branches": 13,
-     "whorl": 5,
-     "branch_start": 0.08,
-     "branch_angle": 95.0,
-     "length_ratio": 0.3,
-     "length_falloff": 0.88,
-     "tropism": -16.0,
-     "crook": 6.0,
-     "jitter": 0.3,
-     "taper": 0.08,
-     "leaf": "cluster",
-     "leaf_size": 0.26,
-     "leaves_per_branch": 13,
-     "leaf_color": [
-      0.05,
-      0.16,
-      0.07
-     ]
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.17,
-      0.11,
-      0.07
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "SpruceShort",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -7.6,
-      -0.285,
-      -12.5
-     ],
-     "rotation": [
-      0.0,
-      130.0,
-      0.0
-     ]
-    },
-    {
-     "type": "Tree",
-     "seed": 12,
-     "height": 5.6,
-     "trunk_radius": 0.17,
-     "levels": 1,
-     "branches": 11,
-     "whorl": 5,
-     "branch_start": 0.06,
-     "branch_angle": 92.0,
-     "length_ratio": 0.32,
-     "length_falloff": 0.86,
-     "tropism": -14.0,
-     "crook": 6.0,
-     "jitter": 0.32,
-     "taper": 0.08,
-     "leaf": "cluster",
-     "leaf_size": 0.24,
-     "leaves_per_branch": 12,
-     "leaf_color": [
-      0.06,
-      0.18,
-      0.08
-     ]
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.17,
-      0.11,
-      0.07
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "SprucePit",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -9.5,
-      -0.253,
-      -7.6
-     ],
-     "rotation": [
-      0.0,
-      300.0,
-      0.0
-     ]
-    },
-    {
-     "type": "Tree",
-     "seed": 13,
-     "height": 7.0,
-     "trunk_radius": 0.19,
-     "levels": 1,
-     "branches": 12,
-     "whorl": 4,
-     "branch_start": 0.1,
-     "branch_angle": 98.0,
-     "length_ratio": 0.29,
-     "length_falloff": 0.9,
-     "tropism": -18.0,
-     "crook": 5.0,
-     "jitter": 0.28,
-     "taper": 0.08,
-     "leaf": "cluster",
-     "leaf_size": 0.25,
-     "leaves_per_branch": 12,
-     "leaf_color": [
-      0.05,
-      0.17,
-      0.09
-     ]
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.16,
-      0.11,
-      0.07
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "DeadSnag",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -22.5,
-      -0.408,
-      -13.5
-     ]
-    },
-    {
-     "type": "Tree",
-     "seed": 3,
-     "height": 5.6,
-     "trunk_radius": 0.2,
-     "levels": 3,
-     "branches": 3,
-     "branch_angle": 46.0,
-     "branch_start": 0.34,
-     "length_ratio": 0.58,
-     "length_falloff": 0.3,
-     "tropism": 14.0,
-     "crook": 13.0,
-     "jitter": 0.45,
-     "taper": 0.05,
-     "leaf": "none"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.3,
-      0.26,
-      0.21
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "ScrubA",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -13.0,
-      -0.308,
-      -10.2
-     ]
-    },
-    {
-     "type": "Tree",
-     "seed": 21,
-     "height": 0.95,
-     "trunk_radius": 0.055,
-     "levels": 2,
-     "branches": 5,
-     "branch_angle": 62.0,
-     "branch_start": 0.1,
-     "length_ratio": 0.7,
-     "tropism": 20.0,
-     "crook": 14.0,
-     "jitter": 0.4,
-     "leaf_size": 0.17,
-     "leaves_per_branch": 12,
-     "leaf_color": [
-      0.13,
-      0.31,
-      0.09
-     ]
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.22,
-      0.16,
-      0.1
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "ScrubB",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -18.0,
-      -0.117,
-      -5.2
-     ],
-     "rotation": [
-      0.0,
-      95.0,
-      0.0
-     ]
-    },
-    {
-     "type": "Tree",
-     "seed": 22,
-     "height": 1.25,
-     "trunk_radius": 0.065,
-     "levels": 2,
-     "branches": 6,
-     "branch_angle": 58.0,
-     "branch_start": 0.08,
-     "length_ratio": 0.68,
-     "tropism": 22.0,
-     "crook": 16.0,
-     "jitter": 0.45,
-     "leaf_size": 0.18,
-     "leaves_per_branch": 11,
-     "leaf_color": [
-      0.11,
-      0.29,
-      0.08
-     ]
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.23,
-      0.17,
-      0.11
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "CloudEast",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      104.0,
-      27.0,
-      -150.0
-     ],
-     "scale": [
-      66.0,
-      30.0,
-      60.0
-     ]
-    },
-    {
-     "type": "Cloud",
-     "seed": 7,
-     "lobes": 7,
-     "levels": 2,
-     "children": 3,
-     "lobe_size": 0.46,
-     "lobe_ratio": 0.56,
-     "flatten": 0.85,
-     "rise": 0.4,
-     "wobble": 0.14,
-     "jitter": 0.3,
-     "density": 0.9,
-     "feather": 3.0,
-     "drift": [
-      0.6,
-      0.0,
-      0.0
-     ],
-     "drift_wrap": 160.0
-    }
-   ]
-  },
-  {
-   "name": "CloudNorth",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -38.0,
-      31.0,
-      -186.0
-     ],
-     "scale": [
-      88.0,
-      36.0,
-      72.0
-     ]
-    },
-    {
-     "type": "Cloud",
-     "seed": 8,
-     "lobes": 8,
-     "levels": 2,
-     "children": 3,
-     "lobe_size": 0.44,
-     "lobe_ratio": 0.56,
-     "flatten": 0.85,
-     "rise": 0.45,
-     "wobble": 0.14,
-     "jitter": 0.32,
-     "density": 0.9,
-     "feather": 3.0,
-     "drift": [
-      0.6,
-      0.0,
-      0.0
-     ],
-     "drift_wrap": 160.0
-    }
-   ]
-  },
-  {
-   "name": "CloudWest",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -158.0,
-      26.0,
-      -54.0
-     ],
-     "scale": [
-      74.0,
-      28.0,
-      62.0
-     ]
-    },
-    {
-     "type": "Cloud",
-     "seed": 19,
-     "lobes": 6,
-     "levels": 2,
-     "children": 3,
-     "lobe_size": 0.48,
-     "lobe_ratio": 0.55,
-     "flatten": 0.8,
-     "rise": 0.35,
-     "wobble": 0.15,
-     "jitter": 0.3,
-     "density": 0.85,
-     "feather": 3.0,
-     "drift": [
-      0.6,
-      0.0,
-      0.0
-     ],
-     "drift_wrap": 160.0
-    }
-   ]
-  },
-  {
-   "name": "CloudDeck",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      0.0,
-      54.0,
-      -250.0
-     ],
-     "scale": [
-      380.0,
-      40.0,
-      180.0
-     ]
-    },
-    {
-     "type": "Cloud",
-     "seed": 3,
-     "lobes": 18,
-     "levels": 1,
-     "children": 3,
-     "lobe_size": 0.24,
-     "lobe_ratio": 0.6,
-     "flatten": 0.95,
-     "rise": 0.15,
-     "wobble": 0.12,
-     "jitter": 0.35,
-     "density": 0.7,
-     "feather": 2.6,
-     "shade_color": [
-      0.44,
-      0.48,
-      0.58
-     ],
-     "drift": [
-      0.4,
-      0.0,
-      0.0
-     ],
-     "drift_wrap": 400.0
-    }
-   ]
-  },
-  {
-   "name": "Critter1",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -10.0,
-      0.026,
-      -10.0
-     ],
-     "scale": [
-      0.34,
-      0.3,
-      0.5
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:sphere"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.42,
-      0.26,
-      0.12
-     ],
-     "roughness": 0.85
-    },
-    {
-     "type": "RigidBody",
-     "body": "kinematic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "layers": [
-      "critter"
-     ],
-     "collides_with": [
-      "ground"
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Critter2",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -16.0,
-      0.024,
-      -9.0
-     ],
-     "scale": [
-      0.3,
-      0.27,
-      0.44
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:sphere"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.55,
-      0.53,
-      0.5
-     ],
-     "roughness": 0.85
-    },
-    {
-     "type": "RigidBody",
-     "body": "kinematic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "layers": [
-      "critter"
-     ],
-     "collides_with": [
-      "ground"
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Critter3",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -12.0,
-      -0.102,
-      -13.5
-     ],
-     "scale": [
-      0.28,
-      0.25,
-      0.42
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:sphere"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.72,
-      0.7,
-      0.66
-     ],
-     "roughness": 0.8
-    },
-    {
-     "type": "RigidBody",
-     "body": "kinematic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "layers": [
-      "critter"
-     ],
-     "collides_with": [
-      "ground"
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Critter4",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -14.5,
-      0.129,
-      -6.0
-     ],
-     "scale": [
-      0.32,
-      0.29,
-      0.47
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:sphere"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.3,
-      0.22,
-      0.14
-     ],
-     "roughness": 0.9
-    },
-    {
-     "type": "RigidBody",
-     "body": "kinematic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "layers": [
-      "critter"
-     ],
-     "collides_with": [
-      "ground"
-     ]
-    }
-   ]
-  },
-  {
-   "name": "FirePit",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.0,
-      -0.167,
-      -13.0
-     ],
-     "scale": [
-      3.0,
-      0.28,
-      3.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cylinder"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.075,
-      0.07,
-      0.065
-     ],
-     "roughness": 0.96
-    }
-   ]
-  },
-  {
-   "name": "Log1",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      8.6,
-      0.143,
-      -13.0
-     ],
-     "rotation": [
-      0.0,
-      24.0,
-      8.0
-     ],
-     "scale": [
-      1.9,
-      0.32,
-      0.32
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.13,
-      0.08,
-      0.05
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "Log2",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.3,
-      0.143,
-      -13.2
-     ],
-     "rotation": [
-      0.0,
-      -38.0,
-      -6.0
-     ],
-     "scale": [
-      1.8,
-      0.3,
-      0.3
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.11,
-      0.07,
-      0.04
-     ],
-     "roughness": 0.95
-    }
-   ]
-  },
-  {
-   "name": "FireCore",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.0,
-      -0.007,
-      -13.0
-     ],
-     "scale": [
-      0.74,
-      0.22,
-      0.74
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:sphere"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.05,
-      0.02,
-      0.0
-     ],
-     "emissive": [
-      0.62,
-      0.13,
-      0.01
-     ]
-    }
-   ]
-  },
-  {
-   "name": "FireLight",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.0,
-      0.793,
-      -13.0
-     ]
-    },
-    {
-     "type": "PointLight",
-     "color": [
-      1.0,
-      0.52,
-      0.18
-     ],
-     "intensity": 5.5,
-     "range": 15.0
-    }
-   ]
-  },
-  {
-   "name": "FireBase",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.0,
-      0.133,
-      -13.0
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 85.0,
-     "lifetime": 0.4,
-     "speed": 1.1,
-     "spread": 46.0,
-     "acceleration": [
-      0.0,
-      5.4,
-      0.0
-     ],
-     "drag": 2.4,
-     "start_size": 0.24,
-     "end_size": 0.34,
-     "start_color": [
-      1.0,
-      0.78,
-      0.44
-     ],
-     "end_color": [
-      1.0,
-      0.38,
-      0.07
-     ],
-     "start_alpha": 0.2,
-     "end_alpha": 0.0,
-     "max_particles": 320,
-     "seed": 201,
-     "blend": "additive",
-     "radius": 0.34,
-     "speed_jitter": 0.45,
-     "size_jitter": 0.3,
-     "lifetime_jitter": 0.35,
-     "turbulence": 2.8,
-     "turbulence_scale": 0.55
-    }
-   ]
-  },
-  {
-   "name": "Fire",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.0,
-      0.193,
-      -13.0
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 300.0,
-     "lifetime": 1.0,
-     "speed": 2.1,
-     "spread": 34.0,
-     "acceleration": [
-      0.0,
-      3.4,
-      0.0
-     ],
-     "drag": 1.9,
-     "start_size": 0.42,
-     "end_size": 0.12,
-     "start_color": [
-      1.0,
-      0.44,
-      0.1
-     ],
-     "end_color": [
-      0.4,
-      0.05,
-      0.01
-     ],
-     "start_alpha": 0.26,
-     "end_alpha": 0.0,
-     "max_particles": 768,
-     "seed": 101,
-     "blend": "additive",
-     "radius": 0.55,
-     "speed_jitter": 0.4,
-     "size_jitter": 0.35,
-     "lifetime_jitter": 0.45,
-     "turbulence": 5.0,
-     "turbulence_scale": 0.7,
-     "stretch": 0.03
-    }
-   ]
-  },
-  {
-   "name": "FireTongues",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.0,
-      0.293,
-      -13.0
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 54.0,
-     "lifetime": 1.2,
-     "speed": 3.0,
-     "spread": 19.0,
-     "acceleration": [
-      0.2,
-      1.9,
-      -0.09
-     ],
-     "drag": 1.8,
-     "start_size": 0.24,
-     "end_size": 0.03,
-     "start_color": [
-      1.0,
-      0.55,
-      0.15
-     ],
-     "end_color": [
-      0.46,
-      0.06,
-      0.0
-     ],
-     "start_alpha": 0.28,
-     "end_alpha": 0.0,
-     "max_particles": 256,
-     "seed": 105,
-     "blend": "additive",
-     "radius": 0.32,
-     "speed_jitter": 0.45,
-     "size_jitter": 0.4,
-     "lifetime_jitter": 0.5,
-     "turbulence": 8.0,
-     "turbulence_scale": 0.5,
-     "stretch": 0.045
-    }
-   ]
-  },
-  {
-   "name": "FireSmoke",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.0,
-      1.743,
-      -13.0
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 24.0,
-     "lifetime": 4.2,
-     "speed": 1.2,
-     "spread": 18.0,
-     "acceleration": [
-      0.55,
-      0.85,
-      0.15
-     ],
-     "drag": 0.45,
-     "start_size": 0.3,
-     "end_size": 1.7,
-     "start_color": [
-      0.22,
-      0.21,
-      0.21
-     ],
-     "end_color": [
-      0.42,
-      0.42,
-      0.45
-     ],
-     "start_alpha": 0.5,
-     "end_alpha": 0.0,
-     "max_particles": 320,
-     "seed": 102,
-     "radius": 0.45,
-     "speed_jitter": 0.5,
-     "size_jitter": 0.4,
-     "lifetime_jitter": 0.4,
-     "turbulence": 1.6,
-     "turbulence_scale": 2.2
-    }
-   ]
-  },
-  {
-   "name": "Sparks",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.0,
-      0.493,
-      -13.0
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 24.0,
-     "lifetime": 1.5,
-     "speed": 2.2,
-     "spread": 30.0,
-     "acceleration": [
-      0.3,
-      -2.0,
-      0.1
-     ],
-     "drag": 1.0,
-     "start_size": 0.04,
-     "end_size": 0.012,
-     "start_color": [
-      1.0,
-      0.86,
-      0.42
-     ],
-     "end_color": [
-      1.0,
-      0.22,
-      0.02
-     ],
-     "start_alpha": 0.9,
-     "end_alpha": 0.0,
-     "max_particles": 160,
-     "seed": 103,
-     "blend": "additive",
-     "radius": 0.34,
-     "speed_jitter": 0.6,
-     "size_jitter": 0.5,
-     "lifetime_jitter": 0.55,
-     "turbulence": 2.4,
-     "turbulence_scale": 1.2,
-     "stretch": 0.04
-    }
-   ]
-  },
-  {
-   "name": "Pond",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      15.0,
-      -0.04,
-      6.0
-     ],
-     "scale": [
-      12.4,
-      1.0,
-      12.4
-     ]
-    },
-    {
-     "type": "Water",
-     "segments": 96,
-     "waves": [
-      {
-       "direction": 14.0,
-       "wavelength": 2.6,
-       "amplitude": 0.045,
-       "steepness": 0.34,
-       "speed": 1.1
-      },
-      {
-       "direction": -58.0,
-       "wavelength": 1.3,
-       "amplitude": 0.021,
-       "steepness": 0.24,
-       "speed": 0.8
-      },
-      {
-       "direction": 96.0,
-       "wavelength": 0.7,
-       "amplitude": 0.008,
-       "steepness": 0.14,
-       "speed": 0.55
-      }
-     ],
-     "detail": 0.85,
-     "detail_scale": 0.45,
-     "roughness": 0.06,
-     "shallow_color": [
-      0.1,
-      0.3,
-      0.28
-     ],
-     "deep_color": [
-      0.02,
-      0.1,
-      0.14
-     ],
-     "depth_fade": 0.8,
-     "opacity": 0.85,
-     "crest_foam": 0.26,
-     "shore_foam": 0.1,
-     "foam_color": [
-      0.88,
-      0.92,
-      0.94
-     ]
-    }
-   ]
-  },
-  {
-   "name": "IceShelf",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      15.0,
-      1.36,
-      -1.6
-     ],
-     "scale": [
-      10.0,
-      3.2,
-      3.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.52,
-      0.72,
-      0.84
-     ],
-     "metallic": 0.05,
-     "roughness": 0.1,
-     "transmission": 0.55,
-     "ior": 1.31,
-     "thickness": 0.9,
-     "attenuation": [
-      0.72,
-      0.92,
-      0.9
-     ]
-    },
-    {
-     "type": "Collider",
-     "shape": "trimesh",
-     "asset": "builtin:cube",
-     "layers": [
-      "ground"
-     ]
-    }
-   ]
-  },
-  {
-   "name": "IceBlock1",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      21.2,
-      0.46,
-      1.2
-     ],
-     "rotation": [
-      0.0,
-      22.0,
-      6.0
-     ],
-     "scale": [
-      1.8,
-      1.4,
-      1.6
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.58,
-      0.77,
-      0.88
-     ],
-     "metallic": 0.04,
-     "roughness": 0.08,
-     "transmission": 0.62,
-     "ior": 1.31,
-     "thickness": 0.45,
-     "attenuation": [
-      0.72,
-      0.92,
-      0.9
-     ]
-    }
-   ]
-  },
-  {
-   "name": "IceBlock2",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      22.0,
-      0.26,
-      4.6
-     ],
-     "rotation": [
-      0.0,
-      -14.0,
-      0.0
-     ],
-     "scale": [
-      1.4,
-      1.0,
-      1.4
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.62,
-      0.8,
-      0.9
-     ],
-     "metallic": 0.06,
-     "roughness": 0.06
-    }
-   ]
-  },
-  {
-   "name": "IceBlock3",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      9.2,
-      0.36,
-      12.4
-     ],
-     "rotation": [
-      0.0,
-      40.0,
-      -5.0
-     ],
-     "scale": [
-      1.6,
-      1.2,
-      1.5
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.55,
-      0.75,
-      0.86
-     ],
-     "metallic": 0.06,
-     "roughness": 0.09
-    }
-   ]
-  },
-  {
-   "name": "IceSpire",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      20.0,
-      1.56,
-      -3.0
-     ],
-     "rotation": [
-      0.0,
-      0.0,
-      7.0
-     ],
-     "scale": [
-      1.2,
-      3.6,
-      1.2
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cylinder"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.6,
-      0.79,
-      0.9
-     ],
-     "metallic": 0.04,
-     "roughness": 0.05,
-     "transmission": 0.66,
-     "ior": 1.31,
-     "thickness": 0.35,
-     "attenuation": [
-      0.72,
-      0.92,
-      0.9
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Waterfall",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      15.0,
-      2.86,
-      0.1
-     ],
-     "rotation": [
-      -110.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 170.0,
-     "lifetime": 1.3,
-     "speed": 2.6,
-     "spread": 11.0,
-     "acceleration": [
-      0.0,
-      -9.0,
-      0.0
-     ],
-     "drag": 0.1,
-     "start_size": 0.11,
-     "end_size": 0.24,
-     "start_color": [
-      0.52,
-      0.74,
-      0.94
-     ],
-     "end_color": [
-      0.86,
-      0.93,
-      1.0
-     ],
-     "start_alpha": 0.75,
-     "end_alpha": 0.0,
-     "max_particles": 512,
-     "seed": 201
-    }
-   ]
-  },
-  {
-   "name": "Spray",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      15.0,
-      0.11,
-      1.4
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 95.0,
-     "lifetime": 0.95,
-     "speed": 1.7,
-     "spread": 58.0,
-     "acceleration": [
-      0.0,
-      -4.0,
-      0.0
-     ],
-     "drag": 1.1,
-     "start_size": 0.08,
-     "end_size": 0.34,
-     "start_color": [
-      0.82,
-      0.9,
-      0.98
-     ],
-     "end_color": [
-      0.95,
-      0.97,
-      1.0
-     ],
-     "start_alpha": 0.55,
-     "end_alpha": 0.0,
-     "max_particles": 320,
-     "seed": 202
-    }
-   ]
-  },
-  {
-   "name": "Frost",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      16.0,
-      3.96,
-      4.0
-     ],
-     "rotation": [
-      -90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 16.0,
-     "lifetime": 4.5,
-     "speed": 0.35,
-     "spread": 80.0,
-     "acceleration": [
-      0.12,
-      -0.35,
-      0.05
-     ],
-     "drag": 0.3,
-     "start_size": 0.05,
-     "end_size": 0.02,
-     "start_color": [
-      0.88,
-      0.95,
-      1.0
-     ],
-     "end_color": [
-      0.7,
-      0.85,
-      1.0
-     ],
-     "start_alpha": 0.8,
-     "end_alpha": 0.0,
-     "max_particles": 128,
-     "seed": 203
-    }
-   ]
-  },
-  {
-   "name": "BreakPad",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -2.0,
-      -0.38,
-      15.0
-     ],
-     "scale": [
-      12.0,
-      0.08,
-      8.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.28,
-      0.27,
-      0.25
-     ],
-     "roughness": 0.85
-    }
-   ]
-  },
-  {
-   "name": "Crate1",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -3.15,
-      0.08,
-      15.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.55,
-      0.34,
-      0.14
-     ],
-     "roughness": 0.75
-    },
-    {
-     "type": "RigidBody",
-     "body": "dynamic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "density": 60.0,
-     "friction": 0.7,
-     "layers": [
-      "debris"
-     ]
-    },
-    {
-     "type": "Breakable",
-     "impulse_threshold": 150.0,
-     "fragments": [
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        -0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        -0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Crate2",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -2.0,
-      0.08,
-      15.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.58,
-      0.37,
-      0.16
-     ],
-     "roughness": 0.75
-    },
-    {
-     "type": "RigidBody",
-     "body": "dynamic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "density": 60.0,
-     "friction": 0.7,
-     "layers": [
-      "debris"
-     ]
-    },
-    {
-     "type": "Breakable",
-     "impulse_threshold": 150.0,
-     "fragments": [
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        -0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        -0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Crate3",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -0.85,
-      0.08,
-      15.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.52,
-      0.32,
-      0.13
-     ],
-     "roughness": 0.75
-    },
-    {
-     "type": "RigidBody",
-     "body": "dynamic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "density": 60.0,
-     "friction": 0.7,
-     "layers": [
-      "debris"
-     ]
-    },
-    {
-     "type": "Breakable",
-     "impulse_threshold": 150.0,
-     "fragments": [
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        -0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        -0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Crate4",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -2.6,
-      1.08,
-      15.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.6,
-      0.39,
-      0.18
-     ],
-     "roughness": 0.75
-    },
-    {
-     "type": "RigidBody",
-     "body": "dynamic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "density": 60.0,
-     "friction": 0.7,
-     "layers": [
-      "debris"
-     ]
-    },
-    {
-     "type": "Breakable",
-     "impulse_threshold": 150.0,
-     "fragments": [
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        -0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        -0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Crate5",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -1.45,
-      1.08,
-      15.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.5,
-      0.31,
-      0.12
-     ],
-     "roughness": 0.75
-    },
-    {
-     "type": "RigidBody",
-     "body": "dynamic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "density": 60.0,
-     "friction": 0.7,
-     "layers": [
-      "debris"
-     ]
-    },
-    {
-     "type": "Breakable",
-     "impulse_threshold": 150.0,
-     "fragments": [
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        -0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        -0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        -0.25,
-        0.25,
-        0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.25,
-        0.25,
-        -0.25
-       ],
-       "scale": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 120.0
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "name": "IcePillar",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      1.8,
-      0.58,
-      15.0
-     ],
-     "scale": [
-      1.0,
-      2.0,
-      1.0
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.58,
-      0.78,
-      0.89
-     ],
-     "metallic": 0.06,
-     "roughness": 0.07
-    },
-    {
-     "type": "RigidBody",
-     "body": "dynamic"
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "density": 40.0,
-     "friction": 0.4,
-     "layers": [
-      "debris"
-     ]
-    },
-    {
-     "type": "Breakable",
-     "fragments": [
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.0,
-        -0.375,
-        0.0
-       ],
-       "scale": [
-        1.0,
-        0.25,
-        1.0
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 40.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.0,
-        -0.125,
-        0.0
-       ],
-       "scale": [
-        1.0,
-        0.25,
-        1.0
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 40.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.0,
-        0.125,
-        0.0
-       ],
-       "scale": [
-        1.0,
-        0.25,
-        1.0
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 40.0
-      },
-      {
-       "mesh": "builtin:cube",
-       "offset": [
-        0.0,
-        0.375,
-        0.0
-       ],
-       "scale": [
-        1.0,
-        0.25,
-        1.0
-       ],
-       "half_extents": [
-        0.5,
-        0.5,
-        0.5
-       ],
-       "density": 40.0
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Boulder",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -11.5,
-      0.882,
-      15.0
-     ],
-     "scale": [
-      0.9,
-      0.9,
-      0.9
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:sphere"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.22,
-      0.21,
-      0.2
-     ],
-     "roughness": 0.9
-    },
-    {
-     "type": "RigidBody",
-     "body": "dynamic",
-     "ccd": true
-    },
-    {
-     "type": "Collider",
-     "shape": "sphere",
-     "radius": 1.0,
-     "density": 90.0,
-     "friction": 0.6,
-     "layers": [
-      "debris"
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Blast",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -1.0,
-      0.48,
-      15.0
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 0.0,
-     "lifetime": 0.55,
-     "speed": 9.0,
-     "spread": 180.0,
-     "acceleration": [
-      0.0,
-      -3.0,
-      0.0
-     ],
-     "drag": 4.0,
-     "start_size": 0.35,
-     "end_size": 0.06,
-     "start_color": [
-      1.0,
-      0.72,
-      0.26
-     ],
-     "end_color": [
-      0.45,
-      0.08,
-      0.02
-     ],
-     "start_alpha": 1.0,
-     "end_alpha": 0.0,
-     "max_particles": 512,
-     "seed": 302
-    }
-   ]
-  },
-  {
-   "name": "Dust",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -1.0,
-      0.08,
-      15.0
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 0.0,
-     "lifetime": 2.6,
-     "speed": 3.4,
-     "spread": 75.0,
-     "acceleration": [
-      0.0,
-      -0.5,
-      0.0
-     ],
-     "drag": 1.5,
-     "start_size": 0.3,
-     "end_size": 1.9,
-     "start_color": [
-      0.46,
-      0.42,
-      0.36
-     ],
-     "end_color": [
-      0.58,
-      0.55,
-      0.5
-     ],
-     "start_alpha": 0.7,
-     "end_alpha": 0.0,
-     "max_particles": 512,
-     "seed": 301
-    }
-   ]
-  },
-  {
-   "name": "RingRoad",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      0.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "Road",
-     "closed": true,
-     "width": 6.0,
-     "shoulder": 1.2,
-     "skirt": 2.5,
-     "segment_length": 2.0,
-     "segment_angle": 4.0,
-     "color": [
-      0.085,
-      0.085,
-      0.095
-     ],
-     "roughness": 0.93,
-     "shoulder_color": [
-      0.14,
-      0.13,
-      0.09
-     ],
-     "bank_color": [
-      0.11,
-      0.09,
-      0.07
-     ],
-     "points": [
-      {
-       "position": [
-        27.95,
-        -0.094,
-        0.0
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        26.998,
-        -0.025,
-        7.234
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        24.205,
-        -0.005,
-        13.975
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        19.764,
-        -0.221,
-        19.764
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        13.975,
-        -0.409,
-        24.205
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        7.234,
-        -0.433,
-        26.998
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        0.0,
-        -0.266,
-        27.95
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -7.234,
-        -0.063,
-        26.998
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -13.975,
-        0.118,
-        24.205
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -19.764,
-        0.146,
-        19.764
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -24.205,
-        0.146,
-        13.975
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -26.998,
-        0.335,
-        7.234
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -27.95,
-        0.3,
-        0.0
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -26.998,
-        -0.069,
-        -7.234
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -24.205,
-        -0.353,
-        -13.975
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -19.764,
-        -0.37,
-        -19.764
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -13.975,
-        -0.277,
-        -24.205
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -7.234,
-        -0.299,
-        -26.998
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        -0.0,
-        -0.534,
-        -27.95
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        7.234,
-        -0.352,
-        -26.998
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        13.975,
-        0.027,
-        -24.205
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        19.764,
-        0.317,
-        -19.764
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        24.205,
-        0.055,
-        -13.975
-       ],
-       "radius": 26.0
-      },
-      {
-       "position": [
-        26.998,
-        -0.027,
-        -7.234
-       ],
-       "radius": 26.0
-      }
-     ],
-     "markings": {
-      "color": [
-       0.88,
-       0.88,
-       0.84
-      ],
-      "edge_width": 0.14,
-      "edge_inset": 0.1,
-      "center_width": 0.13,
-      "center_dash": 2.4,
-      "center_gap": 3.6
-     }
-    },
-    {
-     "type": "Collider",
-     "shape": "trimesh",
-     "friction": 0.9
-    }
-   ]
-  },
-  {
-   "name": "Truck",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      0.0,
-      0.56,
-      27.0
-     ],
-     "rotation": [
-      0.0,
-      90.0,
-      0.0
-     ],
-     "scale": [
-      1.7,
-      0.7,
-      3.6
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cube"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.72,
-      0.15,
-      0.12
-     ],
-     "metallic": 0.1,
-     "roughness": 0.55
-    },
-    {
-     "type": "RigidBody",
-     "body": "dynamic",
-     "ccd": true
-    },
-    {
-     "type": "Collider",
-     "shape": "cuboid",
-     "half_extents": [
-      0.5,
-      0.5,
-      0.5
-     ],
-     "density": 350.0,
-     "friction": 0.3,
-     "restitution": 0.1
-    },
-    {
-     "type": "Script",
-     "source": "scripts/tour_truck.rhai"
-    }
-   ]
-  },
-  {
-   "name": "WheelFL",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -1.25,
-      0.01,
-      27.92
-     ],
-     "rotation": [
-      0.0,
-      90.0,
-      90.0
-     ],
-     "scale": [
-      0.7,
-      0.26,
-      0.7
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cylinder"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.05,
-      0.05,
-      0.06
-     ],
-     "roughness": 0.9
-    },
-    {
-     "type": "Wheel",
-     "vehicle": "Truck",
-     "offset": [
-      -0.92,
-      -0.2,
-      -1.25
-     ],
-     "radius": 0.35,
-     "suspension_rest_length": 0.35,
-     "suspension_stiffness": 30.0,
-     "suspension_compression": 2.8,
-     "suspension_damping": 3.8,
-     "suspension_travel": 0.2,
-     "side_friction_stiffness": 2.0,
-     "friction_slip": 1.0
-    }
-   ]
-  },
-  {
-   "name": "WheelFR",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -1.25,
-      0.01,
-      26.08
-     ],
-     "rotation": [
-      0.0,
-      90.0,
-      90.0
-     ],
-     "scale": [
-      0.7,
-      0.26,
-      0.7
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cylinder"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.05,
-      0.05,
-      0.06
-     ],
-     "roughness": 0.9
-    },
-    {
-     "type": "Wheel",
-     "vehicle": "Truck",
-     "offset": [
-      0.92,
-      -0.2,
-      -1.25
-     ],
-     "radius": 0.35,
-     "suspension_rest_length": 0.35,
-     "suspension_stiffness": 30.0,
-     "suspension_compression": 2.8,
-     "suspension_damping": 3.8,
-     "suspension_travel": 0.2,
-     "side_friction_stiffness": 2.0,
-     "friction_slip": 1.0
-    }
-   ]
-  },
-  {
-   "name": "WheelRL",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      1.25,
-      0.01,
-      27.92
-     ],
-     "rotation": [
-      0.0,
-      90.0,
-      90.0
-     ],
-     "scale": [
-      0.7,
-      0.26,
-      0.7
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cylinder"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.05,
-      0.05,
-      0.06
-     ],
-     "roughness": 0.9
-    },
-    {
-     "type": "Wheel",
-     "vehicle": "Truck",
-     "offset": [
-      -0.92,
-      -0.2,
-      1.25
-     ],
-     "radius": 0.35,
-     "suspension_rest_length": 0.35,
-     "suspension_stiffness": 30.0,
-     "suspension_compression": 2.8,
-     "suspension_damping": 3.8,
-     "suspension_travel": 0.2,
-     "side_friction_stiffness": 1.7,
-     "friction_slip": 1.0
-    }
-   ]
-  },
-  {
-   "name": "WheelRR",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      1.25,
-      0.01,
-      26.08
-     ],
-     "rotation": [
-      0.0,
-      90.0,
-      90.0
-     ],
-     "scale": [
-      0.7,
-      0.26,
-      0.7
-     ]
-    },
-    {
-     "type": "Mesh",
-     "asset": "builtin:cylinder"
-    },
-    {
-     "type": "Material",
-     "albedo": [
-      0.05,
-      0.05,
-      0.06
-     ],
-     "roughness": 0.9
-    },
-    {
-     "type": "Wheel",
-     "vehicle": "Truck",
-     "offset": [
-      0.92,
-      -0.2,
-      1.25
-     ],
-     "radius": 0.35,
-     "suspension_rest_length": 0.35,
-     "suspension_stiffness": 30.0,
-     "suspension_compression": 2.8,
-     "suspension_damping": 3.8,
-     "suspension_travel": 0.2,
-     "side_friction_stiffness": 1.7,
-     "friction_slip": 1.0
-    }
-   ]
-  },
-  {
-   "name": "Exhaust",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      2.05,
-      0.06,
-      27.45
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 55.0,
-     "lifetime": 1.4,
-     "speed": 1.0,
-     "spread": 16.0,
-     "acceleration": [
-      0.0,
-      1.1,
-      0.0
-     ],
-     "drag": 1.2,
-     "start_size": 0.09,
-     "end_size": 0.4,
-     "start_color": [
-      0.3,
-      0.3,
-      0.32
-     ],
-     "end_color": [
-      0.55,
-      0.55,
-      0.58
-     ],
-     "start_alpha": 0.75,
-     "end_alpha": 0.0,
-     "max_particles": 128,
-     "seed": 401
-    }
-   ]
-  },
-  {
-   "name": "SkidLeft",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      1.25,
-      -0.22,
-      27.92
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 0.0,
-     "lifetime": 0.9,
-     "speed": 0.8,
-     "spread": 55.0,
-     "acceleration": [
-      0.0,
-      0.6,
-      0.0
-     ],
-     "drag": 2.0,
-     "start_size": 0.1,
-     "end_size": 0.5,
-     "start_color": [
-      0.62,
-      0.62,
-      0.62
-     ],
-     "end_color": [
-      0.78,
-      0.78,
-      0.78
-     ],
-     "start_alpha": 0.5,
-     "end_alpha": 0.0,
-     "max_particles": 160,
-     "seed": 402
-    }
-   ]
-  },
-  {
-   "name": "SkidRight",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      1.25,
-      -0.22,
-      26.08
-     ],
-     "rotation": [
-      90.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "ParticleEmitter",
-     "rate": 0.0,
-     "lifetime": 0.9,
-     "speed": 0.8,
-     "spread": 55.0,
-     "acceleration": [
-      0.0,
-      0.6,
-      0.0
-     ],
-     "drag": 2.0,
-     "start_size": 0.1,
-     "end_size": 0.5,
-     "start_color": [
-      0.62,
-      0.62,
-      0.62
-     ],
-     "end_color": [
-      0.78,
-      0.78,
-      0.78
-     ],
-     "start_alpha": 0.5,
-     "end_alpha": 0.0,
-     "max_particles": 160,
-     "seed": 403
-    }
-   ]
-  },
-  {
-   "name": "TourCam",
-   "components": [
-    {
-     "type": "Transform",
-     "position": [
-      -24.0,
-      6.432,
-      -18.0
-     ],
-     "rotation": [
-      -12.0,
-      0.0,
-      0.0
-     ]
-    },
-    {
-     "type": "Camera",
-     "fov": 55.0,
-     "near": 0.1,
-     "far": 400.0,
-     "active": true
-    }
-   ]
-  },
-  {
-   "name": "TourDirector",
-   "components": [
-    {
-     "type": "Transform"
-    },
-    {
-     "type": "Script",
-     "source": "scripts/tour_director.rhai"
-    }
-   ]
-  },
-  {
-   "name": "Wildlife",
-   "components": [
-    {
-     "type": "Transform"
-    },
-    {
-     "type": "Script",
-     "source": "scripts/tour_wildlife.rhai"
-    }
-   ]
-  },
-  {
-   "name": "Effects",
-   "components": [
-    {
-     "type": "Transform"
-    },
-    {
-     "type": "Script",
-     "source": "scripts/tour_effects.rhai"
-    }
-   ]
-  },
-  {
-   "name": "LowerThird",
-   "components": [
-    {
-     "type": "HudRect",
-     "anchor": "bottom_left",
-     "offset": [
-      8.0,
-      8.0
-     ],
-     "size": [
-      352.0,
-      92.0
-     ],
-     "color": [
-      0.02,
-      0.03,
-      0.05
-     ],
-     "opacity": 0.5
-    }
-   ]
-  },
-  {
-   "name": "TimeBarBack",
-   "components": [
-    {
-     "type": "HudRect",
-     "anchor": "bottom_left",
-     "offset": [
-      16.0,
-      16.0
-     ],
-     "size": [
-      320.0,
-      8.0
-     ],
-     "color": [
-      0.06,
-      0.07,
-      0.09
-     ],
-     "opacity": 0.9
-    }
-   ]
-  },
-  {
-   "name": "TimeBar",
-   "components": [
-    {
-     "type": "HudRect",
-     "anchor": "bottom_left",
-     "offset": [
-      16.0,
-      16.0
-     ],
-     "size": [
-      0.0,
-      8.0
-     ],
-     "color": [
-      1.0,
-      0.72,
-      0.15
-     ]
-    }
-   ]
-  },
-  {
-   "name": "Title",
-   "components": [
-    {
-     "type": "HudText",
-     "text": "FORGE ENGINE TOUR",
-     "anchor": "bottom_left",
-     "offset": [
-      16.0,
-      78.0
-     ],
-     "size": 8.0,
-     "color": [
-      1.0,
-      0.86,
-      0.3
-     ]
-    }
-   ]
-  },
-  {
-   "name": "StationLabel",
-   "components": [
-    {
-     "type": "HudText",
-     "text": "01 FOREST",
-     "anchor": "bottom_left",
-     "offset": [
-      16.0,
-      52.0
-     ],
-     "size": 16.0,
-     "color": [
-      0.92,
-      0.96,
-      1.0
-     ]
-    }
-   ]
-  },
-  {
-   "name": "SystemsLabel",
-   "components": [
-    {
-     "type": "HudText",
-     "text": "SYSTEMS",
-     "anchor": "bottom_left",
-     "offset": [
-      16.0,
-      34.0
-     ],
-     "size": 8.0,
-     "color": [
-      0.62,
-      0.74,
-      0.88
-     ]
-    }
-   ]
-  },
-  {
-   "name": "TruckLabel",
-   "components": [
-    {
-     "type": "HudText",
-     "text": "TRUCK 0 KMH",
-     "anchor": "bottom_right",
-     "offset": [
-      12.0,
-      12.0
-     ],
-     "size": 8.0,
-     "color": [
-      0.9,
-      0.9,
-      0.95
-     ]
-    }
-   ]
-  }
- ]
+    ],
+    "timestep_hz": 60
+  },
+  "daylight": {
+    "time_of_day": 16.3,
+    "day_length": 300.0,
+    "sun_elevation": 54.0,
+    "sun_azimuth": 28.0,
+    "moon_elevation": 40.0
+  },
+  "environment": {
+    "sky": true,
+    "fog_density": 0.0024,
+    "shadows": true,
+    "shadow_distance": 72.0,
+    "samples": 4
+  },
+  "entities": [
+    {
+      "name": "Ground",
+      "components": [
+        {
+          "type": "Transform",
+          "scale": [
+            200.0,
+            1.0,
+            200.0
+          ]
+        },
+        {
+          "type": "Terrain",
+          "segments": 320,
+          "seed": 3,
+          "height": 1.2,
+          "feature_scale": 38.0,
+          "octaves": 5,
+          "persistence": 0.5,
+          "warp": 0.45,
+          "texture_scale": 2.6,
+          "color_variation": 0.35,
+          "bump": 0.3,
+          "layers": [
+            {
+              "albedo": [
+                0.085,
+                0.125,
+                0.058
+              ],
+              "roughness": 0.96
+            },
+            {
+              "albedo": [
+                0.125,
+                0.135,
+                0.07
+              ],
+              "roughness": 0.96,
+              "height_range": [
+                0.45,
+                20.0
+              ],
+              "height_blend": 0.55,
+              "slope_range": [
+                0.0,
+                14.0
+              ],
+              "slope_blend": 7.0,
+              "noise": 0.9
+            },
+            {
+              "albedo": [
+                0.098,
+                0.072,
+                0.046
+              ],
+              "roughness": 0.95,
+              "slope_range": [
+                13.0,
+                90.0
+              ],
+              "slope_blend": 7.0,
+              "noise": 0.9
+            }
+          ]
+        },
+        {
+          "type": "Collider",
+          "shape": "trimesh",
+          "friction": 0.9,
+          "layers": [
+            "ground"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Meadow",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -2.0,
+            0.0,
+            19.0
+          ],
+          "scale": [
+            24.0,
+            1.0,
+            14.0
+          ]
+        },
+        {
+          "type": "Meadow",
+          "seed": 21,
+          "density": 26.0,
+          "height": 0.5,
+          "cycle_length": 5.0,
+          "stagger": 0.3,
+          "wind": 13.0,
+          "wind_speed": 3.4,
+          "wind_direction": 205.0,
+          "max_slope": 34.0,
+          "terrain": "Ground"
+        }
+      ]
+    },
+    {
+      "name": "Monolith",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -0.481,
+            0.0
+          ],
+          "scale": [
+            4.0,
+            5.5,
+            4.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../meshes/pyramid.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.82,
+            0.8,
+            0.83
+          ],
+          "metallic": 0.15,
+          "roughness": 0.55,
+          "albedo_map": "../textures/granite.png",
+          "normal_map": "../textures/granite_normal.png",
+          "uv_scale": [
+            2.0,
+            2.0
+          ],
+          "normal_strength": 0.8
+        },
+        {
+          "type": "Collider",
+          "shape": "convex_hull",
+          "layers": [
+            "ground"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Beacon",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            5.919,
+            0.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.05,
+            0.06
+          ],
+          "emissive": [
+            0.15,
+            0.85,
+            0.95
+          ]
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "animations/tour_beacon.anim.json",
+          "looping": true
+        }
+      ]
+    },
+    {
+      "name": "OakEast",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -11.0,
+            -0.338,
+            -13.6
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 7,
+          "height": 5.8,
+          "trunk_radius": 0.26,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 58.0,
+          "branch_start": 0.3,
+          "length_ratio": 0.66,
+          "length_falloff": 0.3,
+          "tropism": 16.0,
+          "crook": 11.0,
+          "jitter": 0.35,
+          "taper": 0.1,
+          "leaf_size": 0.27,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.08,
+            0.25,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "asset": "../materials/bark.json"
+        }
+      ]
+    },
+    {
+      "name": "OakWest",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -16.5,
+            -0.433,
+            -12.5
+          ],
+          "rotation": [
+            0.0,
+            74.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 23,
+          "height": 5.2,
+          "trunk_radius": 0.23,
+          "levels": 3,
+          "branches": 5,
+          "branch_angle": 62.0,
+          "branch_start": 0.28,
+          "length_ratio": 0.64,
+          "length_falloff": 0.35,
+          "tropism": 13.0,
+          "crook": 14.0,
+          "jitter": 0.4,
+          "taper": 0.1,
+          "leaf_size": 0.26,
+          "leaves_per_branch": 14,
+          "leaf_color": [
+            0.1,
+            0.27,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "asset": "../materials/bark.json"
+        }
+      ]
+    },
+    {
+      "name": "Birch",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -15.0,
+            -0.242,
+            -6.5
+          ],
+          "rotation": [
+            0.0,
+            210.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 41,
+          "height": 6.4,
+          "trunk_radius": 0.15,
+          "levels": 3,
+          "branches": 4,
+          "branch_angle": 44.0,
+          "branch_start": 0.42,
+          "length_ratio": 0.6,
+          "length_falloff": 0.25,
+          "tropism": 9.0,
+          "crook": 7.0,
+          "jitter": 0.3,
+          "taper": 0.12,
+          "flare": 0.2,
+          "leaf_size": 0.22,
+          "leaves_per_branch": 15,
+          "leaf_color": [
+            0.14,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            1.0,
+            0.97,
+            0.9
+          ],
+          "roughness": 0.85,
+          "albedo_map": "../textures/bark.png",
+          "normal_map": "../textures/bark_normal.png",
+          "uv_scale": [
+            1.0,
+            3.0
+          ],
+          "normal_strength": 0.5
+        }
+      ]
+    },
+    {
+      "name": "SpruceTall",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -20.5,
+            -0.293,
+            -9.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 11,
+          "height": 8.6,
+          "trunk_radius": 0.21,
+          "levels": 1,
+          "branches": 13,
+          "whorl": 5,
+          "branch_start": 0.08,
+          "branch_angle": 95.0,
+          "length_ratio": 0.3,
+          "length_falloff": 0.88,
+          "tropism": -16.0,
+          "crook": 6.0,
+          "jitter": 0.3,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.26,
+          "leaves_per_branch": 13,
+          "leaf_color": [
+            0.05,
+            0.16,
+            0.07
+          ]
+        },
+        {
+          "type": "Material",
+          "asset": "../materials/bark.json"
+        }
+      ]
+    },
+    {
+      "name": "SpruceShort",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -7.6,
+            -0.285,
+            -12.5
+          ],
+          "rotation": [
+            0.0,
+            130.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 12,
+          "height": 5.6,
+          "trunk_radius": 0.17,
+          "levels": 1,
+          "branches": 11,
+          "whorl": 5,
+          "branch_start": 0.06,
+          "branch_angle": 92.0,
+          "length_ratio": 0.32,
+          "length_falloff": 0.86,
+          "tropism": -14.0,
+          "crook": 6.0,
+          "jitter": 0.32,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.24,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.06,
+            0.18,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "asset": "../materials/bark.json"
+        }
+      ]
+    },
+    {
+      "name": "SprucePit",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -9.5,
+            -0.253,
+            -7.6
+          ],
+          "rotation": [
+            0.0,
+            300.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 13,
+          "height": 7.0,
+          "trunk_radius": 0.19,
+          "levels": 1,
+          "branches": 12,
+          "whorl": 4,
+          "branch_start": 0.1,
+          "branch_angle": 98.0,
+          "length_ratio": 0.29,
+          "length_falloff": 0.9,
+          "tropism": -18.0,
+          "crook": 5.0,
+          "jitter": 0.28,
+          "taper": 0.08,
+          "leaf": "cluster",
+          "leaf_size": 0.25,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.05,
+            0.17,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "asset": "../materials/bark.json"
+        }
+      ]
+    },
+    {
+      "name": "DeadSnag",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -22.5,
+            -0.408,
+            -13.5
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 3,
+          "height": 5.6,
+          "trunk_radius": 0.2,
+          "levels": 3,
+          "branches": 3,
+          "branch_angle": 46.0,
+          "branch_start": 0.34,
+          "length_ratio": 0.58,
+          "length_falloff": 0.3,
+          "tropism": 14.0,
+          "crook": 13.0,
+          "jitter": 0.45,
+          "taper": 0.05,
+          "leaf": "none"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.55,
+            0.5,
+            0.42
+          ],
+          "roughness": 0.95,
+          "albedo_map": "../textures/bark.png",
+          "normal_map": "../textures/bark_normal.png",
+          "uv_scale": [
+            1.0,
+            3.0
+          ],
+          "normal_strength": 1.3
+        }
+      ]
+    },
+    {
+      "name": "ScrubA",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -13.0,
+            -0.308,
+            -10.2
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 21,
+          "height": 0.95,
+          "trunk_radius": 0.055,
+          "levels": 2,
+          "branches": 5,
+          "branch_angle": 62.0,
+          "branch_start": 0.1,
+          "length_ratio": 0.7,
+          "tropism": 20.0,
+          "crook": 14.0,
+          "jitter": 0.4,
+          "leaf_size": 0.17,
+          "leaves_per_branch": 12,
+          "leaf_color": [
+            0.13,
+            0.31,
+            0.09
+          ]
+        },
+        {
+          "type": "Material",
+          "asset": "../materials/bark.json"
+        }
+      ]
+    },
+    {
+      "name": "ScrubB",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -18.0,
+            -0.117,
+            -5.2
+          ],
+          "rotation": [
+            0.0,
+            95.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Tree",
+          "seed": 22,
+          "height": 1.25,
+          "trunk_radius": 0.065,
+          "levels": 2,
+          "branches": 6,
+          "branch_angle": 58.0,
+          "branch_start": 0.08,
+          "length_ratio": 0.68,
+          "tropism": 22.0,
+          "crook": 16.0,
+          "jitter": 0.45,
+          "leaf_size": 0.18,
+          "leaves_per_branch": 11,
+          "leaf_color": [
+            0.11,
+            0.29,
+            0.08
+          ]
+        },
+        {
+          "type": "Material",
+          "asset": "../materials/bark.json"
+        }
+      ]
+    },
+    {
+      "name": "CloudEast",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            104.0,
+            27.0,
+            -150.0
+          ],
+          "scale": [
+            66.0,
+            30.0,
+            60.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 7,
+          "lobes": 7,
+          "levels": 2,
+          "children": 3,
+          "lobe_size": 0.46,
+          "lobe_ratio": 0.56,
+          "flatten": 0.85,
+          "rise": 0.4,
+          "wobble": 0.14,
+          "jitter": 0.3,
+          "density": 0.9,
+          "feather": 3.0,
+          "drift": [
+            0.6,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 160.0
+        }
+      ]
+    },
+    {
+      "name": "CloudNorth",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -38.0,
+            31.0,
+            -186.0
+          ],
+          "scale": [
+            88.0,
+            36.0,
+            72.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 8,
+          "lobes": 8,
+          "levels": 2,
+          "children": 3,
+          "lobe_size": 0.44,
+          "lobe_ratio": 0.56,
+          "flatten": 0.85,
+          "rise": 0.45,
+          "wobble": 0.14,
+          "jitter": 0.32,
+          "density": 0.9,
+          "feather": 3.0,
+          "drift": [
+            0.6,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 160.0
+        }
+      ]
+    },
+    {
+      "name": "CloudWest",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -158.0,
+            26.0,
+            -54.0
+          ],
+          "scale": [
+            74.0,
+            28.0,
+            62.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 19,
+          "lobes": 6,
+          "levels": 2,
+          "children": 3,
+          "lobe_size": 0.48,
+          "lobe_ratio": 0.55,
+          "flatten": 0.8,
+          "rise": 0.35,
+          "wobble": 0.15,
+          "jitter": 0.3,
+          "density": 0.85,
+          "feather": 3.0,
+          "drift": [
+            0.6,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 160.0
+        }
+      ]
+    },
+    {
+      "name": "CloudDeck",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            54.0,
+            -250.0
+          ],
+          "scale": [
+            380.0,
+            40.0,
+            180.0
+          ]
+        },
+        {
+          "type": "Cloud",
+          "seed": 3,
+          "lobes": 18,
+          "levels": 1,
+          "children": 3,
+          "lobe_size": 0.24,
+          "lobe_ratio": 0.6,
+          "flatten": 0.95,
+          "rise": 0.15,
+          "wobble": 0.12,
+          "jitter": 0.35,
+          "density": 0.7,
+          "feather": 2.6,
+          "shade_color": [
+            0.44,
+            0.48,
+            0.58
+          ],
+          "drift": [
+            0.4,
+            0.0,
+            0.0
+          ],
+          "drift_wrap": 400.0
+        }
+      ]
+    },
+    {
+      "name": "Critter1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -10.0,
+            0.026,
+            -10.0
+          ],
+          "scale": [
+            0.68,
+            0.6,
+            1.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.42,
+            0.26,
+            0.12
+          ],
+          "roughness": 0.85
+        },
+        {
+          "type": "RigidBody",
+          "body": "kinematic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "layers": [
+            "critter"
+          ],
+          "collides_with": [
+            "ground"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Critter2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -16.0,
+            0.024,
+            -9.0
+          ],
+          "scale": [
+            0.6,
+            0.54,
+            0.88
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.55,
+            0.53,
+            0.5
+          ],
+          "roughness": 0.85
+        },
+        {
+          "type": "RigidBody",
+          "body": "kinematic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "layers": [
+            "critter"
+          ],
+          "collides_with": [
+            "ground"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Critter3",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -12.0,
+            -0.102,
+            -13.5
+          ],
+          "scale": [
+            0.56,
+            0.50,
+            0.84
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.72,
+            0.7,
+            0.66
+          ],
+          "roughness": 0.8
+        },
+        {
+          "type": "RigidBody",
+          "body": "kinematic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "layers": [
+            "critter"
+          ],
+          "collides_with": [
+            "ground"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Critter4",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -14.5,
+            0.129,
+            -6.0
+          ],
+          "scale": [
+            0.64,
+            0.58,
+            0.94
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.3,
+            0.22,
+            0.14
+          ],
+          "roughness": 0.9
+        },
+        {
+          "type": "RigidBody",
+          "body": "kinematic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "layers": [
+            "critter"
+          ],
+          "collides_with": [
+            "ground"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Walker",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -13.4,
+            0.0,
+            -8.2
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../meshes/rigged_walker.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.3,
+            0.28,
+            0.26
+          ],
+          "metallic": 0.18,
+          "roughness": 0.62,
+          "orm_map": "../textures/plate_orm.png",
+          "normal_map": "../textures/plate_normal.png",
+          "uv_scale": [
+            2.0,
+            2.0
+          ],
+          "normal_strength": 1.1
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../meshes/rigged_walker.gltf#Walk",
+          "speed": 1.0,
+          "looping": true,
+          "stride": 1.6408
+        },
+        {
+          "type": "FootPlant",
+          "feet": [
+            {
+              "ankle": "FootL",
+              "chain": 2,
+              "sole": 0.09
+            },
+            {
+              "ankle": "FootR",
+              "chain": 2,
+              "sole": 0.09
+            }
+          ],
+          "ground": "Ground",
+          "hips": "Hips",
+          "max_drop": 0.45,
+          "max_lift": 0.35,
+          "align": 24.0
+        },
+        {
+          "type": "SkinnedCollider",
+          "layers": [
+            "character"
+          ],
+          "parts": [
+            {
+              "joint": "Head",
+              "shape": "sphere",
+              "radius": 0.13,
+              "offset": [
+                0.0,
+                0.07,
+                0.0
+              ]
+            },
+            {
+              "joint": "Chest",
+              "shape": "capsule",
+              "radius": 0.17,
+              "half_height": 0.13,
+              "offset": [
+                0.0,
+                -0.04,
+                0.0
+              ]
+            },
+            {
+              "joint": "Hips",
+              "shape": "capsule",
+              "radius": 0.16,
+              "half_height": 0.06
+            },
+            {
+              "joint": "LegL",
+              "shape": "capsule",
+              "radius": 0.09,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.21,
+                0.0
+              ]
+            },
+            {
+              "joint": "LegR",
+              "shape": "capsule",
+              "radius": 0.09,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.21,
+                0.0
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "FirePit",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            -0.167,
+            -13.0
+          ],
+          "scale": [
+            3.0,
+            0.28,
+            3.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.19,
+            0.18,
+            0.17
+          ],
+          "roughness": 0.96,
+          "albedo_map": "../textures/granite.png",
+          "normal_map": "../textures/granite_normal.png",
+          "uv_scale": [
+            4.0,
+            4.0
+          ],
+          "normal_strength": 1.2
+        }
+      ]
+    },
+    {
+      "name": "Log1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            8.6,
+            0.143,
+            -13.0
+          ],
+          "rotation": [
+            0.0,
+            24.0,
+            8.0
+          ],
+          "scale": [
+            1.9,
+            0.32,
+            0.32
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.31,
+            0.2,
+            0.12
+          ],
+          "roughness": 0.95,
+          "albedo_map": "../textures/bark.png",
+          "normal_map": "../textures/bark_normal.png",
+          "uv_scale": [
+            3.0,
+            1.0
+          ],
+          "normal_strength": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Log2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.3,
+            0.143,
+            -13.2
+          ],
+          "rotation": [
+            0.0,
+            -38.0,
+            -6.0
+          ],
+          "scale": [
+            1.8,
+            0.3,
+            0.3
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.27,
+            0.17,
+            0.1
+          ],
+          "roughness": 0.95,
+          "albedo_map": "../textures/bark.png",
+          "normal_map": "../textures/bark_normal.png",
+          "uv_scale": [
+            3.0,
+            1.0
+          ],
+          "normal_strength": 1.0
+        }
+      ]
+    },
+    {
+      "name": "FireCore",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            -0.007,
+            -13.0
+          ],
+          "scale": [
+            1.48,
+            0.44,
+            1.48
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.02,
+            0.0
+          ],
+          "emissive": [
+            0.62,
+            0.13,
+            0.01
+          ]
+        }
+      ]
+    },
+    {
+      "name": "FireLight",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            0.793,
+            -13.0
+          ]
+        },
+        {
+          "type": "PointLight",
+          "color": [
+            1.0,
+            0.52,
+            0.18
+          ],
+          "intensity": 5.5,
+          "range": 15.0
+        }
+      ]
+    },
+    {
+      "name": "FireBase",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            0.133,
+            -13.0
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 85.0,
+          "lifetime": 0.4,
+          "speed": 1.1,
+          "spread": 46.0,
+          "acceleration": [
+            0.0,
+            5.4,
+            0.0
+          ],
+          "drag": 2.4,
+          "start_size": 0.24,
+          "end_size": 0.34,
+          "start_color": [
+            1.0,
+            0.78,
+            0.44
+          ],
+          "end_color": [
+            1.0,
+            0.38,
+            0.07
+          ],
+          "start_alpha": 0.2,
+          "end_alpha": 0.0,
+          "max_particles": 320,
+          "seed": 201,
+          "blend": "additive",
+          "radius": 0.34,
+          "speed_jitter": 0.45,
+          "size_jitter": 0.3,
+          "lifetime_jitter": 0.35,
+          "turbulence": 2.8,
+          "turbulence_scale": 0.55
+        }
+      ]
+    },
+    {
+      "name": "Fire",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            0.193,
+            -13.0
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 300.0,
+          "lifetime": 1.0,
+          "speed": 2.1,
+          "spread": 34.0,
+          "acceleration": [
+            0.0,
+            3.4,
+            0.0
+          ],
+          "drag": 1.9,
+          "start_size": 0.42,
+          "end_size": 0.12,
+          "start_color": [
+            1.0,
+            0.44,
+            0.1
+          ],
+          "end_color": [
+            0.4,
+            0.05,
+            0.01
+          ],
+          "start_alpha": 0.26,
+          "end_alpha": 0.0,
+          "max_particles": 768,
+          "seed": 101,
+          "blend": "additive",
+          "radius": 0.55,
+          "speed_jitter": 0.4,
+          "size_jitter": 0.35,
+          "lifetime_jitter": 0.45,
+          "turbulence": 5.0,
+          "turbulence_scale": 0.7,
+          "stretch": 0.03
+        }
+      ]
+    },
+    {
+      "name": "FireTongues",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            0.293,
+            -13.0
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 54.0,
+          "lifetime": 1.2,
+          "speed": 3.0,
+          "spread": 19.0,
+          "acceleration": [
+            0.2,
+            1.9,
+            -0.09
+          ],
+          "drag": 1.8,
+          "start_size": 0.24,
+          "end_size": 0.03,
+          "start_color": [
+            1.0,
+            0.55,
+            0.15
+          ],
+          "end_color": [
+            0.46,
+            0.06,
+            0.0
+          ],
+          "start_alpha": 0.28,
+          "end_alpha": 0.0,
+          "max_particles": 256,
+          "seed": 105,
+          "blend": "additive",
+          "radius": 0.32,
+          "speed_jitter": 0.45,
+          "size_jitter": 0.4,
+          "lifetime_jitter": 0.5,
+          "turbulence": 8.0,
+          "turbulence_scale": 0.5,
+          "stretch": 0.045
+        }
+      ]
+    },
+    {
+      "name": "FireSmoke",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            1.743,
+            -13.0
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 24.0,
+          "lifetime": 4.2,
+          "speed": 1.2,
+          "spread": 18.0,
+          "acceleration": [
+            0.55,
+            0.85,
+            0.15
+          ],
+          "drag": 0.45,
+          "start_size": 0.3,
+          "end_size": 1.7,
+          "start_color": [
+            0.22,
+            0.21,
+            0.21
+          ],
+          "end_color": [
+            0.42,
+            0.42,
+            0.45
+          ],
+          "start_alpha": 0.5,
+          "end_alpha": 0.0,
+          "max_particles": 320,
+          "seed": 102,
+          "radius": 0.45,
+          "speed_jitter": 0.5,
+          "size_jitter": 0.4,
+          "lifetime_jitter": 0.4,
+          "turbulence": 1.6,
+          "turbulence_scale": 2.2
+        }
+      ]
+    },
+    {
+      "name": "Sparks",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.0,
+            0.493,
+            -13.0
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 24.0,
+          "lifetime": 1.5,
+          "speed": 2.2,
+          "spread": 30.0,
+          "acceleration": [
+            0.3,
+            -2.0,
+            0.1
+          ],
+          "drag": 1.0,
+          "start_size": 0.04,
+          "end_size": 0.012,
+          "start_color": [
+            1.0,
+            0.86,
+            0.42
+          ],
+          "end_color": [
+            1.0,
+            0.22,
+            0.02
+          ],
+          "start_alpha": 0.9,
+          "end_alpha": 0.0,
+          "max_particles": 160,
+          "seed": 103,
+          "blend": "additive",
+          "radius": 0.34,
+          "speed_jitter": 0.6,
+          "size_jitter": 0.5,
+          "lifetime_jitter": 0.55,
+          "turbulence": 2.4,
+          "turbulence_scale": 1.2,
+          "stretch": 0.04
+        }
+      ]
+    },
+    {
+      "name": "Pond",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            15.0,
+            -0.04,
+            6.0
+          ],
+          "scale": [
+            12.4,
+            1.0,
+            12.4
+          ]
+        },
+        {
+          "type": "Water",
+          "segments": 96,
+          "waves": [
+            {
+              "direction": 14.0,
+              "wavelength": 2.6,
+              "amplitude": 0.045,
+              "steepness": 0.34,
+              "speed": 1.1
+            },
+            {
+              "direction": -58.0,
+              "wavelength": 1.3,
+              "amplitude": 0.021,
+              "steepness": 0.24,
+              "speed": 0.8
+            },
+            {
+              "direction": 96.0,
+              "wavelength": 0.7,
+              "amplitude": 0.008,
+              "steepness": 0.14,
+              "speed": 0.55
+            }
+          ],
+          "detail": 0.85,
+          "detail_scale": 0.45,
+          "roughness": 0.06,
+          "shallow_color": [
+            0.1,
+            0.3,
+            0.28
+          ],
+          "deep_color": [
+            0.02,
+            0.1,
+            0.14
+          ],
+          "depth_fade": 0.8,
+          "opacity": 0.85,
+          "crest_foam": 0.26,
+          "shore_foam": 0.1,
+          "foam_color": [
+            0.88,
+            0.92,
+            0.94
+          ],
+          "ior": 1.33
+        }
+      ]
+    },
+    {
+      "name": "IceShelf",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            15.0,
+            1.36,
+            -1.6
+          ],
+          "scale": [
+            10.0,
+            3.2,
+            3.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.52,
+            0.72,
+            0.84
+          ],
+          "metallic": 0.05,
+          "roughness": 0.1,
+          "transmission": 0.55,
+          "ior": 1.31,
+          "thickness": 0.9,
+          "attenuation": [
+            0.72,
+            0.92,
+            0.9
+          ]
+        },
+        {
+          "type": "Collider",
+          "shape": "trimesh",
+          "asset": "builtin:cube",
+          "layers": [
+            "ground"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "IceBlock1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            21.2,
+            0.46,
+            1.2
+          ],
+          "rotation": [
+            0.0,
+            22.0,
+            6.0
+          ],
+          "scale": [
+            1.8,
+            1.4,
+            1.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.58,
+            0.77,
+            0.88
+          ],
+          "metallic": 0.04,
+          "roughness": 0.08,
+          "transmission": 0.62,
+          "ior": 1.31,
+          "thickness": 0.45,
+          "attenuation": [
+            0.72,
+            0.92,
+            0.9
+          ]
+        }
+      ]
+    },
+    {
+      "name": "IceBlock2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            22.0,
+            0.26,
+            4.6
+          ],
+          "rotation": [
+            0.0,
+            -14.0,
+            0.0
+          ],
+          "scale": [
+            1.4,
+            1.0,
+            1.4
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.62,
+            0.8,
+            0.9
+          ],
+          "metallic": 0.06,
+          "roughness": 0.06
+        }
+      ]
+    },
+    {
+      "name": "IceBlock3",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            9.2,
+            0.36,
+            12.4
+          ],
+          "rotation": [
+            0.0,
+            40.0,
+            -5.0
+          ],
+          "scale": [
+            1.6,
+            1.2,
+            1.5
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.55,
+            0.75,
+            0.86
+          ],
+          "metallic": 0.06,
+          "roughness": 0.09
+        }
+      ]
+    },
+    {
+      "name": "IceSpire",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            20.0,
+            1.56,
+            -3.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            7.0
+          ],
+          "scale": [
+            1.2,
+            3.6,
+            1.2
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.6,
+            0.79,
+            0.9
+          ],
+          "metallic": 0.04,
+          "roughness": 0.05,
+          "transmission": 0.66,
+          "ior": 1.31,
+          "thickness": 0.35,
+          "attenuation": [
+            0.72,
+            0.92,
+            0.9
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Waterfall",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            15.0,
+            2.86,
+            0.1
+          ],
+          "rotation": [
+            -110.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 170.0,
+          "lifetime": 1.3,
+          "speed": 2.6,
+          "spread": 11.0,
+          "acceleration": [
+            0.0,
+            -9.0,
+            0.0
+          ],
+          "drag": 0.1,
+          "start_size": 0.11,
+          "end_size": 0.24,
+          "start_color": [
+            0.52,
+            0.74,
+            0.94
+          ],
+          "end_color": [
+            0.86,
+            0.93,
+            1.0
+          ],
+          "start_alpha": 0.75,
+          "end_alpha": 0.0,
+          "max_particles": 512,
+          "seed": 201
+        }
+      ]
+    },
+    {
+      "name": "Spray",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            15.0,
+            0.11,
+            1.4
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 95.0,
+          "lifetime": 0.95,
+          "speed": 1.7,
+          "spread": 58.0,
+          "acceleration": [
+            0.0,
+            -4.0,
+            0.0
+          ],
+          "drag": 1.1,
+          "start_size": 0.08,
+          "end_size": 0.34,
+          "start_color": [
+            0.82,
+            0.9,
+            0.98
+          ],
+          "end_color": [
+            0.95,
+            0.97,
+            1.0
+          ],
+          "start_alpha": 0.55,
+          "end_alpha": 0.0,
+          "max_particles": 320,
+          "seed": 202
+        }
+      ]
+    },
+    {
+      "name": "Frost",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            16.0,
+            3.96,
+            4.0
+          ],
+          "rotation": [
+            -90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 16.0,
+          "lifetime": 4.5,
+          "speed": 0.35,
+          "spread": 80.0,
+          "acceleration": [
+            0.12,
+            -0.35,
+            0.05
+          ],
+          "drag": 0.3,
+          "start_size": 0.05,
+          "end_size": 0.02,
+          "start_color": [
+            0.88,
+            0.95,
+            1.0
+          ],
+          "end_color": [
+            0.7,
+            0.85,
+            1.0
+          ],
+          "start_alpha": 0.8,
+          "end_alpha": 0.0,
+          "max_particles": 128,
+          "seed": 203
+        }
+      ]
+    },
+    {
+      "name": "BreakPad",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -2.0,
+            -0.38,
+            15.0
+          ],
+          "scale": [
+            12.0,
+            0.08,
+            8.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.67,
+            0.65,
+            0.6
+          ],
+          "roughness": 0.85,
+          "albedo_map": "../textures/granite.png",
+          "normal_map": "../textures/granite_normal.png",
+          "uv_scale": [
+            4.0,
+            6.0
+          ],
+          "normal_strength": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Crate1",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -3.15,
+            0.08,
+            15.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.73,
+            0.45,
+            0.19
+          ],
+          "roughness": 0.75,
+          "albedo_map": "../textures/crate.png",
+          "normal_map": "../textures/crate_normal.png",
+          "normal_strength": 1.0
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 60.0,
+          "friction": 0.7,
+          "layers": [
+            "debris"
+          ]
+        },
+        {
+          "type": "Breakable",
+          "impulse_threshold": 150.0,
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                -0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                -0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Crate2",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -2.0,
+            0.08,
+            15.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.77,
+            0.49,
+            0.21
+          ],
+          "roughness": 0.75,
+          "albedo_map": "../textures/crate.png",
+          "normal_map": "../textures/crate_normal.png",
+          "normal_strength": 1.0
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 60.0,
+          "friction": 0.7,
+          "layers": [
+            "debris"
+          ]
+        },
+        {
+          "type": "Breakable",
+          "impulse_threshold": 150.0,
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                -0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                -0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Crate3",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -0.85,
+            0.08,
+            15.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.69,
+            0.43,
+            0.17
+          ],
+          "roughness": 0.75,
+          "albedo_map": "../textures/crate.png",
+          "normal_map": "../textures/crate_normal.png",
+          "normal_strength": 1.0
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 60.0,
+          "friction": 0.7,
+          "layers": [
+            "debris"
+          ]
+        },
+        {
+          "type": "Breakable",
+          "impulse_threshold": 150.0,
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                -0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                -0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Crate4",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -2.6,
+            1.08,
+            15.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.8,
+            0.52,
+            0.24
+          ],
+          "roughness": 0.75,
+          "albedo_map": "../textures/crate.png",
+          "normal_map": "../textures/crate_normal.png",
+          "normal_strength": 1.0
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 60.0,
+          "friction": 0.7,
+          "layers": [
+            "debris"
+          ]
+        },
+        {
+          "type": "Breakable",
+          "impulse_threshold": 150.0,
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                -0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                -0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Crate5",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.45,
+            1.08,
+            15.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.67,
+            0.41,
+            0.16
+          ],
+          "roughness": 0.75,
+          "albedo_map": "../textures/crate.png",
+          "normal_map": "../textures/crate_normal.png",
+          "normal_strength": 1.0
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 60.0,
+          "friction": 0.7,
+          "layers": [
+            "debris"
+          ]
+        },
+        {
+          "type": "Breakable",
+          "impulse_threshold": 150.0,
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                -0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                -0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                -0.25,
+                0.25,
+                0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.25,
+                0.25,
+                -0.25
+              ],
+              "scale": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 120.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "IcePillar",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.8,
+            0.58,
+            15.0
+          ],
+          "scale": [
+            1.0,
+            2.0,
+            1.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.58,
+            0.78,
+            0.89
+          ],
+          "metallic": 0.06,
+          "roughness": 0.07
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 40.0,
+          "friction": 0.4,
+          "layers": [
+            "debris"
+          ]
+        },
+        {
+          "type": "Breakable",
+          "fragments": [
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.0,
+                -0.375,
+                0.0
+              ],
+              "scale": [
+                1.0,
+                0.25,
+                1.0
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 40.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.0,
+                -0.125,
+                0.0
+              ],
+              "scale": [
+                1.0,
+                0.25,
+                1.0
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 40.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.0,
+                0.125,
+                0.0
+              ],
+              "scale": [
+                1.0,
+                0.25,
+                1.0
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 40.0
+            },
+            {
+              "mesh": "builtin:cube",
+              "offset": [
+                0.0,
+                0.375,
+                0.0
+              ],
+              "scale": [
+                1.0,
+                0.25,
+                1.0
+              ],
+              "half_extents": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "density": 40.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Boulder",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -11.5,
+            0.882,
+            15.0
+          ],
+          "scale": [
+            1.8,
+            1.8,
+            1.8
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.52,
+            0.5,
+            0.48
+          ],
+          "roughness": 0.9,
+          "albedo_map": "../textures/granite.png",
+          "normal_map": "../textures/granite_normal.png",
+          "uv_scale": [
+            3.0,
+            2.0
+          ],
+          "normal_strength": 1.4
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "ccd": true
+        },
+        {
+          "type": "Collider",
+          "shape": "sphere",
+          "radius": 0.5,
+          "density": 90.0,
+          "friction": 0.6,
+          "layers": [
+            "debris"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Blast",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.0,
+            0.48,
+            15.0
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 0.0,
+          "lifetime": 0.55,
+          "speed": 9.0,
+          "spread": 180.0,
+          "acceleration": [
+            0.0,
+            -3.0,
+            0.0
+          ],
+          "drag": 4.0,
+          "start_size": 0.35,
+          "end_size": 0.06,
+          "start_color": [
+            1.0,
+            0.72,
+            0.26
+          ],
+          "end_color": [
+            0.45,
+            0.08,
+            0.02
+          ],
+          "start_alpha": 1.0,
+          "end_alpha": 0.0,
+          "max_particles": 512,
+          "seed": 302
+        }
+      ]
+    },
+    {
+      "name": "Dust",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.0,
+            0.08,
+            15.0
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 0.0,
+          "lifetime": 2.6,
+          "speed": 3.4,
+          "spread": 75.0,
+          "acceleration": [
+            0.0,
+            -0.5,
+            0.0
+          ],
+          "drag": 1.5,
+          "start_size": 0.3,
+          "end_size": 1.9,
+          "start_color": [
+            0.46,
+            0.42,
+            0.36
+          ],
+          "end_color": [
+            0.58,
+            0.55,
+            0.5
+          ],
+          "start_alpha": 0.7,
+          "end_alpha": 0.0,
+          "max_particles": 512,
+          "seed": 301
+        }
+      ]
+    },
+    {
+      "name": "RingRoad",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Road",
+          "closed": true,
+          "width": 6.0,
+          "shoulder": 1.2,
+          "skirt": 2.5,
+          "segment_length": 2.0,
+          "segment_angle": 4.0,
+          "color": [
+            0.085,
+            0.085,
+            0.095
+          ],
+          "roughness": 0.93,
+          "shoulder_color": [
+            0.14,
+            0.13,
+            0.09
+          ],
+          "bank_color": [
+            0.11,
+            0.09,
+            0.07
+          ],
+          "points": [
+            {
+              "position": [
+                27.95,
+                -0.094,
+                0.0
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                26.998,
+                -0.025,
+                7.234
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                24.205,
+                -0.005,
+                13.975
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                19.764,
+                -0.221,
+                19.764
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                13.975,
+                -0.409,
+                24.205
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                7.234,
+                -0.433,
+                26.998
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                0.0,
+                -0.266,
+                27.95
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -7.234,
+                -0.063,
+                26.998
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -13.975,
+                0.118,
+                24.205
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -19.764,
+                0.146,
+                19.764
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -24.205,
+                0.146,
+                13.975
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -26.998,
+                0.335,
+                7.234
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -27.95,
+                0.3,
+                0.0
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -26.998,
+                -0.069,
+                -7.234
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -24.205,
+                -0.353,
+                -13.975
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -19.764,
+                -0.37,
+                -19.764
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -13.975,
+                -0.277,
+                -24.205
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -7.234,
+                -0.299,
+                -26.998
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                -0.0,
+                -0.534,
+                -27.95
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                7.234,
+                -0.352,
+                -26.998
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                13.975,
+                0.027,
+                -24.205
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                19.764,
+                0.317,
+                -19.764
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                24.205,
+                0.055,
+                -13.975
+              ],
+              "radius": 26.0
+            },
+            {
+              "position": [
+                26.998,
+                -0.027,
+                -7.234
+              ],
+              "radius": 26.0
+            }
+          ],
+          "markings": {
+            "color": [
+              0.88,
+              0.88,
+              0.84
+            ],
+            "edge_width": 0.14,
+            "edge_inset": 0.1,
+            "center_width": 0.13,
+            "center_dash": 2.4,
+            "center_gap": 3.6
+          }
+        },
+        {
+          "type": "Collider",
+          "shape": "trimesh",
+          "friction": 0.9
+        }
+      ]
+    },
+    {
+      "name": "Truck",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            0.56,
+            27.0
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            0.0
+          ],
+          "scale": [
+            1.7,
+            0.7,
+            3.6
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.72,
+            0.15,
+            0.12
+          ],
+          "metallic": 0.1,
+          "roughness": 0.72,
+          "orm_map": "../textures/plate_orm.png",
+          "normal_map": "../textures/plate_normal.png",
+          "uv_scale": [
+            2.0,
+            4.0
+          ],
+          "normal_strength": 1.3
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic",
+          "ccd": true
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "density": 350.0,
+          "friction": 0.3,
+          "restitution": 0.1
+        },
+        {
+          "type": "Script",
+          "source": "scripts/tour_truck.rhai"
+        }
+      ]
+    },
+    {
+      "name": "WheelFL",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.25,
+            0.01,
+            27.92
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            90.0
+          ],
+          "scale": [
+            0.7,
+            0.26,
+            0.7
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.05,
+            0.06
+          ],
+          "roughness": 0.9,
+          "normal_map": "../textures/tread_normal.png",
+          "normal_strength": 1.0
+        },
+        {
+          "type": "Wheel",
+          "vehicle": "Truck",
+          "offset": [
+            -0.92,
+            -0.2,
+            -1.25
+          ],
+          "radius": 0.35,
+          "suspension_rest_length": 0.35,
+          "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8,
+          "suspension_damping": 3.8,
+          "suspension_travel": 0.2,
+          "side_friction_stiffness": 2.0,
+          "friction_slip": 1.0
+        }
+      ]
+    },
+    {
+      "name": "WheelFR",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.25,
+            0.01,
+            26.08
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            90.0
+          ],
+          "scale": [
+            0.7,
+            0.26,
+            0.7
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.05,
+            0.06
+          ],
+          "roughness": 0.9,
+          "normal_map": "../textures/tread_normal.png",
+          "normal_strength": 1.0
+        },
+        {
+          "type": "Wheel",
+          "vehicle": "Truck",
+          "offset": [
+            0.92,
+            -0.2,
+            -1.25
+          ],
+          "radius": 0.35,
+          "suspension_rest_length": 0.35,
+          "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8,
+          "suspension_damping": 3.8,
+          "suspension_travel": 0.2,
+          "side_friction_stiffness": 2.0,
+          "friction_slip": 1.0
+        }
+      ]
+    },
+    {
+      "name": "WheelRL",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.25,
+            0.01,
+            27.92
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            90.0
+          ],
+          "scale": [
+            0.7,
+            0.26,
+            0.7
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.05,
+            0.06
+          ],
+          "roughness": 0.9,
+          "normal_map": "../textures/tread_normal.png",
+          "normal_strength": 1.0
+        },
+        {
+          "type": "Wheel",
+          "vehicle": "Truck",
+          "offset": [
+            -0.92,
+            -0.2,
+            1.25
+          ],
+          "radius": 0.35,
+          "suspension_rest_length": 0.35,
+          "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8,
+          "suspension_damping": 3.8,
+          "suspension_travel": 0.2,
+          "side_friction_stiffness": 1.7,
+          "friction_slip": 1.0
+        }
+      ]
+    },
+    {
+      "name": "WheelRR",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.25,
+            0.01,
+            26.08
+          ],
+          "rotation": [
+            0.0,
+            90.0,
+            90.0
+          ],
+          "scale": [
+            0.7,
+            0.26,
+            0.7
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cylinder"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.05,
+            0.05,
+            0.06
+          ],
+          "roughness": 0.9,
+          "normal_map": "../textures/tread_normal.png",
+          "normal_strength": 1.0
+        },
+        {
+          "type": "Wheel",
+          "vehicle": "Truck",
+          "offset": [
+            0.92,
+            -0.2,
+            1.25
+          ],
+          "radius": 0.35,
+          "suspension_rest_length": 0.35,
+          "suspension_stiffness": 30.0,
+          "suspension_compression": 2.8,
+          "suspension_damping": 3.8,
+          "suspension_travel": 0.2,
+          "side_friction_stiffness": 1.7,
+          "friction_slip": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Exhaust",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            2.05,
+            0.06,
+            27.45
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 55.0,
+          "lifetime": 1.4,
+          "speed": 1.0,
+          "spread": 16.0,
+          "acceleration": [
+            0.0,
+            1.1,
+            0.0
+          ],
+          "drag": 1.2,
+          "start_size": 0.09,
+          "end_size": 0.4,
+          "start_color": [
+            0.3,
+            0.3,
+            0.32
+          ],
+          "end_color": [
+            0.55,
+            0.55,
+            0.58
+          ],
+          "start_alpha": 0.75,
+          "end_alpha": 0.0,
+          "max_particles": 128,
+          "seed": 401
+        }
+      ]
+    },
+    {
+      "name": "SkidLeft",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.25,
+            -0.22,
+            27.92
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 0.0,
+          "lifetime": 0.9,
+          "speed": 0.8,
+          "spread": 55.0,
+          "acceleration": [
+            0.0,
+            0.6,
+            0.0
+          ],
+          "drag": 2.0,
+          "start_size": 0.1,
+          "end_size": 0.5,
+          "start_color": [
+            0.62,
+            0.62,
+            0.62
+          ],
+          "end_color": [
+            0.78,
+            0.78,
+            0.78
+          ],
+          "start_alpha": 0.5,
+          "end_alpha": 0.0,
+          "max_particles": 160,
+          "seed": 402
+        }
+      ]
+    },
+    {
+      "name": "SkidRight",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.25,
+            -0.22,
+            26.08
+          ],
+          "rotation": [
+            90.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "ParticleEmitter",
+          "rate": 0.0,
+          "lifetime": 0.9,
+          "speed": 0.8,
+          "spread": 55.0,
+          "acceleration": [
+            0.0,
+            0.6,
+            0.0
+          ],
+          "drag": 2.0,
+          "start_size": 0.1,
+          "end_size": 0.5,
+          "start_color": [
+            0.62,
+            0.62,
+            0.62
+          ],
+          "end_color": [
+            0.78,
+            0.78,
+            0.78
+          ],
+          "start_alpha": 0.5,
+          "end_alpha": 0.0,
+          "max_particles": 160,
+          "seed": 403
+        }
+      ]
+    },
+    {
+      "name": "TourCam",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -24.0,
+            6.432,
+            -18.0
+          ],
+          "rotation": [
+            -12.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "fov": 55.0,
+          "near": 0.1,
+          "far": 400.0,
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "TourDirector",
+      "components": [
+        {
+          "type": "Transform"
+        },
+        {
+          "type": "Script",
+          "source": "scripts/tour_director.rhai"
+        }
+      ]
+    },
+    {
+      "name": "Wildlife",
+      "components": [
+        {
+          "type": "Transform"
+        },
+        {
+          "type": "Script",
+          "source": "scripts/tour_wildlife.rhai"
+        }
+      ]
+    },
+    {
+      "name": "Effects",
+      "components": [
+        {
+          "type": "Transform"
+        },
+        {
+          "type": "Script",
+          "source": "scripts/tour_effects.rhai"
+        }
+      ]
+    },
+    {
+      "name": "LowerThird",
+      "components": [
+        {
+          "type": "HudPanel",
+          "anchor": "bottom_left",
+          "offset": [
+            8.0,
+            8.0
+          ],
+          "layout": "free"
+        }
+      ]
+    },
+    {
+      "name": "CardFrame",
+      "components": [
+        {
+          "type": "HudImage",
+          "texture": "../textures/ui_frame.png",
+          "size": [
+            0.0,
+            0.0
+          ],
+          "slice": [
+            12.0,
+            12.0,
+            12.0,
+            12.0
+          ],
+          "tint": [
+            0.34,
+            0.4,
+            0.52
+          ],
+          "opacity": 0.86,
+          "parent": "LowerThird",
+          "stretch": [
+            true,
+            true
+          ]
+        },
+        {
+          "type": "HudInteract",
+          "hover_tint": [
+            1.35,
+            1.35,
+            1.35
+          ],
+          "press_tint": [
+            0.7,
+            0.7,
+            0.7
+          ]
+        }
+      ]
+    },
+    {
+      "name": "CardColumn",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "column",
+          "padding": 14.0,
+          "gap": 7.0,
+          "parent": "LowerThird"
+        }
+      ]
+    },
+    {
+      "name": "Title",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "FORGE ENGINE TOUR",
+          "size": 8.0,
+          "color": [
+            1.0,
+            0.86,
+            0.3
+          ],
+          "parent": "CardColumn"
+        }
+      ]
+    },
+    {
+      "name": "StationRow",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "row",
+          "gap": 8.0,
+          "align": "center",
+          "parent": "CardColumn"
+        }
+      ]
+    },
+    {
+      "name": "StationIcon",
+      "components": [
+        {
+          "type": "HudImage",
+          "texture": "../textures/ui_icon.png",
+          "size": [
+            16.0,
+            16.0
+          ],
+          "tint": [
+            1.0,
+            0.78,
+            0.24
+          ],
+          "parent": "StationRow"
+        }
+      ]
+    },
+    {
+      "name": "StationLabel",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "01 FOREST",
+          "size": 16.0,
+          "color": [
+            0.92,
+            0.96,
+            1.0
+          ],
+          "parent": "StationRow"
+        }
+      ]
+    },
+    {
+      "name": "SystemsLabel",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "SYSTEMS",
+          "size": 8.0,
+          "color": [
+            0.62,
+            0.74,
+            0.88
+          ],
+          "parent": "CardColumn"
+        }
+      ]
+    },
+    {
+      "name": "TimeBarBack",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "free",
+          "width": 320.0,
+          "height": 8.0,
+          "color": [
+            0.06,
+            0.07,
+            0.09
+          ],
+          "opacity": 0.9,
+          "parent": "CardColumn"
+        }
+      ]
+    },
+    {
+      "name": "TimeBar",
+      "components": [
+        {
+          "type": "HudRect",
+          "size": [
+            0.0,
+            8.0
+          ],
+          "color": [
+            1.0,
+            0.72,
+            0.15
+          ],
+          "parent": "TimeBarBack"
+        }
+      ]
+    },
+    {
+      "name": "TruckLabel",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "TRUCK 0 KMH",
+          "anchor": "bottom_right",
+          "offset": [
+            12.0,
+            12.0
+          ],
+          "size": 8.0,
+          "color": [
+            0.9,
+            0.9,
+            0.95
+          ]
+        }
+      ]
+    }
+  ]
 }

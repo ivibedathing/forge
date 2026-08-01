@@ -2,18 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Full rationale for each system lives in `designs/*.md`; this file is the index plus the list of
-things that cost time. Read `designs/agent-native-engine-design.md` before making structural
-decisions — it is the source of truth for layout, formats, and build order, and several choices in
-it are still open (§9).
+This file is the index plus the list of things that cost time. Read
+`designs/agent-native-engine-design.md` before making structural decisions — it is the source of
+truth for layout, formats, and build order, and several choices in it are still open (§9).
+
+**`designs/` no longer holds a doc per milestone.** M26 and later keep theirs; the eighteen for
+**M4–M25 were deleted once built**, because their conclusions are the sections below. So for those
+systems *this file is the rationale*, not an index to it — and the rejected alternatives, which the
+summaries do not keep in full, are in git history. `designs/README.md` lists what was removed and
+the two commands that get a deleted doc back. **Read the original out of history before reversing
+one of its decisions**; that is the case the longer prose was written for.
 
 ## Current state
 
-**M0–M26 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M34 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
-M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system. (M7 editor at scope
-E0–E2 + validation panel + `--watch`.)
+M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
+M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
+planting, M33 skinned collider proxies, M34 the metre. (M7 editor at scope E0–E2 + validation
+panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -39,15 +47,23 @@ engine simulate <scene.json> --steps N [--input f] [--bake out.json] [--trace t.
 #   without reading the image (M25)
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
-engine list-animations <scene-or-clip> [--schema]
+engine list-animations <scene-or-clip> [--schema]  # glTF clips too, with their channel targets (M30)
+engine list-joints <scene-or-mesh> [--entity Name] [--time T] [--steps N]
+#   the rig and where it is (M30); --steps for a pose the simulation reached, and a
+#   measured `stride` when the entity has a FootPlant (M32)
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
+engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
+#   every collider physics holds — shape, size, world placement — read back out of the
+#   built world, so a skinned hitbox nothing renders is still answerable (M33)
+engine ui-layout <scene.json> [--width W --height H] [--entity N]...  # where the UI landed (M31)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
 engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
-engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; FPS readout is viewer-only
+engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; keyboard AND mouse; FPS readout is viewer-only
 engine init [dir] [--force]              # scaffold a project: starter scene + AGENTS.md/CLAUDE.md
 engine agent-guide                       # the agent orientation as markdown (a stdout exception)
 engine import <model.glb> [--into scene.json] [--textures dir] [--materials dir]  # glTF materials (M26)
 engine list-components [--component Name]  # scene + component JSON Schemas (with range constraints)
+engine list-components --markdown          # the same vocabulary as prose; generates docs/component-reference.md
 engine build [--check]                   # cargo build/check, diagnostics re-emitted as engine errors
 engine run                               # M0 triangle (stack proof)
 engine info                              # selected GPU adapter as JSON
@@ -57,9 +73,13 @@ Component quick-reference (details below): `Material` carries texture maps, or *
 `materials/*.json` file (M26). `Script` runs `fn step(world, step)` once per fixed step
 (order: animations → scripts → physics → particles → render). `Wheel` is raycast suspension on its
 own visual entity naming a chassis. `ParticleEmitter` is a seeded deterministic emitter (M13 smoke,
-M17 fire fields). `PointLight` is a local light, ≤8 per scene. `Water`, `Tree`, `Cloud`, `Terrain`
-and `Road` are **recipes, not mesh references** — each owns its geometry and so carries no `Mesh`
-and no `Material` (a `Tree` is the exception on materials: the entity's `Material` is its bark).
+M17 fire fields). `PointLight` is a local light, ≤8 per scene. `Water`, `Tree`, `Cloud`, `Terrain`,
+`Road` and `Meadow` are **recipes, not mesh references** — each owns its geometry and so carries no
+`Mesh` and no `Material` (a `Tree` is the exception on materials: the entity's `Material` is its
+bark). `Meadow` is ground cover on a seed→grass→weeds→straw→collapse life cycle (M29).
+`HudPanel` lays its children out and `HudImage` is a nine-sliced textured rectangle; `HudInteract`
+makes the element on its own entity clickable (M31). `FootPlant` puts a skinned character's feet on
+the `Terrain` under them, and `AnimationPlayer.stride` drives its clip by ground covered (M32).
 Scene-level blocks: `physics`, `environment` (M16), `daylight` (M21).
 
 ## Editor (M7, `crates/engine-editor`)
@@ -106,7 +126,9 @@ report prints on both pass and fail (a documented stdout exception).
 ## Assets
 
 `Mesh.asset` is `builtin:cube` / `builtin:cylinder` / `builtin:plane` / `builtin:sphere` /
-`builtin:triangle`, or a `.gltf`/`.glb` path relative to the scene file. Reference checks (existence,
+`builtin:triangle`, or a `.gltf`/`.glb` path relative to the scene file. **Every builtin but the
+triangle is one metre across at scale 1** (M34), so `Transform.scale` reads as a size in metres and
+a `Collider` matching one is always `half_extents: [0.5, 0.5, 0.5]` or `radius: 0.5`. Reference checks (existence,
 extension, absolute-path rejection) live in `engine-core/src/mesh.rs` (`MeshAsset::resolve`); actual
 file parsing lives in `engine-assets` — the only crate that opens asset files (glTF meshes plus
 PNG→RGBA8 textures, the latter awaiting texture-mapped materials). `engine validate` runs both
@@ -134,7 +156,24 @@ invocation/environment is"). Every error code is a const in `engine-core/src/cod
 class; `docs/error-codes.md` mirrors it and a repo-contract test keeps them in lockstep — **codes
 are API**, never rename one casually.
 
-Per-component field checking is **schema-driven**: the walk in `validate.rs` reads the same
+**`validate/` is seven modules**, split out of one 5,716-line file as pure code motion (28 lines
+left it: ten `fn` → `pub(super) fn`, nine redundant borrows, one call site, and five rustfmt
+re-wraps). `mod.rs` is `validate_source` — now the preamble plus ten named pass calls —
+`Cx`/`Checked`/`ComponentSchemas`, and `validate_material_source`. `entity.rs` is the per-entity
+walk, `passes.rs` the ten **cross-entity** passes (camera, lights, daylight, point-light budget,
+collision layers, wheel, meadow, foot planting, HUD parent, animation), `component.rs`
+`check_component`, `walk.rs` the schema walk, `blocks.rs` the `physics`/`environment`/`daylight`
+blocks, and `tests.rs` the 2,000-line corpus that lives with the code.
+
+**The passes exist because a name may be authored after its use** — a wheel's chassis, a HUD
+element's parent — so anything naming another entity has to wait for every name to exist. The walk
+hands them a `SceneFacts` struct rather than sixteen positional values, and that is not tidiness:
+four of its fields are `Vec<(String, String)>` and three are `BTreeSet<String>`, so a swapped pair
+would type-check and validate the wrong thing. Field-init shorthand in and destructuring by name
+out makes the mapping name-identity end to end. (The `point_lights` pass is `point_light_budget`
+for the same reason — a function named for its field would shadow it.)
+
+Per-component field checking is **schema-driven**: the walk in `validate/walk.rs` reads the same
 schemars-generated schema `engine list-components` publishes (unknown/missing fields, JSON types,
 `minimum`/`exclusiveMinimum`-style ranges authored as `#[schemars(...)]` attributes), then serde
 parses the clean component as a final gate — `scene_parse_desync` firing means the walk and the
@@ -194,7 +233,7 @@ a wall-clock accumulator; headless is canonical. Physics tests are GPU-free and 
 
 ## Animation (M9)
 
-Property clips (skeletal glTF deferred like editor E3/E4). Clips are JSON (`*.anim.json`, schema in
+Property clips; skeletal glTF landed in M30 and shares this clock. Clips are JSON (`*.anim.json`, schema in
 `schemas/animation-schema.json`, regenerated via `engine list-animations --schema`), animating
 `Component.field` on entities by name. Pose is a pure function of (files, time) — `--time` on
 screenshot/diff-render is reproducible down to `cmp`-identical PNGs, and t=loop-period equals t=0
@@ -209,7 +248,7 @@ directly (structural checks only).
 
 ## Scripting (M10, `crates/engine-script`)
 
-**Rhai pinned =1.25.1** — settled (see `designs/scripting-design.md` §1; Lua lost on the C dependency
+**Rhai pinned =1.25.1** — settled (Lua lost on the C dependency
 and determinism friction, compiled-Rust-only lost on rebuild-per-iteration). Scripts define
 `fn step(world, step)`; the curated `world` API is the entire universe — no time, no I/O, no
 randomness, 1M-operation budget per call, so traces stay byte-identical with scripts running. Script
@@ -219,7 +258,47 @@ differing from the file's rest value is spliced — which is how script-driven k
 files. Kinematic-vs-fixed contact events are opted in via `ActiveCollisionTypes` (rapier skips them
 by default). Bake next to the scene, not /tmp — relative paths.
 
-## Input (M11, `designs/input-design.md`)
+## The mouse (M28, `designs/mouse-input-design.md`)
+
+M11's §7 said "no mouse"; this reverses that one item and nothing else. **Buttons ride the same
+`held` set the keys do** (`MouseLeft`/`MouseRight`/`MouseMiddle`, own allowlist so `world.key` and
+`world.mouse` each reject the other kind *naming the call that would have worked*), and the cursor
+is a `"cursor": [x, y]` **fraction of the frame**, origin top-left — not pixels, because a timeline
+outlives the window it was recorded in. **An absent `cursor` is the centre of the frame**, so every
+pre-M28 timeline parses unchanged; recorded cursors quantize to three decimals (`CURSOR_SCALE`,
+written as a scale and not a step of 0.001, or the file says `0.41300002`).
+
+- **The cursor is a point on the frame; the *ray* is the engine's job.** `input::Pointer::resolve`
+  is computed by the **caller** of `ScriptHost::step` — the code that already knows which camera it
+  is about to render through — so the script host holds no camera-selection policy and the viewer
+  and the headless path provably agree. Scripts get `world.mouse`, `cursor_x`/`cursor_y`,
+  `viewport_width`/`viewport_height`, and `cursor_ground(y)`; a scene with no camera makes
+  `cursor_ground` a **runtime error** (M21's precedent for `time_of_day` without a `daylight`
+  block), while a ray that never meets the plane degrades to `MAX_GROUND_DISTANCE` rather than NaN.
+- **The ray is the inverse of `scene_renderer::view_projection`, written out longhand in
+  engine-core**, which cannot depend on engine-render — so `engine-render/tests/pointer.rs` is the
+  agreement test (project a cursor's ray back through the renderer's own matrix; it must land where
+  it started, at the centre and all four corners, at several distances and two aspects).
+- **A mouse-driven run is a function of the frame size**, which no earlier input was. `screenshot`
+  passes its own size, `diff-render` the baseline's, and `simulate`/`raycast` — which render
+  nothing — `Viewport::DEFAULT`, **960×540**. Same aspect ⇒ same ray, so `simulate` and a 16:9
+  screenshot aim identically; a *pixel-sized* HUD hit test is another matter and the M28 CLI test
+  documents exactly that (960×540 misses the arena fixture's 132×26 plate that 640×360 hits).
+- **`set_hud_offset` / `hud_offset`** (either HUD component, offsets mean the same on both) is the
+  one non-mouse addition: a HUD that could be resized and re-worded but not *moved* cannot draw a
+  crosshair. It bakes change-based like every other script-driven field.
+- The viewer maps `CursorMoved` against the window's inner size and drops buttons outside the three;
+  **`CursorLeft` is deliberately unhandled** — a pointer that slid out of frame must not read as a
+  click at the centre of the screen. The recorder compares **quantized** states, so a still hand
+  records nothing, and its "an initial empty set is implicit" rule now compares against the whole
+  default state, or the first mouse movement of a session (which happens before any button) is lost.
+
+Fixture `verify/m28_pointer.json` + timeline, **two baselines from one file** (`--steps 40` and
+`--steps 80`). Not here: scroll wheel, relative motion / pointer capture (which is what a
+first-person mouselook needs, and it wants its own milestone), click edges (`world.state`, two
+lines), and cursor visibility control.
+
+## Input (M11)
 
 Keyboard input sampled per fixed step on the shared integer clock — scripts ask
 `world.key("ArrowUp")` (unknown names are runtime errors with `did_you_mean`; key names are the
@@ -320,7 +399,7 @@ looks like a renderer bug. This is also a data point on M22's MSAA caveat — 58
 against a *flat* ground plane rendered byte-identically 6 runs running, so it is relief, not fine
 geometry alone, that costs this adapter its determinism.
 
-## HUD (M11.6 lines + M12 components, `designs/hud-design.md`)
+## HUD (M11.6 lines + M12 components)
 
 Two layers, one render path. `world.hud(text)` pushes printable-ASCII debug lines, cleared every step
 — the line HUD is a pure function of the step that drew it — and `world.state(key, default)` /
@@ -374,7 +453,7 @@ tailpipe each step (particles are world-space once spawned, so a moving car leav
 rather than dragging a plume along). All three follow the car's *height* — a contact patch pinned to
 a fixed altitude smokes from inside the hill on a circuit that climbs.
 
-**M17's five fire fields** (`designs/fire-and-lights-design.md`), each fixing one reason a particle
+**M17's five fire fields**, each fixing one reason a particle
 cone does not read as flame: `blend: "additive"` (overlapping flame *brightens*; alpha blending can
 only render orange smoke), `radius` (a disc of coals instead of a single apex),
 `speed_jitter`/`size_jitter`/`lifetime_jitter` (a population born identical dies at one height,
@@ -394,7 +473,7 @@ Additive sprites draw after *all* alpha ones regardless of depth, which is what 
 in smoke looks like. `stretch` is in **seconds** of travel and elongates along the velocity's
 *screen-space* projection, so a particle flying at the camera stays round.
 
-## Breaking (M14, `designs/breaking-design.md`)
+## Breaking (M14)
 
 `Breakable` lists **pre-authored fragments** (mesh ref + local placement + cuboid `half_extents` +
 `density` — no runtime fracture, the settled decision) and breaks three ways: collision
@@ -516,7 +595,7 @@ to `[0, 1]`, and both bake change-based.
 `particles.wgsl` writes the un-stretched quad expansion out twice rather than lerping. Both guard the
 M16 ULP sensitivity — factoring them would rewrite the four untouchable lines.
 
-## Water (M18, `designs/water-design.md`)
+## Water (M18)
 
 **A body of water is one entity with one component.** `Water` owns its surface geometry — a
 tessellated unit grid (`segments`, 1..512, identical to `builtin:plane` at `segments: 1`, generated
@@ -554,12 +633,65 @@ scaling never stretches them and two water entities at the same height form one 
   body is lit with the **up** normal while the view-facing normal drives reflection, Fresnel, and
   specular — conflating them made water black from below.
 
-Not here, deliberately: refraction (what is behind is absorbed and tinted, never bent), scene
-reflections (sky and sun only), a CPU wave evaluator and therefore no buoyancy (`water.rs` is where
-the Rust mirror goes, with an agreement test, when a boat needs to float), and point lights on water.
+Not here, deliberately: scene reflections (sky and sun only), a CPU wave evaluator and therefore no
+buoyancy (`water.rs` is where the Rust mirror goes, with an agreement test, when a boat needs to
+float), and point lights on water. Refraction landed in M27 (below).
 Fixture `verify/m18_water.json` at `--steps 120`.
 
-## Trees (M19, `designs/tree-design.md`)
+## Water refraction (M27, `designs/water-refraction-design.md`)
+
+`Water` gains **one field, `ior`**, defaulting to `1.0` (no bending) — so every committed baseline
+survived the milestone untouched except the six the showcase tour's own edit re-blessed, and the
+sweep confirmed the other 27 bit-exact. `Water::refracts()` is `ior != 1.0`, and it joins
+`Material::refracts()` in the disjunction that allocates M26's opaque colour copy and splits the
+pass, so a scene with neither still renders the pre-M26 pass structure exactly.
+
+- **Three things `Material` needs that water does not.** No `thickness`: `water_thickness()` has
+  measured the view ray's path through the body since M18, so the bend scales with the water's own
+  depth. No `attenuation`: water already grades `shallow_color`→`deep_color` off that same
+  thickness, and the bed that reaches the camera is `1 - out_alpha`, the number the blend unit was
+  already using. **Refraction moves where the bed is read from, not how much of it comes back** —
+  which means turning `ior` on cannot change how deep the water looks, and it can go into a tuned
+  scene without re-tuning it. And no `FrameUniform` change: the exit point projects with
+  `surface.view_proj` out of `WaterUniform`, which water carries because waves displace in world
+  space.
+- **The exit point is solved to the bed's depth, not stepped along the refracted ray by the view
+  ray's path length.** This is the milestone's one real trap. `refraction.wgsl` steps, correctly,
+  because a mesh's `thickness` is an authored fudge; water measures a real quantity along a
+  *different* ray, and the refracted ray is always steeper for `ior > 1`. Measured on the fixture —
+  1.5 m pool at 66° from the normal — stepping overshoots the bed by 1.18 m and displaces the
+  sample 2.53 m instead of 1.42 m, which renders as the bed **diced into rectangular blocks**, not
+  as a bent pool bottom. The travel is capped at `thickness`, which is the `ior >= 1` bound as
+  arithmetic and makes the expression continuous at 1.0.
+- **The sample is validated against the depth copy** and falls back to the unrefracted one when it
+  lands in front of the water. The mesh path skips this (its ice is a block in mid-air); water
+  cannot, because a pond is bounded by a shoreline and by things standing in it. It costs one
+  `textureLoad` from a copy water already has bound. **It was measured before it was believed**: on
+  the fixture's overhead camera it changes *zero* pixels and was nearly deleted as dead code; at a
+  grazing 8° it changes ~22k by up to 99, smearing the boulder's silhouette across the water. Hence
+  the fixture's second camera.
+- **`water.wgsl` is not edited, including its comments.** The plain pipeline compiles it as it sits
+  on disk and a second `refractive-water-pipeline` compiles a variant assembled by
+  `with_water_refraction` (M22/M26's splice, four anchors, each asserted to appear exactly once).
+  The pipeline is chosen **per surface**, so an unrefracting pond beside a refracting one still
+  gets the M18 shader. The IOR rides in `clock.z`, a slot M18 declared padding, which is what keeps
+  one uniform layout feeding both pipelines.
+- **Authoring: refraction is only visible in water you can see through, and needs a pattern under
+  it.** A displacement of a uniform field is invisible by construction, and the displacement runs
+  *along* the view direction — so a bed pattern parallel to that axis barely moves (the first
+  render test split the bed left/right and saw 236 pixels change; bars laid across it see
+  thousands). The tour's pond is silty over a 0.2 m bed and `ior` still moves ~30k pixels of
+  `showcase_450`, because a grazing camera makes the path long even in a puddle.
+
+Fixture `verify/m27_water_refraction.json` at `--steps 120`, **two baselines from one file** via a
+second camera (`--camera CameraGrazing`) — the overhead one pins the bend, the grazing one pins the
+clean waterline. Both are hard bit-exact pins with no tolerance, which M22's rule allows because the
+fixture aims at its subject with no terrain in frame; four consecutive sweeps came back at zero.
+Not here: refracting another transparent surface (the copy is the *opaque* frame, so the ice
+floating in a pond is not in what the pond bends), chromatic dispersion, and planar reflections —
+still the other half of a water surface, and still missing.
+
+## Trees (M19)
 
 The `Tree` component is a **recipe, not a mesh reference**: `engine-core/src/tree.rs` grows it into
 two meshes — bark (drawn with the entity's own `Material`) and leaves (drawn with
@@ -596,7 +728,7 @@ routines move 3 pixels of `m19_trees.png` by one channel step (measured; Rust do
 floats, so this is libm, not FMA), so bless from the debug binary `cargo test` runs. Every pre-tree
 fixture is profile-insensitive; the constraint arrives with CPU-generated geometry.
 
-## Clouds (M20, `designs/cloud-design.md`)
+## Clouds (M20)
 
 M19's premise applied to the sky. `engine-core/src/cloud.rs` grows one mesh — a golden-angle spiral
 of icosphere lobes over the footprint, each growing `children` smaller lobes biased upward by `rise`,
@@ -631,7 +763,7 @@ a `THROUGH_SCATTER` fraction (0.3) with the diffuse curve left **linear**, becau
 full saturates a white cloud everywhere and sharpening the curve instead turns a storm cloud into
 grey rock.
 
-## Day and night (M21, `designs/daylight-design.md`)
+## Day and night (M21)
 
 **It is a pure CPU function, and that is the whole design.** `engine-core/src/daylight.rs` maps
 `(DaylightSettings, time) -> Daylight`, and `scene::apply_daylight` folds that onto the
@@ -673,7 +805,7 @@ a frozen day is reproducible with no `--time` at all. `day_length: 24.0` makes a
   on `sky`); authoring either anyway is the `daylight_overrides_sky` warning, naming the fix.
 - **The horizon-sun shadow bug**, which day/night is the first thing to reach: a sun on the horizon
   casts shadows of unbounded length and one just below it casts them *upward*.
-  `clamp_shadow_elevation` in `scene_renderer.rs` floors the direction used for the **shadow matrix**
+  `clamp_shadow_elevation` in `scene_renderer/shadow.rs` floors the direction used for the **shadow matrix**
   at 5° while the lighting direction keeps going. Above 5° it returns its input unchanged, which is
   why it costs every pre-M21 baseline nothing.
 - **Scripts** get exactly two read-only getters, `world.time_of_day()` and `world.sun_altitude()`,
@@ -688,7 +820,7 @@ or a directional horizon glow (the natural next commit, in `sky_common.wgsl` on 
 the untouchable lines), stars, clouds, real astronomy, moon shadows, and script-driven
 `Material.emissive`.
 
-## Terrain (M22, `designs/terrain-design.md`)
+## Terrain (M22)
 
 **There is no flat ground in the repo's scenes any more.** Following `Water` exactly, `Terrain` owns
 a tessellated unit grid (`segments`, 1..512) sized by `Transform.scale`, so the entity carries **no**
@@ -745,13 +877,30 @@ is what drawing the object second under `Less` gives.
 
 Residue, recorded rather than hidden: `showcase_646.png`, the blast frame, still comes back as two
 images ~100 pixels apart (delta ≤ 18) in the distant tree canopy. It is the only baseline with a
-`diff_args` tolerance in `baselines.json` (`--threshold 24`). **The general rule: fine geometry
+`diff_args` tolerance in `baselines.json` (`--threshold 24`). `showcase_810.png` was first seen to
+flake the same way **once** — 29 pixels at a channel delta of 1, along the treeline, clean on the
+next three runs — and read at the time as a one-off worth re-running rather than blessing away. The
+M31 `draw` split then measured it directly and it is **not** a one-off: 3 distinct renders of 6, on
+`main`'s binary as much as the new one (see Verification). Since M29 all six tour frames carry the
+same tolerance anyway, so nothing needs re-blessing; what changes is the reading — 810 is in the
+class rather than an exception to it.
+M27 saw the same signature on **`showcase_450` (22 px) and `showcase_585` (24 px), both at delta 1**,
+in one of seven consecutive full sweeps, the other six clean. Same residue, same verdict, no
+tolerance: **the whole tour is in this class, not three named frames**, so a failure on any
+`showcase_*` at a delta of 1 and a couple of dozen pixels is worth a second sweep before it is worth
+debugging. Everything else in the manifest is bit-exact and a failure there is real — the M27
+fixtures, which aim at their subject with no terrain in frame, never flaked across ten sweeps.
+**M30 measured the rate instead of counting sweeps**, which is the cheaper way to settle one of
+these: ten `--steps 585` renders of the *unchanged* tour came back as **three distinct images from
+the M30 binary and two from `main`'s** — nondeterministic on both sides, so the sweep is a lossy
+instrument and re-running it is a coin flip. When a sweep fails, `md5` N renders of the one frame:
+a stable-but-different render is a real change, a different-every-time render is the adapter. **The general rule: fine geometry
 against relief under MSAA is where this adapter stops being reproducible, so a new fixture wanting a
 hard pin should aim its camera at its subject rather than across a landscape.** Verified by
 `engine-render/tests/terrain.rs` (including `a_flat_single_layer_patch_is_exactly_a_painted_plane`,
 which pins the shading path against `builtin:plane` at `segments: 1`) and `verify/m22_terrain.json`.
 
-## Roads (M23, `designs/road-design.md`)
+## Roads (M23)
 
 The car demo's circuit was **207 `builtin:cube` plates** whose overlapping slabs and constants existed
 only to hide the fact that the road was not a surface. `Road` replaces all of it with one entity, and
@@ -812,7 +961,7 @@ overshoots, so a road authored to reach 6 m crests at 6.4 and the file stops pre
 Fixture `verify/m23_road.json` at `--steps 180`, pinned by a CLI test that also drops a ball on the
 road and requires it to *stay where it lands*.
 
-## Agent ergonomics (M24/M25, `designs/agent-ergonomics-design.md`)
+## Agent ergonomics (M24/M25)
 
 The README claims *discover by looking, verify by querying*; this is the querying half catching up.
 No component, renderer or physics code was touched, and `bin/verify-baselines` reported 30 of 30
@@ -930,6 +1079,447 @@ Not here: IBL and prefiltered probes, parallax, decals, texture compression, sto
 anisotropic filtering (pinned at 1 — a per-adapter quality knob is where reproducibility dies),
 textured terrain layers, and textured roads.
 
+## Meadows (M29, `designs/meadow-design.md`)
+
+`Meadow` is ground cover with a **life cycle**: seed → sprout → grass → flowering weeds → dry straw →
+collapse → seed, on the scene clock, so `cycle_length: 3.0` runs a whole generation in three seconds.
+A recipe like `Tree`/`Cloud`, so the entity carries **no** `Mesh` and **no** `Material`
+(`meadow_with_mesh`), sized by `Transform.scale` in XZ.
+
+**It is the first recipe here whose subject changes shape over time**, and the whole design is the
+answer to how that avoids minting a mesh per frame (M15 keys the upload cache on `Arc` identity).
+Two static buffers per meadow — a **template** (one plant at maximum extent) and an **instance
+buffer** (36 bytes a plant) — and everything visible happens in `meadow.wgsl`'s vertex stage from
+`ScenePass.time`. Water's M18 trade, on a harder case: water kept its topology, a plant has to change
+*organs*.
+
+- **Shape change is a scale animation on parts that are always in the buffer.** Every vertex carries
+  the phase window (`emerge`..`wither`) its organ lives in; outside it the organ scales to zero about
+  its own anchor and its triangles rasterize nothing. No second draw, no index rewrite, no divergent
+  branch. The template therefore holds the union of every stage's organs — blades, a flower head, a
+  seed head — at all times.
+- **`generation = floor(progress)` is what makes the cycle regrowth rather than a loop.**
+  `hash(plant.seed, generation)` in the shader re-draws each plant's position within its cell, its
+  height, lean and heading every time round, so the dead stalk and the sprout replacing it are not
+  collinear. One integer hash, **no state anywhere** — the render stays a pure function of (file,
+  time). The reseed hash is a **format contract** and is spelled out in the shader for the reason
+  every generator here spells its own out.
+- **`cycle_length: 0` (the default) freezes the field** at `phase`, exactly as `daylight.day_length:
+  0` freezes the day. `stagger` desyncs plants; `0` marches the field in lockstep, `1` shows every
+  stage at once and so never appears to change — the default is near the low end because a real
+  meadow browns together.
+- **`MeadowVertex` carries `centre` and `offset` separately**, and that is not tidiness: height scales
+  by the stage's `height`, girth by its `width`. One combined position would make a taller plant
+  proportionally fatter and leave `blade_width` — authored in metres — meaning something different at
+  every stage.
+- **The cache key covers the transform *and* the terrain.** Instances are placed in **world space**
+  (altitude sampled through M22's `terrain::world_height_at`, the one implementation), so keying on
+  the component's own fields would leave a moved meadow, or a re-shaped terrain under a still one,
+  with grass floating at the old ground's height. `terrain_moves_rebuild_the_patch` pins it. Each
+  instance also carries the ground's **gradient**, so a plant that reseeds a few centimetres away
+  lands at the new spot's altitude rather than the old one's.
+- **Every cell draws its full set of random numbers whether or not the slope test keeps its plant** —
+  otherwise raising a hill at one corner reshuffles the grass at the other. M17's
+  "defaulted fields consume no randomness", generalized.
+- Rendering is `shaders/meadow.wgsl`, a new **instanced** pipeline duplicating `mesh.wgsl`'s lighting
+  with `sky_common.wgsl` prepended (the `water`/`road`/`clouds` precedent, M16's reason). Opaque,
+  depth-writing, drawn last in the opaque run. **`cull_mode: None`** with the normal flipped toward
+  the viewer — a blade is a single-sided strip and half of every tuft faces away. **Grass receives
+  shadows and casts none**: one 2048² cascade cannot resolve a blade, and what it would record is
+  sub-texel noise that crawls. `ROOT_SHADE` (darkening toward the root) is what stands in for the
+  missing self-shadow, and `BACKLIGHT` is what makes a field lit from behind glow.
+- Budget is **`MAX_MEADOW_TRIANGLES` (8M), counted in triangles** rather than plants, because only the
+  product of plant count and template complexity hangs a render. Measured: 1.3M draws in 0.19 s,
+  7.1M in 3.6 s (debug). Geometry fields are in `NOT_ANIMATABLE`, `stagger` included — a plant's phase
+  offset is drawn once, at placement.
+
+**M29 is where this adapter's reproducibility limit gets sharper, and the two artifacts settle it
+oppositely.** A meadow at `samples: 4` is *not* byte-reproducible: six renders of the unchanged
+fixture came back as six distinct PNGs (1874 px, delta 69). At `samples: 1` eight renders are one
+image. **Relief is not required** — the fixture's ground is `height: 0.0`, a flat patch — so M22's
+rule is really "enough sub-pixel geometry", and a meadow is the densest source of it in the engine.
+So `verify/m29_meadow.json` renders at **`samples: 1`** and keeps a hard bit-exact pin, while **all
+six showcase baselines now carry `"diff_args": ["--threshold", "24"]`** (the tour is stable without
+the meadow — 8/8 identical — and the meadow is visible in every frame, worst drift 203 px / delta 20).
+That is a real loss of five bit-exact pins, recorded rather than hidden: **a new fixture wanting a
+hard pin on ground cover must render it at `samples: 1`.**
+
+Four authoring rules came out of looking at renders: blades must be **thin** (2 cm is a real
+measurement and renders as ribbons; 7 mm at higher density reads as grass), **every blade arches**
+including the central one (`reach`'s `+ 0.55` — a rigid vertical wire up each tuft read as wheat),
+heads are **stretched spikelets** not beads, and the flower colour sits **near the plant's** or it
+scatters as dots. Not here: trampling and thatch (both need history, and history is hidden state), a
+spatial wave across the field, textured or alpha-cut blades, slope-aligned plants, and LOD.
+## Skeletal animation (M30, `designs/skeletal-animation-design.md`)
+
+**CPU skeleton, GPU skin, and both halves of that sentence are forced.** Skinning cannot happen on
+the CPU: posing vertices there mints a new `Arc<MeshData>` every frame and defeats M15's upload
+cache (M18's argument, same answer). The skeleton cannot happen on the GPU without costing the
+milestone its point — a joint palette is a few dozen matrices, and *because* they exist on the CPU
+`engine list-joints --time 0.7` can say where every joint went, a script can put a torch in a hand,
+and the whole sampling path is GPU-free and unconditionally testable the way `daylight.rs` is.
+
+- **No new component.** `AnimationPlayer.clip` gains the fragment form `meshes/robot.glb#Walk` that
+  M9's design specified and nothing had used. A skin is a property of the
+  *asset*, and `Mesh.asset` already names it; a `Skeleton` component would be a second source of
+  truth for what the file contains. The fragment is **required** even when the file has one clip —
+  defaulting is friendly right up until someone exports a second one and which clip plays changes
+  silently. Ownership rules, all validation errors: `skeletal_player_mesh_mismatch`,
+  `clip_needs_fragment`, `mesh_has_no_skin`, `unknown_clip` (with `did_you_mean`), and
+  `too_many_joints` past `MAX_JOINTS` (128) — refused before a device exists rather than a rig that
+  renders correctly up to joint 128.
+- **Rotation is a quaternion here, slerped, shortest-path — the opposite of M9's rule**, and the
+  distinction is *who wrote the numbers*. A property clip's keys were typed by an agent into JSON
+  where `[0, 360, 0]` is a sentence that must actually spin; a skeletal clip's came out of a DCC
+  tool through a specified format where the only correct reading is the spec's. Don't "unify" them.
+- **A skinned primitive loads unbaked.** glTF says the transform of the node referencing a skinned
+  mesh is *ignored* — the palette already speaks skin space — while `gltf_mesh.rs` bakes node
+  transforms for static geometry, which is right for that and exactly wrong here. This is the single
+  most likely thing to be "simplified" back into a bug; the symptom is a character posed correctly
+  in the wrong place, or one that doubles its own root transform. `JOINTS_1` (a fifth influence) is
+  **refused**, not dropped: a dropped influence is a wrist that collapses under rotation.
+- **The palette rides group 0 at binding 1** with its own dynamic offset — `downlevel_defaults` caps
+  `max_bind_groups` at 4 and M26 spent the fourth on materials, so there is nowhere else. Packed as
+  **three `vec4` rows, not `mat4x4`**: a joint matrix's fourth column is always `(0,0,0,1)` and
+  storing it wastes a quarter of the 16 KiB budget. **Joint order is the skin's own `joints` order
+  and must not be sorted** — unlike point lights, a joint's index is written into the vertex data.
+- **The vertex stage is assembled from producer contributions**, not replaced wholesale. Texturing
+  needs a UV the plain stage does not carry and skinning needs two more attributes, and a rigged
+  character is precisely the thing that wants both — whole-stage replacement worked while exactly
+  one producer did it. A `VertexContribution` names attributes, varyings, statements, and at most
+  one expression transformed in place of `position`; `an_unassisted_vertex_stage_is_the_one_in_the_file`
+  asserts the empty assembly equals `mesh.wgsl`'s stage **character for character**, which is what
+  keeps M16's four untouchable lines reachable. The A/B said 29 of 29 committed render artifacts
+  byte-identical.
+- **The skinned pipelines are built lazily**, on the first frame that has a skinned draw — six
+  shader modules is a real startup cost and one scene in this repo has a rig. Same precedent as the
+  shadow map, the 1×1 white texture and the colour copy.
+- **A skinned caster is its own pipeline**, because `shadow.wgsl` reads nothing but the model matrix
+  and a walking character would otherwise cast its **rest pose** — a wrongness that reads as a
+  renderer bug and is a missing pipeline. Both casters are skinned (solid and M26's alpha-cutout).
+  The solid one is front-face culled, M16's peeling margin, which applies to characters too.
+- **Scripts get two read-only getters and no setter**: `world.joint_position(entity, joint)` and
+  `world.joint_transform(entity, joint)` (position plus XYZ Euler degrees, six numbers in one call
+  so the rig is posed once). M21's reason — a script-settable joint is hidden state (invariant 2)
+  and the pose must stay a function of (files, time). Hanging a prop off a hand is then an ordinary
+  `set_position`, which bakes change-based and shows up in the trace. A mistyped joint is a located
+  runtime error with `did_you_mean`, matching `world.key`.
+- **The rest pose still needs a palette.** `render_items(assets)` is the rest pose and
+  `render_items_at(assets, Some(t))` is posed; the tempting shortcut of an identity palette collapses
+  any rig whose rest pose is not exactly its bind pose, since the vertices live in skin space.
+
+Fixture `verify/m30_skeletal.json` at `--time 0.4`: two copies of `examples/meshes/rigged_arm.gltf`,
+one playing `Wave`. **The two arms are the assertion** — they share a file, a mesh and a material, so
+anything that made both wrong would leave them identical; only real skinning makes one bend and the
+other stand, and the bent one's shadow bends with it. **Measured rather than assumed** (§9 warned it
+might go the other way): this baseline is *not* per-build-profile, unlike trees and clouds — three
+joints of slerp is not enough libm to reach a pixel, and a hundred-joint rig may not inherit that.
+Test assets are generated text glTF like `pyramid.gltf`: `make_rigged_arm.py` (3 joints, the fixture)
+and `make_rigged_walker.py` (13 joints in a branching tree, `Walk` + `Idle`, UVs — the tour's
+character, and the only **skinned × textured** draw in the repo).
+
+Not here, deliberately: blending, crossfades and state machines (M9 §8's rejection still standing —
+blending reintroduces exactly the nondeterminism that made two clips on one property an error), IK
+and root motion, retargeting, morph targets, skinned colliders (a skinned mesh is visual; physics
+sees whatever `Collider` the entity carries, posed by its `Transform`), per-joint attachment
+components, and editor picking against the posed mesh — CPU ray picking hits the rest pose.
+
+## The UI system (M31, `designs/ui-system-design.md`)
+
+M12's two screen-space primitives were enough to *read* state out of a running scene and not enough
+to build a **screen**. M31 adds the three things that were missing — layout, images, and widgets a
+pointer lands on — and adds no input code at all, because M28 had already shipped the pointer.
+
+**The design doc was drafted before M28 and planned to invent its own** (pixel cursors, a per-
+keyframe `viewport`, an `input_viewport_mismatch` error). §7 is now a record of that reversal rather
+than a specification: a timeline outlives the window it was recorded in, so M28's *fraction* is
+right, and the draft's error code would have reported that failure rather than removed it. The
+concern was real but belongs to the **layout** — which is what `engine ui-layout` answers.
+
+- **`HudPanel` is the component that removes hand-computed offsets.** `layout` is `free`/`row`/
+  `column`; **absent `width`/`height` means hug contents**, which is the default because it is the
+  case that makes a dialog authorable. `opacity` defaults to **0**, so a bare panel is an invisible
+  layout *group* and the same component is also the dialog's backdrop — one component, not a
+  container plus a rect whose size has to be kept in agreement with it.
+- **Hierarchy is a `parent` name in a flat file** (the `Wheel.vehicle` precedent), shared with
+  `visible` and `stretch` by all four elements. Nothing structural guarantees it resolves, so five
+  codes do: `hud_parent_not_found`, `hud_parent_not_panel`, `hud_parent_cycle` (the message names
+  the ring), `hud_nesting_too_deep` (16), `hud_interact_without_element`. Cycles are a *validation*
+  error rather than a layout guard — `tree_too_complex`'s argument — though `Structure::resolve`
+  still roots an offending node so layout terminates on a scene that reached it anyway.
+- **Two properties make the restructure free rather than merely cheap, and both are asserted rather
+  than measured.** `ui::anchored` is M12's expression verbatim, so an unparented element resolves
+  through arithmetic that is textually the same; and the new draw order (depth-first, a panel before
+  its children, siblings by `(class, file order)`) **collapses** to "rects then texts, each in file
+  order" when nothing names a parent. There is no arrangement of pre-M31 components the two rules
+  sort differently. The A/B said **29 of 29** artifacts byte-identical between binaries.
+- **Flow order is file order; draw order is `(class, file order)`.** Two orderings of one sibling
+  set, and conflating them is a bug with a confusing symptom: the class sort exists so text reads
+  over the backgrounds it sits on, and running a *column* in that order stacks every button above
+  every label however the file reads. This cost a fixture render to find.
+- **Layout runs in f32 end to end and rounds once per element, at emission.** Rounding per level
+  would let a nested element drift a pixel per level. Hidden elements leave the flow entirely (they
+  take no space) and a stretched child contributes nothing to a hugging parent — both so hug sizing
+  cannot be circular. `stretch` on a `row`/`column`'s **main** axis is ignored, since distributing
+  leftover space is flex-grow and that is a named non-goal.
+- **`HudImage` samples nearest-neighbour, written out in-repo** for the reason every generator here
+  is: a render sits under a baseline, so the filter is a format contract. Nine-slice copies corners
+  1:1 and **tiles** edges and centre — tiling at nearest is exact where stretching at nearest is a
+  moiré pattern. Only the base mip is read (the overlay never minifies below one destination pixel
+  per texel band). `hud_image_slice_too_large` lives in **engine-assets**, not engine-core, because
+  comparing an inset against its source needs the PNG decoded — the `texture_too_large` division.
+- **Interaction is polled, never dispatched**: `world.hovered`/`pressed`/`clicked`. An `on_click`
+  field would need a second addressing scheme for which `Script` owns the handler, a dispatch-order
+  rule, and mid-step reentrancy; `world.key` set this shape in M11 because a button that runs code
+  is a *binding*, and bindings are game logic. The **press capture** is the one thing a polled API
+  cannot derive for itself, so the engine keeps it — runtime state of `world.state`'s kind:
+  replay-deterministic, reset by a fresh run, **not baked**, since a half-finished click is not a
+  property of the scene. Press-inside/release-outside does not click; `clicked` is true for exactly
+  one step. **`MouseLeft` alone drives the widget model**, the other two staying raw.
+- **Tints are applied to the extracted tree just before drawing, not inside the rasterizer** — the
+  renderer has no business knowing what a pointer is, and `hud::rasterize` stays a pure function of
+  (tree, lines, size). The `[1, 1, 1]` defaults make `apply_tints` a no-op for any scene with no
+  cursor over an interactive element, which is why adding a `HudInteract` moves no pixel.
+- **Hit-testing runs before scripts and is *not* gated on a scene having a `Script`** — hover and
+  press tints are a property of the components, so a menu that lights up needs no script. It is
+  gated on there being an overlay at all, so a scene without one takes the pre-M31 path exactly.
+- **`engine ui-layout <scene> [--width W --height H] [--entity N]...`** is the command the milestone
+  is really for: `road-centerline`'s argument applied to buttons. It reports the same rectangles the
+  rasterizer draws from and the hit test uses, name-sorted, at rest (no `--steps`, no cursor) — and
+  a CLI test closes the loop by turning a reported rect into the cursor *fraction* that hits it,
+  which is the one place the pixel report and the fractional timeline have to agree.
+
+**A trap worth knowing before authoring a fixture**: M28 defines an absent cursor as the **centre of
+the frame**, so "no `--input`" is not the untouched case if anything interactive sits in the middle —
+`verify/m31_ui.json`'s first button does, which is why its untouched-render test compares against
+`--steps 0` instead.
+
+Fixture `verify/m31_ui.json` + timeline at `--steps 30`, 640×360: a stretched dim backdrop, a
+nine-sliced frame, a hugging column of title, wrapped centred body text, and two buttons — with the
+**second held down**, the state hardest to reach and the one nothing else pins. Aimed at its subject
+with no terrain in frame per M22's rule, so it carries a hard bit-exact pin (four consecutive renders
+identical). Not here, deliberately: TTF text (a bitmap-font atlas is the sanctioned next step, and
+the 8×8 font's fully-on-or-off glyph pixels are what the whole verification story rests on), pointer
+lock and scroll, text input and focus, percentage sizes and flex-grow, rounded corners and shadows
+(all anti-aliasing, which is where the CPU rasterizer's bit-exactness lives), and world-space UI.
+
+## Locomotion and foot planting (M32, `designs/locomotion-design.md`)
+
+M30's walker slid and floated, and its own design doc said so. This removes those two fakes and
+nothing else. **Everything defaults to the pre-M32 behaviour** — `stride: 0` is the clock driving
+the clip, and a scene with no `FootPlant` poses exactly as it did — so the A/B said **30 of 30**
+comparable artifacts byte-identical, the seven exclusions being the new fixture and the six tour
+frames the `Walker`'s own edit re-blessed.
+
+- **The clip's phase is a field in the file, not state in the process, and the *bake* is what
+  settled that.** The obvious implementation is an accumulator in the sim loop beside
+  `ParticleSystem`; a particle is genuinely disposable and a half-finished stride is not, so a baked
+  scene that dropped it would reload the walker with its legs somewhere else and the bake's promise
+  — reload, re-render, bit-exactly — would be false for every walking character. So
+  `AnimationPlayer` gains `stride` (metres of ground one **cycle** covers) and `phase`, the engine
+  writes `phase` back after physics every fixed step, and the change-based bake splices it.
+  **Nothing in the render path changed signature**: `palette_for` was already reading the component.
+  The general rule this yields — *ask what the bake should contain, and the answer says whether
+  something is state or data.*
+- **`phase` counts cycles, not seconds**, so the locomotion system needs no clip duration and never
+  opens a glTF; `local_time` converts where the duration is already in hand. It wraps into `[0, 1)`
+  **on write-back**, so a long run does not bake a number whose f32 resolution has decayed.
+- **Driving `AnimationPlayer.speed` from a script does not work**, and the reason is invisible until
+  you look at a filmstrip: `local_time` is `t * speed`, so changing `speed` at t=10 from 1 to 2
+  teleports the phase from 10 to 20. Every acceleration is a pop. Phase continuity under a changing
+  rate *is* an integral, which is the whole reason a stored `phase` exists.
+- **`engine list-joints` measures `stride` off the clip** (`stride.measured`, over
+  `STRIDE_SAMPLES` = 64 moments, on an entity that also has a `FootPlant` so the feet are named). It
+  assumes nothing about gait: over each interval the **lowest** foot is the planted one and the
+  ground covered is how far it travelled in the skeleton's frame — biped, quadruped, or a hop, which
+  correctly measures zero. Computing it implicitly at render time was rejected: the measurement is
+  an algorithm, and an algorithm that silently set the clip rate would be a format contract, so a
+  refinement would move every walking character in every baseline. **The tour's walker covers
+  1.6408 m per cycle**, against the 0.884 m/s it was being carried at — a foot travelling 0.76 m/s
+  backwards through every stance, which is the fake as a number.
+- **`list-joints --steps N`**, and the fixture's own test is what forced it. A stride-driven pose is
+  *not* a pure function of (files, time) — its phase is what the run reached — so `--time` alone
+  reports the authored pose. The first version of the slip test baked to `/tmp` to reach the stepped
+  world and broke every relative asset path in the baked file (the trap this file already warns
+  about). A system whose state no report can reach is what M30 §6 says not to build.
+- **`FootPlant` plants against a `Terrain`, and that is a purity decision.** Raycasting the physics
+  world would make the pose a function of the simulation, which is exactly what lets `list-joints
+  --time` answer at all. So `ground` names an entity with a `Terrain`, checked
+  (`foot_plant_ground_not_found` / `_not_terrain`), and sampling goes through M22's one
+  implementation. **The stated cost: a character cannot stand on a crate.**
+- **The solve runs in skin space**, mapping the target back through `model⁻¹` rather than mapping
+  every quaternion forward — one inverse per entity per frame, and it cannot get a scale subtly
+  wrong (`foot_plant_non_uniform_scale` refuses one outright). Two lessons from writing it: the
+  knee's side must be chosen by **nearness to where the clip put it**, never by a fixed sign (a sign
+  flips the joint the first frame a leg passes through straight), and results must be written back
+  as **local** transforms with the hierarchy re-walked — editing globals detaches everything below,
+  and the symptom is a foot that reaches the ground with nothing joining it to the knee. The hips
+  drop first, by the largest deficit across legs; absent a `hips` joint the deficit is clamped and
+  one leg stretches, which is bounded and reads as wrong.
+- Scripts get `world.animation_phase`/`set_animation_phase` and the `stride` pair — **settable**,
+  unlike M30's joint getters, and the distinction is where the number lives: a joint is derived and
+  would be hidden state, while these are ordinary component fields the file carries. A game with its
+  own locomotion rule drives it through them rather than through a second system in the engine.
+  `FootPlant.max_drop`/`max_lift`/`align` animate freely, which is how a jump *stops* planting;
+  `stride` and `phase` are in `NOT_ANIMATABLE` because a clip driving its own clock is circular.
+
+Fixture `verify/m32_locomotion.json` at `--steps 45`: two copies of `rigged_walker.gltf` crossing one
+slope, one with a `FootPlant`. **The two walkers are the assertion**, M30's fixture logic — they
+share a file, a mesh and a clip, so anything that made both wrong would leave them identical. It
+renders at **`samples: 1`** because it needs terrain in frame (M22's rule, M29's answer), and four
+consecutive renders came back as one image, so the hard pin is measured. Both claims are also pinned
+**without a pixel**: a CLI test asserts each planted ankle's world Y equals `terrain-height(x, z) +
+sole` to a millimetre at four moments, and another measures foot **slip** — under a centimetre over
+two steps stride-driven, seven times that with the clock driving the same clip.
+
+**The tour is not where this is visible.** Station 01's walker is thirty metres back and mostly
+behind the lower-third card: the whole change moves **147 pixels** of `showcase_90` and nothing
+outside the existing tolerance on the other five. All six were re-blessed anyway, since the scene
+changed. Not here, deliberately: blending and crossfades (**still rejected**, and locomotion is the
+usual reason engines reach for a blend tree — a gait change here is a different `clip`), root motion
+(the inverse of this design; it would take `Transform.position` from scripts and physics, and there
+is no third owner), planting on physics colliders, arm/hand IK and authored pole targets, and toe
+joints.
+
+## Skinned collider proxies (M33, `designs/skinned-collider-design.md`)
+
+M30 §1 said a skinned mesh is visual and physics sees only the entity's own `Collider`. **This
+reverses that one item and nothing else**: a `SkinnedCollider` lists simple shapes, each fixed in
+one joint's frame, and the physics world re-poses them from the rig every fixed step. They are hit
+by raycasts, they report contacts, and they push dynamic bodies.
+
+- **The pose drives the proxies and nothing reads them back.** That one sentence is the design.
+  A proxy is a **kinematic** body, posed from `locomotion::posed_globals_at` — the same seam the
+  render, `engine list-joints` and `world.joint_position` go through, so a hitbox cannot disagree
+  with the picture about where a head is, and a `FootPlant` character's ankle proxies are on the
+  ground for free. Physics reading the skeleton is what keeps M30's "the pose is a pure function of
+  (files, time)" true; physics *writing* it would be a ragdoll, which is a different milestone.
+  **A proxy therefore holds a character up exactly as much as a moving wall holds up the hand
+  pushing it** — what a character stands on is still its own `Collider`.
+- **One body per part** (colliders on one rapier body share its pose; joints do not), `sphere` /
+  `capsule` / `cuboid` only — `Collider`'s own vocabulary, and a mesh shape is refused
+  (`collider_part_shape_unsupported`) because a proxy exists precisely because the skinned mesh is
+  on the GPU. `offset`/`rotation` are in the **joint's** frame (capsule axis local +Y);
+  `Transform.scale` scales the parts and a non-uniform one is refused. Shapes never resize with the
+  pose: only the placement follows the rig.
+- **Self-collision is a contact-pair hook keyed on the owning entity**, and only proxy colliders set
+  `ActiveHooks`, so a scene without one reaches none of it. Proxies also opt into
+  `ActiveCollisionTypes::all()` — kinematic-vs-fixed and kinematic-vs-kinematic are both off by
+  default in rapier, and "did the sword touch the shield" is the second of those.
+- **An address is not an entity name.** `ContactEvent` keeps `a`/`b` as entity names and gains
+  `a_part`/`b_part`, so every pre-M33 script and both golden traces are untouched and a trace line
+  grows a `"parts"` key only when a proxy is involved. `engine raycast` reports `"part"` beside
+  `"entity"`, and scripts get `world.touching_parts` / `contacts_started_parts` returning
+  **addresses** (`Walker/Head`) — engine-produced, never accepted back, slash-separated because
+  entity names already contain dots (`Crate.frag0`). With no proxies in a scene those two calls
+  return exactly what `touching`/`contacts_started` do.
+- **`engine list-colliders`** is the milestone's legibility half and reports *every* collider,
+  component-authored and skinned alike, read back out of rapier rather than re-derived —
+  `road-centerline`'s argument applied to physics. `--steps N` for M32's reason.
+- **`PhysicsWorld::build` takes `&dyn PhysicsAssets`** (M30's `AssetSource` trick again: one
+  supertrait, every existing caller unchanged) and **`step` takes the scene time** — passed, not
+  counted internally, so no caller can drift from the clock the render uses. The pose is sampled at
+  the step's **end**, `steps · dt`, the time the render draws after those steps.
+
+**Two things measured, both worth knowing before debugging one of them.** First, **a physics scene
+is not stable under the addition of a collider anywhere in it**: the tour's `Walker` gained five
+proxies that touch nothing, and 24 of the tour's 26 dynamic bodies moved, two frames by ~1900
+pixels. Dropping *one 5 cm static sphere 200 m from anything* into the unchanged tour moves six
+bodies by up to 4.4 mm — the collider set is an input to the broad phase, its traversal fixes the
+order contacts reach the solver, and float addition is not associative. So the determinism promise
+is per *file*: a scene that gains a body re-blesses, and three runs of the edited tour are still
+byte-identical to each other. The A/B said **31 of 31** comparable artifacts byte-identical, the
+seven exclusions being the new fixture and the six tour frames this scene edit re-blessed.
+Second, **a stride-driven character's proxies lag its render by one step** (1.9 mm at the hips on
+the fixture): `phase` is advanced by ground *covered*, which physics cannot know until it has run,
+so the pose a proxy can be aimed at is the previous step's. M12's contact latency, in another
+place — causal, not a defect, and the CLI test that compares `list-colliders` with `list-joints`
+states the residue rather than hiding it.
+
+Fixture `verify/m33_proxies.json` at `--steps 150`: two copies of `rigged_walker.gltf` walking into
+two identical crates, one carrying an eleven-part proxy set. **The two walkers are the assertion**
+(M30's fixture logic for the third time) — one bulldozes its crate 1.3 m, the other walks straight
+through its own, which is visible in the render and readable out of `simulate` without one. Aimed
+at its subject with no terrain in frame per M22's rule, so it carries a hard bit-exact pin (four
+consecutive renders were one image), and a CLI test diff-renders it. Not here, deliberately:
+ragdolls, standing on a proxy, shapes solved from the posed bone, automatic proxy generation from
+vertex weights, and skinned *mesh* colliders.
+
+
+## One unit is one metre (M34)
+
+**The convention was already true everywhere except one primitive, and that one exception had
+quietly produced wrong content in six committed scenes.** Free fall measures `-9.810 m/s` after a
+second and `-19.620` after two, a body at 10 m/s covers 10.000 m in one, every length-bearing field
+in all 26 component schemas is documented in metres, a `Terrain` at `scale: 100` spans exactly ±50,
+and glTF loads 1:1 (the rigged walker measures 1.58 m to the head). None of that changed. What
+changed is `builtin:sphere`.
+
+- **`builtin:sphere` was radius 1 — two metres across — while the cube, cylinder and plane were all
+  one.** The cylinder's own doc comment stated the rule it broke: *"like the cube it fits the unit
+  extent and `Transform.scale` means the same thing on both."* It now has radius 0.5, and
+  `every_modelling_primitive_fits_the_unit_extent` pins the rule for all four by measuring the
+  generated vertices. `builtin:triangle` stays 1.6 × 1.4 and is exempt — it is the M0 stack proof,
+  not a modelling shape.
+- **The damage was in the collider pairing, and it is why this was worth a milestone rather than a
+  doc fix.** `Collider` dimensions are in the entity's own units and `Transform.scale` multiplies
+  them too, so a collider authored to match the drawn ball had to be written at *twice* its visible
+  radius — and nothing said so. Five of the six sphere-plus-collider pairs in the repo were wrong:
+  `m8_drop`'s ball rested with its bottom 0.45 m under the floor, `m14_break`'s and `m23_road`'s the
+  same, `m22_terrain`'s `Dropped` had a radius written as a world measurement that scale multiplied
+  a second time (0.7 authored, 0.49 simulated, 0.7 drawn), and **the starter scene `engine init`
+  scaffolds shipped the defect to every new project**. Only the tour's `Boulder` was right, and only
+  because its author happened to write `radius: 1.0`.
+- **Three of the four fixtures needed no edit at all, and that is the tell.** Where the author had
+  treated the collider as the source of truth, halving the mesh made the two agree on its own —
+  which is why **both golden traces are byte-identical** and `m23_road`'s "the ball must stay where
+  it lands" test still passes untouched. Only the render moved. The other spheres had their `scale`
+  **doubled**, which is bit-exact rather than merely close: doubling a decimal literal and halving a
+  mesh are both exact in binary floating point, and the products round identically, so 34 of 39
+  artifacts came back at zero pixels against baselines rendered by an older binary — the A/B claim,
+  for free, out of the ordinary sweep.
+- **The one thing that broke that reasoning was a script.** `m17_fire.rhai` and `tour_effects.rhai`
+  both call `world.set_scale` on their emissive coal bed every step from a hard-coded constant, so
+  doubling the *authored* scale achieved nothing and the coals rendered at half size. A blanket edit
+  over scene files cannot see this; the constants in both scripts were doubled too. **Grep the
+  `.rhai` files for `set_scale` before believing any scale-space change is complete.**
+- **`collider_mesh_size_mismatch` is the check that would have caught all six**, and it is a
+  warning rather than an error because a proxy collider is ordinary authoring. It compares a
+  `sphere` or `cuboid` collider against the builtin mesh on the same entity, both in world units,
+  and fires past a deliberately loose `COLLIDER_SIZE_TOLERANCE` of 1.25 — sized to catch the factor
+  of two and the scale-applied-twice case while staying silent on an inset hull, a thick collider
+  under a flat `builtin:plane` (axes the mesh is flat in are skipped), and a cuboid standing in for
+  a sphere, which the tour's critters author and whose bounding box is exactly right.
+  `no_committed_scene_disagrees_with_itself_about_how_big_something_is` sweeps every committed
+  scene, the scaffolded starter included, so the six cannot come back.
+- **It immediately found a seventh, in code merged the same day.** M33's `m33_proxies.json` draws
+  both crates as `builtin:cube` at scale 1 — one metre — over a collider half a metre across, so
+  its own baseline shows a walker standing *inside* a crate. The fix keeps M33's physics exactly
+  (`scale` 0.5 with `half_extents` 0.5 leaves the world half-extent at 0.25, and mass comes from
+  the collider, so `simulate` is byte-identical); only the drawn size moved, and the crate's
+  authored `y: 0.25` confirms half a metre was always the intent. **That is the argument for the
+  warning in one example**: this class is invisible in review, survives a fixture with a hard
+  bit-exact pin, and reads as a renderer bug when anyone finally looks.
+- **`BuiltinMesh::half_extents()` is what validation compares against, and it is written by hand**,
+  so `declared_half_extents_match_the_geometry` measures it against the generated vertices. It is
+  the reach from the origin rather than half the span, because the M0 triangle is not centred.
+- Documented where it was silent: `Transform.position` and `Transform.scale` had **no doc comment at
+  all** — `rotation` spent five lines on its degrees convention while the field that defines the
+  length unit said nothing. Both now carry it, which reaches `engine list-components` and
+  `docs/component-reference.md` for free. `AGENTS.md` and `docs/scene-format.md` gained the
+  builtin-extent rule and the collider-units corollary. Also written down: **`Collider.density` is
+  kg/m³ and its `1.0` default is not a plausible material** — a default 1 m³ cube masses 1 kg, which
+  is invisible under gravity (mass-independent) and three orders of magnitude off for anything
+  force-driven; the demo car carries `350` to reach 1.5 t.
+
+Not here: changing `builtin:triangle`, and fixing `builtin:plane`/`builtin:cube`'s UV layout, which
+M26 already deferred as its own change with its own A/B.
+
+**Numbering**: two parallel sessions were holding `m33-gi` and `m33-skinned-colliders` when this
+started. Skinned colliders landed as M33 while this was building, so this took M34 on the way in —
+the repo's rule that the later session renumbers, applied at merge rather than at branch. A
+global-illumination branch is still out there and is the next number.
+
 ## Showcase tour (`designs/showcase-tour.md`)
 
 `examples/scenes/showcase_tour.json` is a 15-second (900-step) camera move through five 180-step
@@ -937,18 +1527,94 @@ stations — forest / campfire / water+ice / breaking / wide — with every syst
 four scripts (`scripts/tour_{director,wildlife,effects,truck}.rhai`) and six 640×360 baselines
 (per-adapter, checked by hand with `diff-render`, not by a CLI test).
 
+**The camera path is a closed cycle, not a timeline that ends.** Six legs over seven keys (the
+seventh is the first again), read through `p = step % 1080`, so past step 900 leg 5 flies the camera
+home from the wide finale and the five stations come round again on an 18-second lap — the director
+used to clamp its station index, which replayed the finale's own three seconds forever while the
+world went on moving. **Nothing resets on a lap**: breaks stay one-shot, so station 04 later shows a
+debris field, and `day_length: 300` means lap two is dusk. The first lap is *arithmetically* the
+pre-loop one (`step % 1080` is the identity below 1080, and the time bar picks a numerator and
+denominator rather than scaling a fraction), so all six baselines diff at zero pixels. Rhai's
+function-expression depth budget is **16 in a debug build**, which is why the director spells
+sub-expressions into `let`s instead of nesting one more paren.
+
 **Its growth contract is a test**: `repo_contracts.rs::showcase_tour_uses_every_component_the_engine_has`
 fails on any schema component the tour does not use, so a new component's commit adds an entity here
 — there is no allowlist, deliberately. `showcase_tour_uses_every_scene_block_the_format_has` sits
 beside it, since `daylight` is a block the component walk could never have seen missing. M21 put the
 first hole in the component contract's premise, because `drives_sun` makes `DirectionalLight` a
 validation error and two components stopped being addable; that exemption is *computed* from the
-validation rule, not listed, so it evaporates if the tour stops driving the sun.
+validation rule, not listed, so it evaporates if the tour stops driving the sun. **M30 put the second
+hole in it, with a different shape**: skeletal animation adds no component at all (a skin is a
+property of the asset), so a contract keyed on components can never notice the system exists — M21's
+hole is an exemption the contract computes, this one is a system it was never able to see. The tour
+carries a rigged `Walker` anyway, because "every system running at once" is the claim.
 
-The tour shows M26 too: the monolith is granite-textured (`albedo_map` + `normal_map`, generated by
-`examples/textures/make_textures.py`) and the ice **refracts** — `ior: 1.31` with a thickness that
-scales with the block and a faint blue-green `attenuation`. Those two edits are why the six showcase
-baselines were re-blessed in M26 while every other committed baseline held.
+The tour shows M26 too: the ice **refracts** — `ior: 1.31` with a thickness that scales with the
+block and a faint blue-green `attenuation` — and **every `Mesh` in it is textured**, from the four
+new map sets `examples/textures/make_textures.py` generates beside the granite: fissured `bark` on
+the nine trees and the campfire logs, a framed-panel `crate`, `plate_normal` + `plate_orm` panelling
+the truck, and `tread_normal` on its wheels. Granite serves the monolith, the boulder, the fire pit
+and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
+
+- **The maps are near-neutral and bright, and the `Material` carries the hue**, because `albedo_map`
+  is *multiplied* by `albedo` — a map with its own strong colour can only be tinted toward black, so
+  one bark file could not serve an oak and a birch both. This is why `granite.png` was already grey.
+- **Seven of the nine trees share `examples/materials/bark.json`**, the tour's use of `Material.asset`.
+  Birch and the dead snag stay inline: same maps, different tint, and `asset` is exclusive with every
+  other field so a shared file cannot be tinted per entity.
+- **`builtin:cube`'s faces disagree on which way `u` runs** — and they disagree **in pairs, not in
+  axes**: `mesh.rs` builds them as `quad(+X, Y, Z)` / `quad(−X, Z, Y)` / `quad(+Z, X, Y)` /
+  `quad(−Z, Y, X)`, so `u` is vertical on +X and *horizontal* on −X. Anything strongly directional on
+  a cube therefore draws differently on all four sides, and a box's tiling is a property of the
+  **face** you care about rather than of the box (the arena shooter's four perimeter walls carry four
+  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`, whose
+  title/pause/end menu was **rebuilt on M31**: a `HudPanel` tree the engine lays out and a
+  `HudInteract` it hit-tests, where M28's version was rectangles the script computed, centred by
+  multiplying a string's length by the glyph advance, and hover-highlighted by putting brackets
+  round the label. What that bought is worth reading as a worked example of the UI system —
+  hug-sized cards that are three different sizes for three screens, `visible` in place of the
+  empty-string/zero-size pair, a play HUD authored *hidden* so `--steps 0` is the title screen, and
+  a demo director that asks `engine ui-layout` where the button is instead of hard-coding the
+  fraction. It also carries the one trap in `HudImage`: with no `slice` an image is all middle band
+  and the middle band **tiles**, so an icon must be drawn at its source size — 32 px of a 16 px
+  reticle is four reticles. Its demo timeline is authored by a closed-loop director,
+  `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a drone at step 431, and
+  M31's **press capture** means that director now writes the release on the button too. Four
+  `Meadow` strips ring the plateau since the same pass, and it now runs a **four-level campaign**
+  whose shape is dictated by two engine rules — a scene cannot spawn entities, and a script cannot
+  move a *dynamic* body by writing its Transform — so every level's drones and barrels are authored
+  parked above the arena and fly or drop in when their level starts, each level four metres above
+  the last because they reuse each other's positions and a shared park altitude has physics shoving
+  two bodies apart all run. **The performance bug it fixed is worth knowing outside the arena: a
+  full-frame `HudRect` defeats M15's scissored HUD rasterizer** and puts the frame back to filling a
+  window-sized CPU canvas — measured at 1920×1080, six frames went 13.1 s with a full-screen menu
+  veil against 5.7 s with a card-sized backdrop, which in a debug viewer stepping physics through a
+  wall-clock accumulator reads as a game that has stopped responding).
+  The crate texture is a *framed* panel with a centre batten for that reason: a border is invariant
+  under it. `Tree` tubes are the well-behaved case (`u` around the ring, `v` along the branch), which
+  is also why bark fissures must vary in `u` — transposed, a trunk wears tyre tread.
+- **The ice is deliberately unmapped**: refraction is what station 03 is showing and a frost normal
+  map competes for the same pixels. So are the critters and the beacon, which are stand-ins.
+
+Those edits are why the six showcase baselines were re-blessed — the sweep confirmed the other 25
+held bit-exactly, since no engine code was touched.
+
+**M30 adds the `Walker`** to station 01: thirteen joints out of `examples/meshes/rigged_walker.gltf`
+playing a one-second `Walk`, carried around a circuit by `tour_wildlife.rhai` while the clip does the
+legs — the milestone's division of labour, since no script ever touches a joint. It is the repo's
+only **skinned × textured** draw (`plate_normal` + `plate_orm`, the truck's maps), which is the
+composition the vertex-stage seam was rebuilt for. It stands *between* the station-01 camera and the
+trees deliberately: a two-metre figure thirty metres back behind a canopy is a pale smudge. Five of
+the six showcase baselines were re-blessed for it and `showcase_450` was **byte-identical** — station
+03's camera is aimed the other way, which is the cheap confirmation that one added entity changed
+only the frames it is in. **M32 unfaked two of the three the tour doc names**: the stride is
+now driven by the ground the walker covers (`stride: 1.6408`, the number `list-joints` measures off
+the clip) and its feet are planted on the terrain by a `FootPlant`. **M33 gave it five collision
+proxies**, which is the tour's use of `SkinnedCollider` — and re-blessed all six baselines for a
+reason worth reading in that section: the walker touches nothing, and adding bodies to a rapier
+world perturbs every other body in it anyway. Still faked: `Idle` is in the
+file but never crossfaded to, because a crossfade is the nondeterminism M9 refused.
 
 Station 04 fires all three `Breakable` triggers in one run (collision at ~585, `break_entity` at 601,
 `explode` at 636). What is real: particles, physics, fragments, the ice (real
@@ -959,8 +1625,10 @@ components where twelve cylinder-and-sphere entities used to be), and four `Clou
 cameras are all ground-level and aimed *down*, so the clouds ride the horizon rather than filling the
 sky. Still faked and named as such in the doc: animals (scaled spheres on parametric loops) and the
 sky (a gradient, not scattering). The blast at station 04 emits no light, which is a wiring job rather
-than a missing feature. Refraction is the upgrade that would move this scene most; textured bark and
-alpha-cut leaves are the same missing feature.
+than a missing feature. The pond **refracts** since M27 (`ior: 1.33` — `Water` carries its own, having no
+`Material` to put one on), which is what re-blessed the six baselines a second time; **alpha-cut
+leaves** are the last flat surface in frame, and they need `Tree::leaf_material` to grow map fields
+— an engine change, not authoring.
 
 **Building it found a physics bug** now fixed and regression-tested: priming the broad-phase BVH
 before the first step (vehicle worlds did this so wheel rays hit ground on step 0) consumed the pair
@@ -977,7 +1645,18 @@ goes on a scratch clone (`bvh_cold`).
   binary in `~/.local/bin`. Linux is built on the *oldest* supported Ubuntu deliberately — the
   artifact's glibc floor is whatever runner built it. `.github/workflows/ci.yml` runs fmt, clippy and
   the workspace tests; the render tests skip there for want of an adapter, so **CI proves the GPU-free
-  half only** and baselines stay a local, per-adapter check. **crates.io is closed to this workspace**:
+  half only** and baselines stay a local, per-adapter check. Two things had to be true for that skip to
+  be real, and neither was: the runner offers a **software GL adapter**, so "no adapter" was never the
+  case there — `Gpu::new` now checks the three formats every frame attaches
+  (`Rgba8UnormSrgb`, `Depth32Float`, `R32Float`) and refuses an adapter that cannot render one, naming
+  it and the capability, because before that check every render died deep inside
+  `create_render_pipeline` on `R32Float` and reported itself as `internal_panic` — *an engine bug* —
+  which is exactly the wrong diagnosis. And **the pinned car drive is a per-platform artifact** the way
+  a baseline is a per-adapter one: eleven thousand steps of a chaotic vehicle sim through glibc's trig
+  instead of Apple's park the car ~53 m off, so
+  `the_committed_lap_timeline_drives_the_car_around_the_track` skips off aarch64 macOS. Making that one
+  cross-platform means routing every trig call in the engine *and* in Rhai through one deterministic
+  libm — a milestone, not a fixup. **crates.io is closed to this workspace**:
   `engine-editor` pins egui to a git rev, cargo refuses to publish anything with a git dependency, and
   `engine-cli` depends on the editor — so `publish = false` is a *consequence*, and
   `cargo install --git` is the toolchain path until egui 0.36 lets that pin become a version.
@@ -1032,14 +1711,53 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**15 of the 27 baselines are pinned by no test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`,
-both `m10`, `m11_lap`, `m13_smoke`, `m14_break`, and all six `showcase_*`) — the sweep is their only
-check. `m11_lap.png` is the one to be careful about when reading older notes: the lap CLI test pins
-the *drive* (positions, elevation, parked HUD strings) and names the PNG in a comment, but nothing
-diff-renders it. A sweep failure that will not reproduce twice in a row is worth suspecting before it
-is worth debugging: since M22 one artifact (`showcase_646.png`) genuinely renders two ways on this
-adapter and carries a `diff_args` tolerance — the rest of the manifest is bit-exact and a failure
-there is real.
+**32 of the 38 baselines are pinned by a test** (M33's fixture arrived with its own), and the six
+that are not are the six `showcase_*` frames — deliberately. They are not byte-reproducible on this adapter (measured repeatedly at four
+to six distinct images from six renders of an *unchanged* scene, on any binary), so a test
+asserting them would fail at random, which is worse than no test. They keep their `diff_args`
+tolerance in the manifest and stay the sweep's job; `cli.rs` says so where someone would go to add
+them.
+
+This was 25-of-37 unpinned until the pins landed, and getting worse rather than better — 16 of 35
+when first counted, with M26 and M28 each adding fixtures nothing asserted. The nineteen that were
+missing now cost **3.6 s** in the CLI suite for the lot, `m11_lap`'s eleven thousand steps of
+vehicle physics included, which is the answer to why it had not been done. Two of them looked
+pinned and were not: `m27_water_refraction.png` was named by a test only in the **negative**
+direction (with `ior` back at 1.0 the baseline must *not* match), which pins refraction as
+load-bearing and says nothing about the render; and `m11_lap.png` was named only in a comment, by
+a test that pins the *drive* — positions, elevation, the parked HUD strings — and never rendered
+it. Both now have the positive half too. A sweep failure that will not reproduce twice in a row is worth suspecting before it
+is worth debugging: since M29 **all six `showcase_*` frames** carry a `diff_args` tolerance of
+`--threshold 24 --max-diff-percent 0.02`, because a meadow at `samples: 4` is not byte-reproducible
+on this adapter and the tour has one in every frame (M22 had already given `showcase_646` a
+threshold for its own reason). The pixel *allowance* is there rather than a wider threshold because
+the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held for eight
+consecutive full sweeps where `--threshold 40` alone would have been a looser claim. The other 30
+entries carry no `diff_args` at all — they are bit-exact, and a failure there is real.
+
+**M31 measured the tour's flake rate directly**, which is the cheap way to settle one of these: with
+the *unchanged* pre-M31 scene, `showcase_585` came back as **5 distinct images from 6 renders** on
+the M31 binary and **3 from 6** on `main`'s. A frame that disagrees with itself on both sides of a
+change is the adapter; `cmp`-ing one render against one render would have called that a regression.
+
+The clippy cleanup re-measured it on **two** frames and got the same answer, which is worth knowing
+before anyone reads an A/B result as a regression: `showcase_585` came back **6 distinct of 6** on
+the new binary and **5 of 6** on `main`'s, and `showcase_646` **3 of 6** and **4 of 6**. Its A/B
+found exactly those two frames differing out of 36 artifacts — and neither binary agrees with
+itself on either, so the difference is the adapter and not the change. **This is the reason the
+`md5`-it-N-times step is not optional**: a two-artifact A/B failure looks damning and here meant
+nothing.
+
+The `draw` split then found **three** — 585, 646 and **`showcase_810`** — and the probe settled 810
+the same way: **3 distinct of 6 on both binaries**, `main`'s included. That retires the older note
+that 810 had "been seen to flake once"; it is measurably in the class, not a one-off, which is what
+the section above already predicted when it said the whole tour is. Three sweeps have now each
+picked a different subset of the six tour frames, so **which** of them differ carries no
+information — only whether the differing frame is stable under repetition does.
+
+**Blessing gotcha that cost a sweep here: `--filter` is a substring match, not a regex.**
+`--filter "m28|showcase"` matches nothing and blesses nothing, reporting success — run one filter
+per artifact family and check the `checked` count in the summary line.
 
 The three repeated rituals are skills in `.claude/skills/`: `verify-baselines`, `ab-check`,
 `milestone`.
@@ -1073,9 +1791,42 @@ Cargo workspace (design doc §4), dependency order bottom-up:
 - `crates/engine-assets` — mesh/texture loading, asset schema
 - `crates/engine-cli` — the `engine` binary; the primary interface
 
+**`engine-render/src/scene_renderer/` is six modules**, split out of one 5,989-line file as **pure
+code motion** — not one expression changed, which is the only form that refactor is safe in on a
+path this file flags as ULP-sensitive in four places (the A/B: 34 of 36 artifacts byte-identical,
+the two exceptions being the tour frames this adapter cannot reproduce at all). `uniforms.rs` is
+every `#[repr(C)]` struct the GPU sees plus the functions that pack a component into one — **field
+order there is a wire format**, matching a WGSL declaration positionally. `shaders.rs` is the WGSL
+assembly seam (`with_surface`, the `Producer`s, the anchors, and the `seam_tests` that pin every
+substitution actually landing). `pipelines.rs` is `with_samples` and the per-pass constructors;
+`resources.rs` the caches and frame-scoped GPU resources; `shadow.rs` the shadow map and its
+matrix math. Submodules are children and see the parent's private items; what they define is
+`pub(crate)` and glob-imported back, so call sites read as they did when it was one file.
+
+`mod.rs` keeps `SceneRenderer`, `ScenePass`, and the frame. **`draw` splits on the borrow, not on
+the passes**: `prepare` is the `&mut self` half (uploads, uniform packing, cache maintenance) and
+hands `record_shadows`/`record_scene`/`record_hud` — which need only `&self` and an encoder — a
+`FramePlan`. `prepare_frame_targets` sits between the first two and **must keep that position**: it
+both decides the frame's attachments and allocates the copies that decision needs, and the order
+these run in is the order the GPU sees. `FramePlan` is built with field-init shorthand and
+destructured by name everywhere, which is load-bearing rather than tidy — several of its fields are
+the same type, and **a swapped pair of `Vec<usize>` keys is the one error class here that compiles
+clean and renders wrong**. The split moved no expression: the only edits inside the moved bodies
+were 25 `&x` → `x` borrows, forced because destructuring a reference yields references, and each
+one is compiler-checked.
+
 Plus `engine-physics`, `engine-script`, `engine-editor`. Supporting:
-`schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`,
-`docs/component-reference.md` (generated from doc comments).
+`schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`, and
+`docs/`, which holds four documents. `cli-contract.md` is the wire contract and `error-codes.md`
+mirrors `codes.rs`, both pinned by repo-contract tests. **`component-reference.md` is generated** —
+`engine list-components --markdown` renders the same schema the flagless form publishes, and
+`checked_in_component_reference_matches_the_code` fails when the committed file is stale, so it can
+never become a second source of truth (invariant 7). **`scene-format.md` is prose**, covering what
+the schema cannot say: internal tagging, entity names as addresses, asset paths relative to the
+*scene file*, which components own their own geometry, and the cost of JSON having no comments. Its
+worked example is fenced with `<!-- validated -->` and checked by a test rather than trusted — the
+example in a format document is the first thing anyone copies, and the test caught two invented
+`RigidBody` fields the hour it was written.
 
 Stack: Rust + wgpu 30 (Vulkan/Metal/DX12) + winit 0.30 + glam + serde/JSON + hecs + `image` for PNG
 export.
@@ -1133,7 +1884,7 @@ API at MSRV 1.65 with 6 transitive deps and a ~1.2s cold build, against 128 deps
 gives up: `bevy_ecs` change detection would have helped with hot reload — the one argument that could
 reverse this.
 
-**Runtime scripting: Rhai** (M10, `designs/scripting-design.md`).
+**Runtime scripting: Rhai** (M10).
 
 ## Open decisions — ask, don't assume
 
@@ -1148,16 +1899,49 @@ assets → M4 materials + lighting → M5 validation hardening → M6 diff-rende
 M8 physics → M9 animation (A0–A1) → M10 scripting — **the roadmap is complete.** Each milestone from
 M4 on ends by running its fixture from `designs/milestone-verification-scenes.md`.
 
-Deferred follow-ups: editor E3 (structure edits) / E4 (undo), M9-A2 skeletal glTF + GPU skinning, the
-M5-era deferrals (`--fix`, watch mode), and — after M16–M20 — refraction and scene-color sampling for
-transmissive materials (water's loudest missing feature), planar reflections, shadow cascades (which
+Deferred follow-ups: editor E3 (structure edits) / E4 (undo), the
+M5-era deferrals (`--fix`, watch mode), and — after M16–M20 — planar reflections, shadow cascades (which
 is also what cloud shadows need), shadows from point lights, spot lights, a CPU wave evaluator and
 buoyancy, a light on the tour's explosion, a sky-dome cloud layer for cirrus and overcast, and
-tree LOD and wind. (Refraction and texture-mapped materials landed in M26; textured **bark** and
-alpha-cut leaves are now a matter of authoring a `Tree`'s materials rather than a missing feature.) After M23: road junctions (two roads crossing wants a patch primitive, not a ribbon), banked
+tree LOD and wind. (Refraction and texture-mapped materials landed in M26, and the showcase tour's
+bark is authored from them. **Alpha-cut leaves are still a missing feature**, not an authoring job:
+`Tree::leaf_material` synthesizes a `Material` from `leaf_color`/`leaf_roughness` alone, so leaf maps
+and an `alpha_cutoff` mean new `Tree` fields, a schema regeneration, and a validation pass.) After M23: road junctions (two roads crossing wants a patch primitive, not a ribbon), banked
 cross-sections, per-point road width, roads that follow a `Terrain` instead of carrying their own
 heights, and textures for asphalt grain (analytic markings beat a texture for anything periodic, but
-grain is not periodic).
+grain is not periodic). After M30: editor picking against the posed mesh (foot IK and
+stride-driven locomotion landed in M32, skinned collider proxies in M33). After M33: ragdolls
+(physics writing the skeleton, which is the one-way rule reversed and wants its own answer to where
+the pose then comes from), proxies that resize with the posed bone, and generating a proxy set from
+the skin's vertex weights. After M32: planting against
+arbitrary colliders rather than only a `Terrain` (which wants an answer to the purity question M32
+declined to give), arm and hand IK with authored pole targets, toe joints, and a locomotion rule
+richer than one clip per gait. **Blending stays rejected**, not deferred — see the design's §1. After M31: a
+bitmap-font atlas (the sanctioned path to better text — a PNG plus an in-repo JSON of glyph cells,
+sampled nearest, no new dependency and no float, arriving as a `font` field whose absence is the 8×8
+font), pointer lock and scroll, text input and focus, per-side padding, and world-space UI (a health
+bar over an enemy's head is a *projection* question and wants `world.project(x, y, z)`).
+
+**The M31 audit's housekeeping is done**: `scene_renderer.rs` and `validate.rs` are split, the
+clippy warnings are cleared and their CI step is blocking, every reproducible baseline has a test,
+and both `docs/` files the design doc sketched now exist. What is left of that list is one standing
+rule rather than a task: **a new fixture arrives with the CLI test that diff-renders it**, in the
+same commit, unless it is in the tour's nondeterministic class — in which case say so where the
+test would have gone.
+
+**The clippy warnings are cleared and CI's clippy step is blocking.** Six of the twenty-eight were
+not bugs to fix but the lint being wrong, and they carry a local `#[allow]` with the reason —
+**read it before deleting one**. Five are the `!(a > b)` comparisons in `validate/component.rs` and
+`engine-script`, written negated *precisely so NaN fails*; clippy's suggested `a <= b` is false for
+NaN, so "fixing" them would let a NaN far plane, collider dimension, meadow stage or explosion
+radius validate clean. The sixth is `drop(write_object)` in `scene_renderer/mod.rs`, which releases the
+closure's mutable borrow of `object_bytes` — deleting it does not compile. Four
+`too_many_arguments` allows carry their own rationale (a nine-field keyframe constructor, a
+recursive validation walk threading a JSON location, a collider builder naming four geometry
+sources, and eleven index-aligned slices on the blended draw path). One genuine defect fell out of
+it: the editor cloned `ResolvedLights` under a comment claiming M17 had made it non-`Copy`, when
+M17 had deliberately kept it `Copy` with a fixed-size point-light array — the comment asserted the
+opposite of the design it cited.
 
 ## Out of scope for v1
 

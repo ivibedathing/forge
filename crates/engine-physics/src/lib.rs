@@ -13,15 +13,17 @@
 //! components, which `--bake` turns into ordinary scene text.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use engine_core::components::{
-    BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent,
-    Name, RigidBody as RigidBodyData, Road, Terrain as TerrainData, Transform,
+    BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent, Name,
+    RigidBody as RigidBodyData, Road, SkinnedCollider, Terrain as TerrainData, Transform,
     Wheel as WheelData,
 };
-use engine_core::mesh::MeshSource;
+use engine_core::mesh::{MeshSource, PhysicsAssets};
 use engine_core::scene::PhysicsSettings;
+use engine_core::skeleton::Rig;
 use engine_core::{codes, EngineError, Result};
 use glam::{Quat, Vec3};
 use hecs::{Entity, World};
@@ -33,6 +35,8 @@ use rapier3d::prelude::*;
 mod breaking;
 pub use breaking::{apply_breaks, BreakEvent};
 
+mod skinned;
+
 /// One contact begin/end between two named entities — what traces record.
 /// Shared vocabulary from `engine-core` so scripting can consume contacts
 /// without depending on this crate.
@@ -42,9 +46,46 @@ pub use engine_core::contact::ContactEvent;
 #[derive(Debug, Clone, PartialEq)]
 pub struct RayHit {
     pub entity: String,
+    /// The skinned collider proxy that was hit, if the ray hit one (M33) —
+    /// which is how a shot to the head is told from a shot to the shin.
+    pub part: Option<String>,
     pub point: Vec3,
     pub normal: Vec3,
     pub distance: f32,
+}
+
+/// Where one skinned collider proxy is — `engine list-colliders`'s row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProxyPlacement {
+    pub entity: String,
+    pub part: String,
+    pub position: Vec3,
+    /// Euler XYZ degrees, the file convention.
+    pub rotation: Vec3,
+}
+
+/// One collider as the physics world actually holds it — `engine
+/// list-colliders`'s row (M33).
+///
+/// Read back out of rapier rather than re-derived from the components, which
+/// is what makes it impossible for the report and the simulation to disagree:
+/// `road-centerline` and `ui-layout` exist for the same reason.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColliderReport {
+    pub entity: String,
+    /// The proxy part, when this collider is one (M33). Absent for every
+    /// collider an entity's own `Collider` component built.
+    pub part: Option<String>,
+    /// `sphere`, `cuboid`, `capsule`, `trimesh`, `convex_hull`, or `other`.
+    pub shape: &'static str,
+    /// `radius` for a sphere, the three half-extents for a cuboid, and
+    /// `[half_height, radius]` for a capsule; empty for a mesh shape, whose
+    /// size is its geometry.
+    pub dimensions: Vec<f32>,
+    pub position: Vec3,
+    /// Euler XYZ degrees, the file convention.
+    pub rotation: Vec3,
+    pub sensor: bool,
 }
 
 /// A queued blast (M12): applied at the start of the next step's
@@ -149,7 +190,22 @@ pub struct PhysicsWorld {
     bvh_cold: bool,
     /// Breaks this step decided on; drained by `take_pending_breaks`.
     pending_breaks: Vec<PendingBreak>,
+    /// Skinned collider proxies (M33), in (entity name, part order) order —
+    /// deterministic, since a rapier handle's identity follows insertion.
+    proxies: Vec<skinned::Proxy>,
+    /// The rig behind each proxied entity, resolved once at build: a skin is a
+    /// property of the asset and cannot change mid-run, while which clip plays
+    /// and what phase it is at are read from the components every step.
+    rig_of: HashMap<Entity, Arc<Rig>>,
+    /// Proxy colliders → the part name reports address them by. Absent for
+    /// every ordinary collider, which is exactly how a report tells them apart.
+    part_of_collider: HashMap<ColliderHandle, String>,
 }
+
+/// One wheel awaiting assembly into a `Vehicle`, as `build` collects them:
+/// the wheel's own entity name (which is what the sort is by, and so what
+/// fixes the controller's wheel indices), its ECS entity, and its component.
+type MountedWheel = (String, Entity, WheelData);
 
 /// One raycast vehicle: a chassis body plus its wheels' visual entities,
 /// in wheel-entity-name order (the controller's wheel indices follow it).
@@ -169,15 +225,24 @@ impl PhysicsWorld {
         world.query::<&RigidBodyData>().iter().next().is_some()
             || world.query::<&ColliderData>().iter().next().is_some()
             || world.query::<&Breakable>().iter().next().is_some()
+            // A proxied character (M33) is usually script-driven and carries
+            // no body of its own, so without this a scene whose only physics
+            // is a hitbox set would build no world at all.
+            || world.query::<&SkinnedCollider>().iter().next().is_some()
     }
 
     /// Build a fresh physics world from the (already validated) scene world.
     /// `meshes` feeds `trimesh`/`convex_hull` colliders; scenes without mesh
     /// shapes never call it (`BuiltinAssets` is fine for tests).
+    ///
+    /// `assets` also supplies the rigs behind any `SkinnedCollider` (M33) —
+    /// one source rather than two arguments, because the file a proxy's joints
+    /// come out of is the entity's own `Mesh.asset`, the same file the mesh
+    /// collider would have read.
     pub fn build(
         world: &World,
         settings: &PhysicsSettings,
-        meshes: &dyn MeshSource,
+        meshes: &dyn PhysicsAssets,
     ) -> Result<Self> {
         let mut physics = Self {
             pipeline: PhysicsPipeline::new(),
@@ -204,6 +269,9 @@ impl PhysicsWorld {
             queued_explosions: Vec::new(),
             pending_breaks: Vec::new(),
             bvh_cold: true,
+            proxies: Vec::new(),
+            rig_of: HashMap::new(),
+            part_of_collider: HashMap::new(),
         };
 
         // Collision layers (M12): map each distinct name to one bit of
@@ -214,6 +282,13 @@ impl PhysicsWorld {
             for collider in world.query::<&ColliderData>().iter() {
                 names.extend(collider.layers.iter().flatten().cloned());
                 names.extend(collider.collides_with.iter().flatten().cloned());
+            }
+            // Proxy layers share the budget and the bit assignment (M33): a
+            // character's "hitbox" and a bullet's "bullet" are names in the
+            // same scene-local namespace, and validation counts them together.
+            for proxies in world.query::<&SkinnedCollider>().iter() {
+                names.extend(proxies.layers.iter().flatten().cloned());
+                names.extend(proxies.collides_with.iter().flatten().cloned());
             }
             names
                 .into_iter()
@@ -326,12 +401,17 @@ impl PhysicsWorld {
         // Deterministic build order: chassis sorted by name, wheels within a
         // vehicle sorted by their entity name; the controller's wheel
         // indices follow that order.
-        let mut wheels_by_chassis: Vec<(String, Vec<(String, Entity, WheelData)>)> = Vec::new();
+        let mut wheels_by_chassis: Vec<(String, Vec<MountedWheel>)> = Vec::new();
         for (entity, name, wheel) in world.query::<(Entity, &Name, &WheelData)>().iter() {
-            match wheels_by_chassis.iter_mut().find(|(c, _)| *c == wheel.vehicle) {
+            match wheels_by_chassis
+                .iter_mut()
+                .find(|(c, _)| *c == wheel.vehicle)
+            {
                 Some((_, list)) => list.push((name.0.clone(), entity, wheel.clone())),
-                None => wheels_by_chassis
-                    .push((wheel.vehicle.clone(), vec![(name.0.clone(), entity, wheel.clone())])),
+                None => wheels_by_chassis.push((
+                    wheel.vehicle.clone(),
+                    vec![(name.0.clone(), entity, wheel.clone())],
+                )),
             }
         }
         wheels_by_chassis.sort_by(|a, b| a.0.cmp(&b.0));
@@ -394,6 +474,142 @@ impl PhysicsWorld {
                 chassis: chassis_handle,
                 wheel_entities,
             });
+        }
+
+        // ── Skinned collider proxies (M33) ────────────────────────────
+        //
+        // Entity-name sorted, then in the component's own part order, so a
+        // rapier handle's identity — which follows insertion — is a function
+        // of the file and nothing else.
+        let mut proxied: Vec<(String, Entity, SkinnedCollider, String, Transform)> = Vec::new();
+        for (entity, name, transform, proxies, mesh) in world
+            .query::<(
+                Entity,
+                &Name,
+                &Transform,
+                &SkinnedCollider,
+                Option<&MeshComponent>,
+            )>()
+            .iter()
+        {
+            // No `Mesh` is `skinned_collider_without_skin` at validation; a
+            // world built past it has nothing to ride and skips quietly.
+            let Some(mesh) = mesh else { continue };
+            proxied.push((
+                name.0.clone(),
+                entity,
+                proxies.clone(),
+                mesh.asset.clone(),
+                *transform,
+            ));
+        }
+        proxied.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, entity, proxies, asset, transform) in proxied {
+            let rig = meshes.load_rig(&asset)?;
+            let Some(skin) = &rig.skin else {
+                // Validation refuses this (`skinned_collider_without_skin`),
+                // so reaching it means the walk and the loader disagree.
+                return Err(EngineError::new(
+                    codes::SCENE_PARSE_DESYNC,
+                    format!(
+                        "entity {name:?} has a SkinnedCollider but its mesh {asset:?} \
+                         carries no skin; this survived validation, which is an engine bug"
+                    ),
+                )
+                .entity(&name));
+            };
+            physics.name_of.insert(entity, name.clone());
+            // Uniform by validation, so any axis is *the* scale.
+            let scale = transform.scale.x;
+            let model = transform.matrix();
+            let globals = engine_core::locomotion::posed_globals_at(world, entity, &rig, Some(0.0));
+
+            for part in &proxies.parts {
+                let Some(joint) = skin.joint_named(&part.joint) else {
+                    return Err(EngineError::new(
+                        codes::SCENE_PARSE_DESYNC,
+                        format!(
+                            "the SkinnedCollider on {name:?} rides joint {:?}, which the \
+                             rig in {asset:?} does not have; this survived validation, \
+                             which is an engine bug",
+                            part.joint
+                        ),
+                    )
+                    .entity(&name));
+                };
+                let Some(shape) = skinned::part_shape(part, scale) else {
+                    return Err(EngineError::new(
+                        codes::SCENE_PARSE_DESYNC,
+                        format!(
+                            "part {:?} of the SkinnedCollider on {name:?} names a mesh \
+                             shape, which a proxy cannot be; this survived validation, \
+                             which is an engine bug",
+                            part.part_name()
+                        ),
+                    )
+                    .entity(&name));
+                };
+
+                let local = skinned::part_local(part, scale);
+                let pose = skinned::part_pose(
+                    model,
+                    globals.get(joint).copied().unwrap_or(glam::Mat4::IDENTITY),
+                    local,
+                );
+
+                // Kinematic, and that is the milestone's whole invariant: the
+                // pose drives the proxy and nothing writes back to the pose.
+                let body = physics.bodies.insert(
+                    RigidBodyBuilder::kinematic_position_based()
+                        .pose(pose)
+                        .build(),
+                );
+
+                let built = ColliderBuilder::new(shape)
+                    .friction(proxies.friction)
+                    .restitution(proxies.restitution)
+                    .restitution_combine_rule(CoefficientCombineRule::Max)
+                    .sensor(part.sensor)
+                    .collision_groups(InteractionGroups::new(
+                        group_mask(proxies.layers.as_deref(), &layer_bits),
+                        group_mask(proxies.collides_with.as_deref(), &layer_bits),
+                        InteractionTestMode::And,
+                    ))
+                    // Only proxies carry hooks, so `SelfFilter` is unreachable
+                    // for a scene without one and the solver sees exactly the
+                    // pairs it always did.
+                    .active_hooks(
+                        ActiveHooks::FILTER_CONTACT_PAIRS | ActiveHooks::FILTER_INTERSECTION_PAIR,
+                    )
+                    // rapier reports neither kinematic-vs-fixed nor
+                    // kinematic-vs-kinematic contacts by default (M10 hit the
+                    // first of those), and "did the sword touch the shield" is
+                    // the second — the question proxies exist to answer.
+                    .active_collision_types(ActiveCollisionTypes::all())
+                    .active_events(ActiveEvents::COLLISION_EVENTS)
+                    .build();
+                let collider =
+                    physics
+                        .colliders
+                        .insert_with_parent(built, body, &mut physics.bodies);
+
+                // Reports name the *entity*, never the proxy (design §5), so a
+                // proxy collider maps to its owner exactly as any other does;
+                // the part rides alongside.
+                physics.entity_of_collider.insert(collider, entity);
+                physics
+                    .part_of_collider
+                    .insert(collider, part.part_name().to_string());
+                physics.proxies.push(skinned::Proxy {
+                    entity,
+                    joint,
+                    part: part.part_name().to_string(),
+                    local,
+                    body,
+                });
+            }
+            physics.rig_of.insert(entity, rig);
         }
 
         Ok(physics)
@@ -538,14 +754,32 @@ impl PhysicsWorld {
     /// Callers apply them via [`apply_breaks`](crate::apply_breaks).
     pub fn take_pending_breaks(&mut self) -> Vec<PendingBreak> {
         let mut breaks = std::mem::take(&mut self.pending_breaks);
-        breaks.sort_by(|a, b| self.name_of.get(&a.entity).cmp(&self.name_of.get(&b.entity)));
+        breaks.sort_by(|a, b| {
+            self.name_of
+                .get(&a.entity)
+                .cmp(&self.name_of.get(&b.entity))
+        });
         breaks.dedup_by_key(|b| b.entity);
         breaks
     }
 
     /// Advance one fixed step and write the results back into hecs. Returns
     /// the contact events the step produced, in deterministic order.
-    pub fn step(&mut self, world: &mut World) -> Vec<ContactEvent> {
+    /// One fixed step. `time` is the **scene** time this step ends at —
+    /// `steps · dt`, the same number the render would draw with — and is what
+    /// skinned collider proxies sample the pose at (M33).
+    ///
+    /// It is a parameter rather than a counter this struct keeps, so that no
+    /// caller can quietly drift from the clock the picture uses; a world with
+    /// no proxies ignores it entirely, which is why every pre-M33 golden trace
+    /// is untouched whatever is passed.
+    pub fn step(&mut self, world: &mut World, time: f32) -> Vec<ContactEvent> {
+        // 0. Proxies follow the pose the render will draw at the end of this
+        //    step, which is exactly what `set_next_kinematic_position` means:
+        //    rapier interpolates from where the body is to where it is told it
+        //    will be. Nothing here reads a proxy back into the skeleton.
+        self.pose_proxies(world, time);
+
         // 1. Kinematic bodies follow whatever the world says their
         //    Transform is now; dynamic bodies pick up script-written
         //    velocities (M11): a component velocity differing from the value
@@ -589,7 +823,11 @@ impl PhysicsWorld {
                 if distance >= explosion.radius {
                     continue;
                 }
-                let direction = if distance > 1e-6 { delta / distance } else { Vec3::Y };
+                let direction = if distance > 1e-6 {
+                    delta / distance
+                } else {
+                    Vec3::Y
+                };
                 let falloff = 1.0 - distance / explosion.radius;
                 body.apply_impulse(direction * (explosion.impulse * falloff), true);
             }
@@ -698,7 +936,9 @@ impl PhysicsWorld {
             &mut self.impulse_joints,
             &mut self.multibody_joints,
             &mut self.ccd,
-            &(),
+            &skinned::SelfFilter {
+                owner: &self.entity_of_collider,
+            },
             &self.events,
         );
 
@@ -744,8 +984,7 @@ impl PhysicsWorld {
                     Err(_) => continue,
                 };
                 let length = state.raycast_info().suspension_length;
-                let center = chassis_position
-                    + chassis_rotation * (offset - Vec3::Y * length);
+                let center = chassis_position + chassis_rotation * (offset - Vec3::Y * length);
                 let pose = chassis_rotation
                     * Quat::from_rotation_y(state.steering)
                     * Quat::from_rotation_x(state.rotation)
@@ -779,11 +1018,119 @@ impl PhysicsWorld {
         }
         for (entity, impulse) in peak {
             if impulse >= self.break_thresholds[&entity] {
-                self.pending_breaks.push(PendingBreak { entity, kick: None });
+                self.pending_breaks
+                    .push(PendingBreak { entity, kick: None });
             }
         }
 
         self.drain_events()
+    }
+
+    /// Move every proxy onto the pose its entity has at scene time `time`.
+    ///
+    /// The pose comes from `locomotion::posed_globals_at` — the one seam the
+    /// render, `engine list-joints` and `world.joint_position` already share —
+    /// so a hitbox cannot end up somewhere the character visibly is not, and a
+    /// planted character's ankle proxies are on the ground because the pose
+    /// they read is the planted one.
+    ///
+    /// One pose per *entity*, not per part: a fifteen-part humanoid samples its
+    /// clip once and every part reads the joint it rides out of the result.
+    ///
+    /// **A stride-driven character's proxies lag its render by one step**, and
+    /// that is causal rather than a defect: `AnimationPlayer.phase` is advanced
+    /// by the ground the entity *covered*, which is not known until physics has
+    /// run, so the pose this step can be told to move toward is the one the
+    /// previous step's phase describes. It is M12's contact latency again — the
+    /// same shape, the same reason — and it is worth a millimetre or two on a
+    /// walking character. A clock-driven clip has no lag at all: `time` is the
+    /// end of this step, which is exactly what the render will draw.
+    fn pose_proxies(&mut self, world: &World, time: f32) {
+        if self.proxies.is_empty() {
+            return;
+        }
+        let mut posed: HashMap<Entity, (glam::Mat4, Vec<glam::Mat4>)> = HashMap::new();
+        for proxy in &self.proxies {
+            let entry = match posed.entry(proxy.entity) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    let Some(rig) = self.rig_of.get(&proxy.entity) else {
+                        continue;
+                    };
+                    let model = world
+                        .get::<&Transform>(proxy.entity)
+                        .map(|t| t.matrix())
+                        .unwrap_or(glam::Mat4::IDENTITY);
+                    let globals = engine_core::locomotion::posed_globals_at(
+                        world,
+                        proxy.entity,
+                        rig,
+                        Some(time),
+                    );
+                    slot.insert((model, globals))
+                }
+            };
+            let (model, globals) = &*entry;
+            let Some(&global) = globals.get(proxy.joint) else {
+                continue;
+            };
+            let pose = skinned::part_pose(*model, global, proxy.local);
+            if let Some(body) = self.bodies.get_mut(proxy.body) {
+                body.set_next_kinematic_position(pose);
+            }
+        }
+    }
+
+    /// Every proxy's world placement right now — the pose `engine
+    /// list-colliders` reports and the solver sees, read back out of rapier
+    /// rather than re-derived, so the report cannot drift from the simulation.
+    pub fn proxy_placements(&self) -> Vec<ProxyPlacement> {
+        let mut placements: Vec<ProxyPlacement> = self
+            .proxies
+            .iter()
+            .filter_map(|proxy| {
+                let body = self.bodies.get(proxy.body)?;
+                Some(ProxyPlacement {
+                    entity: self.name_of.get(&proxy.entity)?.clone(),
+                    part: proxy.part.clone(),
+                    position: body.translation(),
+                    rotation: quat_to_euler_degrees(*body.rotation()),
+                })
+            })
+            .collect();
+        // Name-sorted, M24's contract for reports.
+        placements.sort_by(|a, b| (&a.entity, &a.part).cmp(&(&b.entity, &b.part)));
+        placements
+    }
+
+    /// Every collider in the world, name-sorted — what `engine list-colliders`
+    /// prints.
+    ///
+    /// Includes the component-authored ones as well as the proxies, because
+    /// "where are the colliders" is the question and answering half of it is
+    /// the kind of gap this repo writes down instead of shipping.
+    pub fn collider_report(&self) -> Vec<ColliderReport> {
+        let mut rows: Vec<ColliderReport> = self
+            .colliders
+            .iter()
+            .filter_map(|(handle, collider)| {
+                let entity = self.entity_of_collider.get(&handle)?;
+                let (shape, dimensions) = describe_shape(collider.shape());
+                Some(ColliderReport {
+                    entity: self.name_of.get(entity)?.clone(),
+                    part: self.part_of_collider.get(&handle).cloned(),
+                    shape,
+                    dimensions,
+                    position: collider.translation(),
+                    rotation: quat_to_euler_degrees(collider.rotation()),
+                    sensor: collider.is_sensor(),
+                })
+            })
+            .collect();
+        // Name-sorted, M24's contract for reports; the part orders within an
+        // entity, so a humanoid's rows read the same every run.
+        rows.sort_by(|a, b| (&a.entity, &a.part).cmp(&(&b.entity, &b.part)));
+        rows
     }
 
     fn drain_events(&mut self) -> Vec<ContactEvent> {
@@ -802,13 +1149,28 @@ impl PhysicsWorld {
                 };
                 let mut a = self.name_of.get(self.entity_of_collider.get(&h1)?)?.clone();
                 let mut b = self.name_of.get(self.entity_of_collider.get(&h2)?)?.clone();
-                if b < a {
+                // The part, when the collider was a proxy (M33) — carried
+                // beside the entity name rather than folded into it, so a
+                // pre-M33 reader of this event is unchanged.
+                let mut a_part = self.part_of_collider.get(&h1).cloned();
+                let mut b_part = self.part_of_collider.get(&h2).cloned();
+                if (&b, &b_part) < (&a, &a_part) {
                     std::mem::swap(&mut a, &mut b);
+                    std::mem::swap(&mut a_part, &mut b_part);
                 }
-                Some(ContactEvent { a, b, started })
+                Some(ContactEvent {
+                    a,
+                    b,
+                    a_part,
+                    b_part,
+                    started,
+                })
             })
             .collect();
-        events.sort_by(|x, y| (&x.a, &x.b, x.started).cmp(&(&y.a, &y.b, y.started)));
+        events.sort_by(|x, y| {
+            (&x.a, &x.b, &x.a_part, &x.b_part, x.started)
+                .cmp(&(&y.a, &y.b, &y.a_part, &y.b_part, y.started))
+        });
         events
     }
 
@@ -817,9 +1179,7 @@ impl PhysicsWorld {
         let mut names: Vec<String> = self
             .body_of
             .iter()
-            .filter(|(_, &handle)| {
-                self.bodies.get(handle).is_some_and(RigidBody::is_dynamic)
-            })
+            .filter(|(_, &handle)| self.bodies.get(handle).is_some_and(RigidBody::is_dynamic))
             .filter_map(|(&entity, _)| world.get::<&Name>(entity).ok().map(|n| n.0.clone()))
             .collect();
         names.sort();
@@ -877,6 +1237,7 @@ impl PhysicsWorld {
         let entity = self.entity_of_collider.get(&handle)?;
         Some(RayHit {
             entity: self.name_of.get(entity)?.clone(),
+            part: self.part_of_collider.get(&handle).cloned(),
             point: ray.point_at(intersection.time_of_impact),
             normal: intersection.normal,
             distance: intersection.time_of_impact,
@@ -889,6 +1250,14 @@ impl PhysicsWorld {
 /// so any scale is representable). `force_events` opts the collider into
 /// contact-force events — thresholded breakables only, so scenes without
 /// breakables run the exact event path they always did.
+///
+/// Nine parameters, and they are nine independent lookups the caller has
+/// already done — the component, its transform, and the four places a shape's
+/// geometry can come from (its own asset, the entity's Mesh, a Terrain, a
+/// Road). Bundling them into a struct would build that struct per collider at
+/// scene load and hide which sources a given shape actually consults, which is
+/// the whole subtlety of this function.
+#[allow(clippy::too_many_arguments)]
 fn build_collider(
     collider: &ColliderData,
     transform: &Transform,
@@ -937,31 +1306,31 @@ fn build_collider(
             // collidable without a mesh file duplicating what the renderer
             // already draws — and, for a road, they are what makes the surface
             // driven and the surface drawn impossible to author apart.
-            let (asset, mesh, from_road) = match (collider.asset.as_deref().or(entity_mesh), terrain, road)
-            {
-                (Some(asset), _, _) => (
-                    asset.to_string(),
-                    meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
-                    false,
-                ),
-                (None, Some(terrain), _) => (
-                    "the entity's Terrain".to_string(),
-                    engine_core::terrain::surface_grid(
-                        terrain,
-                        glam::Vec2::new(transform.position.x, transform.position.z),
-                        glam::Vec2::new(scale.x, scale.z),
+            let (asset, mesh, from_road) =
+                match (collider.asset.as_deref().or(entity_mesh), terrain, road) {
+                    (Some(asset), _, _) => (
+                        asset.to_string(),
+                        meshes.load_mesh(asset).map_err(|e| e.entity(entity))?,
+                        false,
                     ),
-                    false,
-                ),
-                (None, None, Some(road)) => (
-                    format!("the Road on {entity:?}"),
-                    engine_core::road::surface(road).mesh.clone(),
-                    true,
-                ),
-                (None, None, None) => {
-                    return Err(shape_bug(entity, "mesh collider with no asset in reach"))
-                }
-            };
+                    (None, Some(terrain), _) => (
+                        "the entity's Terrain".to_string(),
+                        engine_core::terrain::surface_grid(
+                            terrain,
+                            glam::Vec2::new(transform.position.x, transform.position.z),
+                            glam::Vec2::new(scale.x, scale.z),
+                        ),
+                        false,
+                    ),
+                    (None, None, Some(road)) => (
+                        format!("the Road on {entity:?}"),
+                        engine_core::road::surface(road).mesh.clone(),
+                        true,
+                    ),
+                    (None, None, None) => {
+                        return Err(shape_bug(entity, "mesh collider with no asset in reach"))
+                    }
+                };
             let vertices: Vec<Vec3> = mesh
                 .positions
                 .iter()
@@ -1067,6 +1436,35 @@ fn build_collider(
         .build())
 }
 
+/// A built shape as the name and numbers a report prints (M33).
+///
+/// The scene's vocabulary, not parry's: what an author typed into `shape` is
+/// what comes back, so a report row can be compared against the file that
+/// produced it. Anything the engine cannot build from a scene is `other`
+/// rather than a panic — this is a report, and a report that crashes on an
+/// unexpected input is worse than one that says it does not know.
+fn describe_shape(shape: &dyn Shape) -> (&'static str, Vec<f32>) {
+    match shape.as_typed_shape() {
+        TypedShape::Ball(ball) => ("sphere", vec![ball.radius]),
+        TypedShape::Cuboid(cuboid) => (
+            "cuboid",
+            vec![
+                cuboid.half_extents.x,
+                cuboid.half_extents.y,
+                cuboid.half_extents.z,
+            ],
+        ),
+        TypedShape::Capsule(capsule) => (
+            "capsule",
+            // Half the segment's length is the `half_height` the file names.
+            vec![capsule.segment.length() * 0.5, capsule.radius],
+        ),
+        TypedShape::TriMesh(_) => ("trimesh", Vec::new()),
+        TypedShape::ConvexPolyhedron(_) => ("convex_hull", Vec::new()),
+        _ => ("other", Vec::new()),
+    }
+}
+
 /// A layer list as a rapier group mask. `None` (field absent) is ALL —
 /// the pre-layer behavior; every name has a bit because the map was built
 /// from the union of all names in the scene.
@@ -1141,7 +1539,7 @@ mod tests {
         let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
         let mut all_events = Vec::new();
         for _ in 0..steps {
-            all_events.extend(physics.step(&mut scene.world));
+            all_events.extend(physics.step(&mut scene.world, 0.0));
         }
         (scene, physics, all_events)
     }
@@ -1201,7 +1599,7 @@ mod tests {
             let mut apex: f32 = 0.0;
             let mut previous_y = 5.0f32;
             for _ in 0..400 {
-                physics.step(&mut scene.world);
+                physics.step(&mut scene.world, 0.0);
                 let y = position_of(&scene, "Cube").y;
                 if y > previous_y {
                     bounced = true;
@@ -1220,7 +1618,10 @@ mod tests {
             high > 3.0,
             "restitution 1.0 should bounce back most of the way, apex {high}"
         );
-        assert!(low < 1.0, "restitution 0.0 should not meaningfully bounce, apex {low}");
+        assert!(
+            low < 1.0,
+            "restitution 0.0 should not meaningfully bounce, apex {low}"
+        );
     }
 
     #[test]
@@ -1245,8 +1646,8 @@ mod tests {
         // Move the transform externally; the body must follow, not fight.
         let entity = scene.entity("Mover").unwrap();
         scene.world.get::<&mut Transform>(entity).unwrap().position = Vec3::new(3.0, 1.0, 0.0);
-        physics.step(&mut scene.world);
-        physics.step(&mut scene.world);
+        physics.step(&mut scene.world, 0.0);
+        physics.step(&mut scene.world, 0.0);
 
         assert_eq!(position_of(&scene, "Mover"), Vec3::new(3.0, 1.0, 0.0));
     }
@@ -1267,8 +1668,14 @@ mod tests {
         let hit = physics
             .raycast(Vec3::new(0.0, 10.0, 0.0), Vec3::NEG_Y)
             .expect("straight down must hit something");
-        assert_eq!(hit.entity, "Cube", "the cube sits on the ground, so it is hit first");
-        assert!((hit.point.y - 1.05).abs() < 0.03, "top of the settled cube, got {hit:?}");
+        assert_eq!(
+            hit.entity, "Cube",
+            "the cube sits on the ground, so it is hit first"
+        );
+        assert!(
+            (hit.point.y - 1.05).abs() < 0.03,
+            "top of the settled cube, got {hit:?}"
+        );
         assert!(hit.normal.y > 0.9);
 
         let miss = physics.raycast(Vec3::new(50.0, 10.0, 0.0), Vec3::NEG_Y);
@@ -1293,7 +1700,10 @@ mod tests {
         let (scene, _, _) = simulate(&scaled, 300);
         let y = position_of(&scene, "Cube").y;
         // Scaled cube has half-extent 1.0 → rests at 0.05 + 1.0.
-        assert!((y - 1.05).abs() < 0.02, "scaled cube should rest at ≈1.05, is at {y}");
+        assert!(
+            (y - 1.05).abs() < 0.02,
+            "scaled cube should rest at ≈1.05, is at {y}"
+        );
     }
 
     /// A script writing `RigidBody.linear_velocity` between steps must reach
@@ -1322,7 +1732,7 @@ mod tests {
 
         // Settle, then "throttle": write a forward velocity like a script.
         for _ in 0..30 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         let x_before = position_of(&scene, "Car").x;
         scene
@@ -1331,7 +1741,7 @@ mod tests {
             .unwrap()
             .linear_velocity = Vec3::new(5.0, 0.0, 0.0);
         for _ in 0..60 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         let moved = position_of(&scene, "Car").x - x_before;
         assert!(
@@ -1459,15 +1869,19 @@ mod tests {
 
         // Settle onto the springs first, then floor it.
         for _ in 0..120 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         let start = position_of(&scene, "Chassis");
         for name in ["WheelBL", "WheelBR"] {
             let entity = scene.entity(name).unwrap();
-            scene.world.get::<&mut WheelData>(entity).unwrap().engine_force = 1500.0;
+            scene
+                .world
+                .get::<&mut WheelData>(entity)
+                .unwrap()
+                .engine_force = 1500.0;
         }
         for _ in 0..120 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         let moved = start - position_of(&scene, "Chassis");
         // Positive engine force drives the chassis's local −Z.
@@ -1484,7 +1898,10 @@ mod tests {
         let entity = scene.entity("WheelBL").unwrap();
         let rotation = scene.world.get::<&Transform>(entity).unwrap().rotation;
         let spun = rotation.x.abs() + rotation.z.abs();
-        assert!(spun > 1.0, "a driving wheel's visual should spin: {rotation}");
+        assert!(
+            spun > 1.0,
+            "a driving wheel's visual should spin: {rotation}"
+        );
     }
 
     #[test]
@@ -1501,18 +1918,22 @@ mod tests {
         let settings = PhysicsSettings::default();
         let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
         for _ in 0..120 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         for name in ["WheelBL", "WheelBR"] {
             let entity = scene.entity(name).unwrap();
-            scene.world.get::<&mut WheelData>(entity).unwrap().engine_force = 600.0;
+            scene
+                .world
+                .get::<&mut WheelData>(entity)
+                .unwrap()
+                .engine_force = 600.0;
         }
         for name in ["WheelFL", "WheelFR"] {
             let entity = scene.entity(name).unwrap();
             scene.world.get::<&mut WheelData>(entity).unwrap().steering = 15.0;
         }
         for _ in 0..120 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         let position = position_of(&scene, "Chassis");
         // Starting toward −Z, positive steering curves the path toward −X.
@@ -1532,17 +1953,20 @@ mod tests {
         let settings = PhysicsSettings::default();
         let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
         for _ in 0..120 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         let drive = |world: &mut hecs::World, scene_entity: hecs::Entity, force: f32| {
-            world.get::<&mut WheelData>(scene_entity).unwrap().engine_force = force;
+            world
+                .get::<&mut WheelData>(scene_entity)
+                .unwrap()
+                .engine_force = force;
         };
         let bl = scene.entity("WheelBL").unwrap();
         let br = scene.entity("WheelBR").unwrap();
         drive(&mut scene.world, bl, 1500.0);
         drive(&mut scene.world, br, 1500.0);
         for _ in 0..120 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         drive(&mut scene.world, bl, 0.0);
         drive(&mut scene.world, br, 0.0);
@@ -1551,7 +1975,7 @@ mod tests {
             scene.world.get::<&mut WheelData>(entity).unwrap().brake = 15.0;
         }
         for _ in 0..240 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         let entity = scene.entity("Chassis").unwrap();
         let speed = scene
@@ -1560,7 +1984,10 @@ mod tests {
             .unwrap()
             .linear_velocity
             .length();
-        assert!(speed < 0.2, "braked vehicle should stop, still moving at {speed}");
+        assert!(
+            speed < 0.2,
+            "braked vehicle should stop, still moving at {speed}"
+        );
     }
 
     /// `locked_rotations` holds the axis fixed even under off-center impact.
@@ -1590,7 +2017,7 @@ mod tests {
         let settings = PhysicsSettings::default();
         let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
         for _ in 0..120 {
-            physics.step(&mut scene.world);
+            physics.step(&mut scene.world, 0.0);
         }
         let entity = scene.entity("Car").unwrap();
         let rotation = scene.world.get::<&Transform>(entity).unwrap().rotation;
@@ -1676,7 +2103,9 @@ mod tests {
             "the ball must rest on the trimesh plane at ≈0.5, is at {ball:?}"
         );
         assert!(
-            events.iter().any(|e| e.a == "Ball" && e.b == "Track" && e.started),
+            events
+                .iter()
+                .any(|e| e.a == "Ball" && e.b == "Track" && e.started),
             "the landing must appear as a contact event: {events:?}"
         );
     }
@@ -1708,5 +2137,237 @@ mod tests {
             "the hulled crate must rest at ≈0.55, is at {y}"
         );
     }
-}
 
+    // ── Skinned collider proxies (M33) ────────────────────────────────
+    //
+    // A two-joint rig built in code rather than read from a file: these tests
+    // are about what the physics world does with a pose, and a glTF in the
+    // middle would only add a parser to what they can fail on.
+
+    /// `Root` at the origin, `Head` one metre above it, and a clip that swings
+    /// the head to +Z by rotating the root 90° about +X.
+    fn stick_rig() -> Arc<Rig> {
+        use engine_core::skeleton::{
+            Channel, ChannelProperty, ChannelValues, Interpolation, Joint, SkeletalClip, SkinData,
+            Trs,
+        };
+        let skin = SkinData {
+            name: Some("Stick".into()),
+            joints: vec![
+                Joint {
+                    node: 0,
+                    name: "Root".into(),
+                    parent: None,
+                    rest: Trs::default(),
+                    inverse_bind: glam::Mat4::IDENTITY,
+                    ancestor: glam::Mat4::IDENTITY,
+                },
+                Joint {
+                    node: 1,
+                    name: "Head".into(),
+                    parent: Some(0),
+                    rest: Trs {
+                        translation: Vec3::Y,
+                        ..Trs::default()
+                    },
+                    inverse_bind: glam::Mat4::from_translation(-Vec3::Y),
+                    ancestor: glam::Mat4::IDENTITY,
+                },
+            ],
+        };
+        Arc::new(Rig {
+            skin: Some(skin),
+            clips: vec![SkeletalClip {
+                name: "Swing".into(),
+                channels: vec![Channel {
+                    node: 0,
+                    node_name: None,
+                    property: ChannelProperty::Rotation,
+                    interpolation: Interpolation::Linear,
+                    times: vec![0.0, 1.0],
+                    values: ChannelValues::Quat(vec![
+                        Quat::IDENTITY,
+                        Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+                    ]),
+                }],
+            }],
+        })
+    }
+
+    /// `BuiltinAssets` for geometry, one hand-built rig for anything else.
+    struct StickAssets;
+
+    impl MeshSource for StickAssets {
+        fn load_mesh(&self, asset: &str) -> Result<Arc<engine_core::mesh::MeshData>> {
+            BuiltinAssets.load_mesh(asset)
+        }
+    }
+
+    impl engine_core::skeleton::RigSource for StickAssets {
+        fn load_rig(&self, _asset: &str) -> Result<Arc<Rig>> {
+            Ok(stick_rig())
+        }
+    }
+
+    /// A real rigged file, so the reference checks in `Scene::from_source`
+    /// pass; `StickAssets` hands back the two-joint rig above whatever the
+    /// path says, because what these tests are about is the physics world's
+    /// use of a pose rather than the loader's reading of a file.
+    fn stick_scene(extra: &str, clip: &str) -> String {
+        format!(
+            r#"{{
+              "name": "proxies",
+              "entities": [
+                {{"name": "Walker", "components": [
+                  {{"type": "Transform", "position": [0.0, 0.0, 0.0]}},
+                  {{"type": "Mesh", "asset": "../../examples/meshes/rigged_arm.gltf"}},
+                  {{"type": "AnimationPlayer", "clip": "../../examples/meshes/rigged_arm.gltf#{clip}", "looping": false}},
+                  {{"type": "SkinnedCollider", "parts": [
+                    {{"joint": "Head", "shape": "sphere", "radius": 0.25}}
+                  ]}}
+                ]}}
+                {extra}
+              ]
+            }}"#
+        )
+    }
+
+    fn stick_world(source: &str) -> (Scene, PhysicsWorld) {
+        let scene = Scene::from_source(source, "test.json").unwrap();
+        let settings = PhysicsSettings::default();
+        let physics = PhysicsWorld::build(&scene.world, &settings, &StickAssets).unwrap();
+        (scene, physics)
+    }
+
+    #[test]
+    fn a_proxy_rides_the_joint_it_names() {
+        let (mut scene, mut physics) = stick_world(&stick_scene("", "Swing"));
+
+        // At rest the head is one metre up, and the proxy is on it.
+        let at_rest = physics.proxy_placements();
+        assert_eq!(at_rest.len(), 1);
+        assert_eq!(at_rest[0].entity, "Walker");
+        assert_eq!(at_rest[0].part, "Head");
+        assert!(
+            (at_rest[0].position - Vec3::Y).length() < 1e-4,
+            "the proxy starts at {}",
+            at_rest[0].position
+        );
+
+        // One second in, the clip has swung the root 90° about +X, carrying
+        // the head to +Z — and the proxy with it.
+        physics.step(&mut scene.world, 1.0);
+        let swung = physics.proxy_placements();
+        assert!(
+            (swung[0].position - Vec3::Z).length() < 1e-3,
+            "the proxy must follow the pose to +Z, is at {}",
+            swung[0].position
+        );
+    }
+
+    #[test]
+    fn a_proxy_carries_the_entity_transform() {
+        // The same swing, on a character standing ten metres out and turned
+        // 180°: the proxy must compose the model matrix, not just the pose.
+        let source = stick_scene("", "Swing").replace(
+            r#"{"type": "Transform", "position": [0.0, 0.0, 0.0]}"#,
+            r#"{"type": "Transform", "position": [10.0, 0.0, 0.0], "rotation": [0.0, 180.0, 0.0]}"#,
+        );
+        let (mut scene, mut physics) = stick_world(&source);
+        physics.step(&mut scene.world, 1.0);
+
+        let position = physics.proxy_placements()[0].position;
+        let expected = Vec3::new(10.0, 0.0, -1.0);
+        assert!(
+            (position - expected).length() < 1e-3,
+            "expected {expected}, got {position}"
+        );
+    }
+
+    #[test]
+    fn a_proxy_pushes_a_dynamic_body_and_reports_the_part() {
+        // A crate resting where the head swings to. The proxy is kinematic,
+        // so the crate is pushed and the character is not.
+        let crate_entity = r#",
+                {"name": "Crate", "components": [
+                  {"type": "Transform", "position": [0.0, 0.3, 1.0]},
+                  {"type": "RigidBody", "body": "dynamic", "gravity_scale": 0.0},
+                  {"type": "Collider", "shape": "cuboid", "half_extents": [0.25, 0.25, 0.25]}
+                ]}"#;
+        let (mut scene, mut physics) = stick_world(&stick_scene(crate_entity, "Swing"));
+
+        let mut events = Vec::new();
+        for step in 1..=60 {
+            events.extend(physics.step(&mut scene.world, step as f32 / 60.0));
+        }
+
+        let crate_z = position_of(&scene, "Crate").z;
+        assert!(
+            crate_z > 1.05,
+            "the swinging proxy must shove the crate along +Z, it is at {crate_z}"
+        );
+
+        // The contact names the *entity* — a proxy is not an entity — with the
+        // part beside it (design §5).
+        let hit = events
+            .iter()
+            .find(|e| e.started && (e.a == "Crate" || e.b == "Crate"))
+            .expect("the crate must report a contact");
+        assert_eq!(hit.a, "Crate");
+        assert_eq!(hit.b, "Walker");
+        assert_eq!(hit.b_part.as_deref(), Some("Head"));
+        assert_eq!(hit.address_b(), "Walker/Head");
+    }
+
+    #[test]
+    fn a_character_does_not_collide_with_its_own_proxies() {
+        // A body on the character itself, inside its own hitbox. Without the
+        // self-filter the pair resolves and the character launches.
+        let source = stick_scene("", "Swing").replace(
+            r#"{"type": "Transform", "position": [0.0, 0.0, 0.0]}"#,
+            r#"{"type": "Transform", "position": [0.0, 1.0, 0.0]},
+                  {"type": "RigidBody", "body": "dynamic", "gravity_scale": 0.0},
+                  {"type": "Collider", "shape": "sphere", "radius": 0.5}"#,
+        );
+        let (mut scene, mut physics) = stick_world(&source);
+        for step in 1..=30 {
+            physics.step(&mut scene.world, step as f32 / 60.0);
+        }
+
+        let entity = scene.entity("Walker").unwrap();
+        let velocity = scene
+            .world
+            .get::<&RigidBodyData>(entity)
+            .unwrap()
+            .linear_velocity;
+        assert!(
+            velocity.length() < 1e-3,
+            "a character must not be pushed by its own hitboxes, it is moving at {velocity}"
+        );
+    }
+
+    #[test]
+    fn a_raycast_names_the_part_it_hit() {
+        let (mut scene, mut physics) = stick_world(&stick_scene("", "Swing"));
+        physics.step(&mut scene.world, 0.0);
+
+        let hit = physics
+            .raycast(Vec3::new(-5.0, 1.0, 0.0), Vec3::X)
+            .expect("the ray must reach the head proxy");
+        assert_eq!(hit.entity, "Walker");
+        assert_eq!(hit.part.as_deref(), Some("Head"));
+    }
+
+    #[test]
+    fn a_scene_with_no_proxies_builds_none() {
+        // The default path, asserted rather than assumed: a world with no
+        // `SkinnedCollider` has nothing to pose and nothing to filter.
+        let (_, physics) = {
+            let scene = Scene::from_source(DROP, "test.json").unwrap();
+            let settings = PhysicsSettings::default();
+            let physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets).unwrap();
+            (scene, physics)
+        };
+        assert!(physics.proxy_placements().is_empty());
+    }
+}

@@ -1,0 +1,227 @@
+{
+  "name": "m32_locomotion",
+  "environment": {
+    "sky": true,
+    "shadows": true,
+    "shadow_distance": 24.0,
+    "samples": 1
+  },
+  "physics": {
+    "timestep_hz": 60
+  },
+  "entities": [
+    {
+      "name": "Cam",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.3,
+            1.35,
+            5.5
+          ],
+          "rotation": [
+            -7.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "fov": 42.0,
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "rotation": [
+            -44.0,
+            -28.0,
+            0.0
+          ]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [
+            1.0,
+            0.97,
+            0.9
+          ],
+          "intensity": 3.1
+        }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [
+            0.55,
+            0.63,
+            0.78
+          ],
+          "intensity": 0.34
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        {
+          "type": "Transform",
+          "scale": [
+            26.0,
+            1.0,
+            26.0
+          ]
+        },
+        {
+          "type": "Terrain",
+          "segments": 220,
+          "seed": 11,
+          "height": 1.3,
+          "feature_scale": 11.0,
+          "octaves": 3,
+          "persistence": 0.45,
+          "warp": 0.2,
+          "texture_scale": 2.2,
+          "color_variation": 0.3,
+          "layers": [
+            {
+              "albedo": [
+                0.13,
+                0.16,
+                0.09
+              ],
+              "roughness": 0.95
+            },
+            {
+              "albedo": [
+                0.16,
+                0.13,
+                0.09
+              ],
+              "roughness": 0.94,
+              "slope_range": [
+                16.0,
+                90.0
+              ],
+              "slope_blend": 8.0,
+              "noise": 0.7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Director",
+      "components": [
+        {
+          "type": "Script",
+          "source": "walk.rhai"
+        }
+      ]
+    },
+    {
+      "name": "Planted",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -0.8,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            -90.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/rigged_walker.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.82,
+            0.4,
+            0.24
+          ],
+          "roughness": 0.55
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../../meshes/rigged_walker.gltf#Walk",
+          "speed": 1.0,
+          "looping": true,
+          "stride": 1.6408
+        },
+        {
+          "type": "FootPlant",
+          "feet": [
+            {
+              "ankle": "FootL",
+              "chain": 2,
+              "sole": 0.09
+            },
+            {
+              "ankle": "FootR",
+              "chain": 2,
+              "sole": 0.09
+            }
+          ],
+          "ground": "Ground",
+          "hips": "Hips",
+          "max_drop": 0.5,
+          "max_lift": 0.4,
+          "align": 26.0
+        }
+      ]
+    },
+    {
+      "name": "Loose",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.8,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            -90.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/rigged_walker.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.3,
+            0.45,
+            0.7
+          ],
+          "roughness": 0.55
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../../meshes/rigged_walker.gltf#Walk",
+          "speed": 1.0,
+          "looping": true,
+          "stride": 1.6408
+        }
+      ]
+    }
+  ]
+}
