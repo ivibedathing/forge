@@ -504,7 +504,9 @@ assets → M4 materials + lighting → M5 validation hardening → M6 diff-rende
 M8 physics → M9 animation (A0–A1) → M10 scripting — **the roadmap is complete.** Each milestone from
 M4 on ends by running its fixture from `designs/milestone-verification-scenes.md`.
 
-Deferred follow-ups, by area:
+**The four that block a capability rather than polish one** — entity spawning, hot reload,
+alpha-cut leaves, and a CPU wave evaluator — are pulled out into
+`designs/structural-holes.md`, with what each one costs a live demo today. The rest, by area:
 
 - **Editor**: E3 (structure edits), E4 (undo); picking against the *posed* mesh (CPU ray picking
   hits the rest pose).
