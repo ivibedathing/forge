@@ -37,15 +37,23 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # The gate. Everything below it is advisory: the workspace is not
-      # currently rustfmt- or clippy-clean, and turning either into a blocking
-      # check means a first commit that reformats every crate — which is
-      # exactly the kind of wide diff this repo's ULP-sensitive shader and
-      # geometry code should not be buried under. Make them blocking on the
-      # commit that actually cleans them up, not before.
+      # The gate.
       - run: cargo test --workspace --locked
 
+      # Blocking since the M31 audit: the workspace is rustfmt-clean, so the
+      # wide reformat-every-crate diff this used to defer has already been
+      # paid. A formatting regression is now a red build.
       - run: cargo fmt --all -- --check
-        continue-on-error: true
+
+      # Still advisory. 28 clippy warnings remain, and clearing them touches
+      # geometry and validation code — exactly the kind of change this repo's
+      # ULP-sensitive paths want gated behind an A/B between binaries rather
+      # than swept in under a lint fix. Make this blocking on the commit that
+      # actually clears them, not before.
+      #
+      # Note it does have to *compile*: `approx_constant` and friends are
+      # deny-by-default, so a single one aborts the run for the whole crate
+      # and every later lint in it goes unreported. That happened once and
+      # `continue-on-error` hid it for the length of a milestone.
       - run: cargo clippy --workspace --all-targets
         continue-on-error: true

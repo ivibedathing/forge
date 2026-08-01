@@ -40,8 +40,8 @@ engine simulate <scene.json> --steps N [--input f] [--bake out.json] [--trace t.
 #   without reading the image (M25)
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
-engine list-animations <scene-or-clip> [--schema]  # glTF clips too, with their channel targets (M27)
-engine list-joints <scene-or-mesh> [--entity Name] [--time T]  # the rig, and where it is (M27)
+engine list-animations <scene-or-clip> [--schema]  # glTF clips too, with their channel targets (M30)
+engine list-joints <scene-or-mesh> [--entity Name] [--time T]  # the rig, and where it is (M30)
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 engine ui-layout <scene.json> [--width W --height H] [--entity N]...  # where the UI landed (M31)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
@@ -200,7 +200,7 @@ a wall-clock accumulator; headless is canonical. Physics tests are GPU-free and 
 
 ## Animation (M9)
 
-Property clips; skeletal glTF landed in M27 and shares this clock. Clips are JSON (`*.anim.json`, schema in
+Property clips; skeletal glTF landed in M30 and shares this clock. Clips are JSON (`*.anim.json`, schema in
 `schemas/animation-schema.json`, regenerated via `engine list-animations --schema`), animating
 `Component.field` on entities by name. Pose is a pure function of (files, time) — `--time` on
 screenshot/diff-render is reproducible down to `cmp`-identical PNGs, and t=loop-period equals t=0
@@ -1172,7 +1172,7 @@ and the whole sampling path is GPU-free and unconditionally testable the way `da
   `render_items_at(assets, Some(t))` is posed; the tempting shortcut of an identity palette collapses
   any rig whose rest pose is not exactly its bind pose, since the vertices live in skin space.
 
-Fixture `verify/m27_skeletal.json` at `--time 0.4`: two copies of `examples/meshes/rigged_arm.gltf`,
+Fixture `verify/m30_skeletal.json` at `--time 0.4`: two copies of `examples/meshes/rigged_arm.gltf`,
 one playing `Wave`. **The two arms are the assertion** — they share a file, a mesh and a material, so
 anything that made both wrong would leave them identical; only real skinning makes one bend and the
 other stand, and the bent one's shadow bends with it. **Measured rather than assumed** (§9 warned it
@@ -1292,7 +1292,7 @@ fails on any schema component the tour does not use, so a new component's commit
 beside it, since `daylight` is a block the component walk could never have seen missing. M21 put the
 first hole in the component contract's premise, because `drives_sun` makes `DirectionalLight` a
 validation error and two components stopped being addable; that exemption is *computed* from the
-validation rule, not listed, so it evaporates if the tour stops driving the sun. **M27 put the second
+validation rule, not listed, so it evaporates if the tour stops driving the sun. **M30 put the second
 hole in it, with a different shape**: skeletal animation adds no component at all (a skin is a
 property of the asset), so a contract keyed on components can never notice the system exists — M21's
 hole is an exemption the contract computes, this one is a system it was never able to see. The tour
@@ -1331,7 +1331,7 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
 Those edits are why the six showcase baselines were re-blessed — the sweep confirmed the other 25
 held bit-exactly, since no engine code was touched.
 
-**M27 adds the `Walker`** to station 01: thirteen joints out of `examples/meshes/rigged_walker.gltf`
+**M30 adds the `Walker`** to station 01: thirteen joints out of `examples/meshes/rigged_walker.gltf`
 playing a one-second `Walk`, carried around a circuit by `tour_wildlife.rhai` while the clip does the
 legs — the milestone's division of labour, since no script ever touches a joint. It is the repo's
 only **skinned × textured** draw (`plate_normal` + `plate_orm`, the truck's maps), which is the
@@ -1427,19 +1427,25 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**16 of the 35 baselines are pinned by no test at all** (`m4_lighting`, both `m8_drop`, `m9_t025`,
-both `m10`, `m11_lap`, `m13_smoke`, `m14_break`, `m29_meadow`, and all six `showcase_*`) — the sweep
-is their only
-check. `m11_lap.png` is the one to be careful about when reading older notes: the lap CLI test pins
-the *drive* (positions, elevation, parked HUD strings) and names the PNG in a comment, but nothing
-diff-renders it. A sweep failure that will not reproduce twice in a row is worth suspecting before it
+**25 of the 36 baselines are pinned by no test at all** — the sweep is their only check. The eleven a
+test actually diff-renders and asserts *matching* are `m12_hud`, `m16_environment`, `m17_fire`,
+`m18_water`, `m19_trees`, `m20_clouds`, `m21_daylight_1200`, `m22_terrain`, `m23_road`,
+`m30_skeletal` and `m31_ui`; everything else — `m4_lighting`, both `m8_drop`, `m9_t025`, both `m10`,
+`m11_lap`, `m13_smoke`, `m14_break`, the other four `m21_daylight_*`, `m26_materials`, both `m27_*`,
+both `m28_pointer_*`, `m29_meadow`, and all six `showcase_*` — rides on `bin/verify-baselines` alone.
+**This ratio has been getting worse, not better**: it was 16 of 35 when last counted, and M26/M28
+each added fixtures whose baselines no test asserts. Two entries mislead if skimmed.
+`m27_water_refraction.png` *is* named by a CLI test, but only in the **negative** direction (with
+`ior` back at 1.0 the baseline must *not* match), which pins that refraction is load-bearing and
+does not pin the render. And `m11_lap.png`: the lap CLI test pins the *drive* (positions, elevation,
+parked HUD strings) and names the PNG in a comment, but nothing diff-renders it. A sweep failure that will not reproduce twice in a row is worth suspecting before it
 is worth debugging: since M29 **all six `showcase_*` frames** carry a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02`, because a meadow at `samples: 4` is not byte-reproducible
 on this adapter and the tour has one in every frame (M22 had already given `showcase_646` a
 threshold for its own reason). The pixel *allowance* is there rather than a wider threshold because
 the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held for eight
-consecutive full sweeps where `--threshold 40` alone would have been a looser claim. The other 29
-entries are bit-exact and a failure there is real.
+consecutive full sweeps where `--threshold 40` alone would have been a looser claim. The other 30
+entries carry no `diff_args` at all — they are bit-exact, and a failure there is real.
 
 **M31 measured the tour's flake rate directly**, which is the cheap way to settle one of these: with
 the *unchanged* pre-M31 scene, `showcase_585` came back as **5 distinct images from 6 renders** on
@@ -1483,8 +1489,11 @@ Cargo workspace (design doc §4), dependency order bottom-up:
 - `crates/engine-cli` — the `engine` binary; the primary interface
 
 Plus `engine-physics`, `engine-script`, `engine-editor`. Supporting:
-`schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`,
-`docs/component-reference.md` (generated from doc comments).
+`schemas/component-schema.json` (generated, not hand-written), `examples/scenes/*.json`, and
+`docs/` — which holds `cli-contract.md` and `error-codes.md` and **nothing else**. The design doc's
+§4 sketch also lists `docs/component-reference.md` and `docs/scene-format.md`; neither was ever
+built, and the component reference today is `engine list-components` plus the doc comments it
+carries into the schema. Don't cite either file as if it exists.
 
 Stack: Rust + wgpu 30 (Vulkan/Metal/DX12) + winit 0.30 + glam + serde/JSON + hecs + `image` for PNG
 export.
@@ -1567,7 +1576,7 @@ bark is authored from them. **Alpha-cut leaves are still a missing feature**, no
 and an `alpha_cutoff` mean new `Tree` fields, a schema regeneration, and a validation pass.) After M23: road junctions (two roads crossing wants a patch primitive, not a ribbon), banked
 cross-sections, per-point road width, roads that follow a `Terrain` instead of carrying their own
 heights, and textures for asphalt grain (analytic markings beat a texture for anything periodic, but
-grain is not periodic). After M27: foot IK (the tour's walker rides the terrain by its root, which
+grain is not periodic). After M30: foot IK (the tour's walker rides the terrain by its root, which
 is not the same as planting on it), a locomotion system that drives clip rate from ground speed
 instead of leaving the stride tuned by hand, skinned collider proxies, and editor picking against
 the posed mesh. **Blending stays rejected**, not deferred — see the design's §1. After M31: a
@@ -1575,6 +1584,24 @@ bitmap-font atlas (the sanctioned path to better text — a PNG plus an in-repo 
 sampled nearest, no new dependency and no float, arriving as a `font` field whose absence is the 8×8
 font), pointer lock and scroll, text input and focus, per-side padding, and world-space UI (a health
 bar over an enemy's head is a *projection* question and wants `world.project(x, y, z)`).
+
+**Housekeeping the M31 audit turned up and did not do**, in the order they are worth doing:
+
+- **`scene_renderer.rs` has outgrown its file** — 5,977 lines, of which `SceneRenderer::with_samples`
+  is ~880 (pipeline construction) and `SceneRenderer::draw` is ~1,150. `validate.rs` is 5,539 with
+  `validate_source` at ~1,400. Splitting them is the one real structural debt in the workspace, and
+  `draw` is exactly the ULP-sensitive path this file keeps warning about — so it wants its own
+  change with its own A/B between binaries, never a drive-by while doing something else.
+- **28 clippy warnings** across engine-core, engine-render, engine-physics, engine-script,
+  engine-assets and engine-editor — mostly `map_or`→`is_none_or`, `manual_flatten`,
+  `needless_range_loop`, `too_many_arguments`, and two `large_enum_variant` in `engine-cli/src/app.rs`.
+  Several touch geometry and validation code, so this is an A/B-gated change too, not a `--fix` run.
+  Clearing them is what lets CI's clippy step stop being `continue-on-error`.
+- **25 of the 36 baselines are pinned by no test** (see Verification). Each new fixture has been
+  adding to that pile; a CLI test that diff-renders the fixture is cheap and is what makes a
+  baseline survive someone who does not run the sweep.
+- **`docs/scene-format.md` and `docs/component-reference.md`** are sketched in the design doc §4 and
+  were never written. If either lands it must be generated and pinned like `error-codes.md`.
 
 ## Out of scope for v1
 
