@@ -270,7 +270,7 @@ pub trait RigSource {
 
 /// What an `AnimationPlayer.clip` string names.
 ///
-/// One field, both kinds of animation — `animation-system-design.md` §4
+/// One field, both kinds of animation — M9's design §4
 /// specified the fragment form and nothing used it until M30.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipRef<'a> {

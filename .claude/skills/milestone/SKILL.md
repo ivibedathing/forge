@@ -12,10 +12,11 @@ description: The end-to-end loop this repo builds milestones with — worktree, 
    choice is still free — moving finished work is expensive.
 2. **Take a worktree.** `git worktree add .claude/worktrees/<name> -b <name>`.
    Sessions sharing one working tree overwrite each other's edits.
-3. **Read the design doc for what you are touching** — `designs/water-design.md`,
-   `designs/tree-design.md`, `designs/fire-and-lights-design.md`, and so on, plus
-   `designs/agent-native-engine-design.md` for anything structural. Several §9
-   decisions are still open: surface them, do not pick silently.
+3. **Read the design doc for what you are touching**, if one survives —
+   `designs/` keeps the docs for M26 and later plus the cross-cutting ones, and
+   M4–M25's were pruned once built (`designs/README.md` says where they went).
+   Read `designs/agent-native-engine-design.md` for anything structural: several
+   §9 decisions are still open, so surface them rather than picking silently.
 4. **Write the design doc first** when the milestone is new. Every milestone
    here has one, and it is where the rejected alternatives live.
 

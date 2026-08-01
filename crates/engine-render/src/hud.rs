@@ -573,7 +573,7 @@ fn draw_text(
 
         for (index, ch) in line.chars().enumerate() {
             // Outside the font's ASCII coverage: a filled box — visibly wrong
-            // in the screenshot, never a panic (hud-design.md §2).
+            // in the screenshot, never a panic (M11.6's design, §2).
             let bitmap = glyph(ch as u32);
             let gx = x0 + index as i64 * cell;
             for (row, bits) in bitmap.iter().enumerate() {
