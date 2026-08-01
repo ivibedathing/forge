@@ -325,7 +325,7 @@ impl LightRig {
 
     /// Apply the no-lights fallback rule and return concrete values.
     ///
-    /// The rule is all-or-nothing (design `materials-lighting-design.md` §3):
+    /// The rule is all-or-nothing (M4's design, §3):
     /// zero light components → the documented fallback rig (white sun 1.0 +
     /// white ambient 0.15); at least one light component → exactly what the
     /// scene wrote, absent means off.
@@ -776,32 +776,15 @@ impl Scene {
             return Ok(Vec::new());
         };
 
-        let player = self
-            .world
-            .get::<&crate::components::AnimationPlayer>(entity)
-            .ok()
-            .map(|player| (*player).clone());
-        // A property clip on a skinned entity is legal: it animates components,
-        // not joints, and the rig stays at rest.
-        let clip = player.as_ref().and_then(|player| {
-            match crate::skeleton::ClipRef::parse(&player.clip) {
-                crate::skeleton::ClipRef::Skeletal { clip, .. } => rig.clip_named(clip),
-                crate::skeleton::ClipRef::Property(_) => None,
-            }
-        });
-
-        let local = match (time, &player, clip) {
-            (Some(t), Some(player), Some(clip)) => {
-                crate::animation::local_time(player, crate::skeleton::duration(clip), t)
-            }
-            // No clock, no player, or a player whose clip this file does not
-            // have: the rest pose. It still needs a palette — the vertices are
-            // in skin space, so `global · inverse_bind` is what puts them back
-            // in bind space, and an identity palette would collapse any rig
-            // whose rest pose is not exactly its bind pose.
-            _ => 0.0,
-        };
-        let globals = self.posed_globals(entity, skin, time.and(clip), local);
+        // Clip selection and the clip-local clock live in `locomotion`, which
+        // is where the physics world reads them from too (M33): a proxy that
+        // resolved the clip differently from the render would sit somewhere
+        // the character visibly is not. A `time` of `None` is the rest pose,
+        // and it still needs a real palette — the vertices are in skin space,
+        // so `global · inverse_bind` is what puts them back in bind space, and
+        // an identity palette would collapse any rig whose rest pose is not
+        // exactly its bind pose.
+        let globals = crate::locomotion::posed_globals_at(&self.world, entity, &rig, time);
         Ok(globals
             .into_iter()
             .zip(&skin.joints)

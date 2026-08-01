@@ -144,7 +144,10 @@ pub fn run(
                 });
             }
         }
-        let events = physics.step(&mut scene.world);
+        // The scene time this step *ends* at, which is the time the render
+        // would draw after `step` steps — so a skinned collider proxy (M33)
+        // sits where the picture puts the joint it rides.
+        let events = physics.step(&mut scene.world, step as f32 * dt);
         contact_state.apply(&events);
         // Locomotion reads the post-physics world for the same reason: a
         // stride is driven by the ground the entity *covered*, and a script's
@@ -181,14 +184,18 @@ pub fn run(
                 write_line(trace, &line)?;
             }
             for event in &events {
-                write_line(
-                    trace,
-                    &json!({
-                        "step": step,
-                        "contact": [event.a, event.b],
-                        "started": event.started,
-                    }),
-                )?;
+                let mut line = json!({
+                    "step": step,
+                    "contact": [event.a, event.b],
+                    "started": event.started,
+                });
+                // A `"parts"` key joins the line only when a skinned collider
+                // proxy was involved (M33), so every pre-M33 trace — both
+                // golden ones included — is byte-identical.
+                if event.a_part.is_some() || event.b_part.is_some() {
+                    line["parts"] = json!([event.a_part, event.b_part]);
+                }
+                write_line(trace, &line)?;
             }
             // The HUD is part of the observable record: one line whenever it
             // changes, so a lap crossing is a greppable trace event. Script-
@@ -940,14 +947,22 @@ pub fn raycast_command(
     physics.refresh_queries();
 
     let result = match physics.raycast(from, direction) {
-        Some(hit) => json!({
-            "hit": {
+        Some(hit) => {
+            let mut record = json!({
                 "entity": hit.entity,
                 "point": vec3_json(hit.point),
                 "normal": vec3_json(hit.normal),
                 "distance": number_from_f32(hit.distance),
+            });
+            // Only when the ray hit a skinned collider proxy (M33): a report
+            // that carried `"part": null` on every hit would make every
+            // pre-M33 answer look different for no reason. `entity` stays an
+            // entity name, which is what separates a report from an address.
+            if let Some(part) = hit.part {
+                record["part"] = json!(part);
             }
-        }),
+            json!({ "hit": record })
+        }
         None => json!({ "hit": null }),
     };
     println!("{result}");

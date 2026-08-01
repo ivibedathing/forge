@@ -1,0 +1,411 @@
+{
+  "name": "m33_proxies",
+  "environment": {
+    "sky": true,
+    "shadows": true,
+    "shadow_distance": 22.0,
+    "samples": 4
+  },
+  "physics": {
+    "timestep_hz": 60
+  },
+  "entities": [
+    {
+      "name": "Cam",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            3.1,
+            4.6
+          ],
+          "rotation": [
+            -26.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Camera",
+          "fov": 42.0,
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "rotation": [
+            -46.0,
+            -30.0,
+            0.0
+          ]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [
+            1.0,
+            0.97,
+            0.9
+          ],
+          "intensity": 3.1
+        }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [
+            0.55,
+            0.63,
+            0.78
+          ],
+          "intensity": 0.34
+        }
+      ]
+    },
+    {
+      "name": "Floor",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -0.25,
+            0.0
+          ],
+          "scale": [
+            16.0,
+            0.5,
+            16.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.3,
+            0.31,
+            0.29
+          ],
+          "roughness": 0.95
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "friction": 0.8
+        }
+      ]
+    },
+    {
+      "name": "Director",
+      "components": [
+        {
+          "type": "Script",
+          "source": "m33_proxies.rhai"
+        }
+      ]
+    },
+    {
+      "name": "Proxied",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.3,
+            0.0,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/rigged_walker.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.82,
+            0.4,
+            0.24
+          ],
+          "roughness": 0.55
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../../meshes/rigged_walker.gltf#Walk",
+          "speed": 1.0,
+          "looping": true,
+          "stride": 1.6408
+        },
+        {
+          "type": "SkinnedCollider",
+          "layers": [
+            "character"
+          ],
+          "friction": 0.9,
+          "parts": [
+            {
+              "joint": "Head",
+              "shape": "sphere",
+              "radius": 0.13,
+              "offset": [
+                0.0,
+                0.07,
+                0.0
+              ]
+            },
+            {
+              "joint": "Chest",
+              "shape": "capsule",
+              "radius": 0.17,
+              "half_height": 0.13,
+              "offset": [
+                0.0,
+                -0.04,
+                0.0
+              ]
+            },
+            {
+              "joint": "Hips",
+              "shape": "capsule",
+              "radius": 0.16,
+              "half_height": 0.06
+            },
+            {
+              "joint": "ArmL",
+              "shape": "capsule",
+              "radius": 0.07,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.19,
+                0.0
+              ]
+            },
+            {
+              "joint": "ArmR",
+              "shape": "capsule",
+              "radius": 0.07,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.19,
+                0.0
+              ]
+            },
+            {
+              "joint": "LegL",
+              "shape": "capsule",
+              "radius": 0.09,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.21,
+                0.0
+              ]
+            },
+            {
+              "joint": "LegR",
+              "shape": "capsule",
+              "radius": 0.09,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.21,
+                0.0
+              ]
+            },
+            {
+              "joint": "KneeL",
+              "shape": "capsule",
+              "radius": 0.08,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.21,
+                0.0
+              ]
+            },
+            {
+              "joint": "KneeR",
+              "shape": "capsule",
+              "radius": 0.08,
+              "half_height": 0.15,
+              "offset": [
+                0.0,
+                -0.21,
+                0.0
+              ]
+            },
+            {
+              "joint": "FootL",
+              "shape": "cuboid",
+              "half_extents": [
+                0.05,
+                0.05,
+                0.11
+              ],
+              "offset": [
+                0.0,
+                -0.02,
+                0.03
+              ]
+            },
+            {
+              "joint": "FootR",
+              "shape": "cuboid",
+              "half_extents": [
+                0.05,
+                0.05,
+                0.11
+              ],
+              "offset": [
+                0.0,
+                -0.02,
+                0.03
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Loose",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.3,
+            0.0,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/rigged_walker.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.3,
+            0.45,
+            0.7
+          ],
+          "roughness": 0.55
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../../meshes/rigged_walker.gltf#Walk",
+          "speed": 1.0,
+          "looping": true,
+          "stride": 1.6408
+        }
+      ]
+    },
+    {
+      "name": "CrateHit",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -1.3,
+            0.25,
+            -0.55
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.72,
+            0.58,
+            0.32
+          ],
+          "roughness": 0.8
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.25,
+            0.25,
+            0.25
+          ],
+          "density": 6.0,
+          "friction": 0.7
+        }
+      ]
+    },
+    {
+      "name": "CrateMissed",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            1.3,
+            0.25,
+            -0.55
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:cube"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.72,
+            0.58,
+            0.32
+          ],
+          "roughness": 0.8
+        },
+        {
+          "type": "RigidBody",
+          "body": "dynamic"
+        },
+        {
+          "type": "Collider",
+          "shape": "cuboid",
+          "half_extents": [
+            0.25,
+            0.25,
+            0.25
+          ],
+          "density": 6.0,
+          "friction": 0.7
+        }
+      ]
+    }
+  ]
+}

@@ -35,6 +35,7 @@ engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --co
 engine simulate <scene.json> --steps N [--entity Name]... [--bake out.json] [--trace t.jsonl]
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N]
 engine road-centerline <scene.json> [--entity Name]
+engine list-colliders <scene.json> [--entity Name] [--steps N]  # every collider, and where
 engine ui-layout <scene.json> [--width W --height H] [--entity Name]  # where the UI landed
 engine terrain-height <scene.json> --at x,z [--entity Name]   # where the ground is
 engine inspect <scene.json> [--entity Name]       # every field, with the defaults filled in
@@ -135,6 +136,7 @@ engine terrain-height scene.json --at -12,8      # the world Y of the ground the
 engine road-centerline scene.json                # where a Road actually goes
 engine list-joints scene.json --entity Robot --time 0.7   # where every joint is
 engine ui-layout scene.json --width 1280 --height 720     # every HUD element's rectangle
+engine list-colliders scene.json --steps 90               # every collider, and where it is
 engine raycast scene.json --from -6,20,6 --dir 0,-1,0
 ```
 
@@ -155,6 +157,15 @@ is how you write the cursor that hits it: a timeline's cursor is a *fraction*
 of the frame, so the centre of a reported `[x, y, w, h]` is
 `[(x + w/2) / width, (y + h/2) / height]`. Layout is a pure function of the
 file and the viewport, so the answer is stable and needs no GPU.
+
+`engine list-colliders` answers the question physics never used to: where the
+collision geometry actually is, shape and size included, read back out of the
+built world rather than re-derived from the file. It matters most for a
+`SkinnedCollider` — the hitboxes that ride a character's joints, which appear in
+no render at all and whose placement comes from a pose. `--steps N` when the
+pose is one the simulation reached. A proxy's row carries a `part`, and so does
+a `raycast` that hits one: `entity` stays the character, `part` says where you
+shot it.
 
 `engine list-joints` is the same idea for a rigged mesh, and it is how you check
 an animation without reading pixels: a filmstrip shows that *something* moved

@@ -24,11 +24,15 @@ that breaks a rule here fails the build before it ships.
   nothing else, ever. Even an internal panic speaks this protocol (the panic
   hook re-renders it as `internal_panic`, backtrace escaped inside the JSON
   string when `RUST_BACKTRACE` is set).
-- `--help`, `--version`, and `engine agent-guide` are documentation, not
-  results, and are exempt: human-readable prose, exit 0. `agent-guide` prints
-  the markdown orientation an agent needs to work here, which is the one thing
-  a caller wants unwrapped — a JSON string holding a 200-line document with
-  every newline escaped serves nobody.
+- `--help`, `--version`, `engine agent-guide`, and
+  `engine list-components --markdown` are documentation, not results, and are
+  exempt: human-readable prose, exit 0. `agent-guide` prints the markdown
+  orientation an agent needs to work here, which is the one thing a caller
+  wants unwrapped — a JSON string holding a 200-line document with every
+  newline escaped serves nobody. `list-components --markdown` is the same
+  vocabulary the flagless form emits as JSON Schema, rendered for reading;
+  it is how `docs/component-reference.md` is generated, and a repo contract
+  test fails when that file falls behind.
 
 ## Exit codes
 
@@ -101,10 +105,13 @@ engine list-animations <scene-or-clip-or-gltf> [--schema]
 engine list-joints <scene-or-gltf> [--entity Name] [--time T] [--clip Name]
 engine build [--check]                       # --check: type-check only, ~half the time
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
+engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
+                                             # every collider physics holds, and where
 engine ui-layout <scene.json> [--width W --height H] [--entity Name]...  # where the UI landed
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
 engine list-components [--component Name]    # scene + component JSON Schemas
+engine list-components --markdown            # the same vocabulary, as prose
 engine info                                  # selected GPU adapter
 engine init [dir] [--force]                  # scaffold a project; refuses a non-empty dir
 engine agent-guide                           # the agent orientation, as markdown
@@ -321,6 +328,22 @@ make_car_track.py` is the worked example: it writes the road, asks where it
 went, and writes the scene again with the barriers on it. With no `--entity`
 the scene must contain exactly one road; naming one that is not there is
 `entity_not_found` with a `did_you_mean`.
+
+`engine list-colliders` prints `steps` and one `colliders` array, name-sorted:
+each row's `entity`, `shape` (`sphere`/`cuboid`/`capsule`/`trimesh`/
+`convex_hull`/`other`), its `dimensions` in the file's own terms (a sphere's
+radius; a cuboid's three half-extents; a capsule's half-height and radius; a
+mesh shape's is its geometry, so the array is empty), world `position` and
+`rotation` (Euler XYZ degrees), and `sensor`. A skinned collider proxy (M33)
+carries a `part` as well — the name it reports under, which no other row has.
+
+The rows are read back out of the built physics world rather than re-derived
+from the components, which is what makes it impossible for the report and the
+simulation to disagree: `road-centerline`'s argument, applied to physics. That
+matters most for a proxy, whose placement comes from a *pose* and which appears
+in no render at all. `--steps N` runs the simulation first, because a
+stride-driven pose is what the run reached rather than a function of the file —
+`list-joints` grew the same flag in M32 for the same reason.
 
 ## The render digest
 

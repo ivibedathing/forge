@@ -259,8 +259,7 @@ than no showcase:
   translated rigidly, so the surface normal pointed straight up everywhere and
   nothing could catch the light, and their seams were visible in every
   screenshot. Still missing: refraction — the bed shows through undistorted —
-  and the trees beside the pond are not reflected in it, only the sky is. See
-  `water-design.md`.
+  and the trees beside the pond are not reflected in it, only the sky is.
 - **Ice** is a pale dielectric at roughness 0.05–0.10 with transmission
   0.55–0.66, and the floating blocks are sorted into the same back-to-front
   list as the water they sit in. As of M26 it **refracts** — `ior: 1.31` with a
@@ -324,6 +323,15 @@ than no showcase:
   stance foot had been sliding backwards at 0.76 m/s — a number nobody had
   because nothing could measure it.
 
+  **M33** adds the third thing it was missing, though nothing in the tour is
+  aimed at it: five `SkinnedCollider` proxies — head, chest, hips and two legs —
+  so the walker is something the physics world can see rather than a pose that
+  passes through everything. It walks a circle that meets nothing, and the
+  entry is here because the growth contract has no allowlist. The interesting
+  part was the cost: adding those five kinematic bodies moved 24 of the tour's
+  26 dynamic bodies and re-blessed all six baselines, because a rapier world's
+  results depend on its whole collider set and not only on what touches what.
+
   What is still faked: no blending and no state machine, which is M9's
   rejection standing. `Idle` is in the file and the tour never crossfades to
   it, because a crossfade is exactly the nondeterminism that made two clips on
@@ -355,8 +363,8 @@ Refraction is the upgrade that would move this scene most now, and the water is
 its loudest customer — the ice took it in M26 and the pond still cannot, since
 `Water` has no `Material` to put an `ior` on. For the forest it is alpha-cut
 leaves: the bark is textured and the canopy is the last flat surface in the
-frame. For the sky it is the cloud *layer* of
-`cloud-design.md` §9: overcast and cirrus belong to the dome, would ride into
+frame. For the sky it is the cloud *layer* M20 deferred:
+overcast and cirrus belong to the dome, would ride into
 the water reflection for free through `sky_common.wgsl`, and unlike the cloud
 objects would be visible from a camera that never looks up.
 

@@ -13,7 +13,7 @@
 //! [`EnvironmentSettings`](crate::scene::EnvironmentSettings) it was going to
 //! upload anyway.
 //!
-//! That is the central decision of the milestone (`daylight-design.md` §1) and
+//! That is the central decision of the milestone (M21's design, §1) and
 //! it is what makes this module GPU-free and unconditionally testable: no
 //! shader changed, so M16's bit-exactness rules cannot be tripped, and every
 //! rule in here is an ordinary unit test with no skip path.

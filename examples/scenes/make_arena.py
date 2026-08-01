@@ -59,7 +59,25 @@ BARRIERS = [
     (22.0, -12.0, 1.3, 1.5, 8.0),
 ]
 
-# Explosive barrels. Shooting one kills every drone inside BLAST_RADIUS.
+# How many levels the campaign runs. The engine cannot spawn entities, so a
+# level's drones and barrels have to exist in the file from the start — which is
+# what makes this a number rather than "endless". They are parked at PARK_Y and
+# fly (drones) or drop (barrels) in when their level begins, which is the same
+# trick the dormant waves have always used: "it is already there, 46 m up".
+LEVELS = 4
+PARK_Y = 46.0
+# Each level parks four metres above the one before it, and that is not tidiness
+# — the levels reuse each other's positions (the drone ring is the same ten
+# points turned a quarter, and a level's barrels are the first N of one list),
+# so a shared park altitude stacks two dynamic bodies inside each other and
+# physics spends the whole run shoving them apart. The first run of this showed
+# parked drones drifting metres out of position before their level began.
+PARK_STEP = 4.0
+
+# Barrel positions, most-used first: a level takes the first `BARRELS_PER_LEVEL`
+# of them, so the cover thins out as the campaign goes on. Shooting one kills
+# every drone inside BLAST_RADIUS.
+BARRELS_PER_LEVEL = [4, 3, 2, 1]
 BARRELS = [
     (-9.0, -2.0),
     (9.0, -2.0),
@@ -305,6 +323,41 @@ def decal(name, x, z, sx, sz, albedo):
     }
 
 
+def quarter_turn(x, z, turns):
+    """Rotate a spawn point a quarter turn at a time, clockwise about the
+    arena's centre. Each level turns the ring one more quarter, so the same
+    ten positions open the fight from a different quadrant every time — the
+    cheapest variety there is when the positions themselves have to be in the
+    file from the start."""
+    for _ in range(turns % 4):
+        x, z = -z, x
+    return x, z
+
+
+def drone_table():
+    """Every drone in the campaign: (x, z, wave, level), level-major, so the
+    global index is `(level - 1) * len(DRONES) + wave_index` and the script can
+    get from a level to its ten drones by arithmetic."""
+    table = []
+    for level in range(1, LEVELS + 1):
+        for x, z, wave in DRONES:
+            rx, rz = quarter_turn(x, z, level - 1)
+            table.append((rx, rz, wave, level))
+    return table
+
+
+def barrel_table():
+    """Every barrel: (x, z, level). A level takes the first N positions, N
+    shrinking down the campaign, so the numbering runs 1..sum(BARRELS_PER_LEVEL)
+    and each level's are contiguous."""
+    table = []
+    for level in range(1, LEVELS + 1):
+        count = BARRELS_PER_LEVEL[min(level, len(BARRELS_PER_LEVEL)) - 1]
+        for x, z in BARRELS[:count]:
+            table.append((x, z, level))
+    return table
+
+
 def entities():
     out = []
 
@@ -433,16 +486,28 @@ def entities():
         )
 
     # --- explosive barrels --------------------------------------------------
-    # Dynamic so a blast throws them, breakable so a bullet opens them, and the
+    # Dynamic so a blast can shove one, breakable so a bullet opens it, and the
     # script turns the break into a radial kill. The collider is a cuboid under
     # a cylinder mesh: Transform.scale scales collider shapes, and a box takes
     # a non-uniform scale without argument.
-    for i, (x, z) in enumerate(BARRELS):
+    #
+    # Gravity is off and the script holds each one at rest — see `settle_barrels`
+    # in the game script. That is what lets a barrel wait three levels out at
+    # park altitude without sagging, and what brings it down when its level
+    # starts; the cost is that a blast no longer throws its neighbour, which is
+    # a trade the campaign is worth.
+    for i, (x, z, level) in enumerate(barrel_table()):
+        # Level 1's barrels stand on the floor, so the file's first frame is the
+        # arena as it has always looked. Every later level's are parked at
+        # PARK_Y with gravity off and driven down by the script when their level
+        # starts — a resupply drop, and the only way a scene with no spawning
+        # can hand the player a fresh barrel.
+        y = 0.62 if level == 1 else PARK_Y + (level - 1) * PARK_STEP
         out.append(
             {
                 "name": f"Barrel{i + 1}",
                 "components": [
-                    t(position=(x, 0.62, z), scale=(0.86, 1.24, 0.86)),
+                    t(position=(x, y, z), scale=(0.86, 1.24, 0.86)),
                     {"type": "Mesh", "asset": "builtin:cylinder"},
                     # `barrel.png` carries its own colour, so the tint here is
                     # near-white rather than the red the untextured barrel used
@@ -454,7 +519,15 @@ def entities():
                         BARREL_TINT, 0.45, 0.25, [0.08, 0.012, 0.0],
                         maps=BARREL_MAPS, uv=[1.0, 1.0],
                     ),
-                    {"type": "RigidBody", "body": "dynamic", "linear_damping": 0.4},
+                    # Gravity off, like the drones: a barrel waiting three levels
+                    # out at PARK_Y would otherwise sag out of the sky, and the
+                    # script that drives it down holds it where it lands.
+                    {
+                        "type": "RigidBody",
+                        "body": "dynamic",
+                        "gravity_scale": 0.0,
+                        "linear_damping": 0.4,
+                    },
                     {
                         "type": "Collider",
                         "shape": "cuboid",
@@ -592,8 +665,10 @@ def entities():
     )
 
     # --- drones -------------------------------------------------------------
-    for i, (x, z, wave) in enumerate(DRONES):
-        y = 0.95 if wave == 1 else 46.0
+    for i, (x, z, wave, level) in enumerate(drone_table()):
+        # Only level 1's first wave is in the arena at load; everything else
+        # waits at PARK_Y for its wave — and now for its level.
+        y = 0.95 if (wave == 1 and level == 1) else PARK_Y + (level - 1) * PARK_STEP
         out.append(
             {
                 "name": f"Drone{i + 1:02d}",
@@ -881,17 +956,44 @@ def entities():
     # `HudPanel` does the arranging now, `HudInteract` does the hit test, and
     # what is left in the script is which words are on screen.
     out += [
+        # Level over score, in a column, for the same reason the health readout
+        # is one: two 24-pixel lines anchored to opposite top corners meet in
+        # the middle of a 960-wide frame. A column costs one panel and the
+        # engine keeps the two apart at any size.
+        {
+            "name": "ScoreGroup",
+            "components": [
+                {
+                    "type": "HudPanel",
+                    "anchor": "top_left",
+                    "offset": [18.0, 16.0],
+                    "layout": "column",
+                    "gap": 4.0,
+                    "visible": False,
+                }
+            ],
+        },
+        {
+            "name": "LevelText",
+            "components": [
+                {
+                    "type": "HudText",
+                    "text": "LEVEL 1",
+                    "size": 16.0,
+                    "color": [0.85, 0.9, 1.0],
+                    "parent": "ScoreGroup",
+                }
+            ],
+        },
         {
             "name": "ScoreText",
             "components": [
                 {
                     "type": "HudText",
                     "text": "SCORE 0",
-                    "anchor": "top_left",
-                    "offset": [18.0, 16.0],
                     "size": 24.0,
                     "color": [1.0, 0.95, 0.8],
-                    "visible": False,
+                    "parent": "ScoreGroup",
                 }
             ],
         },
@@ -1003,23 +1105,28 @@ def entities():
         # the game as it opens and the file says what the first frame is. The
         # script closes it.
         #
-        # The veil is a top-level stretched rect rather than a child of the
-        # menu: it covers the frame, and the menu covers its own contents.
-        {
-            "name": "MenuVeil",
-            "components": [
-                {
-                    "type": "HudRect",
-                    "size": [0.0, 0.0],
-                    "stretch": [True, True],
-                    "color": [0.015, 0.02, 0.03],
-                    "opacity": 0.78,
-                }
-            ],
-        },
+        # **There is deliberately no full-frame veil, and that is a performance
+        # fix rather than a taste one.** The menu used to dim the whole screen
+        # with a stretched `HudRect`, which defeats M15's central optimisation:
+        # the CPU HUD rasterizer fills only the pixels HUD elements cover, and
+        # one element covering everything puts it back to filling a
+        # window-sized canvas every frame. Measured on this scene, six frames at
+        # 1920x1080: 13.1 s with the veil against 6.7 s without — about a second
+        # of CPU per frame in a debug build, which is what `bin/engine` runs.
+        # The viewer steps physics through a wall-clock accumulator, so a frame
+        # that slow asks for sixty steps next frame and the game stops
+        # responding. The card carries its own dark backdrop instead.
         {
             "name": "MenuRoot",
-            "components": [{"type": "HudPanel", "anchor": "center", "layout": "free"}],
+            "components": [
+                {
+                    "type": "HudPanel",
+                    "anchor": "center",
+                    "layout": "free",
+                    "color": [0.015, 0.02, 0.03],
+                    "opacity": 0.92,
+                }
+            ],
         },
         # The frame is nine-sliced and stretched over whatever the column comes
         # out as: corners 1:1, edges tiled. It is the reason the menu no longer
@@ -1178,16 +1285,24 @@ def main():
     print(f"  {len(scene()['entities'])} entities, {len(DRONES)} drones, {BULLETS} bullets")
     print("  components:", ", ".join(f"{k}x{v}" for k, v in sorted(counts.items())))
     print("\nthe script's constants must match this file:")
-    print(f"  DRONE_COUNT  = {len(DRONES)}")
+    print(f"  LEVELS       = {LEVELS}")
+    print(f"  DRONE_COUNT  = {len(DRONES)}   (per level; {len(drone_table())} in the file)")
     print(f"  BULLET_COUNT = {BULLETS}")
-    print(f"  BARREL_COUNT = {len(BARRELS)}")
+    print(f"  BARRELS_PER_LEVEL = {BARRELS_PER_LEVEL}")
+    base = 0
+    for level in range(1, LEVELS + 1):
+        count = BARRELS_PER_LEVEL[min(level, len(BARRELS_PER_LEVEL)) - 1]
+        print(f"  level {level}: Drone{(level - 1) * len(DRONES) + 1:02d}"
+              f"..Drone{level * len(DRONES):02d}, "
+              f"Barrel{base + 1}..Barrel{base + count}")
+        base += count
     print(f"  ARENA_HALF   = {HALF}")
     print(f"  HEALTH_FILL  = {HEALTH_FILL}")
     print(f"  CROSSHAIR    = {CROSSHAIR}")
     for w in (1, 2, 3):
         first = min(i for i, d in enumerate(DRONES) if d[2] == w) + 1
         last = max(i for i, d in enumerate(DRONES) if d[2] == w) + 1
-        print(f"  wave {w}: Drone{first:02d}..Drone{last:02d}")
+        print(f"  wave {w}: drones {first}..{last} of each level's ten")
 
 
 if __name__ == "__main__":

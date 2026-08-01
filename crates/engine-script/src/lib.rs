@@ -595,6 +595,35 @@ fn curated_engine() -> rhai::Engine {
         },
     );
 
+    // The same two questions at proxy resolution (M33). The answers are
+    // **addresses** — `Walker/Head` — which are engine-produced and never
+    // accepted back: a proxy is not an entity, so `world.set_position` would
+    // rightly reject one. With no `SkinnedCollider` in the scene these return
+    // exactly what the two above do, which is what makes them safe to reach
+    // for in a script that may or may not be shooting at a character.
+    engine.register_fn(
+        "touching_parts",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.entity(engine_core::contact::owner_of(name))?;
+            Ok(w.contacts
+                .touching_parts(name)
+                .into_iter()
+                .map(Dynamic::from)
+                .collect())
+        },
+    );
+    engine.register_fn(
+        "contacts_started_parts",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<rhai::Array, Box<EvalAltResult>> {
+            w.entity(engine_core::contact::owner_of(name))?;
+            Ok(w.contacts
+                .started_parts_with(name)
+                .into_iter()
+                .map(Dynamic::from)
+                .collect())
+        },
+    );
+
     engine.register_fn(
         "hud",
         |w: &mut WorldApi, text: &str| -> std::result::Result<(), Box<EvalAltResult>> {
@@ -2448,11 +2477,7 @@ mod tests {
         let y_of = |scene: &Scene| scene.world.get::<&Transform>(entity).unwrap().position.y;
 
         let mut contacts = ContactState::default();
-        contacts.apply(&[ContactEvent {
-            a: "Cam".into(),
-            b: "Mover".into(),
-            started: true,
-        }]);
+        contacts.apply(&[ContactEvent::new("Cam", "Mover", true)]);
         host.step(
             &mut scene.world,
             0,
@@ -2477,11 +2502,7 @@ mod tests {
         .unwrap();
         assert_eq!(y_of(&scene), 5.0, "started clears, touching persists");
 
-        contacts.apply(&[ContactEvent {
-            a: "Cam".into(),
-            b: "Mover".into(),
-            started: false,
-        }]);
+        contacts.apply(&[ContactEvent::new("Cam", "Mover", false)]);
         host.step(
             &mut scene.world,
             2,

@@ -33,8 +33,16 @@ engine lays out and hit-tests, described under [The menu](#the-menu) below.
 Three waves of hovering drones home in on you: four, then three, then three.
 Three bolts kill one, or shoot one of the four red barrels and the blast takes
 everything within 7.5 m — and chains into any other barrel in range. Contact
-costs 26 health per second. Clear all ten and the banner says so; run out of
-health and it says the other thing.
+costs 26 health per second.
+
+Clear all ten and the card offers **NEXT LEVEL**. There are four, and each one
+is faster (+14% closing speed), tougher (+33% hull — three bolts to a kill, then
+four, five and six), harder-hitting (+25% contact damage) and worth more (+50%
+score) than the one before it, and each
+drops in fewer new barrels than the last: four, three, two, one. A barrel you
+did not shoot stays live into the next level, so saving one is worth something.
+Clearing a level hands back 45 health, and the score carries. Run out of health, or clear the fourth level,
+and the card says so and stops — see [The campaign](#the-campaign).
 
 Headlessly, with the recorded run:
 
@@ -50,9 +58,9 @@ frame size, which the mouse added**: a cursor is a fraction of the frame and
 the ray through it depends on the aspect, so render the demo at 16:9 or it
 aims somewhere else (`designs/mouse-input-design.md` §5).
 
-The canned demo clicks PLAY, then fights: it kills seven of the ten drones and
-reaches wave three without losing a point of health. It is a choreography, not
-an AI — see [Regenerating the demo](#regenerating-the-demo).
+The canned demo clicks PLAY, then fights: it clears level 1, presses NEXT
+LEVEL, and fights on into level 2. It is a choreography, not an AI — see
+[Regenerating the demo](#regenerating-the-demo).
 
 ## How it is put together
 
@@ -84,10 +92,12 @@ entity that no longer exists, so the next `world.position` on it is a runtime
 error. One owner of destruction, and it is the script.
 
 **Drones hover** (`gravity_scale: 0`), which is what makes waves cheap. A
-dormant drone is parked at y=46 and simply held at zero velocity; when its wave
-starts, the same steering code flies it down and in. A script cannot move a
-dynamic body by writing its `Transform`, so "spawn it later" was never
-available — "it is already there, 46 m up" is.
+dormant drone is parked above the arena and simply held at zero velocity; when
+its wave starts, the same steering code flies it down and in. A script cannot
+move a dynamic body by writing its `Transform`, so "spawn it later" was never
+available — "it is already there, 46 m up" is. [The campaign](#the-campaign)
+is that same sentence applied one level up, which is why it is four levels
+rather than endless.
 
 **The arena is a plateau in a valley.** The `Terrain` patch is scenery only: it
 carries no collider, and it sits low enough (`position.y = -7`, `height: 6`)
@@ -140,6 +150,64 @@ every inner loop in the script lives in its own function — a function body sta
 the budget over — and why subexpressions are pulled out into locals rather than
 nested. It reads like an over-cautious style rule and is not one.
 
+## The campaign
+
+Four levels, and the shape of them is decided by one engine rule: **a scene
+cannot spawn entities, and a script cannot move a dynamic body by writing its
+Transform.** So a level's enemies cannot be created when it starts, and a dead
+one cannot be picked up and put back. What is left is the trick the dormant
+waves have used since the beginning — *it is already there, 46 m up* — applied
+one level higher.
+
+Every level's ten drones and its barrels are in the file from the start, parked
+above the arena, and fly or drop in when their level begins. That is why the
+campaign is four levels rather than endless: the number is in the scene, and
+`make_arena.py` writes it.
+
+**Levels are contiguous runs of a flat numbering.** Level *n* owns
+`Drone{(n-1)*10+1}`..`Drone{n*10}`, and its barrels are the next run of a list
+that shortens as the campaign goes on. So the script gets from a level to its
+drones with `base = (level - 1) * 10`, and everything downstream — the hit test,
+the blast radius, the wave counter — keeps working in indices local to the
+level. The generator prints the boundaries; they are the only coupling.
+
+**Drones are scoped to their level and barrels are not.** Every barrel up to and
+including this level's stays armed, because one left standing from last level
+looks exactly like a live one, and an inert twin of a thing that explodes is the
+worst answer available. It also means saving a barrel is worth something.
+
+**Each level parks four metres above the one before it**, and that is not
+tidiness. The levels reuse each other's positions — the drone ring is the same
+ten points turned a quarter turn per level, and a level's barrels are the first
+N of one list — so a shared park altitude puts two dynamic bodies inside each
+other and physics spends the whole run shoving them apart. The first run of
+this showed parked drones metres out of position before their level had begun.
+
+**A barrel has `gravity_scale: 0` and is driven down by the script.** It has to
+be: a barrel waiting three levels out would otherwise sag out of the sky, and
+even at rest nothing would hold it against the blast that opens its neighbour.
+`settle_barrels` drives it down at a speed that eases off over the last metre
+and then holds it at zero velocity — a drop is a velocity or it is nothing.
+
+**Difficulty is three dials, not one, and two of them are pinned to something
+real.** Hull alone makes a level *longer*; speed and contact damage make it
+*tighter*. Hull steps so the bolts-to-a-kill count lands on 3, 4, 5, 6 rather
+than on a fraction — a magazine that runs dry in a different place each level
+for no visible reason is worse than a harder one. Closing speed stays under the
+player's own 7.2 m/s at level 4 (6.3), because a drone that outruns the player
+cannot be kited and the arena stops being a place to move through. Score scales
+with the dials, so a level-4 kill is worth more than a level-1 one, and each
+level brings fewer new barrels because cover that never runs out is not a
+difficulty curve. Every step is a multiple of
+`level - 1`, so **level 1 is arithmetically the game that shipped** — the
+identity, not a tuned approximation of it.
+
+**Mode 4 is the new state**, and it is the difference between a card that
+reports and a card that offers. Mode 3 is now only the two ends nothing follows:
+the player died, or the fourth level is clear. Both still have no button, and
+now for a reason that survives the campaign — either one wants forty broken
+drones and ten spent barrels back.
+
 ## The menu
 
 Three screens, and since M31 they are a component tree the engine lays out and
@@ -191,6 +259,21 @@ cannot spawn entities — so a cleared arena stays cleared, and offering `RETRY`
 would be offering something that cannot work. An empty label hides the button
 panel, a hidden element leaves the flow entirely, and the card is shorter by
 exactly the gap.
+
+**There is no full-frame dim behind the card, and that is a performance fix.**
+The menu used to darken the whole screen with a stretched `HudRect`, which
+defeats M15's central optimisation: the CPU HUD rasterizer fills only the pixels
+HUD elements actually cover, and one element covering everything puts it back to
+filling a window-sized canvas every frame. Measured on this scene, six frames at
+1920×1080: **13.1 s with the veil against 6.7 s without** — about a second of CPU
+per frame in a debug build, which is what `bin/engine` runs. The viewer steps
+physics through a wall-clock accumulator, so a frame that slow asks for sixty
+steps on the next one and the game stops responding to input altogether. The
+card carries its own dark backdrop instead (a `HudPanel` *is* its own backdrop,
+which is why this costs no extra component), and the same six frames now take
+5.7 s. **A full-screen HUD element is the one shape this engine's overlay cannot
+afford**; anything wanting a real dim wants the renderer to draw solid rects on
+the GPU, which is an engine change with its own A/B.
 
 **One recorded timeline still clicks the button at any frame size**, though
 not for the reason the old menu gave. The card is centre-anchored and its
@@ -316,21 +399,30 @@ rectangle at the frame it is authoring for and clicks its centre — the same
 crossing between a pixel report and a fractional timeline that M31's own CLI
 test pins.
 
+**The director plays the campaign, and it reads the level boundary out of the
+same signal it reads a kill from.** A broken drone leaves the `simulate` report
+entirely; when every one of a level's ten has left it and none of them is still
+up at park altitude, the level is over, the card is up, and the button that was
+PLAY is now NEXT LEVEL — so the director presses it in the same place and starts
+watching the next ten names. It then waits half a second for them to fly down,
+because a director aiming at an arena whose drones are still 50 m up wanders off
+to the middle of the floor and shoots at nothing.
+
 ## Regenerating the scene
 
 `make_arena.py` exists for the same reason `make_car_track.py` does: a bullet
 pool is fourteen entities differing only in a name, and a drone is nine lines of
-JSON repeated ten times. Everything worth tuning is a table at the top of the
-file.
+JSON repeated forty times now that the campaign wants four levels of them.
+Everything worth tuning is a table at the top of the file.
 
 ```
 python3 examples/scenes/make_arena.py
 ```
 
-It prints the constants the script has to agree with (drone count, bullet count,
-barrel count, arena half-width, and which drone indices belong to which wave).
-Those five numbers are the only coupling between the two files — change a table
-and check them.
+It prints the constants the script has to agree with: the level count, drones
+per level, bullets, barrels per level, the arena half-width, the two HUD numbers
+— and, level by level, which drone and barrel names each one owns. Those are the
+only coupling between the two files; change a table and check them.
 
 The emitted JSON is a normal, hand-editable scene; the engine never runs the
 generator. This is a convenience, not a second source of truth.
@@ -340,8 +432,9 @@ generator. This is a convenience, not a second source of truth.
 No baseline is committed for this scene and no CLI test pins it: it is a demo,
 not a verification fixture, and it is not in `verify/baselines.json`. Also
 absent, in rough order of how much each would add: cover that stops bullets,
-enemies that shoot back, a restart (the engine cannot spawn entities, so a
-cleared arena stays cleared), drone variety, a walking enemy off M30's rig, and
-sound — of which the engine has none. The menu is deliberately still 8×8 text:
+enemies that shoot back, a restart or an endless mode (both want entities the
+file does not carry — the campaign is four levels because four levels' worth of
+drones are authored), drone variety, a walking enemy off M30's rig, and sound —
+of which the engine has none. The menu is deliberately still 8×8 text:
 a bitmap-font atlas is the sanctioned next step for that everywhere in the repo,
 not something to solve once here.
