@@ -1316,12 +1316,20 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
   `quad(−Z, Y, X)`, so `u` is vertical on +X and *horizontal* on −X. Anything strongly directional on
   a cube therefore draws differently on all four sides, and a box's tiling is a property of the
   **face** you care about rather than of the box (the arena shooter's four perimeter walls carry four
-  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`, which M28 also gave
-  a mouse-driven title/pause/end menu built from ordinary `HudText`/`HudRect`: the layout is measured
-  from the **centre** of the frame so one recorded timeline clicks the same button at any window
-  size, hiding an element is a zero size or an empty string, and its demo timeline is now authored by
-  a closed-loop director, `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a
-  drone at step 431).
+  different `uv_scale`s for exactly this reason — see `designs/arena-shooter.md`, whose
+  title/pause/end menu was **rebuilt on M31**: a `HudPanel` tree the engine lays out and a
+  `HudInteract` it hit-tests, where M28's version was rectangles the script computed, centred by
+  multiplying a string's length by the glyph advance, and hover-highlighted by putting brackets
+  round the label. What that bought is worth reading as a worked example of the UI system —
+  hug-sized cards that are three different sizes for three screens, `visible` in place of the
+  empty-string/zero-size pair, a play HUD authored *hidden* so `--steps 0` is the title screen, and
+  a demo director that asks `engine ui-layout` where the button is instead of hard-coding the
+  fraction. It also carries the one trap in `HudImage`: with no `slice` an image is all middle band
+  and the middle band **tiles**, so an icon must be drawn at its source size — 32 px of a 16 px
+  reticle is four reticles. Its demo timeline is authored by a closed-loop director,
+  `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a drone at step 431, and
+  M31's **press capture** means that director now writes the release on the button too. Four
+  `Meadow` strips ring the plateau since the same pass).
   The crate texture is a *framed* panel with a centre batten for that reason: a border is invariant
   under it. `Tree` tubes are the well-behaved case (`u` around the ring, `v` along the branch), which
   is also why bark fissures must vary in `u` — transposed, a trunk wears tyre tread.
