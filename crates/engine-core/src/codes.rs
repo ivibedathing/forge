@@ -199,6 +199,16 @@ registry! {
     BREAKABLE_WITHOUT_COLLIDER = "breakable_without_collider", Input,
         "a Breakable sets impulse_threshold but the entity has no Collider to be hit on";
 
+    // ── Fracture (M43) ─────────────────────────────────────────────────
+    FRAGMENT_GEOMETRY = "fragment_geometry", Input,
+        "a fragment is a mesh reference or a shard's points, never both and never neither";
+    SHARD_DEGENERATE = "shard_degenerate", Input,
+        "a shard's points do not bound a volume: fewer than four, or all coplanar";
+    SHARD_WITH_MESH = "shard_with_mesh", Input,
+        "a Shard owns its geometry, so the entity may not also carry a Mesh";
+    FRACTURE_FAILED = "fracture_failed", Input,
+        "engine fracture could not break the volume into the pieces asked for";
+
     // ── Environment (M16) ──────────────────────────────────────────────
     INVALID_ENVIRONMENT_VALUE = "invalid_environment_value", Input,
         "an environment setting is outside its meaningful range";

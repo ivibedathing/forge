@@ -231,17 +231,20 @@ pub fn validate_scene_assets(source: &str, path: &str) -> Vec<EngineError> {
                     )],
                     None => continue,
                 },
+                // A shard fragment (M43) has no file behind it — its geometry
+                // is the points in the scene — so only mesh-backed fragments
+                // reach the asset pass at all.
                 ComponentData::Breakable(breakable) => breakable
                     .fragments
                     .iter()
                     .enumerate()
-                    .map(|(i, fragment)| {
-                        (
+                    .filter_map(|(i, fragment)| {
+                        Some((
                             format!("{component_path}/fragments/{i}/mesh"),
-                            fragment.mesh.as_str(),
+                            fragment.mesh.as_deref()?,
                             "Breakable",
                             "mesh",
-                        )
+                        ))
                     })
                     .collect(),
                 _ => continue,

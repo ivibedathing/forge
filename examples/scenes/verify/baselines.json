@@ -603,6 +603,18 @@
       "height": 450,
       "milestone": "M42",
       "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m43_fracture.png",
+      "scene": "examples/scenes/verify/m43_fracture.json",
+      "args": [
+        "--steps",
+        "55"
+      ],
+      "width": 800,
+      "height": 450,
+      "milestone": "M43",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [

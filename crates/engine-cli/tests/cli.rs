@@ -28,6 +28,13 @@ fn scene_file(test: &str, contents: &str) -> PathBuf {
     path
 }
 
+/// A command's stdout as JSON — the shape every query command reports in.
+fn json_out(output: &Output) -> serde_json::Value {
+    let text = stdout_of(output);
+    serde_json::from_str(text.trim())
+        .unwrap_or_else(|e| panic!("stdout is not one JSON object ({e}): {text:?}"))
+}
+
 fn stdout_of(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout must be UTF-8")
 }
@@ -2552,13 +2559,23 @@ fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
     // Nothing may leave the world. A body that loses its ground contact
     // falls forever in silence — no error, no failed validation, just a
     // scene that renders wrong — so the tour asserts the floor holds.
+    //
+    // The floor is **below the deepest ground**, not below zero: M42 dug the
+    // pond's basin to −1.94 m, and a crate fragment thrown into it by the
+    // explosion comes to rest at −1.67, which is resting rather than falling.
+    // The constant only has to separate "on the ground somewhere" from
+    // "falling forever" — a body that loses contact at step 600 is past
+    // −100 m by step 900 — so it tracks the terrain rather than the origin.
+    // (Found in M43: adding one collider to the tour moved a fragment into
+    // the basin for the first time.)
+    let lost_below = -3.0;
     let last = lines
         .iter()
         .filter(|l| l["step"] == 900 && l.get("position").is_some());
     for row in last {
         let y = row["position"][1].as_f64().unwrap();
         assert!(
-            y > -1.0,
+            y > lost_below,
             "{} ended up at y={y}: it fell through the world",
             row["entity"]
         );
@@ -6947,4 +6964,192 @@ fn simulate_reports_traces_and_bakes_what_a_run_spawned() {
         .filter(|l| l.contains(r#""spawned":"Shot#1""#) && !l.contains("Shot#1x"))
         .count();
     assert_eq!(spawns, 1, "a name was reused");
+}
+
+// ── Material-aware fracture (M43) ──────────────────────────────────────────
+
+/// The fixture: four slabs of four materials, each with a weight dropped on it,
+/// rendered a second after the impacts.
+///
+/// **The four break patterns side by side are the assertion.** They share a
+/// scene, a clock and a hammer, so anything that broke fracture as a whole
+/// would move all four together — only a working material model puts glass
+/// slivers across the floor, wood splinters in a heap, stone chunks where the
+/// block was, and metal in two plates that barely parted. Pinned bit-exactly:
+/// three renders came back as one image, because the camera holds no terrain
+/// and the scene renders at `samples: 1`.
+#[test]
+fn the_fracture_fixture_matches_its_baseline() {
+    let scene = repo_path("examples/scenes/verify/m43_fracture.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m43_fracture.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("55")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+}
+
+/// `engine fracture` prints a `Breakable` and leaves the file alone; `--write`
+/// splices one in. The generator is a command, never a runtime behaviour, so
+/// "what did it produce" has to be answerable without running anything.
+#[test]
+fn fracture_generates_a_breakable_and_only_writes_when_asked() {
+    let scene = scene_file(
+        "fracture-write",
+        r#"{
+  "name": "one_crate",
+  "entities": [
+    { "name": "Crate", "components": [
+      { "type": "Transform", "scale": [0.8, 0.8, 0.8] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5] }
+    ] }
+  ]
+}
+"#,
+    );
+    let before = std::fs::read_to_string(&scene).unwrap();
+
+    let report: serde_json::Value = json_out(
+        &engine()
+            .arg("fracture")
+            .arg(&scene)
+            .arg("--entity")
+            .arg("Crate")
+            .arg("--material")
+            .arg("stone")
+            .arg("--pieces")
+            .arg("6")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(report["pieces"], 6, "{report}");
+    assert_eq!(report["material"], "stone");
+    assert_eq!(report["written"], false);
+    // The cells tile the source box, so their volumes sum to it — in metres,
+    // which for a unit collider at scale 0.8 is 0.8³.
+    let volume = report["volume"].as_f64().unwrap();
+    assert!((volume - 0.8_f64.powi(3)).abs() < 1e-4, "{volume}");
+    assert_eq!(
+        std::fs::read_to_string(&scene).unwrap(),
+        before,
+        "a report is not an edit"
+    );
+
+    // Every fragment is a shard, and the density is the material's.
+    let fragments = report["component"]["fragments"].as_array().unwrap();
+    assert_eq!(fragments.len(), 6);
+    for fragment in fragments {
+        assert!(fragment["points"].is_array(), "{fragment}");
+        assert!(fragment["mesh"].is_null(), "a shard is not a mesh ref");
+        assert_eq!(fragment["density"], 2400.0);
+    }
+
+    // --write splices it in, and what it wrote validates.
+    let written: serde_json::Value = json_out(
+        &engine()
+            .arg("fracture")
+            .arg(&scene)
+            .arg("--entity")
+            .arg("Crate")
+            .arg("--material")
+            .arg("stone")
+            .arg("--pieces")
+            .arg("6")
+            .arg("--threshold")
+            .arg("30")
+            .arg("--write")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(written["written"], true, "{written}");
+    let after = std::fs::read_to_string(&scene).unwrap();
+    assert!(after.contains(r#""material": "stone""#), "{after}");
+    assert!(after.contains(r#""impulse_threshold": 30.0"#), "{after}");
+    let checked = engine()
+        .arg("validate")
+        .arg(&scene)
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "the written scene must validate: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    // A second fracture keeps the threshold: it is a decision about the
+    // object, not about its shards.
+    let again = engine()
+        .arg("fracture")
+        .arg(&scene)
+        .arg("--entity")
+        .arg("Crate")
+        .arg("--seed")
+        .arg("9")
+        .arg("--write")
+        .output()
+        .unwrap();
+    assert!(again.status.success(), "{again:?}");
+    let refractured = std::fs::read_to_string(&scene).unwrap();
+    assert!(
+        refractured.contains(r#""impulse_threshold": 30.0"#),
+        "{refractured}"
+    );
+    // And the material too, without the flag.
+    assert!(refractured.contains(r#""material": "stone""#), "{refractured}");
+}
+
+/// The same seed is the same shards, and a different seed is different ones —
+/// the property that lets a generated scene file be committed at all.
+#[test]
+fn fracture_is_reproducible_from_its_seed() {
+    let scene = scene_file(
+        "fracture-seed",
+        r#"{
+  "name": "pane",
+  "entities": [
+    { "name": "Pane", "components": [
+      { "type": "Transform", "scale": [1.2, 0.04, 1.2] },
+      { "type": "Mesh", "asset": "builtin:cube" },
+      { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5] }
+    ] }
+  ]
+}
+"#,
+    );
+
+    let run = |seed: &str| {
+        json_out(
+            &engine()
+                .arg("fracture")
+                .arg(&scene)
+                .arg("--entity")
+                .arg("Pane")
+                .arg("--material")
+                .arg("glass")
+                .arg("--seed")
+                .arg(seed)
+                .output()
+                .unwrap(),
+        )["component"]
+            .clone()
+    };
+    assert_eq!(run("4"), run("4"), "the same seed is the same break");
+    assert_ne!(run("4"), run("5"), "a different seed is a different break");
 }

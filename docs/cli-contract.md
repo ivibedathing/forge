@@ -110,6 +110,9 @@ engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
                                              # every collider physics holds, and where
 engine fit-colliders <scene.json> [--entity Name] [--shape S] [--write]
                                              # solve a proxy set from vertex weights, as text
+engine fracture <scene.json> --entity Name [--material M] [--pieces N] [--seed S]
+                [--impact x,y,z] [--grain x,y,z] [--threshold T] [--write]
+                                             # break a volume into material-shaped shards, as text
 engine ui-layout <scene.json> [--width W --height H] [--entity Name]... [--steps N] [--input f]
                                              # where the UI landed; --steps for what a script painted
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
@@ -398,6 +401,21 @@ decisions about the character, and only the shapes are what this solves.
 **Generation is a command, never a runtime behaviour** (M39 §8). Nothing at
 load time or step time consults a vertex weight; the file still says everything,
 and a regenerated set that differs from the committed one shows up as a diff.
+
+`engine fracture` prints `scene`, `entity`, the `material` and `seed` it used,
+the `source_half_extents` it read and the `world_half_extents` those become
+under the entity's scale, where the `impact` was taken to be, the `pieces` it
+produced, their total `volume` in m³ with the `smallest` and `largest` of them,
+whether it `written` anything, and the complete `Breakable` component. The
+volumes are the check worth reading: the pieces tile the source box, so their
+sum is the box, and a total that is not says the fracture went wrong in a way
+no picture would show.
+
+The same rule as `fit-colliders`, and M14's design doc named it in advance:
+nothing at load time or break time fractures anything. `--write` splices the
+component in through the editor's own commit path, keeping the entity's
+`impulse_threshold` — that is a decision about the object, not about its
+shards — and `--threshold` sets one for an entity that had no `Breakable` yet.
 
 ## The render digest
 

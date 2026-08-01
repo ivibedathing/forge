@@ -139,9 +139,19 @@
         ],
         "type": "string"
       },
+      "FractureMaterial": {
+        "description": "What a `Breakable` is made of (M43).\n\n`glass` shatters into radial slivers that fly far and fast; `wood` splits\ninto splinters along the grain and tumbles about its long axis; `stone`\nbreaks into chunky blocks that barely scatter, so a granite block comes\napart and its pieces *drop*; `metal` tears into a few large plates that\nmove together and slide.\n\nFour, because four is what the fracture generator has distinct algorithms\nfor and what the runtime has distinct behaviour for. A fifth would need\nboth, and \"generic\" is spelled by leaving the field out.\n\nNOTE: leave these variants undocumented, for [`ParticleBlend`]'s reason —\na doc comment on an enum *variant* makes schemars emit oneOf/const instead\nof a flat `\"enum\": [...]`, which blinds the validation walk's\nclosed-vocabulary check. Measured here: `\"material\": \"wud\"` reported\nnothing at all until these four comments moved up into this one.",
+        "enum": [
+          "glass",
+          "wood",
+          "stone",
+          "metal"
+        ],
+        "type": "string"
+      },
       "Fragment": {
         "additionalProperties": false,
-        "description": "One piece a `Breakable` entity shatters into (M14).\n\n`mesh` follows `Mesh.asset` rules (builtin or relative glTF path).\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model.\n`half_extents` is the fragment's cuboid collider in fragment-local units —\n`scale` scales it, exactly as `Transform.scale` scales a `Collider`.\nCuboid-only fragment colliders are deliberate v1 scope.",
+        "description": "One piece a `Breakable` entity shatters into (M14, shards since M43).\n\nA fragment is **either** a mesh reference or a shard, and exactly one of the\ntwo (`fragment_geometry`):\n\n- `mesh` follows `Mesh.asset` rules (builtin or relative glTF path), and\n  `half_extents` is its cuboid collider in fragment-local units — M14's\n  shape, where shards are boxes to the solver.\n- `points` is a convex point set (M43) that becomes a [`Shard`]: the\n  fragment's collider *is* its geometry, so `half_extents` alongside it is\n  an error rather than a number physics quietly ignores.\n\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model. `scale`\nscales the collider, exactly as `Transform.scale` does.",
         "properties": {
           "density": {
             "default": 1.0,
@@ -151,22 +161,24 @@
             "type": "number"
           },
           "half_extents": {
-            "default": [
-              0.5,
-              0.5,
-              0.5
-            ],
-            "description": "Cuboid collider half-extents. The default matches `builtin:cube`, so\na fragment that is a scaled builtin cube needs no collider authoring.",
+            "description": "Cuboid collider half-extents, for a `mesh` fragment. The default is\n`[0.5, 0.5, 0.5]`, matching `builtin:cube`, so a fragment that is a\nscaled builtin cube needs no collider authoring.\n\nOptional rather than defaulted-in-place since M43: a shard's collider\nis its own hull, so the difference between \"absent\" and \"written at the\ndefault\" is the difference between a valid fragment and a claim about a\ncollider physics never builds.",
             "items": {
               "format": "float",
               "type": "number"
             },
             "maxItems": 3,
             "minItems": 3,
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "mesh": {
-            "type": "string"
+            "description": "The piece's geometry as a mesh reference. Exclusive with `points`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "offset": {
             "default": [
@@ -182,6 +194,24 @@
             "maxItems": 3,
             "minItems": 3,
             "type": "array"
+          },
+          "points": {
+            "description": "The piece's geometry as a convex point set in parent-local metres\n(M43) — what `engine fracture` writes. Exclusive with `mesh`.",
+            "items": {
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "maxItems": 32,
+            "minItems": 4,
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "rotation": {
             "default": [
@@ -213,9 +243,6 @@
             "type": "array"
           }
         },
-        "required": [
-          "mesh"
-        ],
         "type": "object"
       },
       "GrowthStage": {
@@ -1511,6 +1538,17 @@
               "number",
               "null"
             ]
+          },
+          "material": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/FractureMaterial"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What this is made of (M43), which decides how the pieces behave once\nthey are pieces: how hard they scatter away from the impact, how much\nthey tumble, and what their surfaces are like.\n\n**Absent is M14 unchanged** — fragments take the parent's motion and\nnothing else, on `friction: 0.5, restitution: 0.0`. A material is also\nwhat `engine fracture` generates shard geometry for, but the two halves\nare independent: a wooden crate that breaks into authored boxes still\nscatters like wood."
           },
           "type": {
             "const": "Breakable",
@@ -3863,6 +3901,36 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A convex piece of a broken thing (M43), as a point set that **owns its\ngeometry** — so an entity with one carries no `Mesh`, the rule `Water`,\n`Terrain`, `Cloud`, `Road`, `Junction` and `Meadow` already follow.\n\nIt is `Tree`'s exception on materials: the entity's own `Material` is the\nshard's surface, because a shard of a painted crate is painted.\n\nThe drawn solid is the convex hull of `points`, flat-shaded, and a\n`convex_hull` `Collider` on the same entity collides with that same hull —\nthe file carries points rather than faces precisely so the two cannot be\ndifferent shapes.\n\nOrdinary authored data, not a runtime-only artifact: rubble on the ground is\na pile of these. `engine fracture` is what usually writes them.",
+        "properties": {
+          "points": {
+            "description": "The convex point set, in entity-local metres, scaled by\n`Transform.scale` like every other length. At least 4, at most 32, and\nthey must bound a volume (`shard_degenerate`).",
+            "items": {
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "maxItems": 32,
+            "minItems": 4,
+            "type": "array"
+          },
+          "type": {
+            "const": "Shard",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "points"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -3897,7 +3965,8 @@
     "FootPlant",
     "SkinnedCollider",
     "Ragdoll",
-    "Buoyancy"
+    "Buoyancy",
+    "Shard"
   ],
   "scene": {
     "$defs": {
@@ -4698,6 +4767,17 @@
                   "number",
                   "null"
                 ]
+              },
+              "material": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/FractureMaterial"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What this is made of (M43), which decides how the pieces behave once\nthey are pieces: how hard they scatter away from the impact, how much\nthey tumble, and what their surfaces are like.\n\n**Absent is M14 unchanged** — fragments take the parent's motion and\nnothing else, on `friction: 0.5, restitution: 0.0`. A material is also\nwhat `engine fracture` generates shard geometry for, but the two halves\nare independent: a wooden crate that breaks into authored boxes still\nscatters like wood."
               },
               "type": {
                 "const": "Breakable",
@@ -7050,6 +7130,36 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A convex piece of a broken thing (M43), as a point set that **owns its\ngeometry** — so an entity with one carries no `Mesh`, the rule `Water`,\n`Terrain`, `Cloud`, `Road`, `Junction` and `Meadow` already follow.\n\nIt is `Tree`'s exception on materials: the entity's own `Material` is the\nshard's surface, because a shard of a painted crate is painted.\n\nThe drawn solid is the convex hull of `points`, flat-shaded, and a\n`convex_hull` `Collider` on the same entity collides with that same hull —\nthe file carries points rather than faces precisely so the two cannot be\ndifferent shapes.\n\nOrdinary authored data, not a runtime-only artifact: rubble on the ground is\na pile of these. `engine fracture` is what usually writes them.",
+            "properties": {
+              "points": {
+                "description": "The convex point set, in entity-local metres, scaled by\n`Transform.scale` like every other length. At least 4, at most 32, and\nthey must bound a volume (`shard_degenerate`).",
+                "items": {
+                  "items": {
+                    "format": "float",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "maxItems": 32,
+                "minItems": 4,
+                "type": "array"
+              },
+              "type": {
+                "const": "Shard",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "points"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -7357,9 +7467,19 @@
         },
         "type": "object"
       },
+      "FractureMaterial": {
+        "description": "What a `Breakable` is made of (M43).\n\n`glass` shatters into radial slivers that fly far and fast; `wood` splits\ninto splinters along the grain and tumbles about its long axis; `stone`\nbreaks into chunky blocks that barely scatter, so a granite block comes\napart and its pieces *drop*; `metal` tears into a few large plates that\nmove together and slide.\n\nFour, because four is what the fracture generator has distinct algorithms\nfor and what the runtime has distinct behaviour for. A fifth would need\nboth, and \"generic\" is spelled by leaving the field out.\n\nNOTE: leave these variants undocumented, for [`ParticleBlend`]'s reason —\na doc comment on an enum *variant* makes schemars emit oneOf/const instead\nof a flat `\"enum\": [...]`, which blinds the validation walk's\nclosed-vocabulary check. Measured here: `\"material\": \"wud\"` reported\nnothing at all until these four comments moved up into this one.",
+        "enum": [
+          "glass",
+          "wood",
+          "stone",
+          "metal"
+        ],
+        "type": "string"
+      },
       "Fragment": {
         "additionalProperties": false,
-        "description": "One piece a `Breakable` entity shatters into (M14).\n\n`mesh` follows `Mesh.asset` rules (builtin or relative glTF path).\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model.\n`half_extents` is the fragment's cuboid collider in fragment-local units —\n`scale` scales it, exactly as `Transform.scale` scales a `Collider`.\nCuboid-only fragment colliders are deliberate v1 scope.",
+        "description": "One piece a `Breakable` entity shatters into (M14, shards since M43).\n\nA fragment is **either** a mesh reference or a shard, and exactly one of the\ntwo (`fragment_geometry`):\n\n- `mesh` follows `Mesh.asset` rules (builtin or relative glTF path), and\n  `half_extents` is its cuboid collider in fragment-local units — M14's\n  shape, where shards are boxes to the solver.\n- `points` is a convex point set (M43) that becomes a [`Shard`]: the\n  fragment's collider *is* its geometry, so `half_extents` alongside it is\n  an error rather than a number physics quietly ignores.\n\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model. `scale`\nscales the collider, exactly as `Transform.scale` does.",
         "properties": {
           "density": {
             "default": 1.0,
@@ -7369,22 +7489,24 @@
             "type": "number"
           },
           "half_extents": {
-            "default": [
-              0.5,
-              0.5,
-              0.5
-            ],
-            "description": "Cuboid collider half-extents. The default matches `builtin:cube`, so\na fragment that is a scaled builtin cube needs no collider authoring.",
+            "description": "Cuboid collider half-extents, for a `mesh` fragment. The default is\n`[0.5, 0.5, 0.5]`, matching `builtin:cube`, so a fragment that is a\nscaled builtin cube needs no collider authoring.\n\nOptional rather than defaulted-in-place since M43: a shard's collider\nis its own hull, so the difference between \"absent\" and \"written at the\ndefault\" is the difference between a valid fragment and a claim about a\ncollider physics never builds.",
             "items": {
               "format": "float",
               "type": "number"
             },
             "maxItems": 3,
             "minItems": 3,
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "mesh": {
-            "type": "string"
+            "description": "The piece's geometry as a mesh reference. Exclusive with `points`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "offset": {
             "default": [
@@ -7400,6 +7522,24 @@
             "maxItems": 3,
             "minItems": 3,
             "type": "array"
+          },
+          "points": {
+            "description": "The piece's geometry as a convex point set in parent-local metres\n(M43) — what `engine fracture` writes. Exclusive with `mesh`.",
+            "items": {
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "maxItems": 32,
+            "minItems": 4,
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "rotation": {
             "default": [
@@ -7431,9 +7571,6 @@
             "type": "array"
           }
         },
-        "required": [
-          "mesh"
-        ],
         "type": "object"
       },
       "GrowthStage": {

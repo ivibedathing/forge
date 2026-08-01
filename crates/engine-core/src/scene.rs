@@ -995,6 +995,40 @@ impl Scene {
                 });
             }
         }
+        // Shards carry their geometry too (M43), and for the same reason a
+        // tree rides this list rather than getting its own: a shard is an
+        // ordinary opaque lit surface that happens to compute its own vertices.
+        // Shadows, fog, point lights, picking and the editor's selection all
+        // come free, and no second copy of any of them exists.
+        for (entity, shard) in self
+            .world
+            .query::<(Entity, &crate::components::Shard)>()
+            .iter()
+        {
+            let name = self
+                .world
+                .get::<&Name>(entity)
+                .map(|n| n.0.clone())
+                .unwrap_or_default();
+            let material = self
+                .world
+                .get::<&crate::components::Material>(entity)
+                .map(|m| (*m).clone())
+                .unwrap_or_default();
+            let textures = crate::texture::MaterialTextures::resolve(&material, assets)
+                .map_err(|e| e.entity(name.clone()))?;
+
+            items.push(RenderItem {
+                entity: name,
+                mesh: crate::shard::mesh_for(shard),
+                model: self.transform_of(entity).matrix(),
+                material,
+                textures,
+                terrain: None,
+                joints: Vec::new(),
+            });
+        }
+
         items.extend(self.terrain_items());
 
         Ok(items)

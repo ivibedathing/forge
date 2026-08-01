@@ -18,8 +18,8 @@ use std::sync::Mutex;
 
 use engine_core::components::{
     BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent, Name,
-    Ragdoll as RagdollData, RigidBody as RigidBodyData, SkinnedCollider, Terrain as TerrainData,
-    Transform, Wheel as WheelData,
+    Ragdoll as RagdollData, RigidBody as RigidBodyData, Shard as ShardData, SkinnedCollider,
+    Terrain as TerrainData, Transform, Wheel as WheelData,
 };
 use engine_core::mesh::{MeshSource, PhysicsAssets};
 use engine_core::components::ComponentData;
@@ -110,17 +110,45 @@ pub struct Explosion {
 pub struct PendingBreak {
     pub entity: Entity,
     pub kick: Option<Explosion>,
+    /// Where the break came from and how hard it was (M43), for the scatter a
+    /// `Breakable.material` throws its fragments with.
+    ///
+    /// `None` for `world.break_entity`: a scripted break has no geometry to
+    /// scatter from, and inventing one would put energy into the scene that
+    /// nothing in the file accounts for.
+    pub impact: Option<Impact>,
 }
+
+/// Where a break was struck and how far past its threshold the hit was (M43).
+#[derive(Debug, Clone, Copy)]
+pub struct Impact {
+    /// World-space: the contact point for a collision, the blast centre for an
+    /// explosion.
+    pub point: Vec3,
+    /// The hit's impulse over the threshold that let it through, so a hit at
+    /// exactly the threshold is 1. Clamped by the producer — a truck at 40 m/s
+    /// should not fire the debris into orbit.
+    pub severity: f32,
+}
+
+/// The hardest a hit is allowed to count as, however hard it actually was.
+/// Past roughly this the scatter stops reading as a break and starts reading
+/// as an explosion, which is a different component.
+const MAX_SEVERITY: f32 = 4.0;
 
 /// Collects rapier collision events; drained after each step.
 #[derive(Default)]
 struct EventSink {
     collisions: Mutex<Vec<CollisionEvent>>,
-    /// `(pair, contact impulse)` for pairs that opted into force events —
-    /// breakable colliders only (M12). rapier reports force; multiplying by
-    /// `dt` here makes the number an impulse, which survives a
+    /// `(pair, contact impulse, where it landed)` for pairs that opted into
+    /// force events — breakable colliders only (M12). rapier reports force;
+    /// multiplying by `dt` here makes the number an impulse, which survives a
     /// `timestep_hz` change.
-    impulses: Mutex<Vec<(ColliderHandle, ColliderHandle, f32)>>,
+    ///
+    /// The contact point rides along for M43's scatter. Nothing the solver
+    /// does reads it, so collecting it cannot move a body: a scene with no
+    /// `Breakable.material` simulates exactly as it did before.
+    impulses: Mutex<Vec<(ColliderHandle, ColliderHandle, f32, Vec3)>>,
 }
 
 impl EventHandler for EventSink {
@@ -140,15 +168,36 @@ impl EventHandler for EventSink {
         &self,
         dt: Real,
         _bodies: &RigidBodySet,
-        _colliders: &ColliderSet,
+        colliders: &ColliderSet,
         contact_pair: &ContactPair,
         total_force_magnitude: Real,
     ) {
+        // The deepest contact of the pair, in world space: `local_p1` is on
+        // the first collider, so its own transform is what places it. A pair
+        // with no manifold point (a speculative contact whose force still
+        // reported) falls back to the first collider's centre — a break needs
+        // *a* point, and the centre is the least wrong one available.
+        let point = contact_pair
+            .find_deepest_contact()
+            .and_then(|(_, contact)| {
+                colliders
+                    .get(contact_pair.collider1)
+                    .map(|collider| collider.position() * contact.local_p1)
+            })
+            .map(|p| Vec3::new(p.x, p.y, p.z))
+            .or_else(|| {
+                colliders
+                    .get(contact_pair.collider1)
+                    .map(|c| c.translation())
+            })
+            .unwrap_or(Vec3::ZERO);
+
         if let Ok(mut impulses) = self.impulses.lock() {
             impulses.push((
                 contact_pair.collider1,
                 contact_pair.collider2,
                 total_force_magnitude * dt,
+                point,
             ));
         }
     }
@@ -244,6 +293,10 @@ pub struct Presence<'a> {
     pub break_threshold: Option<f32>,
     /// The entity's own `Mesh.asset`, for a `trimesh`/`convex_hull` collider.
     pub entity_mesh: Option<&'a str>,
+    /// The entity's `Shard` (M43), the other thing a `convex_hull` collider
+    /// with no asset can be built from — and what a broken piece uses, so the
+    /// hull it collides with is the hull it draws.
+    pub shard: Option<&'a ShardData>,
     /// Where that mesh comes from. A caller with only builtin shapes passes
     /// [`engine_core::mesh::BuiltinAssets`].
     pub meshes: &'a dyn MeshSource,
@@ -403,6 +456,18 @@ impl PhysicsWorld {
                             "Road"
                         },
                         mesh: Arc::clone(&item.surface.mesh),
+                    },
+                );
+            }
+            // A shard's hull (M43), through the same `shard::mesh_for` the
+            // renderer draws — so an authored piece of rubble collides with
+            // the shape on screen, not with a box around it.
+            for (name, shard) in world.query::<(&Name, &ShardData)>().iter() {
+                surfaces.insert(
+                    name.0.clone(),
+                    GeneratedSurface {
+                        kind: "Shard",
+                        mesh: engine_core::shard::mesh_for(shard),
                     },
                 );
             }
@@ -805,6 +870,7 @@ impl PhysicsWorld {
             collider,
             break_threshold,
             entity_mesh,
+            shard,
             meshes,
         } = *presence;
         if body.is_none() && collider.is_none() {
@@ -861,13 +927,17 @@ impl PhysicsWorld {
             // is authored once, and is not something a break or a spawn
             // produces — the mesh-shaped case that *is* reachable reads the
             // entity's own `Mesh.asset`, which is why that one is a parameter.
+            let shard_surface = shard.map(|shard| GeneratedSurface {
+                kind: "Shard",
+                mesh: engine_core::shard::mesh_for(shard),
+            });
             let built = build_collider(
                 collider,
                 transform,
                 name,
                 entity_mesh,
                 None,
-                None,
+                shard_surface.as_ref(),
                 meshes,
                 &self.layer_bits,
                 break_threshold.is_some(),
@@ -1052,10 +1122,15 @@ impl PhysicsWorld {
                 if distance >= explosion.radius {
                     continue;
                 }
-                if explosion.impulse * (1.0 - distance / explosion.radius) >= threshold {
+                let delivered = explosion.impulse * (1.0 - distance / explosion.radius);
+                if delivered >= threshold {
                     self.pending_breaks.push(PendingBreak {
                         entity,
                         kick: Some(*explosion),
+                        impact: Some(Impact {
+                            point: explosion.center,
+                            severity: (delivered / threshold).clamp(1.0, MAX_SEVERITY),
+                        }),
                     });
                 }
             }
@@ -1258,22 +1333,37 @@ impl PhysicsWorld {
             Ok(mut impulses) => std::mem::take(&mut *impulses),
             Err(_) => Vec::new(),
         };
-        let mut peak: HashMap<Entity, f32> = HashMap::new();
-        for (h1, h2, impulse) in impulses {
+        //    The peak's own contact point rides with it (M43): the hardest
+        //    contact of the step is the one a break scatters away from.
+        let mut peak: HashMap<Entity, (f32, Vec3)> = HashMap::new();
+        for (h1, h2, impulse, point) in impulses {
             for handle in [h1, h2] {
                 let Some(&entity) = self.entity_of_collider.get(&handle) else {
                     continue;
                 };
                 if self.break_thresholds.contains_key(&entity) {
-                    let slot = peak.entry(entity).or_insert(0.0);
-                    *slot = slot.max(impulse);
+                    let slot = peak.entry(entity).or_insert((0.0, point));
+                    if impulse > slot.0 {
+                        *slot = (impulse, point);
+                    }
                 }
             }
         }
-        for (entity, impulse) in peak {
-            if impulse >= self.break_thresholds[&entity] {
-                self.pending_breaks
-                    .push(PendingBreak { entity, kick: None });
+        // Sorted, because a HashMap's iteration order is not a contract and
+        // this decides the order breaks are queued in.
+        let mut struck: Vec<(Entity, (f32, Vec3))> = peak.into_iter().collect();
+        struck.sort_by_key(|(entity, _)| entity.to_bits());
+        for (entity, (impulse, point)) in struck {
+            let threshold = self.break_thresholds[&entity];
+            if impulse >= threshold {
+                self.pending_breaks.push(PendingBreak {
+                    entity,
+                    kick: None,
+                    impact: Some(Impact {
+                        point,
+                        severity: (impulse / threshold).clamp(1.0, MAX_SEVERITY),
+                    }),
+                });
             }
         }
 

@@ -1141,18 +1141,34 @@ pub struct HudInteract {
     pub disabled: bool,
 }
 
-/// One piece a `Breakable` entity shatters into (M14).
+/// One piece a `Breakable` entity shatters into (M14, shards since M43).
 ///
-/// `mesh` follows `Mesh.asset` rules (builtin or relative glTF path).
+/// A fragment is **either** a mesh reference or a shard, and exactly one of the
+/// two (`fragment_geometry`):
+///
+/// - `mesh` follows `Mesh.asset` rules (builtin or relative glTF path), and
+///   `half_extents` is its cuboid collider in fragment-local units — M14's
+///   shape, where shards are boxes to the solver.
+/// - `points` is a convex point set (M43) that becomes a [`Shard`]: the
+///   fragment's collider *is* its geometry, so `half_extents` alongside it is
+///   an error rather than a number physics quietly ignores.
+///
 /// `offset`/`rotation`/`scale` place the fragment relative to the parent
-/// entity, so the assembled fragments overlay the unbroken model.
-/// `half_extents` is the fragment's cuboid collider in fragment-local units —
-/// `scale` scales it, exactly as `Transform.scale` scales a `Collider`.
-/// Cuboid-only fragment colliders are deliberate v1 scope.
+/// entity, so the assembled fragments overlay the unbroken model. `scale`
+/// scales the collider, exactly as `Transform.scale` does.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Fragment {
-    pub mesh: String,
+    /// The piece's geometry as a mesh reference. Exclusive with `points`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<String>,
+
+    /// The piece's geometry as a convex point set in parent-local metres
+    /// (M43) — what `engine fracture` writes. Exclusive with `mesh`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 4, max = 32))]
+    #[schemars(with = "Option<Vec<[f32; 3]>>")]
+    pub points: Option<Vec<Vec3>>,
 
     /// Position relative to the parent entity's origin, in parent-local
     /// units (the parent's `Transform.scale` applies).
@@ -1170,11 +1186,17 @@ pub struct Fragment {
     #[schemars(with = "[f32; 3]")]
     pub scale: Vec3,
 
-    /// Cuboid collider half-extents. The default matches `builtin:cube`, so
-    /// a fragment that is a scaled builtin cube needs no collider authoring.
-    #[serde(default = "half_cube")]
-    #[schemars(with = "[f32; 3]")]
-    pub half_extents: Vec3,
+    /// Cuboid collider half-extents, for a `mesh` fragment. The default is
+    /// `[0.5, 0.5, 0.5]`, matching `builtin:cube`, so a fragment that is a
+    /// scaled builtin cube needs no collider authoring.
+    ///
+    /// Optional rather than defaulted-in-place since M43: a shard's collider
+    /// is its own hull, so the difference between "absent" and "written at the
+    /// default" is the difference between a valid fragment and a claim about a
+    /// collider physics never builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<[f32; 3]>")]
+    pub half_extents: Option<Vec3>,
 
     /// Fragment mass comes from `density` x collider volume. `> 0`.
     #[serde(default = "one")]
@@ -1186,9 +1208,9 @@ fn ones() -> Vec3 {
     Vec3::ONE
 }
 
-fn half_cube() -> Vec3 {
-    Vec3::splat(0.5)
-}
+/// A `Fragment.half_extents` left unwritten: the unit cube's, so a fragment
+/// that is a scaled `builtin:cube` needs no collider authoring.
+pub const HALF_CUBE: Vec3 = Vec3::splat(0.5);
 
 /// Breaks into pre-authored fragments (M14) — on a hard enough collision,
 /// inside an explosion, or when a script calls `world.break_entity`.
@@ -1212,6 +1234,153 @@ pub struct Breakable {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub impulse_threshold: Option<f32>,
+
+    /// What this is made of (M43), which decides how the pieces behave once
+    /// they are pieces: how hard they scatter away from the impact, how much
+    /// they tumble, and what their surfaces are like.
+    ///
+    /// **Absent is M14 unchanged** — fragments take the parent's motion and
+    /// nothing else, on `friction: 0.5, restitution: 0.0`. A material is also
+    /// what `engine fracture` generates shard geometry for, but the two halves
+    /// are independent: a wooden crate that breaks into authored boxes still
+    /// scatters like wood.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<FractureMaterial>,
+}
+
+/// What a `Breakable` is made of (M43).
+///
+/// `glass` shatters into radial slivers that fly far and fast; `wood` splits
+/// into splinters along the grain and tumbles about its long axis; `stone`
+/// breaks into chunky blocks that barely scatter, so a granite block comes
+/// apart and its pieces *drop*; `metal` tears into a few large plates that
+/// move together and slide.
+///
+/// Four, because four is what the fracture generator has distinct algorithms
+/// for and what the runtime has distinct behaviour for. A fifth would need
+/// both, and "generic" is spelled by leaving the field out.
+///
+/// NOTE: leave these variants undocumented, for [`ParticleBlend`]'s reason —
+/// a doc comment on an enum *variant* makes schemars emit oneOf/const instead
+/// of a flat `"enum": [...]`, which blinds the validation walk's
+/// closed-vocabulary check. Measured here: `"material": "wud"` reported
+/// nothing at all until these four comments moved up into this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FractureMaterial {
+    Glass,
+    Wood,
+    Stone,
+    Metal,
+}
+
+/// How one material's pieces behave once they are pieces (M43).
+///
+/// Plain data hanging off the enum rather than a `match` at every use, so the
+/// four materials are legible side by side — and so adding a fifth is one row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FractureBehaviour {
+    /// Metres per second a fragment is thrown away from the impact, at a hit
+    /// exactly on the threshold. A harder hit scales this up.
+    pub burst_speed: f32,
+    /// Degrees per second of tumble per metre per second of scatter.
+    pub spin: f32,
+    /// Fragment collider friction — M14 spawned every fragment at 0.5.
+    pub friction: f32,
+    /// Fragment collider restitution — M14 spawned every fragment at 0.0.
+    pub restitution: f32,
+    /// Density in kg/m³ the generator writes into the fragments it emits.
+    /// Nothing reads it at runtime: a fragment's mass is the `density` in the
+    /// file, so a hand-edited one can disagree.
+    pub density: f32,
+}
+
+impl FractureMaterial {
+    /// This material's behaviour. The numbers are the milestone's model, and
+    /// the ratios between them are what a render reads as "that is glass":
+    /// glass throws its slivers roughly six times as far as stone drops its
+    /// chunks, and metal barely parts at all.
+    pub fn behaviour(self) -> FractureBehaviour {
+        match self {
+            Self::Glass => FractureBehaviour {
+                burst_speed: 3.0,
+                spin: 220.0,
+                friction: 0.2,
+                restitution: 0.1,
+                density: 2500.0,
+            },
+            Self::Wood => FractureBehaviour {
+                burst_speed: 1.6,
+                spin: 160.0,
+                friction: 0.6,
+                restitution: 0.05,
+                density: 700.0,
+            },
+            Self::Stone => FractureBehaviour {
+                burst_speed: 0.5,
+                spin: 60.0,
+                friction: 0.8,
+                restitution: 0.0,
+                density: 2400.0,
+            },
+            Self::Metal => FractureBehaviour {
+                burst_speed: 0.8,
+                spin: 40.0,
+                friction: 0.4,
+                restitution: 0.02,
+                density: 7800.0,
+            },
+        }
+    }
+
+    /// The `"material"` value that names this one, for reports and errors.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Glass => "glass",
+            Self::Wood => "wood",
+            Self::Stone => "stone",
+            Self::Metal => "metal",
+        }
+    }
+
+    /// Every material's name, for `did_you_mean` and the CLI's `--material`.
+    pub const NAMES: &'static [&'static str] = &["glass", "wood", "stone", "metal"];
+
+    /// Parse a `--material` flag or a scene string.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "glass" => Some(Self::Glass),
+            "wood" => Some(Self::Wood),
+            "stone" => Some(Self::Stone),
+            "metal" => Some(Self::Metal),
+            _ => None,
+        }
+    }
+}
+
+/// A convex piece of a broken thing (M43), as a point set that **owns its
+/// geometry** — so an entity with one carries no `Mesh`, the rule `Water`,
+/// `Terrain`, `Cloud`, `Road`, `Junction` and `Meadow` already follow.
+///
+/// It is `Tree`'s exception on materials: the entity's own `Material` is the
+/// shard's surface, because a shard of a painted crate is painted.
+///
+/// The drawn solid is the convex hull of `points`, flat-shaded, and a
+/// `convex_hull` `Collider` on the same entity collides with that same hull —
+/// the file carries points rather than faces precisely so the two cannot be
+/// different shapes.
+///
+/// Ordinary authored data, not a runtime-only artifact: rubble on the ground is
+/// a pile of these. `engine fracture` is what usually writes them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Shard {
+    /// The convex point set, in entity-local metres, scaled by
+    /// `Transform.scale` like every other length. At least 4, at most 32, and
+    /// they must bound a volume (`shard_degenerate`).
+    #[schemars(length(min = 4, max = 32))]
+    #[schemars(with = "Vec<[f32; 3]>")]
+    pub points: Vec<Vec3>,
 }
 
 /// Gameplay logic as data (M10): a Rhai script run once per fixed step.
@@ -3898,6 +4067,7 @@ components!(
     SkinnedCollider,
     Ragdoll,
     Buoyancy,
+    Shard,
 );
 
 #[cfg(test)]
@@ -4003,7 +4173,8 @@ mod tests {
                 "FootPlant",
                 "SkinnedCollider",
                 "Ragdoll",
-                "Buoyancy"
+                "Buoyancy",
+                "Shard"
             ]
         );
     }

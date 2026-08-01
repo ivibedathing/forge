@@ -1102,46 +1102,143 @@ pub(super) fn check_component(
 
         // Fragment mesh references resolve like `Mesh.asset` (existence,
         // extension, relative path); fragment collider dimensions are
-        // strictly positive like a Collider's.
+        // strictly positive like a Collider's. Since M43 a fragment may be a
+        // shard instead, and then its points are what has to be well formed.
         ComponentData::Breakable(ref breakable) => {
             let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+            // The authored keys per fragment, for the same reason M26's
+            // material exclusivity reads them: `half_extents` has a default, so
+            // the parsed fragment cannot say whether one was written.
+            let authored = object.get("fragments").and_then(|f| f.as_array());
+
             for (i, fragment) in breakable.fragments.iter().enumerate() {
                 let fragment_path = format!("{component_path}/fragments/{i}");
-                if let Err(resolve) = MeshAsset::resolve(&fragment.mesh, base_dir) {
-                    let mut error = cx
-                        .err(
-                            resolve.error,
-                            resolve.message.clone(),
-                            &format!("{fragment_path}/mesh"),
+                let wrote = |key: &str| {
+                    authored
+                        .and_then(|list| list.get(i))
+                        .and_then(|f| f.as_object())
+                        .is_some_and(|f| f.contains_key(key))
+                };
+
+                match (&fragment.mesh, &fragment.points) {
+                    (Some(mesh), None) => {
+                        if let Err(resolve) = MeshAsset::resolve(mesh, base_dir) {
+                            let mut error = cx
+                                .err(
+                                    resolve.error,
+                                    resolve.message.clone(),
+                                    &format!("{fragment_path}/mesh"),
+                                )
+                                .entity(entity)
+                                .component("Breakable")
+                                .field("mesh");
+                            if let Some(suggestion) =
+                                resolve.context().and_then(|c| c.did_you_mean.clone())
+                            {
+                                error = error.did_you_mean(suggestion);
+                            }
+                            errors.push(error);
+                        }
+                        let authored_extents = fragment
+                            .half_extents
+                            .unwrap_or(crate::components::HALF_CUBE)
+                            .to_array();
+                        // `!(v > 0.0)` rather than `v <= 0.0`, so NaN fails too.
+                        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                        for (axis, v) in authored_extents.into_iter().enumerate() {
+                            if !(v > 0.0) {
+                                errors.push(
+                                    cx.err(
+                                        codes::INVALID_SHAPE_DIMENSION,
+                                        format!(
+                                            "Breakable.fragments[{i}].half_extents[{axis}] is \
+                                             {v}; it must be greater than 0"
+                                        ),
+                                        &format!("{fragment_path}/half_extents/{axis}"),
+                                    )
+                                    .entity(entity)
+                                    .component("Breakable")
+                                    .field("half_extents"),
+                                );
+                            }
+                        }
+                    }
+                    (None, Some(points)) => {
+                        if crate::shard::hull(points).is_none() {
+                            errors.push(
+                                degenerate_shard(
+                                    cx,
+                                    entity,
+                                    "Breakable",
+                                    &format!("Breakable.fragments[{i}]"),
+                                    points.len(),
+                                    &format!("{fragment_path}/points"),
+                                ),
+                            );
+                        }
+                        // A half-extent beside points is a claim about the
+                        // collider that the hull is going to contradict.
+                        if wrote("half_extents") {
+                            errors.push(
+                                cx.err(
+                                    codes::FRAGMENT_GEOMETRY,
+                                    format!(
+                                        "Breakable.fragments[{i}] is a shard and also sets \
+                                         half_extents; a shard's collider is its own hull, so \
+                                         the half-extents would describe a shape physics never \
+                                         builds"
+                                    ),
+                                    &format!("{fragment_path}/half_extents"),
+                                )
+                                .entity(entity)
+                                .component("Breakable")
+                                .field("half_extents"),
+                            );
+                        }
+                    }
+                    (Some(_), Some(_)) => errors.push(
+                        cx.err(
+                            codes::FRAGMENT_GEOMETRY,
+                            format!(
+                                "Breakable.fragments[{i}] sets both mesh and points; a fragment \
+                                 is a mesh reference or a shard, never both"
+                            ),
+                            &fragment_path,
                         )
                         .entity(entity)
                         .component("Breakable")
-                        .field("mesh");
-                    if let Some(suggestion) = resolve.context().and_then(|c| c.did_you_mean.clone())
-                    {
-                        error = error.did_you_mean(suggestion);
-                    }
-                    errors.push(error);
+                        .field("points"),
+                    ),
+                    (None, None) => errors.push(
+                        cx.err(
+                            codes::FRAGMENT_GEOMETRY,
+                            format!(
+                                "Breakable.fragments[{i}] has no geometry; give it a mesh \
+                                 reference or a shard's points (engine fracture generates them)"
+                            ),
+                            &fragment_path,
+                        )
+                        .entity(entity)
+                        .component("Breakable")
+                        .field("mesh"),
+                    ),
                 }
-                // `!(v > 0.0)` rather than `v <= 0.0`, so NaN fails too.
-                #[allow(clippy::neg_cmp_op_on_partial_ord)]
-                for (axis, v) in fragment.half_extents.to_array().into_iter().enumerate() {
-                    if !(v > 0.0) {
-                        errors.push(
-                            cx.err(
-                                codes::INVALID_SHAPE_DIMENSION,
-                                format!(
-                                    "Breakable.fragments[{i}].half_extents[{axis}] is {v}; \
-                                     it must be greater than 0"
-                                ),
-                                &format!("{fragment_path}/half_extents/{axis}"),
-                            )
-                            .entity(entity)
-                            .component("Breakable")
-                            .field("half_extents"),
-                        );
-                    }
-                }
+            }
+        }
+
+        // A shard owns its geometry, and its points have to bound a volume —
+        // a degenerate one draws nothing and collides with nothing, which is
+        // the hardest failure there is to read off a picture (M43).
+        ComponentData::Shard(ref shard) => {
+            if crate::shard::hull(&shard.points).is_none() {
+                errors.push(degenerate_shard(
+                    cx,
+                    entity,
+                    "Shard",
+                    "This Shard",
+                    shard.points.len(),
+                    &format!("{component_path}/points"),
+                ));
             }
         }
 
@@ -1266,4 +1363,38 @@ pub(super) fn check_component(
     }
 
     checked
+}
+
+/// The `shard_degenerate` error, shared by the two places points can appear:
+/// a `Shard` component and a `Breakable` fragment (M43).
+///
+/// One message rather than two, because the diagnosis is the same in both
+/// places and the fix is the same: the points have to bound a volume.
+fn degenerate_shard(
+    cx: &Cx,
+    entity: &str,
+    component: &str,
+    subject: &str,
+    count: usize,
+    json_path: &str,
+) -> EngineError {
+    let why = if count < 4 {
+        format!("only {count} points, and it takes 4 to bound a volume")
+    } else {
+        format!(
+            "{count} points that do not bound a volume — they are coplanar, \\
+             collinear or coincident"
+        )
+    };
+    cx.err(
+        codes::SHARD_DEGENERATE,
+        format!(
+            "{subject} has {why}. A shard draws as its convex hull, so a flat one \\
+             draws nothing and collides with nothing."
+        ),
+        json_path,
+    )
+    .entity(entity)
+    .component(component)
+    .field("points")
 }
