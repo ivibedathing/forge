@@ -132,6 +132,13 @@ build fails.
 | `buoyancy_water_not_found` | 1 | a Buoyancy's "water" names no entity in the scene |
 | `buoyancy_water_invalid` | 1 | a Buoyancy's "water" must name an entity that has a Water component |
 | `buoyancy_without_body` | 1 | a Buoyancy needs a dynamic RigidBody and a Collider on the same entity |
+| `light_probe_volume_with_mesh` | 1 | a LightProbeVolume entity is a region of space, not geometry; it may not also have a Mesh or a Material |
+| `light_probe_volume_without_transform` | 1 | a LightProbeVolume takes its bounds from its Transform, so it needs one |
+| `gi_bake_missing` | 1 | a LightProbeVolume's "bake" names a file that is not there; run `engine bake-gi` |
+| `gi_bake_stale` | 1 | a GI bake was taken from a different scene than the one loading it; re-run `engine bake-gi` |
+| `gi_bake_malformed` | 1 | a GI bake file parses but its version, grid or basis disagrees with the component |
+| `too_many_gi_probes` | 1 | a LightProbeVolume's bounds and spacing would place more probes than the engine will bake |
+| `multiple_gi_volumes` | 1 | a scene has more than one LightProbeVolume, and the renderer draws only the finest one |
 | `hud_parent_not_found` | 1 | a HUD element's "parent" names no entity in the scene |
 | `hud_parent_not_panel` | 1 | a HUD element's "parent" must name an entity that has a HudPanel |
 | `hud_parent_cycle` | 1 | a chain of HUD "parent" references loops back on itself |

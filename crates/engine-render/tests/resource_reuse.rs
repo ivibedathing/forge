@@ -91,6 +91,7 @@ fn draw_frames(gpu: &Gpu, renderer: &mut SceneRenderer, items: &[RenderItem], fr
                 time: 0.0,
                 clear: scene_renderer::DEFAULT_CLEAR,
                 hud: None,
+                gi: None,
             },
         );
         gpu.device

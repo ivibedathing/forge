@@ -156,7 +156,8 @@ pub fn mesh_from_points(points: &[Vec3]) -> Option<MeshData> {
         // A fan off the first vertex. Faces are convex by construction, so the
         // fan is valid however many points the face has.
         for corner in 1..(face.points.len() as u32 - 1) {
-            mesh.indices.extend_from_slice(&[base, base + corner, base + corner + 1]);
+            mesh.indices
+                .extend_from_slice(&[base, base + corner, base + corner + 1]);
         }
     }
 
@@ -258,9 +259,17 @@ fn wound(points: Vec<Vec3>, normal: Vec3) -> Vec<Vec3> {
 fn basis(normal: Vec3) -> (Vec3, Vec3) {
     // Cross with whichever cardinal axis the normal is least aligned to, so the
     // cross product never approaches zero.
-    let seed = if normal.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let seed = if normal.x.abs() < 0.9 {
+        Vec3::X
+    } else {
+        Vec3::Y
+    };
     let u_axis = seed.cross(normal).normalize_or_zero();
-    let u_axis = if u_axis == Vec3::ZERO { Vec3::X } else { u_axis };
+    let u_axis = if u_axis == Vec3::ZERO {
+        Vec3::X
+    } else {
+        u_axis
+    };
     (u_axis, normal.cross(u_axis))
 }
 
@@ -376,7 +385,8 @@ mod tests {
         // Every triangle winds counter-clockwise seen from outside, which is
         // the whole reason a wrongly wound shard would render as nothing.
         for triangle in mesh.indices.chunks_exact(3) {
-            let [a, b, c] = [0, 1, 2].map(|i| Vec3::from_array(mesh.positions[triangle[i] as usize]));
+            let [a, b, c] =
+                [0, 1, 2].map(|i| Vec3::from_array(mesh.positions[triangle[i] as usize]));
             let facing = (b - a).cross(c - a);
             let outward = centroid(&[a, b, c]);
             assert!(
@@ -396,7 +406,9 @@ mod tests {
         // Same set of planes, whatever order they were found in.
         for face in &straight {
             assert!(
-                reversed.iter().any(|other| other.normal.distance(face.normal) < 1e-5),
+                reversed
+                    .iter()
+                    .any(|other| other.normal.distance(face.normal) < 1e-5),
                 "face {:?} is missing from the reversed hull",
                 face.normal
             );

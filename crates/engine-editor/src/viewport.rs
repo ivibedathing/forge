@@ -130,6 +130,12 @@ impl ViewportRenderer {
                 // the editor leaves the overlay off. `engine screenshot` is
                 // where the HUD is verified.
                 hud: None,
+                // No GI in the viewport (M35). The editor's job is to show
+                // where things *are*, and a bake is a build artifact that may
+                // be missing or stale on a file being edited — which is a
+                // `validate` finding, not something the viewport should imply
+                // by drawing it. `engine screenshot` is where GI is seen.
+                gi: None,
             },
         );
         target.id

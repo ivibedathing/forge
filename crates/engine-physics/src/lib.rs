@@ -16,13 +16,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use engine_core::components::ComponentData;
 use engine_core::components::{
     BodyKind, Breakable, Collider as ColliderData, ColliderShapeKind, Mesh as MeshComponent, Name,
     Ragdoll as RagdollData, RigidBody as RigidBodyData, Shard as ShardData, SkinnedCollider,
     Terrain as TerrainData, Transform, Wheel as WheelData,
 };
 use engine_core::mesh::{MeshSource, PhysicsAssets};
-use engine_core::components::ComponentData;
 use engine_core::scene::PhysicsSettings;
 use engine_core::skeleton::Rig;
 use engine_core::{codes, EngineError, Result};
@@ -2202,7 +2202,8 @@ mod tests {
     fn simulate(source: &str, steps: u32) -> (Scene, PhysicsWorld, Vec<ContactEvent>) {
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         let mut all_events = Vec::new();
         for _ in 0..steps {
             all_events.extend(physics.step(&mut scene.world, 0.0));
@@ -2260,7 +2261,9 @@ mod tests {
         let apex = |source: &str| -> f32 {
             let mut scene = Scene::from_source(source, "t.json").unwrap();
             let settings = PhysicsSettings::default();
-            let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
+            let mut physics =
+                PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates)
+                    .unwrap();
             let mut bounced = false;
             let mut apex: f32 = 0.0;
             let mut previous_y = 5.0f32;
@@ -2307,7 +2310,8 @@ mod tests {
         ]}"#;
         let mut scene = Scene::from_source(source, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
 
         // Move the transform externally; the body must follow, not fight.
         let entity = scene.entity("Mover").unwrap();
@@ -2393,7 +2397,8 @@ mod tests {
         }"#;
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         let entity = scene.entity("Car").unwrap();
 
         // Settle, then "throttle": write a forward velocity like a script.
@@ -2531,7 +2536,8 @@ mod tests {
     fn engine_force_drives_the_chassis_forward() {
         let mut scene = Scene::from_source(CAR, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
 
         // Settle onto the springs first, then floor it.
         for _ in 0..120 {
@@ -2582,7 +2588,8 @@ mod tests {
         );
         let mut scene = Scene::from_source(&source, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world, 0.0);
         }
@@ -2617,7 +2624,8 @@ mod tests {
     fn brakes_stop_a_rolling_vehicle() {
         let mut scene = Scene::from_source(CAR, "t.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world, 0.0);
         }
@@ -2681,7 +2689,8 @@ mod tests {
         }"#;
         let mut scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let mut physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
+        let mut physics =
+            PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
         for _ in 0..120 {
             physics.step(&mut scene.world, 0.0);
         }
@@ -2901,7 +2910,8 @@ mod tests {
     fn stick_world(source: &str) -> (Scene, PhysicsWorld) {
         let scene = Scene::from_source(source, "test.json").unwrap();
         let settings = PhysicsSettings::default();
-        let physics = PhysicsWorld::build(&scene.world, &settings, &StickAssets, &scene.templates).unwrap();
+        let physics =
+            PhysicsWorld::build(&scene.world, &settings, &StickAssets, &scene.templates).unwrap();
         (scene, physics)
     }
 
@@ -3031,7 +3041,9 @@ mod tests {
         let (_, physics) = {
             let scene = Scene::from_source(DROP, "test.json").unwrap();
             let settings = PhysicsSettings::default();
-            let physics = PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates).unwrap();
+            let physics =
+                PhysicsWorld::build(&scene.world, &settings, &BuiltinAssets, &scene.templates)
+                    .unwrap();
             (scene, physics)
         };
         assert!(physics.proxy_placements().is_empty());

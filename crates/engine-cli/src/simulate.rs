@@ -346,7 +346,10 @@ pub fn insert_spawned(
     name: &str,
     assets: &engine_assets::AssetServer,
 ) -> Result<()> {
-    let transform = world.get::<&Transform>(entity).map(|t| *t).unwrap_or_default();
+    let transform = world
+        .get::<&Transform>(entity)
+        .map(|t| *t)
+        .unwrap_or_default();
     let body = world.get::<&RigidBody>(entity).map(|b| *b).ok();
     let collider = world
         .get::<&engine_core::components::Collider>(entity)

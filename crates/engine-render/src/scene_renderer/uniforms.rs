@@ -111,6 +111,25 @@ pub(crate) struct FrameUniform {
     /// buffer it is bound to, which is why the other five shaders that spell
     /// this struct out did not have to change.
     pub(crate) view_proj: [[f32; 4]; 4],
+    /// The bound probe volume's placement (M35). xyz = the world position of
+    /// probe `[0, 0, 0]`, w = metres between probes.
+    ///
+    /// Appended after `view_proj` under the rule that has held since M17: a
+    /// uniform struct grows only at its end, so every field above keeps the
+    /// offset the shaders already read it from. Only the GI variants declare
+    /// these three, and a shader may declare a prefix of the buffer it is bound
+    /// to.
+    pub(crate) gi_origin: [f32; 4],
+    /// xyz = probes along each axis, w = `LightProbeVolume.intensity`.
+    pub(crate) gi_grid: [f32; 4],
+    /// x = `blend` in metres, y = 1.0 when a field is actually bound; z and w
+    /// unused.
+    ///
+    /// `y` exists because the GI *pipelines* are compiled for the whole frame
+    /// while a field may still be absent — a scene whose volume failed to load,
+    /// or the frame before one is uploaded. Zero there sends every fragment to
+    /// the fallback, which is the pre-M35 expression.
+    pub(crate) gi_params: [f32; 4],
 }
 
 /// World → each cascade's light clip (M38), innermost first.

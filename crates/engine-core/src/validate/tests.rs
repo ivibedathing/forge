@@ -2443,7 +2443,10 @@ fn a_limit_is_optional_but_never_zero() {
     assert!(codes_of(&with(r#","limit":1"#)).is_empty());
     assert_eq!(codes_of(&with(r#","limit":0"#)), ["value_out_of_range"]);
     assert_eq!(codes_of(&with(r#","limit":-3"#)), ["invalid_field_type"]);
-    assert_eq!(codes_of(&with(r#","limit":"lots""#)), ["invalid_field_type"]);
+    assert_eq!(
+        codes_of(&with(r#","limit":"lots""#)),
+        ["invalid_field_type"]
+    );
 }
 
 /// Templates and entities share one name space, because a script addresses
@@ -2529,7 +2532,11 @@ fn a_templates_references_resolve_against_the_scene() {
             {"type":"Meadow","terrain":"Ground"}
         ]}
     ]}"#;
-    assert!(codes_of(good).is_empty(), "{:?}", validate_source(good, "t"));
+    assert!(
+        codes_of(good).is_empty(),
+        "{:?}",
+        validate_source(good, "t")
+    );
 
     // The same reference to another *template* does not resolve: a spawned
     // meadow cannot stand on terrain that does not exist yet.
@@ -2553,8 +2560,14 @@ fn a_templates_references_resolve_against_the_scene() {
 fn a_broken_template_reports_as_a_template() {
     let cases = [
         (r#""templates":[42]"#, "template_not_object"),
-        (r#""templates":[{"components":[]}]"#, "missing_template_name"),
-        (r#""templates":[{"name":"","components":[]}]"#, "empty_template_name"),
+        (
+            r#""templates":[{"components":[]}]"#,
+            "missing_template_name",
+        ),
+        (
+            r#""templates":[{"name":"","components":[]}]"#,
+            "empty_template_name",
+        ),
         (r#""templates":[{"name":"B","limt":2}]"#, "unknown_field"),
     ];
     for (block, code) in cases {
@@ -2587,4 +2600,57 @@ fn template_layers_count_against_the_scene_budget() {
         names.join(",")
     );
     assert_eq!(codes_of(&source), ["too_many_collision_layers"]);
+}
+
+// ── Global illumination (M35) ─────────────────────────────────
+
+/// One volume reaches the GPU, so a scene with two says so at `validate`.
+///
+/// A *warning*, because the scene is not wrong — `bake-gi` bakes both and
+/// `gi-probe` answers from either. What it prevents is invisible: an author who
+/// adds an interior volume and sees no change in the landscape around it has no
+/// way to tell that from a bad bake.
+#[test]
+fn a_second_probe_volume_warns_and_names_the_one_that_draws() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Landscape", "components": [
+            { "type": "Transform", "scale": [100.0, 20.0, 100.0] },
+            { "type": "LightProbeVolume", "spacing": 8.0, "bake": "gi/a.gi.json" } ] },
+        { "name": "Interior", "components": [
+            { "type": "Transform", "scale": [8.0, 4.0, 8.0] },
+            { "type": "LightProbeVolume", "spacing": 1.0, "bake": "gi/b.gi.json" } ] }
+      ]
+    }"#;
+    let errors: Vec<_> = validate_source(source, "test.json")
+        .into_iter()
+        .filter(|e| e.error == codes::MULTIPLE_GI_VOLUMES)
+        .collect();
+
+    // Exactly one warning, on the volume that does *not* draw — the finest one
+    // is doing its job and has nothing to report.
+    assert_eq!(errors.len(), 1, "one warning per volume that is not drawn");
+    assert!(errors[0].is_warning());
+    let context = errors[0].context().expect("the warning carries context");
+    assert_eq!(context.entity.as_deref(), Some("Landscape"));
+    assert!(
+        errors[0].message.contains("\"Interior\""),
+        "the message must name the volume that wins: {}",
+        errors[0].message
+    );
+}
+
+/// And one volume is silent, which is the case nearly every scene is in.
+#[test]
+fn a_single_probe_volume_is_not_warned_about() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Lighting", "components": [
+            { "type": "Transform", "scale": [8.0, 4.0, 8.0] },
+            { "type": "LightProbeVolume", "spacing": 1.0, "bake": "gi/a.gi.json" } ] }
+      ]
+    }"#;
+    assert!(!codes_of(source).contains(&codes::MULTIPLE_GI_VOLUMES));
 }

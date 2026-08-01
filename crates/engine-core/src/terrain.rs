@@ -770,7 +770,10 @@ mod tests {
                 floor_vertices += 1;
             }
         }
-        assert!(floor_vertices > 10, "the floor is not resolved: {floor_vertices}");
+        assert!(
+            floor_vertices > 10,
+            "the floor is not resolved: {floor_vertices}"
+        );
     }
 
     #[test]

@@ -53,6 +53,10 @@ pub(super) struct SceneFacts<'a> {
     pub(super) collider_names: std::collections::BTreeSet<String>,
     pub(super) hud_elements: Vec<HudRef>,
     pub(super) hud_panel_names: std::collections::BTreeSet<String>,
+    /// Every `LightProbeVolume`, with its `spacing` and the path that declared
+    /// it (M35). Collected rather than counted because the multi-volume warning
+    /// has to name which one the renderer will actually draw.
+    pub(super) probe_volumes: Vec<(String, f32, String)>,
 }
 
 /// Which list is being walked (M37).
@@ -154,6 +158,7 @@ pub(super) fn walk<'a>(
     let mut directional_lights: Vec<(String, String)> = Vec::new();
     let mut ambient_lights: Vec<(String, String)> = Vec::new();
     let mut point_lights: Vec<(String, String)> = Vec::new();
+    let mut probe_volumes: Vec<(String, f32, String)> = Vec::new();
     // Collision layers (M12): membership names declared anywhere, every
     // `collides_with` reference (for the unknown-layer warning), and each
     // distinct name with the path that introduced it (for the 32-bit budget).
@@ -367,6 +372,7 @@ pub(super) fn walk<'a>(
         let mut road: Option<(crate::components::Road, String)> = None;
         let mut junction: Option<(crate::components::Junction, String)> = None;
         let mut meadow: Option<(crate::components::Meadow, String)> = None;
+        let mut light_probe_volume: Option<(crate::components::LightProbeVolume, String)> = None;
         // Whether this entity carries anything a `HudInteract` could use as
         // its hit box (M31).
         let mut has_hud_element = false;
@@ -511,6 +517,10 @@ pub(super) fn walk<'a>(
                 Some(ComponentData::Meadow(m)) => {
                     meadows.push((name.to_string(), m.clone(), component_path.clone()));
                     meadow = Some((m, component_path));
+                }
+                Some(ComponentData::LightProbeVolume(v)) => {
+                    probe_volumes.push((name.to_string(), v.spacing, component_path.clone()));
+                    light_probe_volume = Some((v, component_path));
                 }
                 Some(ComponentData::FootPlant(p)) => {
                     foot_plant = Some(component_path.clone());
@@ -1314,7 +1324,11 @@ pub(super) fn walk<'a>(
                                 "entity {name:?} basin {index} has {why}, so it cuts \
                                  nothing and the ground there is the plain noise"
                             ),
-                            &path(if basin.depth == 0.0 { "depth" } else { "radius" }),
+                            &path(if basin.depth == 0.0 {
+                                "depth"
+                            } else {
+                                "radius"
+                            }),
                         )
                         .entity(name)
                         .component("Terrain")
@@ -1421,6 +1435,128 @@ pub(super) fn walk<'a>(
             }
         }
 
+        // ── LightProbeVolume checks (M35) ────────────────────────────────
+        if let Some((volume, path)) = &light_probe_volume {
+            // The recipe rule, for a component that grows no geometry at all:
+            // this entity is a *region of space*, and a Mesh beside it is a
+            // second, silently ignored answer to what the entity is. Stated
+            // separately from the other recipes because the reason differs —
+            // the others own geometry, this one owns none.
+            if has_mesh || !material_paths.is_empty() {
+                let extras = match (has_mesh, material_paths.is_empty()) {
+                    (true, false) => "a Mesh and a Material",
+                    (true, true) => "a Mesh",
+                    _ => "a Material",
+                };
+                errors.push(
+                    cx.err(
+                        codes::LIGHT_PROBE_VOLUME_WITH_MESH,
+                        format!(
+                            "entity {name:?} has a LightProbeVolume and also {extras}; \
+                             a probe volume is a region of space that lights other \
+                             surfaces and draws nothing itself — drop the extra component"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("LightProbeVolume"),
+                );
+            }
+
+            // The Transform *is* the bounds — there is no other source for
+            // them, so without one the volume covers nothing and every probe
+            // would land on top of every other.
+            if !has_transform {
+                errors.push(
+                    cx.err(
+                        codes::LIGHT_PROBE_VOLUME_WITHOUT_TRANSFORM,
+                        format!(
+                            "entity {name:?} has a LightProbeVolume but no Transform; \
+                             the Transform is the volume's bounds — a unit box scaled \
+                             and positioned"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("LightProbeVolume"),
+                );
+            }
+
+            // A bake taken before the volume was resized or re-tuned describes
+            // a grid that no longer exists, so the renderer would index it with
+            // coordinates it was never baked for. Cheap to catch: the header
+            // records the grid, the spacing and the bounces it was taken with,
+            // and all three are derivable from the component in front of us.
+            //
+            // This is the *component* half of staleness. The geometry half —
+            // "somebody moved a wall after baking" — is what `inputs_hash`
+            // exists for, and it is not checked here: reproducing that digest
+            // means collecting every occluder in the scene, which for the tour
+            // is around a million triangles, and `validate` is the ~0.02s gate
+            // the whole agent loop leans on. See the note for the open question.
+            let base_dir = std::path::Path::new(cx.file)
+                .parent()
+                .unwrap_or(std::path::Path::new(""));
+            let bake_file = base_dir.join(&volume.bake);
+            if let Ok(text) = std::fs::read_to_string(&bake_file) {
+                if let Ok(baked) = crate::gi::BakedGi::parse(&text) {
+                    if !baked.matches(volume, scale) {
+                        let want = crate::gi::grid_counts(scale, volume.spacing);
+                        errors.push(
+                            cx.err(
+                                codes::GI_BAKE_STALE,
+                                format!(
+                                    "entity {name:?} needs a {}×{}×{} grid at spacing {} \
+                                     with {} bounce(s), but {:?} was baked as {}×{}×{} at \
+                                     spacing {} with {}; re-run `engine bake-gi`",
+                                    want[0],
+                                    want[1],
+                                    want[2],
+                                    volume.spacing,
+                                    volume.bounces,
+                                    volume.bake,
+                                    baked.header.grid[0],
+                                    baked.header.grid[1],
+                                    baked.header.grid[2],
+                                    baked.header.spacing,
+                                    baked.header.bounces,
+                                ),
+                                path,
+                            )
+                            .entity(name)
+                            .component("LightProbeVolume")
+                            .field("bake"),
+                        );
+                    }
+                }
+            }
+
+            // Refused before anything is allocated — `tree_too_complex`'s rule.
+            // A hung bake that produces no output is the worst failure an agent
+            // loop can hit, and the arithmetic predicting the count is exact.
+            let probes = crate::gi::probe_count_for(volume, scale);
+            if probes > crate::gi::MAX_GI_PROBES {
+                let grid = crate::gi::grid_counts(scale, volume.spacing);
+                errors.push(
+                    cx.err(
+                        codes::TOO_MANY_GI_PROBES,
+                        format!(
+                            "entity {name:?} would place a {}×{}×{} grid ({probes} probes) \
+                             over the limit of {}; raise spacing or shrink the volume",
+                            grid[0],
+                            grid[1],
+                            grid[2],
+                            crate::gi::MAX_GI_PROBES
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("LightProbeVolume")
+                    .field("spacing"),
+                );
+            }
+        }
+
         // ── HudInteract needs something to hit (M31) ──────────────────
         //
         // A `HudInteract` carries no geometry: the hit box *is* the laid-out
@@ -1510,6 +1646,7 @@ pub(super) fn walk<'a>(
         collider_names,
         hud_elements,
         hud_panel_names,
+        probe_volumes,
     }
 }
 

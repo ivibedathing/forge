@@ -6955,7 +6955,10 @@ fn simulate_reports_traces_and_bakes_what_a_run_spawned() {
     // The trace records both halves as events, so a run is greppable.
     let lines = std::fs::read_to_string(&trace).unwrap();
     assert!(lines.contains(r#""spawned":"Shot#1""#), "no spawn event");
-    assert!(lines.contains(r#""despawned":"Shot#1""#), "no despawn event");
+    assert!(
+        lines.contains(r#""despawned":"Shot#1""#),
+        "no despawn event"
+    );
 
     // And the names are never reused: `Shot#1` is spawned once in the whole
     // run, however many times its slot is freed.
@@ -7112,7 +7115,10 @@ fn fracture_generates_a_breakable_and_only_writes_when_asked() {
         "{refractured}"
     );
     // And the material too, without the flag.
-    assert!(refractured.contains(r#""material": "stone""#), "{refractured}");
+    assert!(
+        refractured.contains(r#""material": "stone""#),
+        "{refractured}"
+    );
 }
 
 /// The same seed is the same shards, and a different seed is different ones —
@@ -7152,4 +7158,151 @@ fn fracture_is_reproducible_from_its_seed() {
     };
     assert_eq!(run("4"), run("4"), "the same seed is the same break");
     assert_ne!(run("4"), run("5"), "a different seed is a different break");
+}
+
+// ── Global illumination (M35) ─────────────────────────────────────────────
+
+fn gi_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m35_gi.json")
+}
+
+/// One `gi-probe` invocation, parsed.
+fn gi_probe(at: &str, normal: &str) -> serde_json::Value {
+    let output = engine()
+        .arg("gi-probe")
+        .arg(gi_scene())
+        .arg("--at")
+        .arg(at)
+        .arg("--normal")
+        .arg(normal)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    serde_json::from_str(stdout_of(&output).trim()).unwrap()
+}
+
+fn vec3_of(value: &serde_json::Value) -> [f64; 3] {
+    let a = value.as_array().expect("three numbers");
+    [
+        a[0].as_f64().unwrap(),
+        a[1].as_f64().unwrap(),
+        a[2].as_f64().unwrap(),
+    ]
+}
+
+#[test]
+fn the_gi_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(gi_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The fixture is bit-reproducible on this adapter — no terrain, no ground
+/// cover, `samples: 1` — so it carries a hard pin rather than a tolerance.
+/// Measured before blessing: five renders, one image (M22's rule).
+#[test]
+fn m35_gi_diff_renders() {
+    pin_baseline(
+        "examples/scenes/verify/m35_gi.json",
+        "examples/scenes/verify/baselines/m35_gi.png",
+        &[],
+    );
+}
+
+/// A surface facing the red wall gathers redder light than the same surface
+/// facing the green one — the assertion a picture cannot make.
+///
+/// The two probes are mirror images: same height, same distance from their
+/// wall, same distance down the room, and clear of the overhang so the only
+/// asymmetry left in the scene is which wall each one faces. Anything that
+/// broke GI in a way that survived would have to break it *antisymmetrically*.
+#[test]
+fn gi_carries_the_colour_of_the_wall_a_surface_faces() {
+    // Facing +X from beside the red wall is facing the green one, and vice
+    // versa: a normal gathers the hemisphere in front of it.
+    let toward_green = gi_probe("-2.6,0.7,2.0", "1,0,0");
+    let toward_red = gi_probe("2.6,0.7,2.0", "-1,0,0");
+
+    let g = vec3_of(&toward_green["irradiance"]);
+    let r = vec3_of(&toward_red["irradiance"]);
+
+    assert!(
+        r[0] - r[1] > 0.01,
+        "facing the red wall must gather more red than green: {r:?}"
+    );
+    assert!(
+        g[1] - g[0] > 0.01,
+        "facing the green wall must gather more green than red: {g:?}"
+    );
+
+    // And the fallback is neutral, so the whole difference is GI's doing. This
+    // is the `intensity: 0.0` comparison design §11 asked for, in one
+    // invocation: `gi-probe` reports the pre-M35 value beside the GI one.
+    for probe in [&toward_green, &toward_red] {
+        let fallback = vec3_of(&probe["fallback"]);
+        assert!(
+            (fallback[0] - fallback[1]).abs() < 1.0e-6,
+            "the pre-M35 fill is neutral here, so any tint is GI: {fallback:?}"
+        );
+    }
+}
+
+/// The sheltered sphere gathers measurably less than the open one.
+///
+/// The two spheres share a mesh, a material, a scale and a light, so anything
+/// that made both wrong would leave them identical — M30's and M32's fixture
+/// logic. Only real occlusion separates them.
+#[test]
+fn the_sheltered_sphere_gathers_less_than_the_open_one() {
+    let sheltered = gi_probe("-1.5,1.4,-1.4", "0,1,0");
+    let open = gi_probe("1.5,1.4,-1.4", "0,1,0");
+
+    let magnitude = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    let under = magnitude(vec3_of(&sheltered["irradiance"]));
+    let outside = magnitude(vec3_of(&open["irradiance"]));
+
+    assert!(
+        under < outside * 0.5,
+        "an overhang must at least halve what reaches the sphere under it: \
+         {under} vs {outside}"
+    );
+    assert!(
+        sheltered["openness"].as_f64().unwrap() < open["openness"].as_f64().unwrap(),
+        "openness must fall under the overhang too, or the scalar the shader \
+         reads is not measuring what it says"
+    );
+}
+
+/// Re-baking the fixture reproduces the committed file **byte for byte**.
+///
+/// §5.2's promise, and the reason the sampling sequence is written out in-repo
+/// rather than taken from a dependency: a bake sits under a render baseline, so
+/// a bake that drifted would move a committed pixel for a reason nobody could
+/// find. This is also what makes a stale bake detectable at all.
+#[test]
+fn re_baking_the_fixture_reproduces_the_committed_file() {
+    let committed = repo_path("examples/scenes/verify/gi/m35_gi.gi.json");
+    let before = std::fs::read(&committed).expect("the fixture's bake is committed");
+
+    let temp = std::env::temp_dir().join("m35_rebake.gi.json");
+    let output = engine()
+        .arg("bake-gi")
+        .arg(gi_scene())
+        .arg("--out")
+        .arg(&temp)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+
+    let again = std::fs::read(&temp).expect("bake-gi wrote its output");
+    let _ = std::fs::remove_file(&temp);
+    assert!(
+        before == again,
+        "a re-bake must be byte-identical to the committed file; it is not, so \
+         either the sampling sequence or the quantization moved"
+    );
 }

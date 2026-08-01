@@ -72,14 +72,32 @@ pub(crate) mod anchor {
                                 \x20   let emissive = object.emissive_roughness.rgb;\n";
     pub const NORMAL: &str = "    let n = normalize(in.normal);\n";
     pub const ROUGHNESS: &str = "    let roughness = max(object.emissive_roughness.w, 0.045);\n";
-    /// One of M16's four untouchable lines. A variant may replace it —
-    /// the plain pipeline still compiles the file as it sits on disk — and
-    /// occlusion is the only thing that has ever needed to.
+    /// One of M16's four untouchable lines.
+    ///
+    /// Like [`VERTEX_STAGE`], and since M35 for the same reason, this is not
+    /// *replaced* by a producer but **reassembled** from their
+    /// [`FillContribution`](super::FillContribution)s: texturing multiplies it
+    /// by an occlusion map and GI replaces the constant sky term with a probe
+    /// lookup, and a textured surface inside a probe volume is precisely the
+    /// case that has to compose. `with_surface` applies substitutions by
+    /// sequential `str::replace`, so two producers claiming one anchor is not a
+    /// merge — it is a silent no-op for whichever runs second, which renders the
+    /// feature as if it were absent. The assembly with no contributions is
+    /// asserted to be this string, byte for byte.
     pub const AMBIENT: &str = "    let ambient = albedo * frame.ambient.rgb;\n";
-    /// Its counterpart inside the sky branch.
+    /// Its counterpart inside the sky branch, reassembled under the same rule.
     pub const FILL: &str = "            fill = albedo * hemisphere;\n";
-    /// The frame uniform's tail, where the refraction variant appends the
-    /// view-projection it needs to project an exit point.
+    /// The frame uniform's tail, replaced wholesale by
+    /// [`EXTENDED_FRAME_TAIL`](super::EXTENDED_FRAME_TAIL).
+    ///
+    /// Unconditional since M35, and for [`EXTENDED_UNIFORM_TAIL`]'s reason
+    /// rather than a tidiness one: this was a *substitution* while refraction
+    /// was the only producer that appended a field, and GI needs three more.
+    /// Two producers appending to one positional struct would make the field
+    /// order a function of the producer list — so a variant that happened to
+    /// list them the other way would read `gi_origin` where `view_proj` is and
+    /// render a plausible wrong picture. One tail, declared by every spliced
+    /// variant, removes the error class instead of documenting it.
     pub const FRAME_TAIL: &str = "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
     /// Where the fragment's running colour and alpha are declared.
     pub const VARS: &str = "    var color = base_color;\n    var out_alpha = 1.0;\n";
@@ -136,6 +154,28 @@ pub(crate) const EXTENDED_UNIFORM_TAIL: &str =
     \x20   map_volume: vec4<f32>,\n\
     };\n";
 
+/// The extended frame uniform every spliced variant declares.
+///
+/// [`EXTENDED_UNIFORM_TAIL`]'s twin for group 1, and it exists for the same
+/// reason: uniform field offsets are positional. `mesh.wgsl` on disk stops at
+/// `point_lights` and every field beyond it is invisible to the plain pipeline,
+/// which is legal — a shader may declare a prefix of the buffer it is bound to.
+/// What is *not* safe is letting each producer append its own fields, because
+/// then the offsets depend on the order the producers were listed in.
+pub(crate) const EXTENDED_FRAME_TAIL: &str =
+    "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n\
+    \x20   // World → clip (M26): the refraction variant projects an exit point\n\
+    \x20   // with it.\n\
+    \x20   view_proj: mat4x4<f32>,\n\
+    \x20   // The bound probe volume (M35). xyz = the world position of probe\n\
+    \x20   // [0,0,0], w = metres between probes.\n\
+    \x20   gi_origin: vec4<f32>,\n\
+    \x20   // xyz = probes per axis, w = intensity.\n\
+    \x20   gi_grid: vec4<f32>,\n\
+    \x20   // x = edge blend in metres, y = 1 when a field is bound.\n\
+    \x20   gi_params: vec4<f32>,\n\
+    };\n";
+
 /// Assemble a variant of the mesh shader: the shared lighting body, with one
 /// producer spliced in at the surface-resolution seam.
 ///
@@ -148,9 +188,12 @@ pub(crate) fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, 
     let substitutions = || producers.iter().flat_map(|p| p.substitutions.iter());
     for (anchor, _) in substitutions().chain([
         &(anchor::UNIFORM_TAIL, EXTENDED_UNIFORM_TAIL),
-        // Not in any producer's substitution list — it is reassembled rather
-        // than replaced — but just as load-bearing, so it is asserted here.
+        &(anchor::FRAME_TAIL, EXTENDED_FRAME_TAIL),
+        // Not in any producer's substitution list — they are reassembled rather
+        // than replaced — but just as load-bearing, so they are asserted here.
         &(anchor::VERTEX_STAGE, ""),
+        &(anchor::AMBIENT, ""),
+        &(anchor::FILL, ""),
     ]) {
         assert_eq!(
             source.matches(anchor).count(),
@@ -161,6 +204,7 @@ pub(crate) fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, 
     }
 
     out = out.replace(anchor::UNIFORM_TAIL, EXTENDED_UNIFORM_TAIL);
+    out = out.replace(anchor::FRAME_TAIL, EXTENDED_FRAME_TAIL);
     let preludes: String = producers
         .iter()
         .map(|p| p.prelude)
@@ -174,6 +218,9 @@ pub(crate) fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, 
         anchor::VERTEX_STAGE,
         &vertex_stage(producers.iter().filter_map(|p| p.vertex.as_ref())),
     );
+    let (ambient, fill) = fill_lines(producers.iter().filter_map(|p| p.fill.as_ref()));
+    out = out.replace(anchor::AMBIENT, &ambient);
+    out = out.replace(anchor::FILL, &fill);
     for (anchor, replacement) in substitutions() {
         out = out.replace(anchor, replacement);
     }
@@ -193,7 +240,79 @@ pub(crate) struct Producer {
     /// What this producer adds to the vertex stage, if anything. Terrain and
     /// refraction add nothing: they resolve a surface per pixel.
     pub(crate) vertex: Option<VertexContribution>,
+    /// How this producer changes the fill light, if at all (M35). Reassembled
+    /// rather than substituted — see [`anchor::AMBIENT`].
+    pub(crate) fill: Option<FillContribution>,
     pub(crate) substitutions: Vec<(&'static str, &'static str)>,
+}
+
+/// One producer's change to the ambient and sky-fill terms.
+///
+/// Two kinds, because the two compose differently. An `occlusion` multiplier is
+/// a *scale* on whatever the fill turned out to be, and any number of producers
+/// may contribute one — they multiply. An `irradiance` expression *replaces*
+/// where the fill comes from, and at most one producer may contribute it, for
+/// [`VertexContribution::position`]'s reason: a second would silently win or
+/// lose on iteration order.
+///
+/// An all-empty set assembles to [`anchor::AMBIENT`] and [`anchor::FILL`]
+/// verbatim, which is what keeps the plain pipeline compiling `mesh.wgsl` as it
+/// sits on disk — and what keeps M16's untouchable lines reaching the compiler
+/// surrounded by the code they shipped in.
+#[derive(Default)]
+pub(crate) struct FillContribution {
+    /// A factor the ambient terms are multiplied by — an occlusion map, say.
+    /// Written as the WGSL that follows a `*`, e.g. `"sampled.occlusion"`.
+    ///
+    /// Multiplies the *ambient* terms and **never** the direct sun: that is the
+    /// whole difference between ambient occlusion and a second shadow map.
+    pub(crate) occlusion: Option<&'static str>,
+    /// The expression the ambient term reads instead of `frame.ambient.rgb`.
+    /// At most one producer may set it.
+    pub(crate) ambient_source: Option<&'static str>,
+    /// The expression the sky branch reads instead of `hemisphere`, under the
+    /// same rule.
+    pub(crate) hemisphere_source: Option<&'static str>,
+}
+
+/// Assemble the two fill lines from their contributions, in producer order.
+///
+/// Returns `(ambient, fill)` — the replacements for [`anchor::AMBIENT`] and
+/// [`anchor::FILL`]. With no contributions each is its anchor byte for byte,
+/// which `producers_compose_without_a_hand_written_fill` pins.
+pub(crate) fn fill_lines<'a>(
+    contributions: impl Iterator<Item = &'a FillContribution> + Clone,
+) -> (String, String) {
+    // A second producer deciding where the fill comes from would silently win
+    // or lose depending on iteration order; neither is a thing to discover from
+    // a render. `vertex_stage`'s rule, for its reason.
+    let one = |what: &str, field: fn(&FillContribution) -> Option<&'static str>| {
+        let mut found = contributions.clone().filter_map(field);
+        let first = found.next();
+        assert!(
+            found.next().is_none(),
+            "two producers both claim to compute the {what}; the fill can only \
+             come from one place"
+        );
+        first
+    };
+
+    // Multipliers concatenate in producer order, so the arithmetic a variant
+    // compiles is a function of the producer list and nothing else.
+    let multipliers: String = contributions
+        .clone()
+        .filter_map(|c| c.occlusion)
+        .map(|m| format!(" * {m}"))
+        .collect();
+
+    let ambient_source = one("ambient source", |c| c.ambient_source).unwrap_or("frame.ambient.rgb");
+    let hemisphere_source =
+        one("hemisphere source", |c| c.hemisphere_source).unwrap_or("hemisphere");
+
+    (
+        format!("    let ambient = albedo * {ambient_source}{multipliers};\n"),
+        format!("            fill = albedo * {hemisphere_source}{multipliers};\n"),
+    )
 }
 
 /// One producer's addition to the vertex stage.
@@ -282,6 +401,10 @@ pub(crate) fn terrain_producer() -> Producer {
         // plain stage already interpolates, so it adds nothing to the vertex
         // stage.
         vertex: None,
+        // Terrain shades itself per pixel but takes the fill light every
+        // other opaque surface takes — it is an ordinary lit surface that
+        // happens to compute its own albedo.
+        fill: None,
         substitutions: vec![
             (
                 anchor::PROLOGUE,
@@ -322,6 +445,16 @@ pub(crate) fn texture_producer() -> Producer {
             tail: "    out.uv = uv * object.map_uv.xy + object.map_uv.zw;\n",
             ..VertexContribution::default()
         }),
+        // Occlusion multiplies the ambient terms and **never** the direct sun:
+        // that is the whole difference between ambient occlusion and a second
+        // shadow map. A multiplier rather than a replacement, so it composes
+        // with GI deciding where the fill comes from — before M35 this was a
+        // whole-line substitution, and a second claimant would have silently
+        // erased it.
+        fill: Some(FillContribution {
+            occlusion: Some("sampled.occlusion"),
+            ..FillContribution::default()
+        }),
         substitutions: vec![
             (
                 anchor::PROLOGUE,
@@ -348,17 +481,6 @@ pub(crate) fn texture_producer() -> Producer {
                 anchor::ROUGHNESS,
                 "    let roughness = max(object.emissive_roughness.w * sampled.roughness, 0.045);\n",
             ),
-            // Occlusion multiplies the ambient terms and **never** the direct
-            // sun: that is the whole difference between ambient occlusion and a
-            // second shadow map.
-            (
-                anchor::AMBIENT,
-                "    let ambient = albedo * frame.ambient.rgb * sampled.occlusion;\n",
-            ),
-            (
-                anchor::FILL,
-                "            fill = albedo * hemisphere * sampled.occlusion;\n",
-            ),
         ],
     }
 }
@@ -376,16 +498,15 @@ pub(crate) fn refraction_producer() -> Producer {
         // Refraction is entirely a fragment-stage decision: it bends a view
         // ray, it does not move a vertex.
         vertex: None,
+        // Refraction bends what is seen *through* a surface; it does not
+        // change what lights the surface itself.
+        fill: None,
         substitutions: vec![
-            (
-                anchor::FRAME_TAIL,
-                "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n\
-                 \x20   // World → clip (M26): the refraction variant projects an\n\
-                 \x20   // exit point with it. Appended at the end, so every field\n\
-                 \x20   // above keeps the offset the other shaders read it from.\n\
-                 \x20   view_proj: mat4x4<f32>,\n\
-                 };\n",
-            ),
+            // `view_proj` is no longer appended here: since M35 the frame tail
+            // is one unconditional extension (`EXTENDED_FRAME_TAIL`), because a
+            // second producer with its own fields would have made the offsets a
+            // function of the producer order. This variant reads the field; it
+            // no longer declares it.
             (
                 anchor::VARS,
                 "    var color = base_color;\n\
@@ -436,6 +557,38 @@ pub(crate) fn refraction_producer() -> Producer {
     }
 }
 
+/// The global illumination producer (M35), and the first to contribute nothing
+/// but a [`FillContribution`].
+///
+/// It replaces no line and adds no vertex work. Both of the lines it changes are
+/// *reassembled* around it, which is what lets a textured surface inside a probe
+/// volume take its occlusion map and its baked irradiance at once — the case
+/// that made whole-line replacement untenable and the reason `AMBIENT` and
+/// `FILL` stopped being substitutions.
+///
+/// `gi_fill` takes the pre-M35 expression as its `fallback` argument, so a
+/// fragment outside every volume, or one in a scene whose `intensity` is `0.0`,
+/// evaluates to exactly what it evaluated to before this producer existed. Not
+/// approximately: the early return is on the *expression*, not on a lerp
+/// weight.
+pub(crate) fn gi_producer() -> Producer {
+    Producer {
+        prelude: include_str!("../shaders/gi.wgsl"),
+        // GI is a lookup at a point, resolved per pixel. Nothing moves.
+        vertex: None,
+        fill: Some(FillContribution {
+            // No occlusion multiplier: GI does not *scale* the fill, it decides
+            // where the fill comes from. A surface with a baked ambient
+            // occlusion map still multiplies its own map on top, which is why
+            // the two kinds of contribution are kept apart.
+            occlusion: None,
+            ambient_source: Some("gi_fill(in.world_position, n, frame.ambient.rgb)"),
+            hemisphere_source: Some("gi_fill(in.world_position, n, hemisphere)"),
+        }),
+        substitutions: Vec::new(),
+    }
+}
+
 /// The skinning producer (M27).
 ///
 /// The only producer so far that *moves* a vertex, which is why the vertex
@@ -454,6 +607,9 @@ pub(crate) fn skin_producer() -> Producer {
             normal: Some("skinned.normal"),
             ..VertexContribution::default()
         }),
+        // A skinned surface takes the same fill as any other; the skin moved
+        // the vertex and stopped there.
+        fill: None,
         // Nothing in the fragment stage: a skinned surface is shaded exactly
         // like any other, which is the point of doing this in the vertex
         // stage at all.
@@ -520,23 +676,142 @@ pub(crate) fn skinned_shadow_cutout() -> String {
     )
 }
 
+/// Assemble a variant, with the GI producer appended when the renderer was
+/// built for a scene that has a probe volume.
+///
+/// **Last in the list, always.** Producer order is the compiled arithmetic:
+/// appending GI leaves the multiplier string exactly what it was, so a textured
+/// surface's line grows a new *source* and keeps its `* sampled.occlusion` in
+/// the position it has held since M26. Inserting GI first would reorder a float
+/// product, and this file is ULP-sensitive in four places.
+pub(crate) fn with_gi(mut producers: Vec<Producer>, gi: bool) -> std::borrow::Cow<'static, str> {
+    if gi {
+        producers.push(gi_producer());
+    }
+    with_surface(&producers)
+}
+
+/// The plain mesh shader: `mesh.wgsl` exactly as it sits on disk when the scene
+/// has no probe volume.
+///
+/// The `false` arm is the whole M16 house rule in one expression — a scene that
+/// opted into nothing compiles the untouched file, byte-identical by
+/// construction rather than by measurement. Every baseline in the repo is blessed
+/// through it.
+pub(crate) fn plain_mesh(gi: bool) -> std::borrow::Cow<'static, str> {
+    if gi {
+        with_gi(Vec::new(), true)
+    } else {
+        std::borrow::Cow::Borrowed(include_str!("../shaders/mesh.wgsl"))
+    }
+}
+
 /// The mesh shader with terrain's generative material spliced in (M22).
-pub(crate) fn with_terrain() -> std::borrow::Cow<'static, str> {
-    with_surface(&[terrain_producer()])
+pub(crate) fn with_terrain(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![terrain_producer()], gi)
 }
 
 /// The mesh shader with texture sampling spliced in (M26).
-pub(crate) fn with_textures() -> std::borrow::Cow<'static, str> {
-    with_surface(&[texture_producer()])
+pub(crate) fn with_textures(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![texture_producer()], gi)
 }
 
 /// The blended twins, which also refract.
-pub(crate) fn with_refraction() -> std::borrow::Cow<'static, str> {
-    with_surface(&[refraction_producer()])
+pub(crate) fn with_refraction(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![refraction_producer()], gi)
 }
 
-pub(crate) fn with_textures_and_refraction() -> std::borrow::Cow<'static, str> {
-    with_surface(&[texture_producer(), refraction_producer()])
+pub(crate) fn with_textures_and_refraction(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![texture_producer(), refraction_producer()], gi)
+}
+
+/// The two lines `Road` and `Meadow` decide their fill light on, and the frame
+/// tail they share with `mesh.wgsl` (M35).
+///
+/// Both files duplicate the mesh shader's lighting — the `water.wgsl` /
+/// `clouds.wgsl` precedent, for M16's reason — so neither goes through
+/// [`with_surface`], and each takes its own splice here. What they *do* share is
+/// the frame uniform, byte for byte down to the comment, so one anchor covers
+/// both and [`EXTENDED_FRAME_TAIL`] is the same replacement the mesh variants
+/// get. That is not a coincidence to be tidied away: the three shaders read one
+/// buffer, and the moment their declarations diverge, one of them is reading a
+/// field at the wrong offset.
+pub(crate) mod recipe_anchor {
+    /// The shared frame tail. Identical text in `road.wgsl` and `meadow.wgsl`,
+    /// and identical to [`anchor::FRAME_TAIL`](super::anchor::FRAME_TAIL).
+    pub const FRAME_TAIL: &str = "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
+    /// The no-sky fill, the same line in both files.
+    pub const FILL: &str = "    var fill = albedo * frame.ambient.rgb;\n";
+    /// The sky fill. The two files differ here — a road holds the hemispheric
+    /// term in a `let` because it also reflects it, and a meadow does not — so
+    /// each names its own.
+    pub const ROAD_SKY_FILL: &str = "        fill = albedo * hemisphere;\n";
+    pub const MEADOW_SKY_FILL: &str = "        fill = albedo * sky_ambient(n);\n";
+}
+
+/// Splice GI into a recipe shader that duplicates the mesh lighting.
+///
+/// Three substitutions: the frame tail grows the fields `gi.wgsl` reads, the
+/// prelude goes in behind it (so the struct it references is already declared),
+/// and the two fill lines route through `gi_fill` with their own pre-M35
+/// expression as the fallback. Every anchor is asserted to appear exactly once —
+/// `with_surface`'s discipline, for its reason: a splice that silently did
+/// nothing renders the feature as if it were absent, and a road that quietly
+/// ignored its probe volume while the meshes beside it did not is a difference
+/// nobody would attribute to a splice.
+fn with_recipe_gi(
+    source: &'static str,
+    what: &str,
+    sky_fill: (&'static str, &'static str),
+) -> std::borrow::Cow<'static, str> {
+    let prelude = format!(
+        "{EXTENDED_FRAME_TAIL}\n{}",
+        include_str!("../shaders/gi.wgsl")
+    );
+    let substitutions: [(&str, &str); 3] = [
+        (recipe_anchor::FRAME_TAIL, &prelude),
+        (
+            recipe_anchor::FILL,
+            "    var fill = albedo * gi_fill(in.world_position, n, frame.ambient.rgb);\n",
+        ),
+        sky_fill,
+    ];
+
+    let mut out = source.to_string();
+    for (anchor, replacement) in substitutions {
+        assert_eq!(
+            source.matches(anchor).count(),
+            1,
+            "{what} no longer contains this anchor exactly once, so its GI \
+             pipeline would compile as if the feature were absent:\n{anchor}"
+        );
+        out = out.replace(anchor, replacement);
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// `road.wgsl` with GI spliced in (M35).
+pub(crate) fn with_road_gi() -> std::borrow::Cow<'static, str> {
+    with_recipe_gi(
+        include_str!("../shaders/road.wgsl"),
+        "road.wgsl",
+        (
+            recipe_anchor::ROAD_SKY_FILL,
+            "        fill = albedo * gi_fill(in.world_position, n, hemisphere);\n",
+        ),
+    )
+}
+
+/// `meadow.wgsl` with GI spliced in (M35).
+pub(crate) fn with_meadow_gi() -> std::borrow::Cow<'static, str> {
+    with_recipe_gi(
+        include_str!("../shaders/meadow.wgsl"),
+        "meadow.wgsl",
+        (
+            recipe_anchor::MEADOW_SKY_FILL,
+            "        fill = albedo * gi_fill(in.world_position, n, sky_ambient(n));\n",
+        ),
+    )
 }
 
 /// The anchors `with_water_refraction` splices against — existing lines of
@@ -853,12 +1128,12 @@ mod seam_tests {
     /// which is the failure mode hardest to spot in a render.
     #[test]
     fn every_producer_actually_replaces_what_it_claims() {
-        let terrain = super::with_terrain();
+        let terrain = super::with_terrain(false);
         assert!(terrain.contains("let albedo = generated.albedo;"));
         assert!(terrain.contains("let n = generated.normal;"));
         assert!(terrain.contains("terrain_layers: array<TerrainLayer"));
 
-        let textured = super::with_textures();
+        let textured = super::with_textures(false);
         for expected in [
             "let sampled = sample_maps(in.uv);",
             "sampled.metallic",
@@ -891,7 +1166,7 @@ mod seam_tests {
         // And a producer that adds nothing to the vertex stage leaves it the
         // file's, which is what kept M22's and M26's committed baselines from
         // moving when the assembly replaced whole-stage substitution.
-        for variant in [super::with_terrain(), super::with_refraction()] {
+        for variant in [super::with_terrain(false), super::with_refraction(false)] {
             assert!(
                 variant.contains(super::anchor::VERTEX_STAGE),
                 "a producer with no vertex contribution must leave the stage alone"
@@ -925,6 +1200,203 @@ mod seam_tests {
             !both.contains("object.mvp * vec4<f32>(position, 1.0)"),
             "the unskinned position must not survive alongside the skinned one"
         );
+    }
+
+    /// The empty fill assembly must be M16's two lines byte for byte (M35).
+    ///
+    /// This is the property the whole reassembly rests on: those lines are two
+    /// of the four CLAUDE.md flags as ULP-sensitive, and they have to reach the
+    /// compiler surrounded by the code they shipped in. If this drifts by a
+    /// space, every variant that does *not* use GI starts compiling different
+    /// arithmetic — and the A/B that would catch it runs once a milestone, not
+    /// once a build.
+    #[test]
+    fn the_empty_fill_assembly_is_the_anchor_byte_for_byte() {
+        let (ambient, fill) = super::fill_lines(std::iter::empty());
+        assert_eq!(ambient, super::anchor::AMBIENT);
+        assert_eq!(fill, super::anchor::FILL);
+    }
+
+    /// And with only the texture producer it must be exactly what that producer
+    /// used to substitute, or M26's occlusion silently changes shape.
+    #[test]
+    fn the_texture_only_fill_assembly_matches_the_pre_m35_substitution() {
+        let texture = super::texture_producer();
+        let (ambient, fill) = super::fill_lines(texture.fill.iter());
+        assert_eq!(
+            ambient,
+            "    let ambient = albedo * frame.ambient.rgb * sampled.occlusion;\n"
+        );
+        assert_eq!(
+            fill,
+            "            fill = albedo * hemisphere * sampled.occlusion;\n"
+        );
+    }
+
+    /// Two producers on the fill is the case that forced the assembly, and the
+    /// one `str::replace` could not express: an occlusion map *and* a probe
+    /// lookup have to both survive.
+    #[test]
+    fn an_occluder_and_an_irradiance_source_compose() {
+        let occlusion = super::FillContribution {
+            occlusion: Some("sampled.occlusion"),
+            ..Default::default()
+        };
+        let gi = super::FillContribution {
+            ambient_source: Some("gi_ambient"),
+            hemisphere_source: Some("gi_hemisphere"),
+            ..Default::default()
+        };
+        let (ambient, fill) = super::fill_lines([&occlusion, &gi].into_iter());
+        assert_eq!(
+            ambient,
+            "    let ambient = albedo * gi_ambient * sampled.occlusion;\n"
+        );
+        assert_eq!(
+            fill,
+            "            fill = albedo * gi_hemisphere * sampled.occlusion;\n"
+        );
+    }
+
+    /// Two producers claiming to *be* the fill is the error that must be loud.
+    #[test]
+    #[should_panic(expected = "the fill can only come from one place")]
+    fn two_irradiance_sources_are_refused() {
+        let a = super::FillContribution {
+            ambient_source: Some("one"),
+            ..Default::default()
+        };
+        let b = super::FillContribution {
+            ambient_source: Some("two"),
+            ..Default::default()
+        };
+        super::fill_lines([&a, &b].into_iter());
+    }
+
+    /// The real producer, composed with the real texture producer — the case
+    /// the tour is full of, and the one that decided the seam's shape.
+    #[test]
+    fn a_textured_surface_inside_a_volume_takes_both() {
+        let both = super::with_gi(vec![super::texture_producer()], true);
+
+        // The occlusion map survived a second claimant…
+        assert!(both.contains(
+            "    let ambient = albedo * gi_fill(in.world_position, n, frame.ambient.rgb) \
+             * sampled.occlusion;\n"
+        ));
+        assert!(both.contains(
+            "            fill = albedo * gi_fill(in.world_position, n, hemisphere) \
+             * sampled.occlusion;\n"
+        ));
+        // …the field is declared…
+        assert!(both.contains("@group(2) @binding(6) var gi_sh0: texture_3d<f32>;"));
+        // …and the shared lighting body is still the file's.
+        assert!(both.contains("let base_color = direct + ambient + emissive;"));
+    }
+
+    /// Every spliced variant declares the *whole* frame tail, and the file on
+    /// disk still declares the short one (M35).
+    ///
+    /// The failure this prevents compiles cleanly and renders a plausible wrong
+    /// picture: uniform field offsets are positional, so a variant that declared
+    /// only some of the tail would read `gi_origin` where `view_proj` is. It is
+    /// the same error class as a swapped pair of `Vec<usize>` keys in `FramePlan`
+    /// — no type catches it and no assertion fires.
+    #[test]
+    fn every_spliced_variant_declares_the_whole_frame_tail() {
+        for variant in [
+            super::with_terrain(false),
+            super::with_textures(false),
+            super::with_refraction(false),
+            super::with_textures_and_refraction(true),
+            super::plain_mesh(true),
+        ] {
+            assert!(
+                variant.contains("view_proj: mat4x4<f32>,")
+                    && variant.contains("gi_origin: vec4<f32>,")
+                    && variant.contains("gi_grid: vec4<f32>,")
+                    && variant.contains("gi_params: vec4<f32>,"),
+                "a spliced variant declared only part of the frame uniform's tail"
+            );
+            assert!(
+                !variant.contains(super::anchor::FRAME_TAIL),
+                "the short tail must not survive beside the long one"
+            );
+        }
+        // And the untouched file keeps the short tail, which is what lets the
+        // plain pipeline compile `mesh.wgsl` as it sits on disk.
+        let plain = super::plain_mesh(false);
+        assert!(plain.contains(super::anchor::FRAME_TAIL));
+        assert!(!plain.contains("gi_origin"));
+        assert_eq!(plain, include_str!("../shaders/mesh.wgsl"));
+    }
+
+    /// The two recipe shaders take GI through their own splices, and both must
+    /// actually land (M35).
+    ///
+    /// `Road` and `Meadow` duplicate the mesh shader's lighting, so neither goes
+    /// through `with_surface` and neither is covered by the seam assertions
+    /// there. A splice that silently did nothing would render a road that
+    /// ignores its probe volume while the meshes standing on it do not — a
+    /// difference nobody would attribute to a splice.
+    #[test]
+    fn the_recipe_shaders_receive_gi_through_their_own_splices() {
+        let road = super::with_road_gi();
+        assert!(road.contains(
+            "    var fill = albedo * gi_fill(in.world_position, n, frame.ambient.rgb);\n"
+        ));
+        assert!(
+            road.contains("        fill = albedo * gi_fill(in.world_position, n, hemisphere);\n")
+        );
+
+        let meadow = super::with_meadow_gi();
+        assert!(meadow.contains(
+            "    var fill = albedo * gi_fill(in.world_position, n, frame.ambient.rgb);\n"
+        ));
+        assert!(meadow
+            .contains("        fill = albedo * gi_fill(in.world_position, n, sky_ambient(n));\n"));
+
+        for (what, variant) in [("road", &road), ("meadow", &meadow)] {
+            // The field, the sampler, and the uniform fields that place it.
+            assert!(
+                variant.contains("@group(2) @binding(6) var gi_sh0: texture_3d<f32>;")
+                    && variant.contains("gi_origin: vec4<f32>,")
+                    && variant.contains("gi_params: vec4<f32>,"),
+                "{what} did not receive the GI prelude"
+            );
+            // And `view_proj` with it, unread but declared: these three shaders
+            // read one buffer, and a tail that stopped short would put
+            // `gi_origin` at the offset `view_proj` occupies.
+            assert!(
+                variant.contains("view_proj: mat4x4<f32>,"),
+                "{what} must declare the whole frame tail, not only the fields it reads"
+            );
+        }
+    }
+
+    /// And the files on disk are untouched, which is what lets the non-GI
+    /// pipelines compile them byte-identically to every committed baseline.
+    #[test]
+    fn the_recipe_shaders_on_disk_still_carry_their_anchors() {
+        for (what, source) in [
+            ("road.wgsl", include_str!("../shaders/road.wgsl")),
+            ("meadow.wgsl", include_str!("../shaders/meadow.wgsl")),
+        ] {
+            assert_eq!(
+                source.matches(super::recipe_anchor::FRAME_TAIL).count(),
+                1,
+                "{what} must carry the shared frame tail exactly once"
+            );
+            assert_eq!(
+                source.matches(super::recipe_anchor::FILL).count(),
+                1,
+                "{what} must carry the no-sky fill line exactly once"
+            );
+            assert!(
+                !source.contains("gi_fill"),
+                "{what} on disk must stay the pre-M35 file"
+            );
+        }
     }
 
     /// The joint palette reaches the GPU as three *rows*, and glam matrices are
@@ -1019,6 +1491,36 @@ mod seam_tests {
             // scale theirs by slope.
             let slope = cascaded.contains("let slope = sqrt(max(1.0 - n_dot_l");
             assert_eq!(slope, name != "water", "{name} took the wrong bias");
+        }
+    }
+
+    /// GI and cascades are independent transforms of one source, and a surface
+    /// under a cascaded sun inside a probe volume takes both.
+    ///
+    /// They are the two milestones that both wanted binding 5 in group 2 — M38
+    /// for the cascade matrices, M35 for the first probe plane — which is why
+    /// the field starts at 6. A binding number is not a position in a list, so
+    /// the cascade entry being *conditional* costs GI nothing; this asserts the
+    /// two declarations coexist rather than trusting that reading.
+    #[test]
+    fn a_cascaded_surface_inside_a_volume_takes_both() {
+        for (name, variant) in [
+            ("mesh", super::plain_mesh(true)),
+            ("terrain", super::with_terrain(true)),
+            ("textured", super::with_textures(true)),
+            ("road", super::with_road_gi()),
+            ("meadow", super::with_meadow_gi()),
+        ] {
+            let both = super::with_cascades(&variant, 3);
+            for expected in [
+                "@group(2) @binding(5) var<uniform> cascade: CascadeUniform;",
+                "@group(2) @binding(6) var gi_sh0: texture_3d<f32>;",
+                "@group(2) @binding(10) var gi_sampler: sampler;",
+                "var shadow_map: texture_depth_2d_array;",
+                "fn gi_fill(",
+            ] {
+                assert!(both.contains(expected), "{name} lost {expected:?}");
+            }
         }
     }
 

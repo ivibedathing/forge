@@ -3965,7 +3965,10 @@ mod tests {
         assert!(host.take_despawns().is_empty(), "draining drains");
         // The world still holds it: applying the removal is the caller's job,
         // and it happens after this step's physics.
-        assert!(scene.world.get::<&Transform>(scene.entity("Bullet#1").unwrap()).is_ok());
+        assert!(scene
+            .world
+            .get::<&Transform>(scene.entity("Bullet#1").unwrap())
+            .is_ok());
     }
 
     /// A script whose owner vanished would keep running against names that no

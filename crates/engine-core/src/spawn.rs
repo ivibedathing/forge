@@ -202,12 +202,10 @@ impl SpawnLedger {
 /// respected.
 fn instantiate(world: &mut World, def: &TemplateDef, name: &str, position: Vec3) -> Entity {
     let mut components = def.components.clone();
-    match components
-        .iter_mut()
-        .find_map(|c| match c {
-            ComponentData::Transform(t) => Some(t),
-            _ => None,
-        }) {
+    match components.iter_mut().find_map(|c| match c {
+        ComponentData::Transform(t) => Some(t),
+        _ => None,
+    }) {
         Some(transform) => transform.position = position,
         None => components.push(ComponentData::Transform(Transform {
             position,
@@ -289,7 +287,8 @@ mod tests {
     #[test]
     fn a_template_with_no_transform_still_lands_where_it_was_put() {
         let mut def = template("Spark", 4);
-        def.components.retain(|c| !matches!(c, ComponentData::Transform(_)));
+        def.components
+            .retain(|c| !matches!(c, ComponentData::Transform(_)));
         let mut ledger = SpawnLedger::new(&[def], &World::new());
         let mut world = World::new();
 
@@ -324,7 +323,13 @@ mod tests {
     #[test]
     fn a_resumed_run_counts_past_the_instances_already_in_the_file() {
         let mut world = World::new();
-        for name in ["Ground", "Bullet#1", "Bullet#7", "NotATemplate#3", "Bullet#x"] {
+        for name in [
+            "Ground",
+            "Bullet#1",
+            "Bullet#7",
+            "NotATemplate#3",
+            "Bullet#x",
+        ] {
             let mut builder = EntityBuilder::new();
             builder.add(Name(name.to_string()));
             world.spawn(builder.build());

@@ -40,7 +40,7 @@
 
 use glam::Vec3;
 
-use crate::components::{Fragment, FractureMaterial};
+use crate::components::{FractureMaterial, Fragment};
 use crate::error::{EngineError, Result};
 use crate::{codes, shard};
 
@@ -303,7 +303,8 @@ fn seed(recipe: &Recipe, rng: &mut Rng) -> (Vec<Vec3>, Vec3) {
                 let sector = i % sectors;
                 // Rings grow faster than linearly, so the cells near the
                 // impact are small and the outer ones are long slivers.
-                let radius = reach * ((ring + 1) as f32 / rings as f32).powf(1.8)
+                let radius = reach
+                    * ((ring + 1) as f32 / rings as f32).powf(1.8)
                     * (0.75 + 0.5 * rng.unit());
                 // Staggered by the golden ratio so the cracks of one ring do
                 // not line up with the next and draw spokes.

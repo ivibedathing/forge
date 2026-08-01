@@ -14,6 +14,7 @@ pub mod daylight;
 pub mod error;
 pub mod formatter;
 pub mod fracture;
+pub mod gi;
 pub mod input;
 pub mod junction;
 pub mod lineindex;

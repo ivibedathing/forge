@@ -161,6 +161,15 @@ pub struct ScenePass<'a> {
     /// rasterized at the target's dimensions. `None` skips the overlay pass
     /// entirely, so HUD-less scenes render byte-identically to pre-M12.
     pub hud: Option<&'a crate::hud::HudOverlay>,
+    /// The scene's baked irradiance field, folded against this frame's lighting
+    /// (M35). `None` for a scene with no `LightProbeVolume`, which is then lit
+    /// by exactly the expressions that lit it before GI existed.
+    ///
+    /// Folded by the *caller* rather than here, because the fold is a pure CPU
+    /// function of (bake file, sky, ambient) and `engine gi-probe` has to be
+    /// able to run it without a GPU. M21's arrangement: the model is CPU, and
+    /// the GPU only ever reads its output.
+    pub gi: Option<&'a engine_core::gi::IrradianceField>,
 }
 
 pub struct SceneRenderer {
@@ -234,6 +243,10 @@ pub struct SceneRenderer {
     scene_sampler: wgpu::Sampler,
     format: wgpu::TextureFormat,
     samples: u32,
+    /// Whether the mesh pipelines were compiled with the GI producer (M35).
+    /// Baked into the shaders, so it belongs to the renderer rather than to a
+    /// frame — `samples`' rule, for the same reason.
+    gi: bool,
 
     // Everything below persists across frames; see the module doc.
     /// Bound whenever shadows are off. See [`ShadowMap`].
@@ -266,6 +279,11 @@ pub struct SceneRenderer {
     /// The 1×1 white bound in a slot with no map, made on the first textured
     /// frame — a scene with no maps never allocates it.
     white_texture: Option<wgpu::TextureView>,
+    /// The uploaded irradiance field (M35), allocated the first frame a volume
+    /// arrives. `None` in every scene without one, which is nearly all of them.
+    gi_field: Option<GiTextures>,
+    /// Bound at the four GI slots whenever `gi_field` is `None`.
+    gi_placeholder: wgpu::TextureView,
     frame_uniform: Uniforms,
     /// Object uniforms for the whole draw list, one per `object_stride` bytes.
     objects: Option<Uniforms>,
@@ -376,6 +394,13 @@ impl SceneRenderer {
         self.cascades
     }
 
+    /// Whether this renderer's mesh pipelines carry the GI producer (M35).
+    /// `samples()`'s twin, and a caller whose scene has gained or lost a
+    /// `LightProbeVolume` has to build a new renderer for the same reason.
+    pub fn gi_enabled(&self) -> bool {
+        self.gi
+    }
+
     /// Upload a draw list and render it.
     ///
     /// Geometry uploads once and is reused: `items` carry shared
@@ -438,8 +463,27 @@ impl SceneRenderer {
             environment,
             time,
             hud,
+            gi,
             ..
         } = *pass;
+
+        // Allocate the field's planes if this volume's grid is new, and write
+        // this frame's fold into them. The textures are reallocated only when
+        // the grid changes; the contents are rewritten every frame, because
+        // under `daylight` the sky moves every frame and the fold is what
+        // carries that into GI.
+        if let Some(field) = gi {
+            if GiTextures::ensure(&mut self.gi_field, device, field.grid) {
+                // New planes mean new view identities, so group 2 no longer
+                // names the right textures. Dropping it is what makes
+                // `ensure_frame_textures` rebuild.
+                self.frame_textures = None;
+            }
+            self.gi_field
+                .as_ref()
+                .expect("just ensured")
+                .upload(queue, field);
+        }
 
         // Shadows need a real map; allocate it the first time any scene asks.
         if environment.shadows && self.shadow_map.is_none() {
@@ -498,6 +542,29 @@ impl SceneRenderer {
             params2: [point_light_count as f32, 0.0, 0.0, 0.0],
             point_lights,
             view_proj: view_projection.to_cols_array_2d(),
+            gi_origin: match gi {
+                Some(field) => field.origin.extend(field.spacing).to_array(),
+                None => [0.0; 4],
+            },
+            gi_grid: match gi {
+                Some(field) => [
+                    field.grid[0] as f32,
+                    field.grid[1] as f32,
+                    field.grid[2] as f32,
+                    field.intensity,
+                ],
+                None => [0.0; 4],
+            },
+            // The `1.0` is the only thing that turns GI on in a shader that was
+            // compiled with it: a scene whose pipelines carry the producer but
+            // whose field failed to arrive renders the fallback, rather than
+            // sampling a placeholder and going black.
+            gi_params: [
+                gi.map_or(0.0, |f| f.blend),
+                f32::from(gi.is_some()),
+                0.0,
+                0.0,
+            ],
         };
         queue.write_buffer(&self.frame_uniform.buffer, 0, bytemuck::bytes_of(&frame));
 
@@ -1749,6 +1816,7 @@ impl SceneRenderer {
             shadows,
             depth: self.scene_depth.as_ref().map(|d| (d.width, d.height)),
             color: self.scene_color.as_ref().map(|c| (c.width, c.height)),
+            gi: self.gi_field.as_ref().map(|f| f.grid),
         };
         if self
             .frame_textures
@@ -1770,6 +1838,14 @@ impl SceneRenderer {
             .scene_color
             .as_ref()
             .map_or(&self.color_placeholder, |copy| &copy.view);
+        // Four views either way: the field's planes when a volume is resident,
+        // the 1x1x1 stand-in otherwise. WGSL binds unconditionally, and a
+        // variant that never reads these still needs them present.
+        let gi_views: [&wgpu::TextureView; engine_core::gi::SH_L1_COEFFS] =
+            match self.gi_field.as_ref() {
+                Some(field) => std::array::from_fn(|i| &field.views[i]),
+                None => std::array::from_fn(|_| &self.gi_placeholder),
+            };
 
         let group = |label, colour: &wgpu::TextureView| {
             let mut entries = vec![
@@ -1803,6 +1879,26 @@ impl SceneRenderer {
                     resource: cascades.matrices.as_entire_binding(),
                 });
             }
+            // The field's four planes and the sampler that reads them (M35),
+            // at 6-10 because M38 holds 5. Bound on every frame, placeholder
+            // included, to match the layout above.
+            entries.extend(
+                gi_views
+                    .iter()
+                    .enumerate()
+                    .map(|(i, view)| wgpu::BindGroupEntry {
+                        binding: 6 + i as u32,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    }),
+            );
+            entries.push(wgpu::BindGroupEntry {
+                binding: 10,
+                // The same sampler object as binding 4 under a second name:
+                // linear and clamped on every axis is what both a refraction
+                // offset and a probe fetch want. See `gi.wgsl` for why it
+                // cannot simply share the binding.
+                resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
+            });
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &self.frame_textures_layout,

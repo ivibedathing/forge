@@ -112,6 +112,20 @@
       ]
     },
     {
+      "name": "Lighting",
+      "components": [
+        { "type": "Transform", "position": [0.0, 6.0, 5.0], "scale": [56.0, 16.0, 54.0] },
+        {
+          "type": "LightProbeVolume",
+          "spacing": 4.0,
+          "bake": "gi/showcase_tour.gi.json",
+          "bounces": 1,
+          "intensity": 1.0,
+          "blend": 3.0
+        }
+      ]
+    },
+    {
       "name": "Meadow",
       "components": [
         {

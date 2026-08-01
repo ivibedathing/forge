@@ -697,9 +697,31 @@ impl Scene {
     /// scene (M5 §7). Warnings are not errors and do not appear here; run
     /// [`validate::validate_source`] directly to see them.
     pub fn from_source(source: &str, path: &str) -> std::result::Result<Self, Vec<EngineError>> {
+        Self::from_source_ignoring(source, path, &[])
+    }
+
+    /// [`Scene::from_source`], but treating the named error codes as absent.
+    ///
+    /// Exists for exactly one caller: `engine bake-gi`, which must be able to
+    /// load a scene whose GI bake is missing, stale or malformed, because
+    /// producing that file is the command's entire purpose. Refusing it would
+    /// make the only command that can fix the problem the one command that
+    /// cannot run.
+    ///
+    /// Deliberately *not* a general escape hatch — every other command goes
+    /// through [`Scene::from_source`], so which command you ran still never
+    /// changes what you learn about a broken scene (M5 §7). Passing an empty
+    /// slice is the ordinary path, which is why `from_source` delegates here
+    /// rather than the two keeping separate copies of this logic.
+    pub fn from_source_ignoring(
+        source: &str,
+        path: &str,
+        ignored: &[&str],
+    ) -> std::result::Result<Self, Vec<EngineError>> {
         let errors: Vec<EngineError> = validate::validate_source(source, path)
             .into_iter()
             .filter(|e| !e.is_warning())
+            .filter(|e| !ignored.contains(&e.error))
             .collect();
         if !errors.is_empty() {
             return Err(errors);
