@@ -43,6 +43,10 @@ pub(super) struct SceneFacts<'a> {
     pub(super) foot_plants: Vec<(String, crate::components::FootPlant, String)>,
     pub(super) hud_elements: Vec<HudRef>,
     pub(super) hud_panel_names: std::collections::BTreeSet<String>,
+    /// Every `LightProbeVolume`, with its `spacing` and the path that declared
+    /// it (M35). Collected rather than counted because the multi-volume warning
+    /// has to name which one the renderer will actually draw.
+    pub(super) probe_volumes: Vec<(String, f32, String)>,
 }
 
 /// Walk every entity, pushing per-entity errors and collecting the rest.
@@ -63,6 +67,7 @@ pub(super) fn walk<'a>(
     let mut directional_lights: Vec<(String, String)> = Vec::new();
     let mut ambient_lights: Vec<(String, String)> = Vec::new();
     let mut point_lights: Vec<(String, String)> = Vec::new();
+    let mut probe_volumes: Vec<(String, f32, String)> = Vec::new();
     // Collision layers (M12): membership names declared anywhere, every
     // `collides_with` reference (for the unknown-layer warning), and each
     // distinct name with the path that introduced it (for the 32-bit budget).
@@ -330,6 +335,7 @@ pub(super) fn walk<'a>(
                     meadow = Some((m, component_path));
                 }
                 Some(ComponentData::LightProbeVolume(v)) => {
+                    probe_volumes.push((name.to_string(), v.spacing, component_path.clone()));
                     light_probe_volume = Some((v, component_path));
                 }
                 Some(ComponentData::FootPlant(p)) => {
@@ -1212,6 +1218,7 @@ pub(super) fn walk<'a>(
         foot_plants,
         hud_elements,
         hud_panel_names,
+        probe_volumes,
     }
 }
 

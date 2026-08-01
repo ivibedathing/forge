@@ -234,6 +234,11 @@ pub(crate) struct FrameTextureKey {
     pub(crate) shadows: bool,
     pub(crate) depth: Option<(u32, u32)>,
     pub(crate) color: Option<(u32, u32)>,
+    /// The irradiance field's grid, or `None` when the placeholder is bound
+    /// (M35). Its *dimensions* rather than a flag, for the copies' reason: a
+    /// volume that changes shape reallocates its planes, and a bind group holds
+    /// its views by identity.
+    pub(crate) gi: Option<[u32; 3]>,
 }
 
 /// One uploaded texture with its mip chain, cached across frames.
@@ -326,6 +331,179 @@ pub(crate) fn placeholder_texture(
             view_formats: &[],
         })
         .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// The 1×1×1 stand-in bound at the four GI slots when a scene has no probe
+/// volume, or has one that has not been uploaded yet.
+///
+/// The `white_texture` and `color_placeholder` precedent: WGSL binds
+/// unconditionally, so the slots must hold *something* even in a variant that
+/// never reads them. Zero-filled, which is the harmless answer if it ever is
+/// read — a zero field with `gi_params.y` at zero sends every fragment to the
+/// fallback expression.
+pub(crate) fn gi_placeholder_view(device: &wgpu::Device) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("gi-placeholder"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: GI_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// The irradiance field's texture format.
+///
+/// `Rgba16Float` because it is filterable in core WebGPU — hardware trilinear
+/// interpolation between probes is the entire reason the field is a texture
+/// rather than a storage buffer — and because half precision is ample for a
+/// quantity already quantized to four decimals in the file it came from.
+pub(crate) const GI_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// The four SH-L1 coefficient planes of one volume's irradiance field, resident
+/// on the GPU.
+///
+/// Keyed by the placement rather than by contents: the *textures* are reallocated
+/// only when a volume's grid changes, while their contents are re-uploaded
+/// whenever the lighting moves — which under `daylight` is every frame, and is
+/// why the upload is a few tens of KB rather than a trace.
+pub(crate) struct GiTextures {
+    pub(crate) views: [wgpu::TextureView; engine_core::gi::SH_L1_COEFFS],
+    textures: [wgpu::Texture; engine_core::gi::SH_L1_COEFFS],
+    pub(crate) grid: [u32; 3],
+}
+
+impl GiTextures {
+    /// Allocate for a grid, or hand back the existing set if it already fits.
+    pub(crate) fn ensure(held: &mut Option<Self>, device: &wgpu::Device, grid: [u32; 3]) -> bool {
+        if held.as_ref().is_some_and(|t| t.grid == grid) {
+            return false;
+        }
+        let plane = || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("gi-coefficient"),
+                size: wgpu::Extent3d {
+                    width: grid[0].max(1),
+                    height: grid[1].max(1),
+                    depth_or_array_layers: grid[2].max(1),
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: GI_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let textures: [wgpu::Texture; engine_core::gi::SH_L1_COEFFS] =
+            std::array::from_fn(|_| plane());
+        let views = std::array::from_fn(|i: usize| {
+            textures[i].create_view(&wgpu::TextureViewDescriptor::default())
+        });
+        *held = Some(Self {
+            views,
+            textures,
+            grid,
+        });
+        // Reallocated, so group 2 names different textures and has to be
+        // rebuilt — a bind group holds its views by identity.
+        true
+    }
+
+    /// Write one frame's folded field into the planes.
+    ///
+    /// `Rgba16Float` has no `f32` write path, so each value is converted here.
+    /// The conversion is the standard IEEE half round-to-nearest-even; writing
+    /// a truncating one instead is a whole-field bias, not a rounding detail.
+    pub(crate) fn upload(&self, queue: &wgpu::Queue, field: &engine_core::gi::IrradianceField) {
+        for (plane, values) in self.textures.iter().zip(&field.planes) {
+            let halves: Vec<u16> = values
+                .iter()
+                .flat_map(|rgba| rgba.iter().map(|v| half_from_f32(*v)))
+                .collect();
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: plane,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&halves),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    // 4 channels × 2 bytes.
+                    bytes_per_row: Some(self.grid[0].max(1) * 8),
+                    rows_per_image: Some(self.grid[1].max(1)),
+                },
+                wgpu::Extent3d {
+                    width: self.grid[0].max(1),
+                    height: self.grid[1].max(1),
+                    depth_or_array_layers: self.grid[2].max(1),
+                },
+            );
+        }
+    }
+}
+
+/// `f32` → IEEE binary16, round to nearest even, written out rather than taken
+/// from a dependency.
+///
+/// Sits under a render baseline, so it is a contract in the same sense the
+/// particle xorshift is: a crate that changed its rounding by a single ulp would
+/// move committed pixels for reasons no one could find.
+fn half_from_f32(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let mut exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+    let mantissa = bits & 0x007f_ffff;
+
+    if ((bits >> 23) & 0xff) == 0xff {
+        // Infinity and NaN. A NaN keeps a non-zero mantissa so it stays a NaN
+        // rather than becoming an infinity, which would be a silent change of
+        // meaning.
+        return sign | 0x7c00 | if mantissa != 0 { 0x0200 } else { 0 };
+    }
+    if exponent >= 0x1f {
+        return sign | 0x7c00;
+    }
+    if exponent <= 0 {
+        // Subnormal, or too small to represent at all.
+        if exponent < -10 {
+            return sign;
+        }
+        let mantissa = mantissa | 0x0080_0000;
+        let shift = (14 - exponent) as u32;
+        let half = mantissa >> shift;
+        // Round to nearest, ties to even.
+        let remainder = mantissa & ((1 << shift) - 1);
+        let halfway = 1 << (shift - 1);
+        let round = u32::from(remainder > halfway || (remainder == halfway && (half & 1) == 1));
+        return sign | (half + round) as u16;
+    }
+
+    let half = mantissa >> 13;
+    let remainder = mantissa & 0x1fff;
+    let round = u32::from(remainder > 0x1000 || (remainder == 0x1000 && (half & 1) == 1));
+    let mut half = half + round;
+    // A mantissa that rounded up out of its range carries into the exponent,
+    // which is exactly what the bit layout wants — as long as the exponent is
+    // still in range afterwards.
+    if half > 0x03ff {
+        half = 0;
+        exponent += 1;
+        if exponent >= 0x1f {
+            return sign | 0x7c00;
+        }
+    }
+    sign | ((exponent as u16) << 10) | half as u16
 }
 
 impl Uniforms {

@@ -87,8 +87,17 @@ pub(crate) mod anchor {
     pub const AMBIENT: &str = "    let ambient = albedo * frame.ambient.rgb;\n";
     /// Its counterpart inside the sky branch, reassembled under the same rule.
     pub const FILL: &str = "            fill = albedo * hemisphere;\n";
-    /// The frame uniform's tail, where the refraction variant appends the
-    /// view-projection it needs to project an exit point.
+    /// The frame uniform's tail, replaced wholesale by
+    /// [`EXTENDED_FRAME_TAIL`](super::EXTENDED_FRAME_TAIL).
+    ///
+    /// Unconditional since M35, and for [`EXTENDED_UNIFORM_TAIL`]'s reason
+    /// rather than a tidiness one: this was a *substitution* while refraction
+    /// was the only producer that appended a field, and GI needs three more.
+    /// Two producers appending to one positional struct would make the field
+    /// order a function of the producer list — so a variant that happened to
+    /// list them the other way would read `gi_origin` where `view_proj` is and
+    /// render a plausible wrong picture. One tail, declared by every spliced
+    /// variant, removes the error class instead of documenting it.
     pub const FRAME_TAIL: &str = "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n};\n";
     /// Where the fragment's running colour and alpha are declared.
     pub const VARS: &str = "    var color = base_color;\n    var out_alpha = 1.0;\n";
@@ -145,6 +154,28 @@ pub(crate) const EXTENDED_UNIFORM_TAIL: &str =
     \x20   map_volume: vec4<f32>,\n\
     };\n";
 
+/// The extended frame uniform every spliced variant declares.
+///
+/// [`EXTENDED_UNIFORM_TAIL`]'s twin for group 1, and it exists for the same
+/// reason: uniform field offsets are positional. `mesh.wgsl` on disk stops at
+/// `point_lights` and every field beyond it is invisible to the plain pipeline,
+/// which is legal — a shader may declare a prefix of the buffer it is bound to.
+/// What is *not* safe is letting each producer append its own fields, because
+/// then the offsets depend on the order the producers were listed in.
+pub(crate) const EXTENDED_FRAME_TAIL: &str =
+    "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n\
+    \x20   // World → clip (M26): the refraction variant projects an exit point\n\
+    \x20   // with it.\n\
+    \x20   view_proj: mat4x4<f32>,\n\
+    \x20   // The bound probe volume (M35). xyz = the world position of probe\n\
+    \x20   // [0,0,0], w = metres between probes.\n\
+    \x20   gi_origin: vec4<f32>,\n\
+    \x20   // xyz = probes per axis, w = intensity.\n\
+    \x20   gi_grid: vec4<f32>,\n\
+    \x20   // x = edge blend in metres, y = 1 when a field is bound.\n\
+    \x20   gi_params: vec4<f32>,\n\
+    };\n";
+
 /// Assemble a variant of the mesh shader: the shared lighting body, with one
 /// producer spliced in at the surface-resolution seam.
 ///
@@ -157,6 +188,7 @@ pub(crate) fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, 
     let substitutions = || producers.iter().flat_map(|p| p.substitutions.iter());
     for (anchor, _) in substitutions().chain([
         &(anchor::UNIFORM_TAIL, EXTENDED_UNIFORM_TAIL),
+        &(anchor::FRAME_TAIL, EXTENDED_FRAME_TAIL),
         // Not in any producer's substitution list — they are reassembled rather
         // than replaced — but just as load-bearing, so they are asserted here.
         &(anchor::VERTEX_STAGE, ""),
@@ -172,6 +204,7 @@ pub(crate) fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, 
     }
 
     out = out.replace(anchor::UNIFORM_TAIL, EXTENDED_UNIFORM_TAIL);
+    out = out.replace(anchor::FRAME_TAIL, EXTENDED_FRAME_TAIL);
     let preludes: String = producers
         .iter()
         .map(|p| p.prelude)
@@ -469,15 +502,11 @@ pub(crate) fn refraction_producer() -> Producer {
         // change what lights the surface itself.
         fill: None,
         substitutions: vec![
-            (
-                anchor::FRAME_TAIL,
-                "    point_lights: array<PointLightData, MAX_POINT_LIGHTS>,\n\
-                 \x20   // World → clip (M26): the refraction variant projects an\n\
-                 \x20   // exit point with it. Appended at the end, so every field\n\
-                 \x20   // above keeps the offset the other shaders read it from.\n\
-                 \x20   view_proj: mat4x4<f32>,\n\
-                 };\n",
-            ),
+            // `view_proj` is no longer appended here: since M35 the frame tail
+            // is one unconditional extension (`EXTENDED_FRAME_TAIL`), because a
+            // second producer with its own fields would have made the offsets a
+            // function of the producer order. This variant reads the field; it
+            // no longer declares it.
             (
                 anchor::VARS,
                 "    var color = base_color;\n\
@@ -525,6 +554,38 @@ pub(crate) fn refraction_producer() -> Producer {
                  \x20   return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);\n",
             ),
         ],
+    }
+}
+
+/// The global illumination producer (M35), and the first to contribute nothing
+/// but a [`FillContribution`].
+///
+/// It replaces no line and adds no vertex work. Both of the lines it changes are
+/// *reassembled* around it, which is what lets a textured surface inside a probe
+/// volume take its occlusion map and its baked irradiance at once — the case
+/// that made whole-line replacement untenable and the reason `AMBIENT` and
+/// `FILL` stopped being substitutions.
+///
+/// `gi_fill` takes the pre-M35 expression as its `fallback` argument, so a
+/// fragment outside every volume, or one in a scene whose `intensity` is `0.0`,
+/// evaluates to exactly what it evaluated to before this producer existed. Not
+/// approximately: the early return is on the *expression*, not on a lerp
+/// weight.
+pub(crate) fn gi_producer() -> Producer {
+    Producer {
+        prelude: include_str!("../shaders/gi.wgsl"),
+        // GI is a lookup at a point, resolved per pixel. Nothing moves.
+        vertex: None,
+        fill: Some(FillContribution {
+            // No occlusion multiplier: GI does not *scale* the fill, it decides
+            // where the fill comes from. A surface with a baked ambient
+            // occlusion map still multiplies its own map on top, which is why
+            // the two kinds of contribution are kept apart.
+            occlusion: None,
+            ambient_source: Some("gi_fill(in.world_position, n, frame.ambient.rgb)"),
+            hemisphere_source: Some("gi_fill(in.world_position, n, hemisphere)"),
+        }),
+        substitutions: Vec::new(),
     }
 }
 
@@ -615,23 +676,53 @@ pub(crate) fn skinned_shadow_cutout() -> String {
     )
 }
 
+/// Assemble a variant, with the GI producer appended when the renderer was
+/// built for a scene that has a probe volume.
+///
+/// **Last in the list, always.** Producer order is the compiled arithmetic:
+/// appending GI leaves the multiplier string exactly what it was, so a textured
+/// surface's line grows a new *source* and keeps its `* sampled.occlusion` in
+/// the position it has held since M26. Inserting GI first would reorder a float
+/// product, and this file is ULP-sensitive in four places.
+pub(crate) fn with_gi(mut producers: Vec<Producer>, gi: bool) -> std::borrow::Cow<'static, str> {
+    if gi {
+        producers.push(gi_producer());
+    }
+    with_surface(&producers)
+}
+
+/// The plain mesh shader: `mesh.wgsl` exactly as it sits on disk when the scene
+/// has no probe volume.
+///
+/// The `false` arm is the whole M16 house rule in one expression — a scene that
+/// opted into nothing compiles the untouched file, byte-identical by
+/// construction rather than by measurement. Every baseline in the repo is blessed
+/// through it.
+pub(crate) fn plain_mesh(gi: bool) -> std::borrow::Cow<'static, str> {
+    if gi {
+        with_gi(Vec::new(), true)
+    } else {
+        std::borrow::Cow::Borrowed(include_str!("../shaders/mesh.wgsl"))
+    }
+}
+
 /// The mesh shader with terrain's generative material spliced in (M22).
-pub(crate) fn with_terrain() -> std::borrow::Cow<'static, str> {
-    with_surface(&[terrain_producer()])
+pub(crate) fn with_terrain(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![terrain_producer()], gi)
 }
 
 /// The mesh shader with texture sampling spliced in (M26).
-pub(crate) fn with_textures() -> std::borrow::Cow<'static, str> {
-    with_surface(&[texture_producer()])
+pub(crate) fn with_textures(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![texture_producer()], gi)
 }
 
 /// The blended twins, which also refract.
-pub(crate) fn with_refraction() -> std::borrow::Cow<'static, str> {
-    with_surface(&[refraction_producer()])
+pub(crate) fn with_refraction(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![refraction_producer()], gi)
 }
 
-pub(crate) fn with_textures_and_refraction() -> std::borrow::Cow<'static, str> {
-    with_surface(&[texture_producer(), refraction_producer()])
+pub(crate) fn with_textures_and_refraction(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![texture_producer(), refraction_producer()], gi)
 }
 
 /// The anchors `with_water_refraction` splices against — existing lines of
@@ -736,12 +827,12 @@ mod seam_tests {
     /// which is the failure mode hardest to spot in a render.
     #[test]
     fn every_producer_actually_replaces_what_it_claims() {
-        let terrain = super::with_terrain();
+        let terrain = super::with_terrain(false);
         assert!(terrain.contains("let albedo = generated.albedo;"));
         assert!(terrain.contains("let n = generated.normal;"));
         assert!(terrain.contains("terrain_layers: array<TerrainLayer"));
 
-        let textured = super::with_textures();
+        let textured = super::with_textures(false);
         for expected in [
             "let sampled = sample_maps(in.uv);",
             "sampled.metallic",
@@ -774,7 +865,7 @@ mod seam_tests {
         // And a producer that adds nothing to the vertex stage leaves it the
         // file's, which is what kept M22's and M26's committed baselines from
         // moving when the assembly replaced whole-stage substitution.
-        for variant in [super::with_terrain(), super::with_refraction()] {
+        for variant in [super::with_terrain(false), super::with_refraction(false)] {
             assert!(
                 variant.contains(super::anchor::VERTEX_STAGE),
                 "a producer with no vertex contribution must leave the stage alone"
@@ -879,6 +970,64 @@ mod seam_tests {
             ..Default::default()
         };
         super::fill_lines([&a, &b].into_iter());
+    }
+
+    /// The real producer, composed with the real texture producer — the case
+    /// the tour is full of, and the one that decided the seam's shape.
+    #[test]
+    fn a_textured_surface_inside_a_volume_takes_both() {
+        let both = super::with_gi(vec![super::texture_producer()], true);
+
+        // The occlusion map survived a second claimant…
+        assert!(both.contains(
+            "    let ambient = albedo * gi_fill(in.world_position, n, frame.ambient.rgb) \
+             * sampled.occlusion;\n"
+        ));
+        assert!(both.contains(
+            "            fill = albedo * gi_fill(in.world_position, n, hemisphere) \
+             * sampled.occlusion;\n"
+        ));
+        // …the field is declared…
+        assert!(both.contains("@group(2) @binding(5) var gi_sh0: texture_3d<f32>;"));
+        // …and the shared lighting body is still the file's.
+        assert!(both.contains("let base_color = direct + ambient + emissive;"));
+    }
+
+    /// Every spliced variant declares the *whole* frame tail, and the file on
+    /// disk still declares the short one (M35).
+    ///
+    /// The failure this prevents compiles cleanly and renders a plausible wrong
+    /// picture: uniform field offsets are positional, so a variant that declared
+    /// only some of the tail would read `gi_origin` where `view_proj` is. It is
+    /// the same error class as a swapped pair of `Vec<usize>` keys in `FramePlan`
+    /// — no type catches it and no assertion fires.
+    #[test]
+    fn every_spliced_variant_declares_the_whole_frame_tail() {
+        for variant in [
+            super::with_terrain(false),
+            super::with_textures(false),
+            super::with_refraction(false),
+            super::with_textures_and_refraction(true),
+            super::plain_mesh(true),
+        ] {
+            assert!(
+                variant.contains("view_proj: mat4x4<f32>,")
+                    && variant.contains("gi_origin: vec4<f32>,")
+                    && variant.contains("gi_grid: vec4<f32>,")
+                    && variant.contains("gi_params: vec4<f32>,"),
+                "a spliced variant declared only part of the frame uniform's tail"
+            );
+            assert!(
+                !variant.contains(super::anchor::FRAME_TAIL),
+                "the short tail must not survive beside the long one"
+            );
+        }
+        // And the untouched file keeps the short tail, which is what lets the
+        // plain pipeline compile `mesh.wgsl` as it sits on disk.
+        let plain = super::plain_mesh(false);
+        assert!(plain.contains(super::anchor::FRAME_TAIL));
+        assert!(!plain.contains("gi_origin"));
+        assert_eq!(plain, include_str!("../shaders/mesh.wgsl"));
     }
 
     /// The joint palette reaches the GPU as three *rows*, and glam matrices are

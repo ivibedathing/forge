@@ -367,6 +367,11 @@ enum Command {
         /// Surface normal to evaluate along. Defaults to straight up.
         #[arg(long, allow_hyphen_values = true)]
         normal: Option<String>,
+        /// Scene time in hours, for a scene with a `daylight` block. GI is
+        /// baked as *transfer*, so the answer moves with the sky — which is
+        /// the whole point, and is only checkable if this flag exists.
+        #[arg(long)]
+        time: Option<f32>,
     },
 
     /// Ask a terrain patch how high the ground is at a world XZ position.
@@ -613,7 +618,12 @@ fn main() {
             out,
             samples,
         } => bake_gi(scene, entity, out, samples),
-        Command::GiProbe { scene, at, normal } => gi_probe(scene, at, normal),
+        Command::GiProbe {
+            scene,
+            at,
+            normal,
+            time,
+        } => gi_probe(scene, at, normal, time),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
         Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Import {
@@ -1388,6 +1398,22 @@ fn transform_of(
         .unwrap_or_default()
 }
 
+/// The scene's irradiance field for one frame, or `None` when it has no volume.
+///
+/// A one-line wrapper so that every render path in this file resolves GI the
+/// same way. Three of them do — `screenshot`, `diff-render` and `filmstrip` —
+/// and a fourth that folded the field differently is exactly how a baseline and
+/// the picture it pins start to disagree.
+fn gi_field(
+    scene: &Scene,
+    scene_path: &Path,
+    lights: &engine_core::scene::ResolvedLights,
+    environment: &engine_core::scene::EnvironmentSettings,
+) -> Option<engine_core::gi::IrradianceField> {
+    let base = scene_path.parent().unwrap_or(Path::new(""));
+    engine_core::gi::evaluate::field_for_scene(scene, base, lights, environment)
+}
+
 /// Every entity carrying a `LightProbeVolume`, name-sorted so a multi-volume
 /// bake is deterministic in the order it reports.
 fn probe_volumes(scene: &Scene) -> Vec<String> {
@@ -1534,7 +1560,12 @@ fn bake_gi(
 }
 
 /// `engine gi-probe <scene> --at x,y,z [--normal x,y,z]` (M35).
-fn gi_probe(scene_path: PathBuf, at: String, normal: Option<String>) -> Result<()> {
+fn gi_probe(
+    scene_path: PathBuf,
+    at: String,
+    normal: Option<String>,
+    time: Option<f32>,
+) -> Result<()> {
     let point = parse_vec3_arg(&at, "at")?;
     let normal = match &normal {
         Some(text) => parse_vec3_arg(text, "normal")?.normalize_or_zero(),
@@ -1611,6 +1642,16 @@ fn gi_probe(scene_path: PathBuf, at: String, normal: Option<String>) -> Result<(
     let origin = transform.position - transform.scale * 0.5;
     let cell = ((point - origin) / volume.spacing).max(engine_core::math::Vec3::ZERO);
 
+    // The same fold the renderer runs, against the same clock — this is the
+    // number the shader would read, not a second model of it. `--time` picks the
+    // sky, because under `daylight` the answer moves with it: that is what
+    // baking transfer rather than radiance buys.
+    let (lights, environment) = scene.resolved_at(time.unwrap_or(0.0));
+    let field = engine_core::gi::evaluate(&baked, &volume, &lights, &environment);
+    let irradiance = field.sample(point, normal);
+    let fallback = fallback_fill(normal, &lights, &environment);
+    let weight = field.weight(point);
+
     println!(
         "{}",
         serde_json::json!({
@@ -1625,9 +1666,40 @@ fn gi_probe(scene_path: PathBuf, at: String, normal: Option<String>) -> Result<(
             "cell": cell.to_array(),
             "relocated_probes": baked.header.relocated,
             "samples": baked.header.samples,
+            // What the renderer uses here, and what it would have used
+            // without GI. Two numbers rather than one, because "is this
+            // dark" is only answerable against what it is being compared to.
+            "irradiance": irradiance.to_array(),
+            "fallback": fallback.to_array(),
+            // `intensity` faded at the volume's edge; the renderer mixes the
+            // two above by exactly this.
+            "weight": weight,
+            "openness": field.openness(point),
         })
     );
     Ok(())
+}
+
+/// The fill a fragment would receive with no GI — `sky_ambient(n)` when the
+/// scene draws a sky, the flat `AmbientLight` when it does not.
+///
+/// Transcribed from `mesh.wgsl` rather than shared with it, which is the same
+/// bargain `list-colliders` and `terrain-height` make: the shader's copy is the
+/// one that draws and this one is what a report can print. The equality between
+/// them is what `an_unoccluded_probe_reproduces_sky_ambient` pins.
+fn fallback_fill(
+    normal: engine_core::math::Vec3,
+    lights: &engine_core::scene::ResolvedLights,
+    environment: &engine_core::scene::EnvironmentSettings,
+) -> engine_core::math::Vec3 {
+    if !environment.sky {
+        return lights.ambient;
+    }
+    let up = normal.y * 0.5 + 0.5;
+    let env = environment.sky_ground + (environment.sky_zenith - environment.sky_ground) * up;
+    let mean = ((environment.sky_ground + environment.sky_zenith) * 0.5)
+        .max(engine_core::math::Vec3::splat(1.0e-4));
+    lights.ambient * (env / mean)
 }
 
 /// `--at x,y,z` / `--normal x,y,z`: three numbers, unlike `terrain-height`'s
@@ -1970,6 +2042,7 @@ fn diff_render(
     let render_time = scene_time(time, steps, &scene);
     let items = scene.render_items_at(&assets, Some(render_time))?;
     let (lights, environment) = scene.resolved_at(render_time);
+    let gi = gi_field(&scene, &scene_path, &lights, &environment);
 
     let (actual, adapter) = engine_render::offscreen::render_with_adapter(
         &items,
@@ -1987,6 +2060,7 @@ fn diff_render(
         baseline.height,
         &tinted_hud(&scene, &assets, &interaction),
         &hud,
+        gi.as_ref(),
     )?;
 
     let (stats, diff_image) = engine_render::diff::diff(&actual, &baseline, threshold)?;
@@ -2182,7 +2256,8 @@ fn filmstrip(
         // across the strip — a filmstrip of a lake is a filmstrip of its waves.
         // Daylight is a pure function of time for the same reason, which is
         // what makes `--start 0 --end 24` a whole day on one sheet.
-        let rendered = engine_render::offscreen::render(
+        let gi = gi_field(&scene, &scene_path, &lights, &environment);
+        let rendered = engine_render::offscreen::render_with_adapter(
             &items,
             &scene.water_items(),
             &scene.cloud_items(),
@@ -2198,7 +2273,9 @@ fn filmstrip(
             tile_height,
             &scene.hud_tree(&assets),
             &[],
-        )?;
+            gi.as_ref(),
+        )
+        .map(|(image, _)| image)?;
         let tile = image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
             .expect("offscreen render returns exactly width*height*4 bytes");
         let x = (frame % columns) * tile_width;
@@ -2661,8 +2738,9 @@ fn screenshot(
     let items = scene.render_items_at(&assets, Some(render_time))?;
     let drawn = items.len();
     let (lights, environment) = scene.resolved_at(render_time);
+    let gi = gi_field(&scene, &scene_path, &lights, &environment);
 
-    let image = engine_render::offscreen::render(
+    let image = engine_render::offscreen::render_with_adapter(
         &items,
         &scene.water_items(),
         &scene.cloud_items(),
@@ -2678,7 +2756,9 @@ fn screenshot(
         height,
         &tinted_hud(&scene, &assets, &interaction),
         &hud,
-    )?;
+        gi.as_ref(),
+    )
+    .map(|(image, _)| image)?;
 
     // Between rendering and encoding, while the frame is resident: one pass
     // over a buffer that is already there (M25). Nothing about the render
@@ -2729,6 +2809,12 @@ fn run_scene(
     let environment = scene.environment;
     let daylight = scene.daylight.clone();
     let hud_items = scene.hud_tree(&assets);
+    // Read once, folded per frame: the file is a build artifact, the fold is
+    // what the clock moves.
+    let gi = engine_core::gi::evaluate::load_for_scene(
+        &scene,
+        scene_path.parent().unwrap_or(Path::new("")),
+    );
     let title = format!("engine — {}", scene.name);
 
     // Physics and animated scenes come alive in the viewer; static scenes
@@ -2803,6 +2889,7 @@ fn run_scene(
             environment,
             daylight,
             hud_items,
+            gi,
             simulation,
         })),
     ))

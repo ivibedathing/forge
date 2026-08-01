@@ -131,6 +131,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     passes::lights(&cx, &facts, &mut errors);
     passes::daylight(&cx, object, &facts, &mut errors);
     passes::point_light_budget(&cx, &facts, &mut errors);
+    passes::probe_volumes(&cx, &facts, &mut errors);
     passes::collision_layers(&cx, &facts, &mut errors);
     passes::wheel(&cx, &facts, &mut errors);
     passes::meadow(&cx, &facts, &mut errors);

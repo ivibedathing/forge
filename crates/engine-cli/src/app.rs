@@ -70,6 +70,18 @@ pub struct SceneContent {
     /// The scene's HUD components; refreshed per frame when a simulation
     /// runs (clips and scripts can drive them), static otherwise.
     pub hud_items: engine_core::ui::HudTree,
+    /// The scene's probe volume and its parsed bake (M35), read once at load.
+    /// `None` for a scene with no volume — nearly all of them — which then
+    /// renders through exactly the pipelines it did before GI existed.
+    ///
+    /// Held here rather than on [`Simulation`] because a scene can have GI and
+    /// no simulation at all, and because the *fold* is what moves per frame:
+    /// `daylight` rewrites the sky bands, and folding them is a pass over the
+    /// probes rather than a re-read of the file.
+    pub gi: Option<(
+        engine_core::components::LightProbeVolume,
+        engine_core::gi::BakedGi,
+    )>,
     /// Present when the scene has physics components: the viewer drives
     /// the same fixed step through a wall-clock accumulator (the
     /// headless path stays canonical; frame pacing may vary here).
@@ -404,6 +416,7 @@ impl ViewerApp {
                     environment,
                     daylight,
                     hud_items,
+                    gi,
                     simulation,
                 } = &mut **scene;
                 if let Some(sim) = simulation {
@@ -577,15 +590,29 @@ impl ViewerApp {
                 // never calls `world.set_samples` rebuilds nothing — and the
                 // cost of the rebuild is what makes a settings screen's
                 // QUALITY row a deliberate action rather than a slider.
+                // One fold per frame, against the sky this frame is drawing —
+                // which is the whole point of baking transfer rather than
+                // radiance: a cycling day moves the bounce light with it, and
+                // nothing was re-baked to make that happen.
+                let gi_field = gi.as_ref().map(|(volume, baked)| {
+                    engine_core::gi::evaluate(baked, volume, lights, environment)
+                });
+
                 let wanted_samples = environment.samples.max(1);
-                if renderer.samples() != wanted_samples {
+                if renderer.samples() != wanted_samples
+                    || renderer.gi_enabled() != gi_field.is_some()
+                {
                     let (width, height) = target.size();
                     let format = renderer.format();
                     // Into the existing box rather than a fresh one: the
                     // allocation is already there and a `SceneRenderer` holds
                     // every pipeline the engine has.
-                    **renderer =
-                        SceneRenderer::with_samples(&target.gpu.device, format, wanted_samples);
+                    **renderer = SceneRenderer::configured(
+                        &target.gpu.device,
+                        format,
+                        wanted_samples,
+                        gi_field.is_some(),
+                    );
                     (*depth, *msaa) = frame_attachments(
                         &target.gpu.device,
                         format,
@@ -664,6 +691,7 @@ impl ViewerApp {
                             time: simulated_time,
                             clear: scene_renderer::DEFAULT_CLEAR,
                             hud: canvas.as_ref(),
+                            gi: gi_field.as_ref(),
                         },
                     );
                 })

@@ -2240,3 +2240,56 @@ fn matching_layers_validate_clean() {
         validate_source(source, "t")
     );
 }
+
+// ── Global illumination (M35) ─────────────────────────────────
+
+/// One volume reaches the GPU, so a scene with two says so at `validate`.
+///
+/// A *warning*, because the scene is not wrong — `bake-gi` bakes both and
+/// `gi-probe` answers from either. What it prevents is invisible: an author who
+/// adds an interior volume and sees no change in the landscape around it has no
+/// way to tell that from a bad bake.
+#[test]
+fn a_second_probe_volume_warns_and_names_the_one_that_draws() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Landscape", "components": [
+            { "type": "Transform", "scale": [100.0, 20.0, 100.0] },
+            { "type": "LightProbeVolume", "spacing": 8.0, "bake": "gi/a.gi.json" } ] },
+        { "name": "Interior", "components": [
+            { "type": "Transform", "scale": [8.0, 4.0, 8.0] },
+            { "type": "LightProbeVolume", "spacing": 1.0, "bake": "gi/b.gi.json" } ] }
+      ]
+    }"#;
+    let errors: Vec<_> = validate_source(source, "test.json")
+        .into_iter()
+        .filter(|e| e.error == codes::MULTIPLE_GI_VOLUMES)
+        .collect();
+
+    // Exactly one warning, on the volume that does *not* draw — the finest one
+    // is doing its job and has nothing to report.
+    assert_eq!(errors.len(), 1, "one warning per volume that is not drawn");
+    assert!(errors[0].is_warning());
+    let context = errors[0].context().expect("the warning carries context");
+    assert_eq!(context.entity.as_deref(), Some("Landscape"));
+    assert!(
+        errors[0].message.contains("\"Interior\""),
+        "the message must name the volume that wins: {}",
+        errors[0].message
+    );
+}
+
+/// And one volume is silent, which is the case nearly every scene is in.
+#[test]
+fn a_single_probe_volume_is_not_warned_about() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Lighting", "components": [
+            { "type": "Transform", "scale": [8.0, 4.0, 8.0] },
+            { "type": "LightProbeVolume", "spacing": 1.0, "bake": "gi/a.gi.json" } ] }
+      ]
+    }"#;
+    assert!(!codes_of(source).contains(&codes::MULTIPLE_GI_VOLUMES));
+}

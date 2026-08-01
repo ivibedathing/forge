@@ -35,6 +35,9 @@
 //! makes the file both diffable and byte-reproducible.
 
 pub mod bake;
+pub mod evaluate;
+
+pub use evaluate::{evaluate, IrradianceField};
 
 use serde::{Deserialize, Serialize};
 
@@ -280,6 +283,28 @@ impl BakedGi {
                 header.grid,
                 probes.len()
             )));
+        }
+
+        // Line order *is* the layout. The bake writes x fastest, then y, then z,
+        // and both the evaluation and the 3D-texture upload index by line rather
+        // than by searching for a coordinate — which is what makes the upload a
+        // memcpy per plane. A file whose probes are permuted parses as valid
+        // JSON, carries the right count, and renders light from the wrong place;
+        // checking it here is the only cheap moment.
+        for (index, probe) in probes.iter().enumerate() {
+            let i = index as u64;
+            let x = i % header.grid[0] as u64;
+            let y = (i / header.grid[0] as u64) % header.grid[1] as u64;
+            let z = i / (header.grid[0] as u64 * header.grid[1] as u64);
+            let want = [x as u32, y as u32, z as u32];
+            if probe.p != want {
+                return Err(BakeError::Malformed(format!(
+                    "probe {} is {:?} but this grid puts {want:?} there; the file's \
+                     line order is its layout (x fastest, then y, then z)",
+                    index + 1,
+                    probe.p,
+                )));
+            }
         }
 
         Ok(Self { header, probes })

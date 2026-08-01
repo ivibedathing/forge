@@ -79,6 +79,27 @@ impl super::SceneRenderer {
     /// renderer rather than to a frame: a scene that changes `samples` gets a
     /// new `SceneRenderer`, which is what the viewer's reload path does.
     pub fn with_samples(device: &wgpu::Device, format: wgpu::TextureFormat, samples: u32) -> Self {
+        Self::configured(device, format, samples, false)
+    }
+
+    /// [`with_samples`](Self::with_samples), also saying whether the scene has a
+    /// `LightProbeVolume` (M35).
+    ///
+    /// A second constructor parameter rather than a per-frame flag, for the
+    /// sample count's reason: GI is spliced into every mesh variant's shader, so
+    /// it is baked into the pipelines. A scene that gains or loses a volume gets
+    /// a new `SceneRenderer`, which is what the viewer's reload path already
+    /// does for `samples`.
+    ///
+    /// `false` compiles exactly the modules the renderer compiled before M35 —
+    /// which is why every committed baseline is untouched by this milestone
+    /// rather than merely measured to be.
+    pub fn configured(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        samples: u32,
+        gi: bool,
+    ) -> Self {
         let samples = samples.max(1);
         let multisample = wgpu::MultisampleState {
             count: samples,
@@ -86,7 +107,7 @@ impl super::SceneRenderer {
         };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(include_str!("../shaders/mesh.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&plain_mesh(gi))),
         });
 
         let uniform_layout = |label: &str, binding_size: Option<u64>| {
@@ -217,7 +238,35 @@ impl super::SceneRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
-                ],
+                ]
+                .into_iter()
+                // The four SH-L1 coefficient planes of the irradiance field
+                // (M35), and the sampler that reads them. Always in the layout,
+                // like every entry above it, with a 1x1x1 placeholder bound
+                // where a scene has no probe volume: a layout may carry entries
+                // the shader never references, and the reverse is the error.
+                //
+                // `Rgba16Float` is filterable in core WebGPU, which is the
+                // entire reason the field is a 3D texture rather than a buffer —
+                // probe interpolation comes free and continuous from the
+                // sampler.
+                .chain([5u32, 6, 7, 8].map(|binding| wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                }))
+                .chain([wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                }])
+                .collect::<Vec<_>>(),
             });
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -367,7 +416,7 @@ impl super::SceneRenderer {
         // by construction rather than by hoping.
         let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terrain-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_terrain())),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_terrain(gi))),
         });
         let terrain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("terrain-pipeline"),
@@ -411,11 +460,11 @@ impl super::SceneRenderer {
         // for the maps and a third vertex slot for the UVs they are read at.
         let textured_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("textured-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_textures())),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_textures(gi))),
         });
         let textured_blended_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("textured-blended-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_textures_and_refraction())),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_textures_and_refraction(gi))),
         });
         let textured_pipeline_for = |label: &str,
                                      module: &wgpu::ShaderModule,
@@ -525,7 +574,7 @@ impl super::SceneRenderer {
         // asks to bend light pays for a second shader.
         let refractive_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh-refractive-shader"),
-            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_refraction())),
+            source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_refraction(gi))),
         });
         let refractive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("mesh-refractive-pipeline"),
@@ -918,6 +967,9 @@ impl super::SceneRenderer {
             hud_pipeline,
             hud_layout,
             frame_textures_layout,
+            gi,
+            gi_field: None,
+            gi_placeholder: gi_placeholder_view(device),
             shadow_sampler,
             scene_sampler,
             format,
@@ -967,18 +1019,24 @@ impl super::SceneRenderer {
                 source: wgpu::ShaderSource::Wgsl(with_sky_common(&source)),
             })
         };
-        let plain = module("skinned-shader", with_surface(&[skin_producer()]));
+        // The renderer's own flag, not a parameter: these are built lazily, on
+        // the first skinned draw, long after the constructor that decided it.
+        let gi = self.gi;
+        let plain = module("skinned-shader", with_gi(vec![skin_producer()], gi));
         let textured = module(
             "skinned-textured-shader",
-            with_surface(&[skin_producer(), texture_producer()]),
+            with_gi(vec![skin_producer(), texture_producer()], gi),
         );
         let refractive = module(
             "skinned-refractive-shader",
-            with_surface(&[skin_producer(), refraction_producer()]),
+            with_gi(vec![skin_producer(), refraction_producer()], gi),
         );
         let textured_blended = module(
             "skinned-textured-blended-shader",
-            with_surface(&[skin_producer(), texture_producer(), refraction_producer()]),
+            with_gi(
+                vec![skin_producer(), texture_producer(), refraction_producer()],
+                gi,
+            ),
         );
 
         // Position, normal, UV, joints, weights. The joints arrive as
