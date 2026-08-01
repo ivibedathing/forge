@@ -1,6 +1,12 @@
 # designs/
 
-Two kinds of document live here.
+Three kinds of document live here.
+
+**`notes/` — what each system's build taught.** One note per system, relocated
+verbatim out of `CLAUDE.md` when that file was compacted from ~157k characters
+to an index. The notes hold the traps, the load-bearing constants and the
+measurements; `CLAUDE.md` keeps a digest of each and points here. **Read the
+note before changing the system it covers.** See `notes/README.md`.
 
 **Cross-cutting, and never pruned:**
 
@@ -44,16 +50,17 @@ built and their conclusions had been folded into `CLAUDE.md`. The eighteen:
 M12 wheels/collision, M13 particles, M15 frame cost and M16 environment never
 had one; their record has always been `CLAUDE.md` alone.
 
-**Where the content went.** `CLAUDE.md` carries a section per system with the
-decisions that cost time — it is the index and the survival guide, and it was
-written to be sufficient. The full text of every deleted doc is in git history:
+**Where the content went.** `designs/notes/` carries a note per system with the
+decisions that cost time — written to be sufficient, and originally the body of
+`CLAUDE.md` itself before that file was compacted to an index. The full text of
+every deleted doc is in git history:
 
 ```sh
 git log --diff-filter=D --oneline -- designs/water-design.md   # the deleting commit
 git show <commit>^:designs/water-design.md                     # the file itself
 ```
 
-**What was lost, stated plainly.** `CLAUDE.md` records what each system *does*
+**What was lost, stated plainly.** `notes/` records what each system *does*
 and the traps in it; the deleted docs also recorded the alternatives that were
 weighed and rejected, at more length than the summary keeps. If a change is
 about to reverse one of those decisions, read the original out of history first
