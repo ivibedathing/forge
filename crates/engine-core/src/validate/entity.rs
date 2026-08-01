@@ -353,6 +353,10 @@ pub(super) fn walk<'a>(
         let mut has_transform = false;
         let mut scale = glam::Vec3::ONE;
         let mut rotation = glam::Vec3::ZERO;
+        // Only the terrain-basin check reads this, and it reads it in world XZ:
+        // a basin is authored in world space, so the question "does it land on
+        // this patch" is asked about the patch's world footprint (M42).
+        let mut position = glam::Vec3::ZERO;
         let mut rigid_body: Option<(crate::components::BodyKind, String)> = None;
         let mut collider: Option<(crate::components::Collider, String)> = None;
         let mut wheel_path: Option<String> = None;
@@ -443,6 +447,7 @@ pub(super) fn walk<'a>(
                     has_transform = true;
                     scale = t.scale;
                     rotation = t.rotation;
+                    position = t.position;
                 }
                 Some(ComponentData::RigidBody(rb)) => {
                     body_kinds.insert(name.to_string(), rb.body);
@@ -1244,6 +1249,90 @@ pub(super) fn walk<'a>(
                 }
                 if layer.slope_range[0] > layer.slope_range[1] {
                     inverted("slope_range", layer.slope_range, "°");
+                }
+            }
+
+            // ── Basins (M42) ─────────────────────────────────────────────
+            //
+            // Both of these are warnings rather than errors: a basin that cuts
+            // nothing is legal, and a basin that misses this patch is legal too
+            // — M22 promises world-space sampling precisely so that one terrain
+            // description can be shared across several patches, and a shared
+            // description names basins some of its patches do not contain.
+            // What is *not* fine is either happening silently, because the
+            // symptom in both cases is identical: the ground is exactly what it
+            // was and nothing says why.
+            let centre = glam::Vec2::new(position.x, position.z);
+            let half = (glam::Vec2::new(scale.x, scale.z) * 0.5).abs();
+            let (patch_min, patch_max) = (centre - half, centre + half);
+
+            for (index, basin) in terrain.basins.iter().enumerate() {
+                let path = |field: &str| format!("{path}/basins/{index}/{field}");
+                let footprint = basin.radius + basin.falloff;
+
+                if basin.depth == 0.0 || footprint == 0.0 {
+                    let why = if basin.depth == 0.0 {
+                        "depth 0".to_string()
+                    } else {
+                        "radius 0 and falloff 0, so no footprint".to_string()
+                    };
+                    errors.push(
+                        cx.err(
+                            codes::TERRAIN_BASIN_NO_EFFECT,
+                            format!(
+                                "entity {name:?} basin {index} has {why}, so it cuts \
+                                 nothing and the ground there is the plain noise"
+                            ),
+                            &path(if basin.depth == 0.0 { "depth" } else { "radius" }),
+                        )
+                        .entity(name)
+                        .component("Terrain")
+                        .field("basins")
+                        .warning(),
+                    );
+                    continue;
+                }
+
+                // Rectangle against rectangle rather than circle against
+                // rectangle: the answer only has to be right about *missing
+                // entirely*, and the bounding box of a basin that clips a
+                // corner is the case where the two disagree — a warning that
+                // fires on a basin which does reach the patch is worse than one
+                // that stays quiet on a basin which barely does not.
+                let (basin_min, basin_max) = (
+                    glam::Vec2::new(basin.center[0], basin.center[1]) - footprint,
+                    glam::Vec2::new(basin.center[0], basin.center[1]) + footprint,
+                );
+                let overlaps = basin_min.x <= patch_max.x
+                    && basin_max.x >= patch_min.x
+                    && basin_min.y <= patch_max.y
+                    && basin_max.y >= patch_min.y;
+
+                if !overlaps {
+                    errors.push(
+                        cx.err(
+                            codes::TERRAIN_BASIN_OUTSIDE_PATCH,
+                            format!(
+                                "entity {name:?} basin {index} is centred at \
+                                 ({}, {}) with a footprint of {footprint} m, which \
+                                 misses the patch's own extent \
+                                 x [{}, {}], z [{}, {}] — basin centres are in \
+                                 **world** XZ, like every other terrain sample, not \
+                                 in the patch's local space",
+                                basin.center[0],
+                                basin.center[1],
+                                patch_min.x,
+                                patch_max.x,
+                                patch_min.y,
+                                patch_max.y
+                            ),
+                            &path("center"),
+                        )
+                        .entity(name)
+                        .component("Terrain")
+                        .field("basins")
+                        .warning(),
+                    );
                 }
             }
         }

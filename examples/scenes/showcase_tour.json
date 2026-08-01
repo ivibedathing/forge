@@ -46,6 +46,17 @@
           "texture_scale": 2.6,
           "color_variation": 0.35,
           "bump": 0.3,
+          "basins": [
+            {
+              "center": [
+                15.0,
+                5.5
+              ],
+              "radius": 2.8,
+              "depth": 1.7,
+              "falloff": 3.2
+            }
+          ],
           "layers": [
             {
               "albedo": [
@@ -1573,7 +1584,7 @@
           "type": "Transform",
           "position": [
             15.0,
-            -0.04,
+            -0.8,
             6.0
           ],
           "scale": [
@@ -1641,7 +1652,7 @@
           "type": "Transform",
           "position": [
             14.1,
-            0.35,
+            -0.72,
             5.2
           ],
           "rotation": [
@@ -1957,7 +1968,7 @@
           "type": "Transform",
           "position": [
             15.0,
-            0.11,
+            -0.65,
             1.4
           ],
           "rotation": [

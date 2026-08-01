@@ -1425,3 +1425,38 @@ Also covered, outside the fixture: the showcase tour gains a `templates` block (
 coverage test requires it) and its campfire throws real ember bodies that land on the terrain; and
 the arena shooter's twenty-four parked bullets become one template, which deleted 864 lines from the
 generated scene.
+
+## M42 — Terrain basins: `verify/m42_basins.json`
+
+Three depressions cut into one fBm patch at `--steps 180`: a pool with a raft floating in it, a dry
+crater with a vertical wall (`falloff: 0`) holding a boulder and a pebble, and two overlapping
+circles that read as a single oblong pond.
+
+**The overlapping pair is the assertion that a sum would fail.** Two `depth: 1.5` basins 4 m apart
+share a floor at 1.5 m under `max`; under a sum their overlap would be a 3 m pit down the middle and
+the "one pond" would read as two craters with a trench between them. The picture distinguishes the
+two rules at a glance, which no scalar assertion does as cheaply.
+
+**The raft and the boulder are the assertion that the collider is the same surface as the render.**
+Neither is placed on a floor any file states: the raft is settled by `Buoyancy` against water whose
+bed was dug by the height field, and the boulder is dropped from 4 m onto a crater floor that
+exists only because `height_at` subtracts a basin. A basin applied in the mesh generator alone —
+the obvious wrong implementation — draws this frame identically except that both fall through.
+
+No horizon in frame and `samples: 1`, so it carries a hard bit-exact pin
+(`the_basin_fixture_matches_its_baseline`); three consecutive renders came back as one image.
+
+```
+engine validate examples/scenes/verify/m42_basins.json --strict
+engine diff-render examples/scenes/verify/m42_basins.json \
+    examples/scenes/verify/baselines/m42_basins.png --steps 180
+engine terrain-height examples/scenes/verify/m42_basins.json --at -6,-8   # the pool floor
+engine terrain-height examples/scenes/verify/m42_basins.json --at -6,-2   # the ground outside it
+```
+
+**What a picture cannot say is a second test.** `terrain_height_reports_the_basin_floor` asks the
+query for the pool's floor and for the field 6 m away, and requires the difference to be the
+authored 2.1 m — a basin is a *subtraction from a field that still varies underneath it*, so the
+check is a range rather than an equality, deliberately: a basin on a hillside stays on the hillside.
+It also steps 0.3 m across the dry crater's rim and requires the whole 1.2 m drop, which is what
+`falloff: 0` means and what no other fixture in the repo asserts.

@@ -591,6 +591,18 @@
       "height": 360,
       "milestone": "M41",
       "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m42_basins.png",
+      "scene": "examples/scenes/verify/m42_basins.json",
+      "args": [
+        "--steps",
+        "180"
+      ],
+      "width": 800,
+      "height": 450,
+      "milestone": "M42",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [

@@ -88,6 +88,8 @@ build fails.
 | `water_waves_self_intersect` | 1 | the sum of Water wave steepness exceeds 1, which folds the surface through itself |
 | `terrain_with_mesh` | 1 | a Terrain entity owns its own surface; it may not also have a Mesh or a Material |
 | `terrain_layer_range_inverted` | 1 | a Terrain layer's height or slope range runs backwards, so it covers nothing |
+| `terrain_basin_no_effect` | 1 | a Terrain basin has no depth or no footprint, so it cuts nothing (warning) |
+| `terrain_basin_outside_patch` | 1 | a Terrain basin's footprint misses the patch entirely, usually a center written in local rather than world XZ (warning) |
 | `road_with_mesh` | 1 | a Road entity owns its own surface; it may not also have a Mesh or a Material |
 | `road_too_few_points` | 1 | a Road needs at least two centerline points, or three to close |
 | `road_corner_does_not_fit` | 1 | two corner radii need more of the edge between them than it has |

@@ -1848,6 +1848,76 @@ fn rejects_a_terrain_layer_whose_band_runs_backwards() {
 }
 
 #[test]
+fn warns_about_a_basin_that_cuts_nothing() {
+    // Both halves are silent failures with the same symptom — the ground is
+    // exactly the noise and nothing says why (M42).
+    let no_depth = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform","scale":[100.0,1.0,100.0]},
+            {"type":"Terrain","basins":[{"center":[5.0,5.0],"radius":4.0}]}
+        ]}
+    ]}"#;
+    let errors = validate_source(no_depth, "test.json");
+    assert_eq!(codes_of(no_depth), ["terrain_basin_no_effect"]);
+    assert!(errors[0].is_warning());
+    assert_eq!(
+        errors[0].context().unwrap().path.as_deref(),
+        Some("/entities/0/components/1/basins/0/depth")
+    );
+
+    // A depth with nowhere to apply it is the same failure from the other end.
+    let no_footprint = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform","scale":[100.0,1.0,100.0]},
+            {"type":"Terrain","basins":[
+                {"center":[5.0,5.0],"depth":2.0,"radius":0.0,"falloff":0.0}
+            ]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(no_footprint), ["terrain_basin_no_effect"]);
+
+    // A real basin is quiet.
+    let dug = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform","scale":[100.0,1.0,100.0]},
+            {"type":"Terrain","basins":[
+                {"center":[5.0,5.0],"radius":4.0,"depth":1.5,"falloff":3.0}
+            ]}
+        ]}
+    ]}"#;
+    assert!(codes_of(dug).is_empty());
+}
+
+#[test]
+fn warns_about_a_basin_that_misses_its_patch() {
+    // The mistake this catches is a `center` written in the patch's local
+    // space, which is the natural guess and does nothing at all.
+    let source = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform","position":[200.0,0.0,0.0],
+             "scale":[100.0,1.0,100.0]},
+            {"type":"Terrain","basins":[
+                {"center":[0.0,0.0],"radius":4.0,"depth":1.5,"falloff":3.0}
+            ]}
+        ]}
+    ]}"#;
+    let errors = validate_source(source, "test.json");
+    assert_eq!(codes_of(source), ["terrain_basin_outside_patch"]);
+    assert!(errors[0].is_warning());
+    assert_eq!(
+        errors[0].context().unwrap().path.as_deref(),
+        Some("/entities/0/components/1/basins/0/center")
+    );
+
+    // The same basin under the patch that does contain it is quiet, and so is
+    // one that only reaches the patch with its wall.
+    let inside = source.replace(r#""position":[200.0,0.0,0.0],"#, "");
+    assert!(codes_of(&inside).is_empty());
+    let grazing = source.replace("[200.0,0.0,0.0]", "[56.0,0.0,0.0]");
+    assert!(codes_of(&grazing).is_empty());
+}
+
+#[test]
 fn rejects_more_terrain_layers_than_the_shader_can_hold() {
     // The layer table is fixed-size, so a fifth layer would be dropped
     // silently — the schema's `maxItems` catches it before it can be.
