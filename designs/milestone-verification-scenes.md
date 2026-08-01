@@ -1460,3 +1460,39 @@ authored 2.1 m — a basin is a *subtraction from a field that still varies unde
 check is a range rather than an equality, deliberately: a basin on a hillside stays on the hillside.
 It also steps 0.3 m across the dry crater's rim and requires the whole 1.2 m drop, which is what
 `falloff: 0` means and what no other fixture in the repo asserts.
+
+## M43 — Material-aware fracture: `verify/m43_fracture.json`
+
+Four slabs of four materials in a row — a glass pane, a wood plank, a stone block, a metal plate —
+each with the same steel weight dropped on it, rendered at `--steps 55`, a second after the impacts.
+
+**The four break patterns side by side are the assertion.** They share a scene, a clock and a
+hammer, so anything that broke fracture as a whole would move all four together. Only a working
+material model puts glass slivers scattered across the floor, wood splinters in a heap with long
+pieces still standing, stone chunks sitting where the block was, and metal in two plates that barely
+parted. The picture distinguishes four algorithms at a glance, which no scalar assertion does as
+cheaply — and the *ordering* it shows (glass throws its pieces roughly six times as far as stone
+drops its chunks) is the one claim the whole material model rests on.
+
+**Every shard in the file was generated, not authored.** The four `Breakable` components came out of
+`engine fracture --write`, which is the milestone's other half: the generator is a command, so what
+the runtime sees is ordinary text a reader can diff, edit and re-generate from the same seed.
+
+No terrain in frame and `samples: 1`, so it carries a hard bit-exact pin
+(`the_fracture_fixture_matches_its_baseline`); three consecutive renders came back as one image.
+
+```
+engine validate examples/scenes/verify/m43_fracture.json --strict
+engine diff-render examples/scenes/verify/m43_fracture.json \
+    examples/scenes/verify/baselines/m43_fracture.png --steps 55
+engine simulate examples/scenes/verify/m43_fracture.json --steps 55 --trace /tmp/f.jsonl
+grep -o '"broke":"[A-Za-z]*"' /tmp/f.jsonl   # all four, once each
+engine fracture examples/scenes/verify/m43_fracture.json --entity StoneBlock --seed 9
+```
+
+**What a picture cannot say is in the generator's own tests.** They are properties rather than
+pixels: the cells tile the source box to within 1% of its volume (fragments that overlapped would be
+interpenetrating bodies at spawn, and rapier would fling them apart), every cell bounds a volume and
+stays inside the box, the piece count is exact, the same seed reproduces the same points, wood's
+splinters run along the grain, and glass's shards span the full thickness of the pane and come out
+smaller near the impact.

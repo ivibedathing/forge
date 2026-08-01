@@ -80,6 +80,10 @@ build fails.
 | `ragdoll_bad_hinge` | 1 | a Ragdoll hinge axis is zero-length, or its range runs backwards |
 | `collider_part_fit_unsupported` | 1 | a sphere part asks to fit the bone, and a sphere has no length to solve |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
+| `fragment_geometry` | 1 | a fragment is a mesh reference or a shard's points, never both and never neither |
+| `shard_degenerate` | 1 | a shard's points do not bound a volume: fewer than four, or all coplanar |
+| `shard_with_mesh` | 1 | a Shard owns its geometry, so the entity may not also carry a Mesh |
+| `fracture_failed` | 1 | engine fracture could not break the volume into the pieces asked for |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |
 | `daylight_palette_invalid` | 1 | a daylight palette needs at least two keyframes with strictly increasing hours |

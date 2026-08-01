@@ -35,6 +35,7 @@ scene's components with the defaults filled in.
 | [`RigidBody`](#rigidbody) | A simulated rigid body (M8). Requires a `Transform`; a **dynamic** body |
 | [`Road`](#road) | A road: a circuit, a street, a mountain pass. |
 | [`Script`](#script) | Gameplay logic as data (M10): a Rhai script run once per fixed step. |
+| [`Shard`](#shard) | A convex piece of a broken thing (M43), as a point set that **owns its |
 | [`SkinnedCollider`](#skinnedcollider) | Collision proxies that follow a skinned character's pose (M33). |
 | [`Terrain`](#terrain) | A patch of ground: displaced terrain with a procedurally shaded surface |
 | [`Transform`](#transform) | Position, orientation, and scale. |
@@ -94,6 +95,7 @@ else.
 |---|---|---|---|
 | `fragments` | `object[]` | — | What the entity becomes. At least one. |
 | `impulse_threshold` | `number` | — | Contact impulse, in kg·m/s (≈ mass x closing speed), at or above which a collision breaks this entity. **Absent means collisions never break it** — only scripts and explosions do. Impulse rather than force so the number survives a `timestep_hz` change. `> 0`. (greater than 0) |
+| `material` | `object` | — | What this is made of (M43), which decides how the pieces behave once they are pieces: how hard they scatter away from the impact, how much they tumble, and what their surfaces are like.  **Absent is M14 unchanged** — fragments take the parent's motion and nothing else, on `friction: 0.5, restitution: 0.0`. A material is also what `engine fracture` generates shard geometry for, but the two halves are independent: a wooden crate that breaks into authored boxes still scatters like wood. |
 
 ## Buoyancy
 
@@ -751,6 +753,27 @@ scene file.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `source` | `string` | — |  |
+
+## Shard
+
+A convex piece of a broken thing (M43), as a point set that **owns its
+geometry** — so an entity with one carries no `Mesh`, the rule `Water`,
+`Terrain`, `Cloud`, `Road`, `Junction` and `Meadow` already follow.
+
+It is `Tree`'s exception on materials: the entity's own `Material` is the
+shard's surface, because a shard of a painted crate is painted.
+
+The drawn solid is the convex hull of `points`, flat-shaded, and a
+`convex_hull` `Collider` on the same entity collides with that same hull —
+the file carries points rather than faces precisely so the two cannot be
+different shapes.
+
+Ordinary authored data, not a runtime-only artifact: rubble on the ground is
+a pile of these. `engine fracture` is what usually writes them.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `points` | `array[]` | — | The convex point set, in entity-local metres, scaled by `Transform.scale` like every other length. At least 4, at most 32, and they must bound a volume (`shard_degenerate`). |
 
 ## SkinnedCollider
 

@@ -336,6 +336,57 @@ enum Command {
         write: bool,
     },
 
+    /// Break an entity's volume into material-shaped shards (M43).
+    ///
+    /// M14 settled that a `Breakable`'s fragments exist in the text file before
+    /// the run, and its design doc named this as the way out: "a future
+    /// `engine fracture` CLI could *generate* this JSON offline without
+    /// changing the runtime". Nothing at load time or break time fractures
+    /// anything — this writes fragments, and the runtime spawns what it reads.
+    ///
+    /// The volume is the entity's cuboid `Collider` if it has one, else its
+    /// mesh's bounding box. A source shape that is not a box fractures its box,
+    /// which is stated rather than hidden: a fractured sphere would otherwise
+    /// silently gain corners.
+    Fracture {
+        scene: PathBuf,
+        /// The entity to break up.
+        #[arg(long)]
+        entity: String,
+        /// What it is made of: `glass`, `wood`, `stone` or `metal`. Absent, the
+        /// entity's existing `Breakable.material`, and failing that `stone`.
+        #[arg(long)]
+        material: Option<String>,
+        /// How many pieces. Absent, what the material breaks into by default —
+        /// glass the most, metal the fewest.
+        #[arg(long)]
+        pieces: Option<u32>,
+        /// The fracture's random seed. The same seed reproduces the same
+        /// shards byte for byte.
+        #[arg(long, default_value_t = 1)]
+        seed: u32,
+        /// Where it was struck as x,y,z, in entity-local metres — materials
+        /// break finer here. Absent, the middle of the face it would most
+        /// likely be hit on.
+        #[arg(long, allow_hyphen_values = true)]
+        impact: Option<String>,
+        /// Wood's grain direction as x,y,z, in entity-local space. Ignored by
+        /// the other three materials; absent, the volume's longest axis.
+        #[arg(long, allow_hyphen_values = true)]
+        grain: Option<String>,
+        /// The contact impulse that breaks it, in kg·m/s. Absent, the entity
+        /// keeps the `impulse_threshold` it already had — and an entity with
+        /// no `Breakable` yet gets none, which means script-and-explosion-only
+        /// by M14's rule.
+        #[arg(long)]
+        threshold: Option<f32>,
+        /// Splice the result into the scene file, replacing any `Breakable`
+        /// already on the entity and keeping its `impulse_threshold`. Without
+        /// it, the component is printed and the file is untouched.
+        #[arg(long)]
+        write: bool,
+    },
+
     /// Print where every HUD element ends up on screen (M31).
     ///
     /// This is the command the UI system is really for. An agent authoring a
@@ -636,6 +687,27 @@ fn main() {
             shape,
             write,
         } => fit_colliders(scene, entity, shape, write),
+        Command::Fracture {
+            scene,
+            entity,
+            material,
+            pieces,
+            seed,
+            impact,
+            grain,
+            threshold,
+            write,
+        } => fracture(FractureArgs {
+            scene,
+            entity,
+            material,
+            pieces,
+            seed,
+            impact,
+            grain,
+            threshold,
+            write,
+        }),
         Command::UiLayout {
             scene,
             width,
@@ -1022,6 +1094,287 @@ fn list_colliders(
         serde_json::json!({ "steps": steps, "colliders": colliders })
     );
     Ok(())
+}
+
+/// `engine fracture`'s arguments — a named struct rather than eight
+/// positional ones, for `Presence`'s reason: three of them are
+/// `Option<String>` and a swapped pair would type-check and fracture the wrong
+/// thing.
+struct FractureArgs {
+    scene: PathBuf,
+    entity: String,
+    material: Option<String>,
+    pieces: Option<u32>,
+    seed: u32,
+    impact: Option<String>,
+    grain: Option<String>,
+    threshold: Option<f32>,
+    write: bool,
+}
+
+/// `engine fracture` — break an entity's volume into material-shaped shards
+/// (M43).
+///
+/// The generator is a command and never a runtime behaviour, which is M14's
+/// decision kept rather than overruled: what reaches the engine is a list of
+/// fragments in the scene file, validated against the schema, identical from
+/// run to run. `engine fit-colliders` (M39) is the same shape — a solver an
+/// author runs, whose output is ordinary authored data.
+fn fracture(args: FractureArgs) -> Result<()> {
+    let FractureArgs {
+        scene: scene_path,
+        entity,
+        material,
+        pieces,
+        seed,
+        impact,
+        grain,
+        threshold,
+        write,
+    } = args;
+    let display = scene_path.display().to_string();
+
+    // The *file*, not the instantiated world: this reads and writes component
+    // definitions, and `Scene` has already spent them into hecs.
+    let source = std::fs::read_to_string(&scene_path).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_UNREADABLE,
+            format!("cannot read {display}: {e}"),
+        )
+        .file(&display)
+    })?;
+    load_scene(&scene_path)?;
+    let scene: engine_core::SceneFile = serde_json::from_str(&source).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_PARSE_DESYNC,
+            format!("{display} passed validation but failed to parse: {e}"),
+        )
+        .file(&display)
+    })?;
+
+    let target = scene
+        .entities
+        .iter()
+        .find(|e| e.name == entity)
+        .ok_or_else(|| {
+            EngineError::new(
+                codes::UNKNOWN_ENTITY,
+                format!("no entity named {entity:?} in {display}"),
+            )
+            .file(&display)
+            .suggest_from(&entity, scene.entities.iter().map(|e| e.name.as_str()))
+        })?;
+
+    let existing = target.components.iter().find_map(|c| match c {
+        engine_core::components::ComponentData::Breakable(b) => Some(b),
+        _ => None,
+    });
+
+    // The material is the flag, else what the entity already says it is made
+    // of, else stone — the one of the four that reads as "a solid object".
+    let material = match &material {
+        Some(name) => engine_core::components::FractureMaterial::parse(name).ok_or_else(|| {
+            EngineError::new(
+                codes::UNKNOWN_FIELD,
+                format!("{name:?} is not a material this fractures"),
+            )
+            .file(&display)
+            .suggest_from(name, engine_core::components::FractureMaterial::NAMES.iter().copied())
+        })?,
+        None => existing
+            .and_then(|b| b.material)
+            .unwrap_or(engine_core::components::FractureMaterial::Stone),
+    };
+
+    // The fracture runs in **world** metres and the shards come back in local
+    // ones. The entity's own scale is what separates the two, and it has to be
+    // in this arithmetic rather than left out: a plank authored as a
+    // `builtin:cube` scaled to [0.6, 0.18, 2.6] has a *cube* for its local box,
+    // and a generator that only saw the local box would find no grain axis to
+    // splinter along and no thin axis to shatter through.
+    let (half_extents, scale) = source_volume(target, &scene_path, &display, &entity)?;
+    let world_half = half_extents * scale.abs();
+    let recipe = engine_core::fracture::Recipe {
+        half_extents: world_half,
+        material,
+        pieces: pieces.unwrap_or_else(|| engine_core::fracture::Recipe::default_pieces(material)),
+        seed,
+        impact: match &impact {
+            Some(text) => simulate::parse_vec3(text)? * scale.abs(),
+            None => engine_core::fracture::Recipe::default_impact(world_half, material),
+        },
+        grain: match &grain {
+            Some(text) => Some(simulate::parse_vec3(text)?),
+            None => None,
+        },
+    };
+    let mut fragments =
+        engine_core::fracture::fracture(&recipe).map_err(|e| e.file(&display).entity(&entity))?;
+
+    // Measured before the unscale, so the report is in metres — "how big are
+    // the pieces" is a question about the world, not about local units.
+    let volumes: Vec<f32> = fragments
+        .iter()
+        .map(|f| engine_core::shard::volume(f.points.as_deref().unwrap_or_default()))
+        .collect();
+
+    // Back into the entity's units, where a fragment's points and offset both
+    // live — `Transform.scale` multiplies them again at spawn.
+    let unscale = glam::Vec3::ONE / scale.abs();
+    for fragment in &mut fragments {
+        fragment.offset *= unscale;
+        if let Some(points) = &mut fragment.points {
+            for point in points {
+                *point *= unscale;
+            }
+        }
+    }
+
+    // The threshold is a decision about the object rather than about its
+    // shards, so a refracture keeps it — `fit-colliders` keeps a character's
+    // layers for the same reason. `--threshold` is how a first fracture gives
+    // one to an entity that had no `Breakable` at all.
+    let component = engine_core::components::Breakable {
+        fragments,
+        impulse_threshold: threshold.or(existing.and_then(|b| b.impulse_threshold)),
+        material: Some(material),
+    };
+
+    if write {
+        let mut edited = source.clone();
+        if existing.is_some() {
+            edited = engine_core::formatter::apply_remove_component(
+                &edited,
+                &engine_core::formatter::RemoveComponent {
+                    entity: entity.clone(),
+                    component: "Breakable".into(),
+                },
+            )?;
+        }
+        let mut encoded = serde_json::to_value(&component.fragments).map_err(|e| {
+            EngineError::new(
+                codes::SCENE_PARSE_DESYNC,
+                format!("a generated fragment did not encode: {e}"),
+            )
+        })?;
+        // Seven digits, not seventeen: these came from f32s, and a scene file
+        // full of `0.12767969071865082` is precision nobody wrote.
+        engine_core::formatter::shorten_floats(&mut encoded);
+        let mut fields = vec![
+            ("fragments".to_string(), encoded),
+            (
+                "material".to_string(),
+                serde_json::json!(material.as_str()),
+            ),
+        ];
+        if let Some(threshold) = component.impulse_threshold {
+            fields.push(("impulse_threshold".to_string(), serde_json::json!(threshold)));
+        }
+        let edited = engine_core::formatter::apply_add_component(
+            &edited,
+            &engine_core::formatter::AddComponent {
+                entity: entity.clone(),
+                component: "Breakable".into(),
+                fields,
+            },
+        )?;
+        engine_core::formatter::write_atomic(&scene_path, &edited)?;
+    }
+
+    // The report answers "what did it do" without reading the shards: how big
+    // the pieces are, in metres.
+    let total: f32 = volumes.iter().sum();
+    println!(
+        "{}",
+        serde_json::json!({
+            "scene": display,
+            "entity": entity,
+            "material": material.as_str(),
+            "seed": seed,
+            "source_half_extents": half_extents.to_array(),
+            "world_half_extents": world_half.to_array(),
+            "impact": recipe.impact.to_array(),
+            "pieces": component.fragments.len(),
+            "volume": total,
+            "smallest": volumes.iter().copied().fold(f32::MAX, f32::min),
+            "largest": volumes.iter().copied().fold(0.0, f32::max),
+            "written": write,
+            "component": serde_json::to_value(&component).unwrap_or_default(),
+        })
+    );
+    Ok(())
+}
+
+/// The box `engine fracture` breaks up: the entity's cuboid `Collider` if it
+/// has one, else its mesh's bounding box.
+///
+/// The collider comes first deliberately. It is what physics already believes
+/// the object is, so the shards replace exactly the volume that was being hit
+/// — a mesh AABB that disagreed with the collider would fracture into a solid
+/// a different size from the one that broke.
+fn source_volume(
+    entity: &engine_core::scene::EntityDef,
+    scene_path: &Path,
+    display: &str,
+    name: &str,
+) -> Result<(glam::Vec3, glam::Vec3)> {
+    use engine_core::components::{ColliderShapeKind, ComponentData};
+
+    let mut scale = glam::Vec3::ONE;
+    let mut collider = None;
+    let mut mesh = None;
+    for component in &entity.components {
+        match component {
+            ComponentData::Transform(t) => scale = t.scale,
+            ComponentData::Collider(c) => collider = Some(c),
+            ComponentData::Mesh(m) => mesh = Some(m.asset.clone()),
+            _ => {}
+        }
+    }
+
+    if let Some(collider) = collider {
+        if collider.shape == ColliderShapeKind::Cuboid {
+            if let Some(half) = collider.half_extents {
+                return Ok((half, scale));
+            }
+        }
+    }
+
+    let Some(asset) = mesh else {
+        return Err(EngineError::new(
+            codes::COLLIDER_MISSING_MESH,
+            format!(
+                "entity {name:?} has neither a cuboid Collider nor a Mesh, so there is \
+                 no volume to fracture"
+            ),
+        )
+        .file(display)
+        .entity(name));
+    };
+
+    let base_dir = scene_path.parent().unwrap_or(Path::new("."));
+    let data = match engine_core::mesh::MeshAsset::resolve(&asset, base_dir)? {
+        engine_core::mesh::MeshAsset::Builtin(builtin) => builtin.data(),
+        engine_core::mesh::MeshAsset::File(path) => engine_assets::load_gltf(&path)?,
+    };
+    let mut low = glam::Vec3::splat(f32::MAX);
+    let mut high = glam::Vec3::splat(f32::MIN);
+    for position in &data.positions {
+        let point = glam::Vec3::from_array(*position);
+        low = low.min(point);
+        high = high.max(point);
+    }
+    if !(high.cmpgt(low).all()) {
+        return Err(EngineError::new(
+            codes::INVALID_SHAPE_DIMENSION,
+            format!("the mesh on entity {name:?} has no volume to fracture"),
+        )
+        .file(display)
+        .entity(name));
+    }
+    // The AABB's half-extents, centred: a mesh whose origin is not its middle
+    // still fractures into a box around its own geometry.
+    Ok(((high - low) * 0.5, scale))
 }
 
 /// `engine fit-colliders` — solve a proxy set from a skin's vertex weights

@@ -348,6 +348,7 @@ pub(super) fn walk<'a>(
         // has needs the `SkinnedCollider` beside it.
         let mut ragdoll: Option<(crate::components::Ragdoll, String)> = None;
         let mut tree_path: Option<String> = None;
+        let mut shard_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
         let mut has_transform = false;
@@ -438,6 +439,9 @@ pub(super) fn walk<'a>(
             }
             if type_name == "Tree" {
                 tree_path = Some(component_path.clone());
+            }
+            if type_name == "Shard" {
+                shard_path = Some(component_path.clone());
             }
             if type_name == "Material" {
                 material_paths.push(component_path.clone());
@@ -742,12 +746,17 @@ pub(super) fn walk<'a>(
             // without a mesh file duplicating what the renderer already draws —
             // and for a road it is the whole point, since the surface driven and
             // the surface drawn then cannot be authored apart.
+            // A `Shard` (M43) is the third: a `convex_hull` collider on one,
+            // with no asset, collides with the hull the shard draws — which is
+            // what makes a broken piece's drawn shape and collided shape
+            // impossible to author apart.
             if mesh_shape
                 && collider_data.asset.is_none()
                 && !has_mesh
                 && terrain.is_none()
                 && road.is_none()
                 && junction.is_none()
+                && shard_path.is_none()
             {
                 errors.push(
                     cx.err(
@@ -1011,6 +1020,28 @@ pub(super) fn walk<'a>(
                 )
                 .entity(name)
                 .component("Tree"),
+            );
+        }
+
+        // ── Shard entity checks (M43) ─────────────────────────────────
+        //
+        // A `Shard` *is* the entity's geometry, for `tree_with_mesh`'s reason:
+        // two geometries at one transform draw on top of each other and
+        // nothing says which one the author meant. Its `Material` is fine —
+        // that is the shard's surface, the same exception a Tree's bark is.
+        if let (Some(path), true) = (&shard_path, has_mesh) {
+            errors.push(
+                cx.err(
+                    codes::SHARD_WITH_MESH,
+                    format!(
+                        "entity {name:?} has both a Shard and a Mesh; a Shard is the \
+                         convex hull of its own points, so the two would draw on top \
+                         of each other — split them into two entities"
+                    ),
+                    mesh_path.as_deref().unwrap_or(path),
+                )
+                .entity(name)
+                .component("Shard"),
             );
         }
 
@@ -1429,6 +1460,7 @@ pub(super) fn walk<'a>(
         // so it does not also collect this: one mistake, one diagnostic.
         if !has_mesh
             && tree_path.is_none()
+            && shard_path.is_none()
             && water.is_none()
             && cloud_path.is_none()
             && terrain.is_none()

@@ -1358,14 +1358,106 @@ fn rejects_unknown_fragment_fields_with_a_suggestion() {
 }
 
 #[test]
-fn rejects_a_fragment_missing_its_mesh() {
+fn rejects_a_fragment_with_no_geometry() {
+    // Before M43 this was `missing_field` on a required `mesh`. A fragment is
+    // now a mesh reference *or* a shard, so the rule moved rather than went
+    // away: neither of the two is still a rejection, with a message that names
+    // both ways out.
     let source = r#"{"name":"s","entities":[
         {"name":"Crate","components":[
             {"type":"Transform"},
             {"type":"Breakable","fragments":[{"offset":[0.1,0.0,0.0]}]}
         ]}
     ]}"#;
-    assert_eq!(codes_of(source), ["missing_field"]);
+    assert_eq!(codes_of(source), ["fragment_geometry"]);
+}
+
+#[test]
+fn rejects_a_fragment_that_is_both_a_mesh_and_a_shard() {
+    let source = r#"{"name":"s","entities":[
+        {"name":"Crate","components":[
+            {"type":"Transform"},
+            {"type":"Breakable","fragments":[{"mesh":"builtin:cube",
+             "points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]}]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["fragment_geometry"]);
+}
+
+#[test]
+fn rejects_half_extents_on_a_shard_fragment() {
+    // The half-extents would describe a collider physics never builds: a
+    // shard's collider is its own hull.
+    let source = r#"{"name":"s","entities":[
+        {"name":"Crate","components":[
+            {"type":"Transform"},
+            {"type":"Breakable","fragments":[
+             {"points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]],
+              "half_extents":[0.5,0.5,0.5]}]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["fragment_geometry"]);
+}
+
+#[test]
+fn rejects_a_shard_that_bounds_no_volume() {
+    // Four coplanar points. A flat shard draws nothing and collides with
+    // nothing, which is the hardest failure there is to read off a picture.
+    let flat = r#"{"name":"s","entities":[
+        {"name":"Rubble","components":[
+            {"type":"Transform"},
+            {"type":"Shard","points":[[0,0,0],[1,0,0],[1,0,1],[0,0,1]]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(flat), ["shard_degenerate"]);
+
+    // And the same points inside a fragment, which is the other place they
+    // can appear.
+    let fragment = r#"{"name":"s","entities":[
+        {"name":"Crate","components":[
+            {"type":"Transform"},
+            {"type":"Breakable","fragments":[
+             {"points":[[0,0,0],[1,0,0],[1,0,1],[0,0,1]]}]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(fragment), ["shard_degenerate"]);
+}
+
+#[test]
+fn a_shard_owns_its_geometry() {
+    let source = r#"{"name":"s","entities":[
+        {"name":"Rubble","components":[
+            {"type":"Transform"},
+            {"type":"Mesh","asset":"builtin:cube"},
+            {"type":"Shard","points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["shard_with_mesh"]);
+
+    // Its Material is fine, though — that is the shard's surface, the same
+    // exception a Tree's bark is.
+    let painted = r#"{"name":"s","entities":[
+        {"name":"Rubble","components":[
+            {"type":"Transform"},
+            {"type":"Material","albedo":[0.5,0.5,0.5]},
+            {"type":"Shard","points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]}
+        ]}
+    ]}"#;
+    assert!(codes_of(painted).is_empty(), "{:?}", codes_of(painted));
+}
+
+#[test]
+fn a_shard_is_geometry_a_convex_hull_collider_can_borrow() {
+    // No asset, no Mesh — and no error, because the shard's own hull is what
+    // the collider is built from (M43).
+    let source = r#"{"name":"s","entities":[
+        {"name":"Rubble","components":[
+            {"type":"Transform"},
+            {"type":"Shard","points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]},
+            {"type":"Collider","shape":"convex_hull"}
+        ]}
+    ]}"#;
+    assert!(codes_of(source).is_empty(), "{:?}", codes_of(source));
 }
 
 #[test]

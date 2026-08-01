@@ -84,6 +84,20 @@ pub(super) fn walk_component(
             continue; // already reported as unknown
         };
         let property = schemas.resolve(property);
+        // An `Option<T>` of a *named* type (an enum, a struct) publishes
+        // `anyOf: [{$ref}, {"type": "null"}]` rather than the flat
+        // `"type": ["string", "null"]` an optional primitive gets, and
+        // `schema_type` reads only the flat form. Without this, every check
+        // below finds no type at all and waves the field through — which is
+        // how `"material": "wud"` reached serde and came back as
+        // `scene_parse_desync`, the code that means "engine bug" (M43).
+        let (property, nullable) = match optional_variant(schemas, property) {
+            Some(inner) => (inner, true),
+            None => (property, false),
+        };
+        if nullable && value.is_null() {
+            continue; // an explicit null is the absent case
+        }
         let field_path = format!("{component_path}/{key}");
         shape_clean &= check_value(
             cx,
@@ -117,6 +131,21 @@ pub(super) fn schema_type(schema: &Value) -> (Option<&str>, bool) {
         return (concrete, nullable);
     }
     (None, false)
+}
+
+/// The `T` of an `Option<T>` written as `anyOf: [T, null]`, resolved through
+/// its `$ref`. `None` when the schema is not that shape.
+pub(super) fn optional_variant<'a>(
+    schemas: &'a ComponentSchemas,
+    schema: &'a Value,
+) -> Option<&'a Value> {
+    let branches = schema["anyOf"].as_array()?;
+    if branches.len() != 2 {
+        return None;
+    }
+    let has_null = branches.iter().any(|b| b["type"] == "null");
+    let concrete = branches.iter().find(|b| b["type"] != "null")?;
+    has_null.then(|| schemas.resolve(concrete))
 }
 
 /// The closed set of strings a property schema accepts, if it is an enum.

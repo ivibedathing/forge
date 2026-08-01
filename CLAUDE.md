@@ -50,7 +50,8 @@ actually says.
 | `SkinnedCollider` | Hangs simple collision proxies off named joints, re-posed from the rig every step; a part may `fit` its bone. | `m33-skinned-colliders.md`, `m39-ragdolls.md` |
 | `Ragdoll` | Hands a skinned character's skeleton to physics — one-way, per entity — and carries the resulting `pose`. | `m39-ragdolls.md` |
 | `ParticleEmitter` | A seeded deterministic cone emitter around local **−Z**; M17's fields turn a smoke cone into flame. | `m13-particles-and-m17-fire.md` |
-| `Breakable` | Lists pre-authored fragments and the impulse that shatters the entity into them. | `m14-breaking.md` |
+| `Breakable` | Lists pre-authored fragments and the impulse that shatters the entity into them. Since M43 it names its `material`, which decides how the pieces behave once they are pieces. | `m14-breaking.md`, `m43-fracture.md` |
+| `Shard` | A convex piece of a broken thing, as a point set that **owns its geometry** — the hull it draws is the hull it collides with. | `m43-fracture.md` |
 | `Wheel` | One raycast-suspension wheel on its own *visual* entity, naming the chassis it drives. | `m11_5-vehicles-and-wheels.md` |
 | `Water` | A body of water that **owns its surface** — Gerstner waves, depth colouring, foam, refraction. Since M41 it also carries the fluid's `density`, the one field nothing renders. | `m18-water.md`, `m27-water-refraction.md`, `m41-buoyancy.md` |
 | `Terrain` | A height-field patch that **owns its grid**, painted by height/slope layers; the ground everything stands on. Since M42 its `basins` cut authored hollows into the noise. | `m22-terrain.md`, `m42-terrain-basins.md` |
@@ -66,8 +67,9 @@ actually says.
 | `HudInteract` | Makes the HUD element on its own entity hoverable, pressable and clickable — polled, never dispatched. | `m31-ui-system.md` |
 
 **Recipes own their geometry**, so `Water`, `Terrain`, `Road`, `Junction`, `Cloud` and `Meadow`
-carry **no `Mesh` and no `Material`** — authoring one is a validation error. A `Tree` is the exception on
-materials only: the entity's `Material` is its bark.
+carry **no `Mesh` and no `Material`** — authoring one is a validation error. `Tree` and `Shard` are
+the exceptions on materials only: a tree's `Material` is its bark, and a shard's is the surface the
+thing it broke off was painted.
 
 **Scene-level blocks**, siblings of `entities`: `physics` (gravity, `timestep_hz`), `environment`
 (sky, fog, shadows and their cascades, MSAA — `m16-environment.md`, `m38-shadow-cascades.md`,
@@ -79,13 +81,14 @@ script spawns at runtime — `m37-entity-spawning.md`).
 
 ## Current state
 
-**M0–M42 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M43 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
-M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins.
+M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
+M43 material-aware fracture.
 (M35 is a design doc only — global illumination, not built. M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
@@ -124,6 +127,10 @@ engine junction-plan <scene.json> [--entity Name]    # where a Junction's arms m
 engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
 #   every collider physics holds — shape, size, world placement — read back out of the
 #   built world, so a skinned hitbox nothing renders is still answerable (M33)
+engine fracture <scene.json> --entity Name [--material M] [--pieces N] [--seed S]
+#                 [--impact x,y,z] [--grain x,y,z] [--threshold T] [--write]
+#   break a volume into material-shaped shards and print them as a Breakable;
+#   --write splices it in. A command, never a runtime behaviour (M43)
 engine fit-colliders <scene.json> [--entity Name] [--shape S] [--write]
 #   solve a SkinnedCollider from the skin's vertex weights and print it as JSON;
 #   --write splices it into the scene. A command, never a runtime behaviour (M39)
@@ -219,6 +226,25 @@ The cross-cutting ones. Per-system traps are in each note.
 - **A junction's shoulder quad across a mouth is degenerate and must stay skipped** (M40): all four
   of its corners lie on the mouth line, so the quad has zero area and a `NaN` normal. `mouth_of` is
   what excludes it, and nothing is lost — the shoulder there is the road's own.
+- **A doc comment on an enum *variant* blinds the validation walk's closed-vocabulary check**, and
+  since M43 there is a second half to it: **an `Option<T>` of a *named* type publishes
+  `anyOf: [{$ref}, {"type": "null"}]`**, not the flat `"type": ["string", "null"]` an optional
+  primitive gets. The walk read only the flat form, so every optional enum field in the engine was
+  waved through unchecked until `optional_variant` in `walk.rs`. Both symptoms look the same and
+  neither looks like a validation bug: the bad value reaches serde and comes back as
+  `scene_parse_desync`, the code whose message says "this is an engine bug, not a scene problem".
+- **`engine fracture` works in world metres and stores entity-local ones** (M43). A plank authored
+  the M34 way — a `builtin:cube` at `scale: [0.6, 0.18, 2.6]` with unit half-extents — has a *cube*
+  for its local box, so a generator reading the local box alone finds no grain axis to splinter
+  along and no thin axis to shatter through. The multiply-in/divide-out by `Transform.scale` is
+  load-bearing, and its absence shows up as wood splintering the wrong way rather than as an error.
+- **A generated component is a diffability problem the moment it is large.** Fourteen shards
+  spliced through `formatter` arrived as one 6,000-character line — a JSON scene that is no longer
+  git-diffable, which is invariant 1 failing quietly. `formatter.rs` now breaks an array of objects
+  one element per line and `shorten_floats` trims `serde_json`'s f64 widening of an f32
+  (`0.12767969071865082` for a number the engine had seven digits of). Both apply only to shapes no
+  pre-M43 caller produces, so every committed splice stayed byte-identical — **check that when
+  adding a third**.
 - **`builtin:cube`'s faces disagree on which way `u` runs, in pairs rather than in axes.** Anything
   strongly directional on a cube draws differently on all four sides. `builtin:plane`'s UVs are not
   the intuitive ones either — fixing both is deferred as its own change with its own A/B (M26).
@@ -257,14 +283,14 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**39 of the 45 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**40 of the 46 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02` in the manifest and stay the sweep's job; `cli.rs` says so
 where someone would go to add them. The pixel *allowance* is there rather than a wider threshold
 because the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held
-for eight consecutive full sweeps. **The other 39 entries carry no `diff_args` at all — they are
+for eight consecutive full sweeps. **The other 40 entries carry no `diff_args` at all — they are
 bit-exact, and a failure there is real.**
 
 **Which tour frames flake carries no information; whether one is stable under repetition does.**
@@ -351,6 +377,11 @@ made without reading its note first. Paths are under `designs/notes/`.
   emitters; M17 adds the five fields that make a particle cone read as flame.
 - **Breaking (M14)** → `m14-breaking.md`. Pre-authored fragments — no runtime fracture — broken by
   impulse, by a script call, or by an explosion.
+- **Material-aware fracture (M43)** → `m43-fracture.md`, design in `designs/fracture-design.md`.
+  What M14's fragments are made of: convex `Shard` geometry instead of boxes, generated offline by
+  `engine fracture` with a per-material algorithm, and a `Breakable.material` that scatters the
+  pieces away from the impact on the material's own speed, spin and surface. Both halves default to
+  M14 exactly.
 - **Skinned collider proxies (M33)** → `m33-skinned-colliders.md`. Simple shapes hung off named
   joints and re-posed from the rig each step, so a skinned character can be hit and can push things.
 - **Ragdolls (M39)** → `m39-ragdolls.md`. M33's one-way rule reversed for one entity at a time:
@@ -645,6 +676,12 @@ original four, entity spawning was M37 and a CPU wave evaluator was M41.) The re
   and spawning relative to another entity. Downstream of those, in the arena: endless waves, a
   working `RETRY`, and a save that restores a mid-level arena — all now ordinary work rather than
   blocked work, and none of them built.
+- **Breaking** (after M43): dust and debris *particles* at a break (deferred for a reason rather
+  than an omission — an engine-spawned `ParticleEmitter` has nowhere good to die, and a script can
+  already spawn one; `designs/fracture-design.md` §7), shards that break again (needs a depth rule,
+  and each level multiplies the collider set), a fracture source that is not a box, metal that
+  dents instead of parting (per-step mesh mutation, which the purity of geometry-from-file forbids),
+  and per-material `impulse_threshold` defaults.
 - **Deferred with an A/B attached**: fixing `builtin:plane`/`builtin:cube`'s UV layout, and changing
   `builtin:triangle`.
 

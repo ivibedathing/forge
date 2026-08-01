@@ -360,6 +360,12 @@ pub fn insert_spawned(
         .get::<&engine_core::components::Mesh>(entity)
         .map(|m| m.asset.clone())
         .ok();
+    // A spawned shard (M43) collides with its own hull, exactly as an
+    // authored one does — a template may carry a `Shard` like any component.
+    let shard = world
+        .get::<&engine_core::components::Shard>(entity)
+        .map(|s| (*s).clone())
+        .ok();
     physics.insert_entity(
         entity,
         &engine_physics::Presence {
@@ -369,6 +375,7 @@ pub fn insert_spawned(
             collider: collider.as_ref(),
             break_threshold,
             entity_mesh: mesh.as_deref(),
+            shard: shard.as_ref(),
             meshes: assets,
         },
     )
