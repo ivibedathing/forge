@@ -110,6 +110,12 @@ engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
 engine ui-layout <scene.json> [--width W --height H] [--entity Name]... [--steps N] [--input f]
                                              # where the UI landed; --steps for what a script painted
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
+engine bake-gi <scene.json> [--entity Name] [--out path] [--samples N]
+                                             # writes the baked transfer file; the only
+                                             # new command that writes into the project
+engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
+                                             # the irradiance the renderer would use here,
+                                             # and the pre-M35 fallback beside it
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
 engine list-components [--component Name]    # scene + component JSON Schemas
 engine list-components --markdown            # the same vocabulary, as prose
