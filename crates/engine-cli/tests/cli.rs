@@ -4843,3 +4843,197 @@ fn a_hovered_button_is_a_different_frame_from_an_untouched_one() {
     assert_ne!(away_bytes, over_bytes, "hover must brighten the button");
     assert_ne!(over_bytes, down_bytes, "press must differ from hover");
 }
+
+// ── Locomotion and foot planting (M32) ────────────────────────────────────
+
+/// The milestone's fixture: two identical walkers crossing one slope, and the
+/// only difference between them is a `FootPlant`.
+fn locomotion_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m32_locomotion.json")
+}
+
+#[test]
+fn the_locomotion_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(locomotion_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// The M32 fixture rendered: two walkers mid-stride on a hillside, one with
+/// its feet planted and one without, pinned bit-exactly.
+///
+/// The two walkers are the assertion, M30's fixture logic reused — they share
+/// a file, a mesh and a clip, so anything that made both wrong would leave
+/// them identical; only real planting puts one pair of feet on the slope while
+/// the other pair sinks into it.
+///
+/// It renders at `samples: 1`, and that is deliberate rather than incidental:
+/// the fixture needs terrain in frame, which M22 measured as the end of this
+/// adapter's bit-exactness at `samples: 4`. M29's meadow hit the same wall and
+/// settled it the same way. Measured, not assumed — four consecutive renders
+/// of this scene are one image.
+#[test]
+fn the_m32_locomotion_fixture_pins_planted_feet() {
+    let scene = locomotion_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m32_locomotion.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("45")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
+}
+
+/// The milestone's claim, proved without a pixel — M30's half of the story,
+/// which is the half this engine cares about most.
+///
+/// A planted ankle's world Y is the terrain height under it plus the foot's
+/// `sole`, at any moment of the clip; the unplanted twin's is whatever the
+/// animator left it at, which on a slope is inside the hill. Both facts come
+/// out of `engine list-joints` and `engine terrain-height`, neither of which
+/// renders anything.
+#[test]
+fn a_planted_ankle_stands_on_the_ground_and_an_unplanted_one_does_not() {
+    let scene = locomotion_scene();
+
+    let joints = |entity: &str, time: &str| -> serde_json::Value {
+        let output = engine()
+            .arg("list-joints")
+            .arg(&scene)
+            .arg("--entity")
+            .arg(entity)
+            .arg("--time")
+            .arg(time)
+            .output()
+            .unwrap();
+        json_stdout(&output)["rigs"][0].clone()
+    };
+    let ground_at = |x: f64, z: f64| -> f64 {
+        let output = engine()
+            .arg("terrain-height")
+            .arg(&scene)
+            .arg("--at")
+            .arg(format!("{x},{z}"))
+            .output()
+            .unwrap();
+        json_stdout(&output)["height"].as_f64().unwrap()
+    };
+    let ankle = |rig: &serde_json::Value, name: &str| -> (f64, f64, f64) {
+        let joint = rig["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["name"] == name)
+            .unwrap_or_else(|| panic!("no joint {name} in {rig}"));
+        let p = joint["world"]["position"].as_array().unwrap();
+        (
+            p[0].as_f64().unwrap(),
+            p[1].as_f64().unwrap(),
+            p[2].as_f64().unwrap(),
+        )
+    };
+
+    // The sole offset the fixture authors, in metres.
+    const SOLE: f64 = 0.09;
+    let mut off_ground = 0;
+    for time in ["0.0", "0.25", "0.5", "0.75"] {
+        let planted = joints("Planted", time);
+        let loose = joints("Loose", time);
+        for foot in ["FootL", "FootR"] {
+            let (x, y, z) = ankle(&planted, foot);
+            let wanted = ground_at(x, z) + SOLE;
+            assert!(
+                (y - wanted).abs() < 2e-3,
+                "at t={time} the planted {foot} is at y={y}, the ground under it \
+                 plus its sole is {wanted}"
+            );
+
+            let (lx, ly, lz) = ankle(&loose, foot);
+            if (ly - (ground_at(lx, lz) + SOLE)).abs() > 2e-2 {
+                off_ground += 1;
+            }
+        }
+    }
+    assert!(
+        off_ground >= 4,
+        "the unplanted walker's feet should mostly *not* be on the ground — \
+         if they were, the fixture would prove nothing ({off_ground} of 8 were off)"
+    );
+}
+
+/// The other half: a stride-driven clip advances with the ground covered, so a
+/// planted foot stays where it was put while it is the one bearing weight.
+///
+/// This is foot slide as a number, which is what the milestone is actually
+/// about. With `stride` measured off the clip the planted ankle moves under a
+/// centimetre a step through stance; with the clock driving the clip instead,
+/// the same foot travels several times that.
+#[test]
+fn a_stride_driven_walk_does_not_slide_its_feet() {
+    // Where the planted foot is after `steps` steps of the real simulation.
+    // `list-joints --steps` runs the locomotion system first, which is the
+    // only way to ask a stride-driven rig anything: its phase lives in the
+    // world the run leaves behind, not in the file's authored pose.
+    let foot_after = |steps: u32| -> Vec<(f64, f64, f64)> {
+        let output = engine()
+            .arg("list-joints")
+            .arg(locomotion_scene())
+            .arg("--entity")
+            .arg("Planted")
+            .arg("--steps")
+            .arg(steps.to_string())
+            .output()
+            .unwrap();
+        let rig = json_stdout(&output)["rigs"][0].clone();
+        ["FootL", "FootR"]
+            .iter()
+            .map(|name| {
+                let joint = rig["joints"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|j| &j["name"] == name)
+                    .unwrap();
+                let p = joint["world"]["position"].as_array().unwrap();
+                (
+                    p[0].as_f64().unwrap(),
+                    p[1].as_f64().unwrap(),
+                    p[2].as_f64().unwrap(),
+                )
+            })
+            .collect()
+    };
+
+    // Two steps apart: the walker covers 1/30 m at its scripted 1 m/s, and the
+    // foot bearing weight should have travelled essentially none of it.
+    let before = foot_after(24);
+    let after = foot_after(26);
+    let slip = before
+        .iter()
+        .zip(&after)
+        .map(|(a, b)| ((a.0 - b.0).powi(2) + (a.2 - b.2).powi(2)).sqrt())
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        slip < 0.012,
+        "the planted foot slid {slip} m over two steps; a stance foot should stay put"
+    );
+}

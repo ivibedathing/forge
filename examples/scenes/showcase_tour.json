@@ -1020,7 +1020,28 @@
           "type": "AnimationPlayer",
           "clip": "../meshes/rigged_walker.gltf#Walk",
           "speed": 1.0,
-          "looping": true
+          "looping": true,
+          "stride": 1.6408
+        },
+        {
+          "type": "FootPlant",
+          "feet": [
+            {
+              "ankle": "FootL",
+              "chain": 2,
+              "sole": 0.09
+            },
+            {
+              "ankle": "FootR",
+              "chain": 2,
+              "sole": 0.09
+            }
+          ],
+          "ground": "Ground",
+          "hips": "Hips",
+          "max_drop": 0.45,
+          "max_lift": 0.35,
+          "align": 24.0
         }
       ]
     },

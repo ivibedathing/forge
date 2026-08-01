@@ -15,6 +15,7 @@ pub mod error;
 pub mod formatter;
 pub mod input;
 pub mod lineindex;
+pub mod locomotion;
 pub mod material;
 pub mod meadow;
 pub mod mesh;

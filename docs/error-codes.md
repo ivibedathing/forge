@@ -60,6 +60,14 @@ build fails.
 | `mesh_has_no_skin` | 1 | a skeletal AnimationPlayer's glTF file carries no skin |
 | `skeletal_player_mesh_mismatch` | 1 | a skeletal AnimationPlayer and its entity's Mesh name different files |
 | `too_many_joints` | 1 | a skin has more joints than the fixed-size palette holds |
+| `animation_stride_without_transform` | 1 | an AnimationPlayer sets stride but its entity has no Transform to measure |
+| `foot_plant_without_skin` | 1 | a FootPlant is on an entity whose Mesh carries no skin |
+| `foot_plant_ground_not_found` | 1 | a FootPlant's ground names no entity in the scene |
+| `foot_plant_ground_not_terrain` | 1 | a FootPlant's ground names an entity with no Terrain |
+| `foot_plant_non_uniform_scale` | 1 | a planted character's Transform.scale must be uniform |
+| `foot_plant_chain_too_long` | 1 | a foot's chain reaches past the rig's root |
+| `too_many_planted_feet` | 1 | a FootPlant lists more feet than the solver runs |
+| `unknown_joint` | 1 | a joint name is not in the entity's rig |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |

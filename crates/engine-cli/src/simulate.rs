@@ -56,6 +56,9 @@ pub fn run(
     )?;
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
     let mut particles = ParticleSystem::build(&scene.world);
+    // Snapshots where every stride-driven entity starts, so step 1 measures
+    // real displacement rather than a jump from the origin (M32).
+    let mut locomotion = engine_core::locomotion::Locomotion::build(&scene.world);
     let dt = 1.0 / scene.physics.timestep_hz.max(1) as f32;
     let mut contacts = 0u64;
     let no_keys = InputState::default();
@@ -143,6 +146,10 @@ pub fn run(
         }
         let events = physics.step(&mut scene.world);
         contact_state.apply(&events);
+        // Locomotion reads the post-physics world for the same reason: a
+        // stride is driven by the ground the entity *covered*, and a script's
+        // intent and the solver's answer are not the same number (M32).
+        locomotion.step(&mut scene.world);
         // Particles read the post-physics world, so an emitter riding a
         // dynamic body trails where the body actually went this step.
         particles.step(&scene.world, dt);
@@ -595,6 +602,48 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                     }
                 }
             };
+        }
+        // Where a character is in its stride (M32). Unlike the particles
+        // above, this one *must* bake: a stride-driven player reads its phase
+        // out of the file, so a baked scene that dropped it would reload the
+        // walker with its legs somewhere else and the bake's own promise —
+        // reload, re-render, bit-exactly — would be false for every scene with
+        // a walking character in it.
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::AnimationPlayer(_)))
+        {
+            if let Ok(current) = scene
+                .world
+                .get::<&engine_core::components::AnimationPlayer>(entity)
+            {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::AnimationPlayer(p) => Some(p.clone()),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.phase != rest.phase {
+                    edits.push(field_edit(
+                        "phase",
+                        "AnimationPlayer",
+                        number_from_f32(current.phase),
+                    ));
+                }
+                // A script that changed the gait changed the number that
+                // converts metres into cycles, and a resumed scene walks at
+                // the old rate without it.
+                if current.stride != rest.stride {
+                    edits.push(field_edit(
+                        "stride",
+                        "AnimationPlayer",
+                        number_from_f32(current.stride),
+                    ));
+                }
+            }
         }
         bake_light!(PointLight, engine_core::components::PointLight);
         bake_light!(DirectionalLight, engine_core::components::DirectionalLight);

@@ -105,8 +105,21 @@ pub fn duration(clip: &ClipFile) -> f32 {
 
 /// A player's local clip time for scene time `t`: scaled, offset, wrapped
 /// when looping, clamped to the final pose when not.
+///
+/// A **stride-driven** player (M32) substitutes its own accumulated `phase`
+/// for scene time and is otherwise identical — one expression, so `speed`,
+/// `start_offset` and `looping` mean exactly what they always meant on both
+/// clocks. `phase` counts cycles, so it becomes seconds here, where the
+/// duration is already in hand. `t` is then unused, which is why a scene
+/// rendered with `--time` and no steps shows a stride-driven player wherever
+/// its file says it is.
 pub fn local_time(player: &AnimationPlayer, clip_duration: f32, t: f32) -> f32 {
-    let local = t * player.speed + player.start_offset;
+    let clock = if player.stride > 0.0 {
+        player.phase * clip_duration
+    } else {
+        t
+    };
+    let local = clock * player.speed + player.start_offset;
     if clip_duration <= 0.0 {
         return 0.0;
     }
@@ -393,6 +406,22 @@ pub fn set_field(
                 _ => return false,
             }
         }
+        // M32's planting limits animate freely, and that is the intended way
+        // to *stop* planting: a character that jumps drives `max_drop` and
+        // `max_lift` to zero for the airborne frames, and its feet keep
+        // whatever the clip gives them. The foot list itself is structure, not
+        // a number, so it never arrives here.
+        "FootPlant" => {
+            let Ok(mut c) = world.get::<&mut FootPlant>(entity) else {
+                return false;
+            };
+            match field {
+                "max_drop" => c.max_drop = scalar,
+                "max_lift" => c.max_lift = scalar,
+                "align" => c.align = scalar,
+                _ => return false,
+            }
+        }
         "AnimationPlayer" => {
             let Ok(mut c) = world.get::<&mut AnimationPlayer>(entity) else {
                 return false;
@@ -647,6 +676,16 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     // silently drop the bottom inset, which renders as a frame that has lost
     // one edge — so it is refused rather than three-quarters supported.
     ("HudImage", "slice"),
+    // A third reason, and the only fields whose animation would be circular:
+    // these two *are* a clip's clock (M32). `phase` is written by the
+    // locomotion system every fixed step, so a clip driving it would fight
+    // that system for the same number every frame, and a clip driving its own
+    // player's phase would sample itself. `stride` selects which clock runs at
+    // all; flipping it mid-clip teleports the pose, which is the discontinuity
+    // the stored phase exists to remove. Scripts set both, where the write is
+    // explicit and shows up in the trace.
+    ("AnimationPlayer", "stride"),
+    ("AnimationPlayer", "phase"),
 ];
 
 /// Whether a field is vector-shaped in the published schema (3-element
@@ -1046,6 +1085,8 @@ mod tests {
             speed: 1.0,
             looping: true,
             start_offset: 0.0,
+            stride: 0.0,
+            phase: 0.0,
         };
         assert_eq!(local_time(&player, 2.0, 2.0), 0.0, "loop period lands on 0");
         assert_eq!(local_time(&player, 2.0, 2.5), 0.5);
@@ -1068,6 +1109,8 @@ mod tests {
             speed: 2.0,
             looping: true,
             start_offset: 0.5,
+            stride: 0.0,
+            phase: 0.0,
         };
         assert_eq!(local_time(&player, 10.0, 1.0), 2.5);
     }
@@ -1086,6 +1129,8 @@ mod tests {
             speed: 1.0,
             looping: true,
             start_offset: 0.0,
+            stride: 0.0,
+            phase: 0.0,
         };
         let clip = ClipFile {
             name: "spin".into(),
@@ -1142,7 +1187,8 @@ mod tests {
                 {"type":"Cloud"},
                 {"type":"Terrain"},
                 {"type":"Road"},
-                {"type":"Meadow"}
+                {"type":"Meadow"},
+                {"type":"FootPlant","feet":[{"ankle":"Foot.L"}],"ground":"Ground"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

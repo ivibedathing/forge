@@ -151,6 +151,24 @@ registry! {
     TOO_MANY_JOINTS = "too_many_joints", Input,
         "a skin has more joints than the fixed-size palette holds";
 
+    // ── Locomotion and foot planting (M32) ─────────────────────────────
+    ANIMATION_STRIDE_WITHOUT_TRANSFORM = "animation_stride_without_transform", Input,
+        "an AnimationPlayer sets stride but its entity has no Transform to measure";
+    FOOT_PLANT_WITHOUT_SKIN = "foot_plant_without_skin", Input,
+        "a FootPlant is on an entity whose Mesh carries no skin";
+    FOOT_PLANT_GROUND_NOT_FOUND = "foot_plant_ground_not_found", Input,
+        "a FootPlant's ground names no entity in the scene";
+    FOOT_PLANT_GROUND_NOT_TERRAIN = "foot_plant_ground_not_terrain", Input,
+        "a FootPlant's ground names an entity with no Terrain";
+    FOOT_PLANT_NON_UNIFORM_SCALE = "foot_plant_non_uniform_scale", Input,
+        "a planted character's Transform.scale must be uniform";
+    FOOT_PLANT_CHAIN_TOO_LONG = "foot_plant_chain_too_long", Input,
+        "a foot's chain reaches past the rig's root";
+    TOO_MANY_PLANTED_FEET = "too_many_planted_feet", Input,
+        "a FootPlant lists more feet than the solver runs";
+    UNKNOWN_JOINT = "unknown_joint", Input,
+        "a joint name is not in the entity's rig";
+
     // ── Breaking (M14) ─────────────────────────────────────────────────
     BREAKABLE_WITHOUT_COLLIDER = "breakable_without_collider", Input,
         "a Breakable sets impulse_threshold but the entity has no Collider to be hit on";

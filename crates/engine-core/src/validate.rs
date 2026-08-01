@@ -141,6 +141,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     // wheel pass's shape.
     let mut meadows: Vec<(String, crate::components::Meadow, String)> = Vec::new();
     let mut terrain_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Foot planting pass inputs (M32): a `FootPlant` names the Terrain its
+    // feet stand on, so it waits for every name too — the meadow pass's shape,
+    // for the meadow pass's reason.
+    let mut foot_plants: Vec<(String, crate::components::FootPlant, String)> = Vec::new();
     // One HUD element awaiting the cross-entity pass (M31): its owner, the
     // component that owns the `parent` reference, the reference itself, and
     // the component-s JSON path. Collected across all four kinds because
@@ -258,6 +262,12 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         let mut mesh_asset: Option<String> = None;
         // A skeletal `AnimationPlayer`: (glTF asset, clip name, JSON path).
         let mut skeletal_player: Option<(String, String, String)> = None;
+        // A stride-driven `AnimationPlayer`'s JSON path (M32): the clock is
+        // then the entity's own displacement, so it needs somewhere to move.
+        let mut stride_player: Option<String> = None;
+        // A `FootPlant`'s JSON path (M32), for the checks that need to know
+        // what else is on this entity.
+        let mut foot_plant: Option<String> = None;
         let mut tree_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
@@ -344,6 +354,9 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                         skeletal_player =
                             Some((asset.to_string(), clip.to_string(), component_path.clone()));
                     }
+                    if player.stride > 0.0 {
+                        stride_player = Some(component_path.clone());
+                    }
                     players.push((name.to_string(), player, component_path));
                 }
                 Some(ComponentData::Mesh(mesh)) => {
@@ -377,6 +390,10 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 Some(ComponentData::Meadow(m)) => {
                     meadows.push((name.to_string(), m.clone(), component_path.clone()));
                     meadow = Some((m, component_path));
+                }
+                Some(ComponentData::FootPlant(p)) => {
+                    foot_plant = Some(component_path.clone());
+                    foot_plants.push((name.to_string(), p, component_path));
                 }
                 Some(ComponentData::HudPanel(p)) => {
                     has_hud_element = true;
@@ -449,6 +466,76 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                         .field("clip"),
                     );
                 }
+            }
+        }
+
+        // ── Locomotion ownership (M32) ────────────────────────────────
+        //
+        // A stride-driven clip's clock *is* the entity's horizontal
+        // displacement, so an entity with no Transform has no clock at all and
+        // its clip would stand frozen at phase 0 forever — a stillness that
+        // looks exactly like a missing clip and is very hard to place.
+        if let Some(path) = &stride_player {
+            if !has_transform {
+                errors.push(
+                    cx.err(
+                        codes::ANIMATION_STRIDE_WITHOUT_TRANSFORM,
+                        format!(
+                            "entity {name:?} sets AnimationPlayer.stride but has no Transform; \
+                             a stride-driven clip is advanced by how far the entity moves, \
+                             so with nothing to move it would never leave phase 0"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("AnimationPlayer")
+                    .field("stride"),
+                );
+            }
+        }
+
+        // ── Foot planting ownership (M32) ─────────────────────────────
+        //
+        // Whether the mesh's file actually carries a *skin* is engine-assets'
+        // half (`foot_plant_without_skin`), the M30 division: engine-core
+        // checks the reference, the asset pass opens the file.
+        if let Some(path) = &foot_plant {
+            if mesh_asset.is_none() {
+                errors.push(
+                    cx.err(
+                        codes::FOOT_PLANT_WITHOUT_SKIN,
+                        format!(
+                            "entity {name:?} has a FootPlant but no Mesh; the joints it \
+                             plants live in a skinned mesh file, so a FootPlant belongs \
+                             on the entity whose Mesh owns the skin"
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("FootPlant"),
+                );
+            }
+            // The solve runs in skin space and maps the target back through
+            // the model's inverse. A non-uniform scale would arrive there as a
+            // stretch on every bone length, so the leg would solve to the
+            // wrong bend — refused rather than subtly wrong.
+            let uniform = (scale.x - scale.y).abs() < 1e-4 && (scale.y - scale.z).abs() < 1e-4;
+            if !uniform {
+                errors.push(
+                    cx.err(
+                        codes::FOOT_PLANT_NON_UNIFORM_SCALE,
+                        format!(
+                            "entity {name:?} has a FootPlant and a non-uniform \
+                             Transform.scale [{}, {}, {}]; the IK solves in the skin's \
+                             own space, where a non-uniform scale is a different bone \
+                             length along every axis",
+                            scale.x, scale.y, scale.z
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("FootPlant"),
+                );
             }
         }
 
@@ -1221,6 +1308,71 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                 .component("Meadow")
                 .field("terrain")
                 .suggest_from(ground, terrain_names.iter().map(String::as_str)),
+            );
+        }
+    }
+
+    // ── Foot planting pass (M32): the ground a character stands on ─────
+    //
+    // The meadow pass's shape again, and the same failure it prevents: a
+    // `ground` that resolves to nothing would leave the feet posed exactly as
+    // the clip put them, with nothing in the file or the render saying why the
+    // component appears to do nothing.
+    for (owner, plant, plant_component_path) in &foot_plants {
+        let ground_path = format!("{plant_component_path}/ground");
+        if !seen_names.contains(&plant.ground.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::FOOT_PLANT_GROUND_NOT_FOUND,
+                    format!(
+                        "the FootPlant on {owner:?} names ground {:?}, which is not \
+                         an entity in this scene",
+                        plant.ground
+                    ),
+                    &ground_path,
+                )
+                .entity(owner)
+                .component("FootPlant")
+                .field("ground")
+                .suggest_from(&plant.ground, seen_names.iter().copied()),
+            );
+        } else if !terrain_names.contains(plant.ground.as_str()) {
+            errors.push(
+                cx.err(
+                    codes::FOOT_PLANT_GROUND_NOT_TERRAIN,
+                    format!(
+                        "the FootPlant on {owner:?} names ground {:?}, but that entity \
+                         has no Terrain component; feet are planted against a Terrain \
+                         and deliberately not against the physics world, so that the \
+                         pose stays a pure function of the files",
+                        plant.ground
+                    ),
+                    &ground_path,
+                )
+                .entity(owner)
+                .component("FootPlant")
+                .field("ground")
+                .suggest_from(&plant.ground, terrain_names.iter().map(String::as_str)),
+            );
+        }
+
+        // A bounded budget an agent can be told about, rather than a solver
+        // that plants four feet and silently ignores the fifth.
+        if plant.feet.len() > crate::components::MAX_PLANTED_FEET {
+            errors.push(
+                cx.err(
+                    codes::TOO_MANY_PLANTED_FEET,
+                    format!(
+                        "the FootPlant on {owner:?} lists {} feet; at most {} are \
+                         planted",
+                        plant.feet.len(),
+                        crate::components::MAX_PLANTED_FEET
+                    ),
+                    &format!("{plant_component_path}/feet"),
+                )
+                .entity(owner)
+                .component("FootPlant")
+                .field("feet"),
             );
         }
     }
@@ -2262,6 +2414,13 @@ fn check_component(
         // time — it silently plays the cycle backwards through part of itself,
         // which reads as a renderer bug. `daylight_palette_invalid`'s reasoning
         // and its shape.
+        // A `FootPlant`'s own fields are range-checked by the schema walk, and
+        // everything else about it needs either the scene's other entities
+        // (the ground) or the rig itself (the joint names) — so the cross-
+        // entity pass and engine-assets carry those, and there is nothing to
+        // check with the component alone.
+        ComponentData::FootPlant(_) => {}
+
         ComponentData::Meadow(ref meadow) => {
             if meadow.stages.len() < 2 {
                 errors.push(
