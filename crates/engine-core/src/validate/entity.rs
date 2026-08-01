@@ -84,7 +84,7 @@ pub(super) fn walk<'a>(
     // feet stand on, so it waits for every name too — the meadow pass's shape,
     // for the meadow pass's reason.
     let mut foot_plants: Vec<(String, crate::components::FootPlant, String)> = Vec::new();
-    // Buoyancy pass inputs (M40): a `Buoyancy` names the Water it floats on
+    // Buoyancy pass inputs (M41): a `Buoyancy` names the Water it floats on
     // and needs a body and a shape on its own entity, so it waits for every
     // name too — the meadow pass's shape a third time.
     let mut buoyancies: Vec<(String, crate::components::Buoyancy, String)> = Vec::new();

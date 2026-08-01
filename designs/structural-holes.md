@@ -1,8 +1,8 @@
 # Structural holes
 
 **Gaps in the pre-M35 engine that block a capability rather than polish one.**
-Three of the original four remain; **§4, the CPU wave evaluator, was built as M40** — see
-`designs/notes/m40-buoyancy.md` and `designs/buoyancy-design.md`. It is kept below, struck through
+Three of the original four remain; **§4, the CPU wave evaluator, was built as M41** — see
+`designs/notes/m41-buoyancy.md` and `designs/buoyancy-design.md`. It is kept below, struck through
 in prose rather than deleted, because what it *predicted* is worth checking against what it cost.
 `CLAUDE.md`'s "Deferred follow-ups, by area" is the full backlog — three dozen items, most of them
 a nicer version of something that already works. This document is the short list underneath it:
@@ -109,7 +109,7 @@ rendering backlog it otherwise belongs in.
 
 ---
 
-## 4. A CPU wave evaluator, and therefore buoyancy — **BUILT (M40)**
+## 4. A CPU wave evaluator, and therefore buoyancy — **BUILT (M41)**
 
 Everything below was written before the build and is left as it stood. What it got right: the
 remedy was exactly the one `m18-water.md` named — a Rust mirror in `water.rs` with an agreement
@@ -132,10 +132,10 @@ shore-foam contour reads the drawn surface back as a number, and it agrees to 1.
    runtime half is already proven by M14.
 2. **Hot reload**, as a *decision* first. It may cost a paragraph rather than a milestone.
 3. **Alpha-cut leaves.** Small, known shape, disproportionate visual return.
-4. ~~**The wave evaluator.**~~ Built as M40. The "wants a real consumer first" instinct was right
+4. ~~**The wave evaluator.**~~ Built as M41. The "wants a real consumer first" instinct was right
    and was honoured: it shipped with a raft, a buoy and a stone in its fixture, and a floating raft
    in the tour.
 
 Outside this list, the strongest rendering pick was **shadow cascades** — built as M38 by a
-parallel session, which is also why buoyancy landed as M40. Cloud shadows were the thing that came
+parallel session, which is also why buoyancy landed as M41. Cloud shadows were the thing that came
 free with it.

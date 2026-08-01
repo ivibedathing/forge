@@ -883,7 +883,7 @@ impl Scene {
     }
 
     /// The surface of a water patch over a world XZ position at `time` seconds
-    /// (M40) — what `world.water_height` and `engine water-height` resolve
+    /// (M41) — what `world.water_height` and `engine water-height` resolve
     /// through.
     ///
     /// `None` when the entity does not exist, has no `Water`, or when that

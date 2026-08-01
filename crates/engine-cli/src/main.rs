@@ -1546,7 +1546,7 @@ fn sole_entity_with<C: engine_core::hecs::Component>(
     }
 }
 
-/// Ask a water surface where it is at a world XZ position (M40).
+/// Ask a water surface where it is at a world XZ position (M41).
 ///
 /// `terrain-height`'s twin, and different from it in exactly the two ways water
 /// is different from ground. It takes a **clock**, because the surface moves —

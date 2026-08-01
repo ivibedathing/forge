@@ -629,7 +629,7 @@ pub(super) fn check_component(
         // check with the component alone.
         ComponentData::FootPlant(_) => {}
 
-        // Buoyancy (M40). Only one thing is answerable without the rest of the
+        // Buoyancy (M41). Only one thing is answerable without the rest of the
         // scene: that the surface was named at all. An empty `water` is what an
         // author who omitted the field gets, and it has to be an error rather
         // than a default — there is no water a boat can be assumed to float on.

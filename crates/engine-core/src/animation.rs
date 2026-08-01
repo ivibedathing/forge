@@ -537,7 +537,7 @@ pub fn set_field(
                 // nothing. It does switch pipelines the step it leaves 1.0,
                 // which is a pipeline lookup and not a rebuild.
                 "ior" => c.ior = scalar,
-                // The one field here nothing renders (M40). Animatable anyway,
+                // The one field here nothing renders (M41). Animatable anyway,
                 // and for the same reason `ior` is: it is read fresh every step
                 // by whatever floats on this water, so a clip on it regenerates
                 // nothing. A tide going from fresh to salt is a clip on this.
@@ -545,7 +545,7 @@ pub fn set_field(
                 _ => return false,
             }
         }
-        // Buoyancy (M40). `water` is a name and `samples` an integer — the
+        // Buoyancy (M41). `water` is a name and `samples` an integer — the
         // usual two exclusions. What is left is the drag pair, and a clip on it
         // is how a hull that fills with water gets heavier to move without
         // anything spawning or changing shape.

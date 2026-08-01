@@ -1,4 +1,4 @@
-//! Buoyancy (M40) — `designs/buoyancy-design.md`.
+//! Buoyancy (M41) — `designs/buoyancy-design.md`.
 //!
 //! Archimedes, sampled. A floating body's collider is divided into vertical
 //! columns; each column asks the water above it how deep it is; each pushes up

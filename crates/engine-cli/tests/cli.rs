@@ -6310,7 +6310,7 @@ fn ragdoll_validation_refuses_what_it_should() {
     }
 }
 
-// ── Buoyancy and the water evaluator (M40) ──────────────────────────────
+// ── Buoyancy and the water evaluator (M41) ──────────────────────────────
 
 /// A pond with two floats and a stone, sized so the whole pond is inside the
 /// patch and nothing needs a long settle.
@@ -6559,8 +6559,8 @@ fn water_height_answers_at_the_time_it_is_asked_about() {
 /// renders at `samples: 1`.
 #[test]
 fn the_buoyancy_fixture_matches_its_baseline() {
-    let scene = repo_path("examples/scenes/verify/m40_buoyancy.json");
-    let baseline = repo_path("examples/scenes/verify/baselines/m40_buoyancy.png");
+    let scene = repo_path("examples/scenes/verify/m41_buoyancy.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m41_buoyancy.png");
 
     let diff = engine()
         .arg("diff-render")

@@ -1,4 +1,4 @@
-# M40 — A CPU wave evaluator, and therefore buoyancy
+# M41 — A CPU wave evaluator, and therefore buoyancy
 
 **The fourth structural hole** (`designs/structural-holes.md` §4). Water is the only geometry
 recipe in the engine that nothing can stand on, float in, or ask a question about, because its
@@ -261,5 +261,5 @@ in this milestone touches a shader, so the claim is falsifiable and expected to 
    trustworthy as this.
 4. `Water.density`, `Buoyancy`, validation, schema regeneration.
 5. The physics integration.
-6. `verify/m40_buoyancy.json` + baseline + manifest entry + CLI test; the tour's floating body.
+6. `verify/m41_buoyancy.json` + baseline + manifest entry + CLI test; the tour's floating body.
 7. The full sweep, the A/B, the note, `CLAUDE.md`, and `structural-holes.md` losing its §4.

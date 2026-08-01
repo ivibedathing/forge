@@ -211,7 +211,7 @@ pub struct PhysicsWorld {
     /// beside the explosions and for the same reason: an impulse applied
     /// before integration moves the body on the step it fires.
     queued_kicks: Vec<(String, String, Vec3)>,
-    /// Floating bodies (M40), in entity-name order. Empty for every scene with
+    /// Floating bodies (M41), in entity-name order. Empty for every scene with
     /// no `Buoyancy`, which is what keeps the step it costs at zero.
     buoyant: Vec<buoyancy::Buoyant>,
 }
@@ -686,7 +686,7 @@ impl PhysicsWorld {
             }
         }
 
-        // Floating bodies (M40), last: it reads the bodies and colliders every
+        // Floating bodies (M41), last: it reads the bodies and colliders every
         // branch above inserted, and a body's exact volume is only knowable
         // once its collider exists. A break's fragments cannot be buoyant —
         // fragments are pre-authored and carry no `Buoyancy` — so this list is
@@ -984,7 +984,7 @@ impl PhysicsWorld {
             }
         }
 
-        // 1.75. Buoyancy (M40): the weight of the water each floating body
+        // 1.75. Buoyancy (M41): the weight of the water each floating body
         //       displaces, pushed up at the columns that displace it. Before
         //       the solver integrates, so a hull rises the same step the wave
         //       under it does — and before vehicles, since an amphibious

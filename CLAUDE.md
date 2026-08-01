@@ -42,7 +42,7 @@ actually says.
 | `AmbientLight` | Uniform fill light. At most one per scene; with `sky` on it becomes hemispheric. | `m04-lighting.md` |
 | `PointLight` | A local lamp with a hard `range` horizon; ≤8 per scene, no shadows. | `m17-point-lights.md` |
 | `RigidBody` | Makes an entity dynamic, kinematic or fixed; scripts read and write its velocities. | `m08-physics.md` |
-| `Buoyancy` | Floats a dynamic body on a named `Water`, sampling its collider in columns so a hull rights itself. | `m40-buoyancy.md` |
+| `Buoyancy` | Floats a dynamic body on a named `Water`, sampling its collider in columns so a hull rights itself. | `m41-buoyancy.md` |
 | `Collider` | The shape physics sees — cuboid/sphere/capsule/trimesh/convex_hull — plus friction, density (**kg/m³**), and collision layers. | `m08-physics.md` |
 | `Script` | Runs `fn step(world, step)` once per fixed step against the curated `world` API. | `m10-scripting.md` |
 | `AnimationPlayer` | Plays a property clip (`*.anim.json`) or a glTF skeletal clip (`mesh.glb#Walk`); `stride`/`phase` drive a gait by ground covered. | `m09-animation.md`, `m30-skeletal-animation.md`, `m32-locomotion.md` |
@@ -52,7 +52,7 @@ actually says.
 | `ParticleEmitter` | A seeded deterministic cone emitter around local **−Z**; M17's fields turn a smoke cone into flame. | `m13-particles-and-m17-fire.md` |
 | `Breakable` | Lists pre-authored fragments and the impulse that shatters the entity into them. | `m14-breaking.md` |
 | `Wheel` | One raycast-suspension wheel on its own *visual* entity, naming the chassis it drives. | `m11_5-vehicles-and-wheels.md` |
-| `Water` | A body of water that **owns its surface** — Gerstner waves, depth colouring, foam, refraction. Since M40 it also carries the fluid's `density`, the one field nothing renders. | `m18-water.md`, `m27-water-refraction.md`, `m40-buoyancy.md` |
+| `Water` | A body of water that **owns its surface** — Gerstner waves, depth colouring, foam, refraction. Since M41 it also carries the fluid's `density`, the one field nothing renders. | `m18-water.md`, `m27-water-refraction.md`, `m41-buoyancy.md` |
 | `Terrain` | A height-field patch that **owns its grid**, painted by height/slope layers; the ground everything stands on. | `m22-terrain.md` |
 | `Road` | A drivable ribbon from a polygon centerline with corner radii; markings are drawn per pixel. | `m23-roads.md` |
 | `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. | `m19-trees.md` |
@@ -77,13 +77,13 @@ materials only: the entity's `Material` is its bark.
 
 ## Current state
 
-**M0–M36 and M38–M40 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M36 and M38–M41 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M38 shadow cascades,
-M39 ragdolls, M40 buoyancy. (M35 is a design doc only — global illumination, not built. M7 editor
+M39 ragdolls, M41 buoyancy. (M35 is a design doc only — global illumination, not built. M7 editor
 at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
@@ -125,7 +125,7 @@ engine ui-layout <scene.json> [--width W --height H] [--entity N]... [--steps N]
 #   where the UI landed (M31); --steps reports what a script *painted* (M36)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
 engine water-height <scene.json> --at x,z [--entity N] [--time T] [--steps N]
-#   where the water is, and which way it faces (M40); the first query that takes a
+#   where the water is, and which way it faces (M41); the first query that takes a
 #   clock, and the first that can answer "no water here" rather than a height
 engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; keyboard AND mouse; FPS readout is viewer-only
@@ -198,7 +198,7 @@ The cross-cutting ones. Per-system traps are in each note.
   for a scene with anything interactive in the middle.
 - **A script's clock is one step behind physics and the render.** A script runs at the time its step
   *begins* at (`step_index · dt`, 0-based); physics and the render get the time it *ends* at. This
-  predates M40 and is documented in `simulate.rs`, but water is the first thing in the script API
+  predates M41 and is documented in `simulate.rs`, but water is the first thing in the script API
   where it is **visible**, because it is the first surface that moves — comparing
   `world.water_height` at `--steps N` against `engine water-height` wants `--steps N-1`. Terrain
   never had to care: a height field has no clock.
@@ -326,7 +326,7 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   stage, depth colouring and shore foam.
 - **Water refraction (M27)** → `m27-water-refraction.md`. One `ior` field bending what is seen
   through the surface, defaulting to no bending.
-- **The wave evaluator and buoyancy (M40)** → `m40-buoyancy.md`, design in
+- **The wave evaluator and buoyancy (M41)** → `m41-buoyancy.md`, design in
   `designs/buoyancy-design.md`. The Gerstner sum mirrored on the CPU so `engine water-height`,
   `world.water_height` and a floating `Buoyancy` body can all ask where the surface is — held to the
   shader by a GPU agreement test that reads the drawn surface back out of a render.
@@ -544,7 +544,7 @@ M4 on ends by running its fixture from `designs/milestone-verification-scenes.md
 
 **The three that block a capability rather than polish one** — entity spawning, hot reload and
 alpha-cut leaves — are pulled out into `designs/structural-holes.md`, with what each one costs a live
-demo today. (The fourth, a CPU wave evaluator, was M40.) The rest, by area:
+demo today. (The fourth, a CPU wave evaluator, was M41.) The rest, by area:
 
 - **Editor**: E3 (structure edits), E4 (undo); picking against the *posed* mesh (CPU ray picking
   hits the rest pose).
@@ -556,7 +556,7 @@ demo today. (The fourth, a CPU wave evaluator, was M40.) The rest, by area:
   see `m38-shadow-cascades.md`. **Alpha-cut leaves are a missing feature**, not an
   authoring job: `Tree::leaf_material` synthesizes a `Material` from `leaf_color`/`leaf_roughness`
   alone, so leaf maps mean new `Tree` fields, a schema regeneration, and a validation pass.
-- **Water** (after M40): wave-driven drift (a Gerstner wave's orbital velocity would carry a float
+- **Water** (after M41): wave-driven drift (a Gerstner wave's orbital velocity would carry a float
   along with it, and wants its own answer to whether a raft eventually crosses the pond), drag on a
   submerged swimmer as distinct from a floating hull, and waves that respond to the body — which the
   purity of (file, time) currently forbids, and which is what the CPU/GPU agreement rests on.
