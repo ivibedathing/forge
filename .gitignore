@@ -19,3 +19,6 @@ __pycache__/
 
 # Worktrees for parallel sessions live here; they are checkouts, not content.
 .claude/worktrees/
+
+# Video captures of the showcase tour — render output, like the PNGs above.
+/recordings/
