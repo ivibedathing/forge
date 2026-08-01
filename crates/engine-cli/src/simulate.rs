@@ -52,6 +52,7 @@ pub fn run(
         scene_path,
         scene.physics.timestep_hz,
         scene.daylight.clone(),
+        scene.environment,
         &assets,
     )?;
     let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
@@ -67,6 +68,7 @@ pub fn run(
     let mut contact_state = engine_core::contact::ContactState::default();
     let mut hud: Vec<String> = Vec::new();
     let mut traced_hud: Vec<String> = Vec::new();
+    let mut quit_at_step: Option<u32> = None;
     // What the pointer is doing to the overlay (M31). Runtime state of the
     // same kind as `world.state` and the contact state: replay-deterministic,
     // reset by a fresh run, never baked.
@@ -234,6 +236,26 @@ pub fn run(
                 }
             }
         }
+
+        // `world.quit` (M36). Headlessly this stops stepping rather than
+        // failing: a game that ended is not an error, and the frame the run
+        // reached is still the frame to render. The step it happened on rides
+        // out on the report, so the caller can say so without reading pixels.
+        if scripts.as_ref().is_some_and(ScriptHost::quit_requested) {
+            // `step_index`, not `step`: the loop counts 1..=steps and a script
+            // is handed the 0-based index, so reporting the loop's counter
+            // would name a step one later than the one that called `quit`.
+            quit_at_step = Some(step_index as u32);
+            break;
+        }
+    }
+
+    // What scripts left the `environment` block as (M36). Assigned
+    // unconditionally when there is a script host, which is a write of an
+    // equal value for any scene that never calls a setter — that equality is
+    // what keeps the pre-M36 render path byte-identical.
+    if let Some(scripts) = &scripts {
+        scene.environment = scripts.environment();
     }
 
     Ok(StepRun {
@@ -242,6 +264,7 @@ pub fn run(
         contacts,
         hud,
         interaction,
+        quit_at_step,
     })
 }
 
@@ -259,6 +282,11 @@ pub struct StepRun {
     /// rather than recomputed, because recomputing it would need the cursor
     /// again and is one more place the two could disagree.
     pub interaction: engine_core::ui::Interaction,
+    /// The step a script called `world.quit` on (M36), or `None`. A run that
+    /// quit stopped there, so this is also "how many steps actually ran" minus
+    /// nothing — the step index itself, 0-based like every other step number
+    /// the CLI reports.
+    pub quit_at_step: Option<u32>,
 }
 
 fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
@@ -817,6 +845,13 @@ pub fn simulate_command(
         // The final step's HUD, so an agent reads the lap timer without a
         // trace file.
         result["hud"] = json!(outcome.hud);
+    }
+    // Present only when a script actually quit (M36), so every pre-M36 report
+    // is byte-identical. `simulated_steps` stays what was *asked* for — the
+    // two together say "you asked for 200 and it ended at 43", which one
+    // rewritten number could not.
+    if let Some(step) = outcome.quit_at_step {
+        result["quit_at_step"] = json!(step);
     }
     if let Some(path) = &bake_path {
         result["baked"] = json!(path.display().to_string());
