@@ -2742,9 +2742,9 @@
             -21.0
           ],
           "scale": [
-            0.6,
-            0.6,
-            0.6
+            0.3,
+            0.3,
+            0.3
           ]
         },
         {
@@ -2849,9 +2849,9 @@
             -21.0
           ],
           "scale": [
-            0.6,
-            0.6,
-            0.6
+            0.3,
+            0.3,
+            0.3
           ]
         },
         {
@@ -2956,9 +2956,9 @@
             21.0
           ],
           "scale": [
-            0.6,
-            0.6,
-            0.6
+            0.3,
+            0.3,
+            0.3
           ]
         },
         {
@@ -3063,9 +3063,9 @@
             21.0
           ],
           "scale": [
-            0.6,
-            0.6,
-            0.6
+            0.3,
+            0.3,
+            0.3
           ]
         },
         {
@@ -3144,106 +3144,134 @@
       ]
     },
     {
-      "name": "PlayerBody",
+      "name": "PlayerModel",
       "components": [
         {
           "type": "Transform",
           "position": [
             0.0,
-            0.78,
+            0.18,
             16.0
-          ],
-          "scale": [
-            0.95,
-            1.15,
-            0.95
           ]
         },
         {
           "type": "Mesh",
-          "asset": "builtin:cylinder"
+          "asset": "../meshes/rigged_soldier.gltf"
         },
         {
           "type": "Material",
           "albedo": [
-            0.09,
-            0.32,
-            0.62
+            0.26,
+            0.3,
+            0.24
           ],
-          "roughness": 0.6,
-          "metallic": 0.1,
+          "roughness": 0.72,
+          "metallic": 0.05,
           "normal_map": "../textures/plate_normal.png",
           "orm_map": "../textures/plate_orm.png",
           "uv_scale": [
-            2.0,
+            1.0,
             1.0
           ]
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../meshes/rigged_soldier.gltf#Idle",
+          "looping": true
         }
       ]
     },
     {
-      "name": "PlayerHead",
+      "name": "WeaponPistol",
       "components": [
         {
           "type": "Transform",
           "position": [
             0.0,
-            1.52,
-            16.0
-          ],
-          "scale": [
-            0.64,
-            0.64,
-            0.64
+            -30.0,
+            0.0
           ]
         },
         {
           "type": "Mesh",
-          "asset": "builtin:sphere"
+          "asset": "../meshes/weapon_pistol.gltf"
         },
         {
           "type": "Material",
           "albedo": [
-            0.62,
-            0.5,
-            0.38
+            0.13,
+            0.135,
+            0.15
           ],
-          "roughness": 0.7
-        }
-      ]
-    },
-    {
-      "name": "PlayerGun",
-      "components": [
-        {
-          "type": "Transform",
-          "position": [
-            0.0,
-            1.24,
-            15.3
-          ],
-          "scale": [
-            0.15,
-            0.15,
-            1.0
-          ]
-        },
-        {
-          "type": "Mesh",
-          "asset": "builtin:cube"
-        },
-        {
-          "type": "Material",
-          "albedo": [
-            0.045,
-            0.048,
-            0.055
-          ],
-          "roughness": 0.35,
-          "metallic": 0.85,
+          "roughness": 0.4,
+          "metallic": 0.8,
           "normal_map": "../textures/plate_normal.png",
           "uv_scale": [
-            1.0,
+            2.0,
+            2.0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "WeaponRifle",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../meshes/weapon_rifle.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.105,
+            0.11,
+            0.125
+          ],
+          "roughness": 0.45,
+          "metallic": 0.75,
+          "normal_map": "../textures/plate_normal.png",
+          "uv_scale": [
+            2.0,
+            2.0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "WeaponShotgun",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../meshes/weapon_shotgun.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.2,
+            0.135,
+            0.09
+          ],
+          "roughness": 0.55,
+          "metallic": 0.35,
+          "normal_map": "../textures/plate_normal.png",
+          "uv_scale": [
+            2.0,
             2.0
           ]
         }
@@ -10700,9 +10728,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -10736,9 +10764,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -10772,9 +10800,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -10808,9 +10836,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -10844,9 +10872,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -10880,9 +10908,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -10916,9 +10944,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -10952,9 +10980,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -10988,9 +11016,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -11024,9 +11052,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -11060,9 +11088,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -11096,9 +11124,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -11132,9 +11160,9 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -11168,9 +11196,369 @@
             0.0
           ],
           "scale": [
-            0.22,
-            0.22,
-            0.22
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet14",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet15",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet16",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet17",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet18",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet19",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet20",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet21",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet22",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "builtin:sphere"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.9,
+            0.75,
+            0.25
+          ],
+          "roughness": 0.3,
+          "emissive": [
+            1.0,
+            0.72,
+            0.18
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bullet23",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            0.0,
+            -30.0,
+            0.0
+          ],
+          "scale": [
+            0.11,
+            0.11,
+            0.11
           ]
         },
         {
@@ -12173,8 +12561,9 @@
         {
           "type": "HudPanel",
           "layout": "column",
-          "padding": 24.0,
-          "gap": 16.0,
+          "width": 416.0,
+          "padding": 16.0,
+          "gap": 10.0,
           "align": "center",
           "parent": "MenuRoot"
         }
@@ -12201,7 +12590,7 @@
       "components": [
         {
           "type": "HudText",
-          "text": "WASD MOVE   MOUSE AIM   CLICK FIRE   R RELOAD   ESC PAUSE",
+          "text": "WASD MOVE   MOUSE AIM   CLICK FIRE   1 2 3 WEAPON   R RELOAD   ESC PAUSE",
           "size": 16.0,
           "wrap": 416.0,
           "line_gap": 5.0,
@@ -12220,12 +12609,12 @@
       ]
     },
     {
-      "name": "MenuButton",
+      "name": "MenuBtn1",
       "components": [
         {
           "type": "HudPanel",
           "layout": "column",
-          "padding": 10.0,
+          "padding": 7.0,
           "align": "center",
           "color": [
             0.1,
@@ -12237,7 +12626,8 @@
           "stretch": [
             true,
             false
-          ]
+          ],
+          "visible": true
         },
         {
           "type": "HudInteract",
@@ -12255,18 +12645,330 @@
       ]
     },
     {
-      "name": "MenuButtonText",
+      "name": "MenuBtn1Text",
       "components": [
         {
           "type": "HudText",
           "text": "PLAY",
-          "size": 24.0,
+          "size": 18.0,
           "color": [
             0.9,
             0.95,
             1.0
           ],
-          "parent": "MenuButton"
+          "parent": "MenuBtn1"
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn2",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "column",
+          "padding": 7.0,
+          "align": "center",
+          "color": [
+            0.1,
+            0.13,
+            0.18
+          ],
+          "opacity": 0.95,
+          "parent": "MenuColumn",
+          "stretch": [
+            true,
+            false
+          ],
+          "visible": true
+        },
+        {
+          "type": "HudInteract",
+          "hover_tint": [
+            1.9,
+            1.9,
+            1.9
+          ],
+          "press_tint": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn2Text",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "SETTINGS",
+          "size": 18.0,
+          "color": [
+            0.9,
+            0.95,
+            1.0
+          ],
+          "parent": "MenuBtn2"
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn3",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "column",
+          "padding": 7.0,
+          "align": "center",
+          "color": [
+            0.1,
+            0.13,
+            0.18
+          ],
+          "opacity": 0.95,
+          "parent": "MenuColumn",
+          "stretch": [
+            true,
+            false
+          ],
+          "visible": false
+        },
+        {
+          "type": "HudInteract",
+          "hover_tint": [
+            1.9,
+            1.9,
+            1.9
+          ],
+          "press_tint": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn3Text",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "",
+          "size": 18.0,
+          "color": [
+            0.9,
+            0.95,
+            1.0
+          ],
+          "parent": "MenuBtn3"
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn4",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "column",
+          "padding": 7.0,
+          "align": "center",
+          "color": [
+            0.1,
+            0.13,
+            0.18
+          ],
+          "opacity": 0.95,
+          "parent": "MenuColumn",
+          "stretch": [
+            true,
+            false
+          ],
+          "visible": true
+        },
+        {
+          "type": "HudInteract",
+          "hover_tint": [
+            1.9,
+            1.9,
+            1.9
+          ],
+          "press_tint": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn4Text",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "QUIT",
+          "size": 18.0,
+          "color": [
+            0.9,
+            0.95,
+            1.0
+          ],
+          "parent": "MenuBtn4"
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn5",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "column",
+          "padding": 7.0,
+          "align": "center",
+          "color": [
+            0.1,
+            0.13,
+            0.18
+          ],
+          "opacity": 0.95,
+          "parent": "MenuColumn",
+          "stretch": [
+            true,
+            false
+          ],
+          "visible": false
+        },
+        {
+          "type": "HudInteract",
+          "hover_tint": [
+            1.9,
+            1.9,
+            1.9
+          ],
+          "press_tint": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn5Text",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "",
+          "size": 18.0,
+          "color": [
+            0.9,
+            0.95,
+            1.0
+          ],
+          "parent": "MenuBtn5"
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn6",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "column",
+          "padding": 7.0,
+          "align": "center",
+          "color": [
+            0.1,
+            0.13,
+            0.18
+          ],
+          "opacity": 0.95,
+          "parent": "MenuColumn",
+          "stretch": [
+            true,
+            false
+          ],
+          "visible": false
+        },
+        {
+          "type": "HudInteract",
+          "hover_tint": [
+            1.9,
+            1.9,
+            1.9
+          ],
+          "press_tint": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn6Text",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "",
+          "size": 18.0,
+          "color": [
+            0.9,
+            0.95,
+            1.0
+          ],
+          "parent": "MenuBtn6"
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn7",
+      "components": [
+        {
+          "type": "HudPanel",
+          "layout": "column",
+          "padding": 7.0,
+          "align": "center",
+          "color": [
+            0.1,
+            0.13,
+            0.18
+          ],
+          "opacity": 0.95,
+          "parent": "MenuColumn",
+          "stretch": [
+            true,
+            false
+          ],
+          "visible": false
+        },
+        {
+          "type": "HudInteract",
+          "hover_tint": [
+            1.9,
+            1.9,
+            1.9
+          ],
+          "press_tint": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MenuBtn7Text",
+      "components": [
+        {
+          "type": "HudText",
+          "text": "",
+          "size": 18.0,
+          "color": [
+            0.9,
+            0.95,
+            1.0
+          ],
+          "parent": "MenuBtn7"
         }
       ]
     },

@@ -5576,3 +5576,287 @@ fn a_proxy_on_an_unknown_joint_is_refused_with_a_suggestion() {
     assert_eq!(unknown["component"], "SkinnedCollider", "{unknown}");
     assert_eq!(unknown["did_you_mean"], "Chest", "{unknown}");
 }
+
+// ── M36: the game shell — saves, quit, and a writable environment ──────────
+//
+// Three engine additions, and only one of them has pixels behind it. The
+// fixture pins that one; these pin the rest, which is the split the milestone's
+// design doc asks for.
+
+/// A scene in its own temp directory with one script, no assets but builtins.
+///
+/// No relative asset paths, deliberately: M10's trap is that a scene moved away
+/// from its files loses them, and a save test that copied a fixture would be
+/// testing the copy rather than the save.
+fn shell_scene(test: &str, script: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("engine-m36-{}-{test}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(dir.join("scripts/shell.rhai"), script).unwrap();
+    let scene = dir.join("scene.json");
+    std::fs::write(
+        &scene,
+        r#"{"name":"shell","entities":[
+            {"name":"Cam","components":[{"type":"Camera","active":true}]},
+            {"name":"Mark","components":[
+                {"type":"Transform"},
+                {"type":"Mesh","asset":"builtin:cube"}
+            ]},
+            {"name":"Game","components":[{"type":"Script","source":"scripts/shell.rhai"}]}
+        ]}"#,
+    )
+    .unwrap();
+    scene
+}
+
+fn simulate_report(scene: &Path, steps: u32, entities: &[&str]) -> serde_json::Value {
+    let mut command = engine();
+    command
+        .arg("simulate")
+        .arg(scene)
+        .arg("--steps")
+        .arg(steps.to_string());
+    for name in entities {
+        command.arg("--entity").arg(name);
+    }
+    let output = command.output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "simulate failed: {:?}",
+        stderr_lines(&output)
+    );
+    serde_json::from_str(stdout_of(&output).trim()).unwrap()
+}
+
+/// The round trip is the whole promise, and it is checked *across processes*:
+/// one `engine simulate` writes the slot, a second reads it. A single run would
+/// return the right answer out of `world.state` even if no file existed.
+#[test]
+fn a_save_slot_survives_the_process_that_wrote_it() {
+    let writer = shell_scene(
+        "save-writer",
+        r#"fn step(world, step) {
+            if step == 0 { world.set_state("score", 4200.0); }
+            if step == 0 { world.set_state("level", 3.0); }
+            if step == 1 { let ok = world.save(1); }
+        }"#,
+    );
+    simulate_report(&writer, 3, &["Mark"]);
+
+    // Next to the scene, not in /tmp's root and not beside the binary: M10's
+    // rule, because everything in this engine resolves relative to the file.
+    let slot = writer.with_file_name("saves").join("slot1.json");
+    let body = std::fs::read_to_string(&slot)
+        .unwrap_or_else(|e| panic!("no save at {}: {e}", slot.display()));
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["score"], 4200.0, "{body}");
+    assert_eq!(parsed["level"], 3.0, "{body}");
+    // Sorted keys, so a save is git-diffable by construction (invariant 1).
+    assert!(
+        body.find("\"level\"").unwrap() < body.find("\"score\"").unwrap(),
+        "keys must be sorted: {body}"
+    );
+
+    // A second scene in the same directory reads the slot the first wrote and
+    // parks the cube at the numbers that came back.
+    let reader_dir = writer.parent().unwrap();
+    std::fs::write(
+        reader_dir.join("scripts/shell.rhai"),
+        r#"fn step(world, step) {
+            if step == 0 { let ok = world.load(1); }
+            if step == 1 {
+                let s = world.state("score", 0.0);
+                let l = world.state("level", 0.0);
+                world.set_position("Mark", s, l, 0.0);
+            }
+        }"#,
+    )
+    .unwrap();
+    let report = simulate_report(&writer, 3, &["Mark"]);
+    let at = &report["entities"][0]["position"];
+    assert_eq!(at[0], 4200.0, "{report}");
+    assert_eq!(at[1], 3.0, "the save did not come back: {report}");
+}
+
+/// An empty slot reads as empty rather than failing — "is there a save?" is a
+/// menu's first question. An impossible slot *does* fail, because a script
+/// choosing its own path is what the sandbox exists to prevent.
+#[test]
+fn an_empty_slot_is_not_an_error_and_an_impossible_one_is() {
+    let scene = shell_scene(
+        "slots",
+        r#"fn step(world, step) {
+            let found = world.load(4);
+            let there = world.has_save(4);
+            if !found && !there { world.set_position("Mark", 7.0, 0.0, 0.0); }
+        }"#,
+    );
+    let report = simulate_report(&scene, 2, &["Mark"]);
+    assert_eq!(report["entities"][0]["position"][0], 7.0, "{report}");
+
+    let bad = shell_scene("slot-range", r#"fn step(world, step) { world.save(11); }"#);
+    let output = engine()
+        .arg("simulate")
+        .arg(&bad)
+        .arg("--steps")
+        .arg("1")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr_lines(&output);
+    let failure = errors
+        .iter()
+        .find(|e| e["error"] == "script_runtime_error")
+        .unwrap_or_else(|| panic!("expected script_runtime_error, got {errors:?}"));
+    assert!(
+        failure["message"].as_str().unwrap().contains("0..9"),
+        "the message must name the range: {failure}"
+    );
+}
+
+/// `world.quit` stops a headless run and says where. It is **not** a failure:
+/// a game that ended is not an error, and the frame the run reached is still
+/// the frame to render.
+#[test]
+fn quitting_stops_a_headless_run_and_says_which_step() {
+    let scene = shell_scene(
+        "quit",
+        r#"fn step(world, step) {
+            world.set_position("Mark", step.to_float(), 0.0, 0.0);
+            if step == 12 { world.quit(); }
+        }"#,
+    );
+    let report = simulate_report(&scene, 500, &["Mark"]);
+    assert_eq!(report["quit_at_step"], 12, "{report}");
+    // `simulated_steps` stays what was *asked* for, so the two together say
+    // "you asked for 500 and it ended at 12".
+    assert_eq!(report["simulated_steps"], 500, "{report}");
+    // And the run really stopped: the cube is where step 12 left it, not
+    // where step 499 would have.
+    assert_eq!(report["entities"][0]["position"][0], 12.0, "{report}");
+
+    // A run that never quits carries no key at all, so every pre-M36 report is
+    // byte-identical.
+    let quiet = shell_scene(
+        "no-quit",
+        r#"fn step(world, step) { world.set_position("Mark", 1.0, 0.0, 0.0); }"#,
+    );
+    let report = simulate_report(&quiet, 5, &["Mark"]);
+    assert!(report.get("quit_at_step").is_none(), "{report}");
+}
+
+/// The `environment` block is writable, and a scene that writes it renders
+/// differently — checked without a GPU by reading the value back through the
+/// one thing that reports it: the fixture's own diff-render below does the
+/// pixels. Here the claim is that the *setters validate at the call*, M13's
+/// rule, because this value ends up in a scene file.
+#[test]
+fn samples_must_be_one_or_four_at_the_call() {
+    let scene = shell_scene(
+        "samples",
+        r#"fn step(world, step) { world.set_samples(2); }"#,
+    );
+    let output = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .arg("--steps")
+        .arg("1")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr_lines(&output);
+    let failure = errors
+        .iter()
+        .find(|e| e["error"] == "script_runtime_error")
+        .unwrap_or_else(|| panic!("expected script_runtime_error, got {errors:?}"));
+    assert!(
+        failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("must be 1 or 4"),
+        "{failure}"
+    );
+}
+
+/// `engine ui-layout --steps` reports the layout the *run* reached (M36), which
+/// is M32's `list-joints --steps` argument applied to a menu: which slots a
+/// screen uses is what the script painted, not what the file says.
+///
+/// The arena is the worked example and the assertion is the interesting half —
+/// its title card is authored to be exactly what the script paints, so the two
+/// reports must agree. A card that grew on the first step would move every
+/// button in it, and a demo timeline aiming at the rest rect would click
+/// through empty space.
+#[test]
+fn ui_layout_can_report_the_layout_a_run_painted() {
+    let scene = repo_path("examples/scenes/arena_shooter.json");
+    let rect = |steps: Option<u32>| -> serde_json::Value {
+        let mut command = engine();
+        command
+            .arg("ui-layout")
+            .arg(&scene)
+            .arg("--width")
+            .arg("960")
+            .arg("--height")
+            .arg("540")
+            .arg("--entity")
+            .arg("MenuBtn1");
+        if let Some(steps) = steps {
+            command.arg("--steps").arg(steps.to_string());
+        }
+        let output = command.output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "ui-layout failed: {:?}",
+            stderr_lines(&output)
+        );
+        let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+        report["elements"][0]["rect"].clone()
+    };
+
+    let at_rest = rect(None);
+    assert_eq!(
+        at_rest,
+        rect(Some(4)),
+        "the arena authors its title card exactly, so painting it must not move a button"
+    );
+    assert!(
+        at_rest[3].as_f64().unwrap() > 0.0,
+        "a visible button has a height: {at_rest}"
+    );
+}
+
+/// The fixture: script-driven shadows and a hard clip cut, pinned bit-exactly.
+///
+/// **The two soldiers are the assertion** (M30's fixture logic for the fourth
+/// time): they share a file, a mesh and a material, so anything that made both
+/// wrong would leave them identical. Only a real clip switch makes one stride
+/// and the other breathe, and only a writable `environment` puts a shadow under
+/// either of them — the file authors `shadows: false`.
+#[test]
+fn the_shell_fixture_matches_its_baseline() {
+    let scene = repo_path("examples/scenes/verify/m36_shell.json");
+    let baseline = repo_path("examples/scenes/verify/baselines/m36_shell.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("90")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+}

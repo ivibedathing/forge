@@ -15,12 +15,13 @@ one of its decisions**; that is the case the longer prose was written for.
 
 ## Current state
 
-**M0–M34 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M36 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
-planting, M33 skinned collider proxies, M34 the metre. (M7 editor at scope E0–E2 + validation
+planting, M33 skinned collider proxies, M34 the metre, M36 the game shell. (M35 is a design
+doc only — global illumination, not built. M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
@@ -55,7 +56,8 @@ engine road-centerline <scene.json> [--entity Name]  # where a Road actually wen
 engine list-colliders <scene.json> [--entity Name] [--steps N] [--input f]
 #   every collider physics holds — shape, size, world placement — read back out of the
 #   built world, so a skinned hitbox nothing renders is still answerable (M33)
-engine ui-layout <scene.json> [--width W --height H] [--entity N]...  # where the UI landed (M31)
+engine ui-layout <scene.json> [--width W --height H] [--entity N]... [--steps N] [--input f]
+#   where the UI landed (M31); --steps reports what a script *painted* (M36)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
 engine inspect <scene.json> [--entity Name]  # every field resolved, defaults filled in (M24)
 engine run-scene <scene.json> [--record-input f]   # windowed viewer + play mode; keyboard AND mouse; FPS readout is viewer-only
@@ -80,7 +82,7 @@ bark). `Meadow` is ground cover on a seed→grass→weeds→straw→collapse lif
 `HudPanel` lays its children out and `HudImage` is a nine-sliced textured rectangle; `HudInteract`
 makes the element on its own entity clickable (M31). `FootPlant` puts a skinned character's feet on
 the `Terrain` under them, and `AnimationPlayer.stride` drives its clip by ground covered (M32).
-Scene-level blocks: `physics`, `environment` (M16), `daylight` (M21).
+Scene-level blocks: `physics`, `environment` (M16, script-writable since M36), `daylight` (M21).
 
 ## Editor (M7, `crates/engine-editor`)
 
@@ -1520,6 +1522,93 @@ started. Skinned colliders landed as M33 while this was building, so this took M
 the repo's rule that the later session renumbers, applied at merge rather than at branch. A
 global-illumination branch is still out there and is the next number.
 
+## The game shell (M36, `designs/arena-menu-design.md`)
+
+The arena shooter asked for a main menu with Settings, Load Game, Save Game and
+Quit. **Three of those four are engine work**, because the Rhai sandbox has no
+I/O, nothing can close the viewer from a script, and `environment` was read off
+the `Scene` at load and never written again. Everything added defaults to the
+pre-M36 behaviour, so the sweep came back **41 of 41** and the A/B **34 of 38
+comparable artifacts byte-identical** (the four exceptions are tour frames
+neither binary reproduces — see Verification; the 39th, this milestone's own
+fixture, cannot render under the base binary because it calls `set_shadows`).
+
+- **A save is the whole `world.state` map, written as sorted JSON in
+  `<scene dir>/saves/slot<N>.json`.** `world.save` / `world.load` /
+  `world.has_save`, slots `0..9`. The shape came out of M32's rule — *ask what
+  the bake should contain, and the answer says whether something is state or
+  data*: the bake already writes where every body ended up, and this writes the
+  memory the bake deliberately drops. So **a load restores the campaign, not
+  the arena**: the engine cannot spawn an entity and a broken drone cannot be
+  put back, which is why the game offers LOAD GAME on the title card only.
+  Sorted keys make a save git-diffable by construction (invariant 1); an empty
+  slot reads `false` rather than erroring, because "is there a save?" is a
+  menu's first question, while a slot that exists and does not parse *is* an
+  error. `load` replaces the map wholesale — a merge leaves keys from the run
+  being abandoned, and those bugs surface three levels later.
+  **The determinism cost, stated:** a run that calls `world.load` is a function
+  of the save file, exactly as a run with `--input` is a function of the
+  timeline — a documented input, not hidden state, because it is text on disk
+  next to the scene. `world.save` writes headlessly too, deliberately: a call
+  that silently did nothing under `screenshot` would be untestable.
+- **`world.quit` is a request the caller drains**, following `take_breaks`
+  exactly, because what quitting *means* differs by caller: the viewer closes
+  its window at the end of the frame that asked, and a headless run stops
+  stepping and reports `"quit_at_step": N`. It is **not** a failure — a game
+  that ended is not an error. The key is absent unless a script quit, so every
+  pre-M36 report is byte-identical, and `simulated_steps` stays what was
+  *asked* for so the two together say "you asked for 500 and it ended at 43".
+  Gotcha found by its own test: the sim loop counts `1..=steps` and a script is
+  handed the 0-based index, so reporting the loop counter names a step one
+  later than the one that called `quit`.
+- **The `environment` block is writable**: `shadows`/`sky`/`fog`/`samples` plus
+  a getter each. `ScriptHost` holds it in an `Rc<RefCell<EnvironmentSettings>>`
+  seeded at build and the caller — which owns the `Scene` — assigns it back
+  after the step, so `Scene::resolved_at` is untouched and a scene that calls
+  no setter assigns an equal value. **Three of the four are per-frame uniforms
+  and `samples` is not**: it is baked into every pipeline by `with_samples`
+  (M16), so the viewer rebuilds the renderer and its attachments on the step it
+  changes and only then. `set_samples` validates 1-or-4 **at the call** (M13's
+  `set_particle_rate` rule). **A script-written `environment` is deliberately
+  not baked** — whether the player likes shadows is a display preference, not a
+  property of the scene, so it persists in the save slot instead; the
+  consequence is that a screenshot of a run that changed it is not reproducible
+  from the scene file alone.
+- **`world.set_animation_clip` is a hard cut**, and that is the design rather
+  than a limitation: M9 §8 rejected blending, M30 and M32 restated it, and this
+  is the call that makes *a gait change is a different clip* actionable. The
+  argument is M30's fragment form, validated against the rigs the host already
+  resolved (mistyped clip = located runtime error with `did_you_mean`). It
+  **resets `phase` to 0**, because a phase is a fraction of a *cycle* and two
+  clips do not share one — carrying it over is M32's `speed` trap in another
+  place.
+- **`engine ui-layout` takes `--steps N [--input f]`**, added mid-build and
+  forced by the menu: seven slots the script labels per screen means which
+  slots a card uses is not a property of the file, and M32 refused to ship a
+  system whose state no report can reach. It steps against the *requested*
+  viewport, not the 960×540 default, since a mouse-driven run is a function of
+  the frame (M28 §5).
+
+**Two things the renders changed, both worth knowing before authoring a menu.**
+**A hugging column is exactly as wide as its widest *non-stretched* child** —
+M31's rule — so a card whose every child stretches sizes itself from its title,
+which is fine for `ARENA SHOOTER` and left `SETTINGS`' six rows hanging over
+both edges of their own buttons. The column now takes an explicit width and
+hugs only its height, which is the half that mattered (the end card still
+closes up around its missing buttons). And **a card must be authored as what
+its script paints on step 1**: one that grows moves every button in it, and
+`ui-layout` at rest then reports a rect a timeline clicks straight through. A
+CLI test now asserts the two agree.
+
+Fixture `verify/m36_shell.json` at `--steps 90`: two soldiers, one whose clip
+the script cuts to `Run` at step 45, under a shadow the script turns on at
+step 30 that the file authors as `false`. **The two soldiers are the
+assertion** (M30's fixture logic for the fourth time). Aimed at its subject
+with no terrain in frame per M22's rule, and four consecutive renders came back
+as one image, so the hard bit-exact pin is measured. Not here: cloud saves,
+autosave, a save browser (a script has no clock), restoring a mid-level arena,
+and per-joint aim override.
+
 ## Showcase tour (`designs/showcase-tour.md`)
 
 `examples/scenes/showcase_tour.json` is a 15-second (900-step) camera move through five 180-step
@@ -1576,7 +1665,10 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
   hug-sized cards that are three different sizes for three screens, `visible` in place of the
   empty-string/zero-size pair, a play HUD authored *hidden* so `--steps 0` is the title screen, and
   a demo director that asks `engine ui-layout` where the button is instead of hard-coding the
-  fraction. It also carries the one trap in `HudImage`: with no `slice` an image is all middle band
+  fraction. **M36 turned that menu into a five-screen shell** — Settings, Save, Load and Quit on a
+  column of seven labelled slots — put a seventeen-joint rig where a cylinder and a sphere used to
+  stand in for the player, and gave it three weapons hung off `HandR` through `world.joint_position`
+  (M30's sanctioned prop pattern, and the first use of it in the repo). See "The game shell" above. It also carries the one trap in `HudImage`: with no `slice` an image is all middle band
   and the middle band **tiles**, so an icon must be drawn at its source size — 32 px of a 16 px
   reticle is four reticles. Its demo timeline is authored by a closed-loop director,
   `make_arena_demo.py`, because nobody can hand-write which *pixel* is on a drone at step 431, and
@@ -1711,8 +1803,8 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**32 of the 38 baselines are pinned by a test** (M33's fixture arrived with its own), and the six
-that are not are the six `showcase_*` frames — deliberately. They are not byte-reproducible on this adapter (measured repeatedly at four
+**33 of the 39 baselines are pinned by a test** (M33's and M36's fixtures each arrived with their
+own), and the six that are not are the six `showcase_*` frames — deliberately. They are not byte-reproducible on this adapter (measured repeatedly at four
 to six distinct images from six renders of an *unchanged* scene, on any binary), so a test
 asserting them would fail at random, which is worse than no test. They keep their `diff_args`
 tolerance in the manifest and stay the sweep's job; `cli.rs` says so where someone would go to add
@@ -1747,6 +1839,12 @@ found exactly those two frames differing out of 36 artifacts — and neither bin
 itself on either, so the difference is the adapter and not the change. **This is the reason the
 `md5`-it-N-times step is not optional**: a two-artifact A/B failure looks damning and here meant
 nothing.
+
+**M36's A/B found four** — 90, 585, 646 and 810 — and the probe settled every one of them the same
+way, over four renders of the *unchanged* scene per binary: 585 at 3-of-4 new and 4-of-4 base, 646
+at 3-of-4 new, 810 at 3-of-4 on both, and 90 at 2-of-4 base. Every differing frame had a binary
+disagreeing with **itself**, so the A/B difference carried no information — the fourth time this
+has been measured and the fourth time the answer was the adapter.
 
 The `draw` split then found **three** — 585, 646 and **`showcase_810`** — and the probe settled 810
 the same way: **3 distinct of 6 on both binaries**, `main`'s included. That retires the older note
@@ -1920,7 +2018,12 @@ richer than one clip per gait. **Blending stays rejected**, not deferred — see
 bitmap-font atlas (the sanctioned path to better text — a PNG plus an in-repo JSON of glyph cells,
 sampled nearest, no new dependency and no float, arriving as a `font` field whose absence is the 8×8
 font), pointer lock and scroll, text input and focus, per-side padding, and world-space UI (a health
-bar over an enemy's head is a *projection* question and wants `world.project(x, y, z)`).
+bar over an enemy's head is a *projection* question and wants `world.project(x, y, z)`). After M36:
+more than one save slot and a save browser (which wants a clock a script does not have), autosave,
+restoring a mid-level arena (which wants entity spawning, the arena shooter's oldest constraint),
+and a per-joint aim override so a twin-stick character can turn its torso without its legs —
+which M30 refuses today for M21's reason, and which is the one item here that would reverse a
+settled decision rather than extend one.
 
 **The M31 audit's housekeeping is done**: `scene_renderer.rs` and `validate.rs` are split, the
 clippy warnings are cleared and their CI step is blocking, every reproducible baseline has a test,
