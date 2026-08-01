@@ -498,6 +498,18 @@
       "height": 360,
       "milestone": "M31",
       "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m32_locomotion.png",
+      "scene": "examples/scenes/verify/m32_locomotion.json",
+      "args": [
+        "--steps",
+        "45"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M32",
+      "pinned_by": "cli.rs"
     }
   ],
   "traces": [

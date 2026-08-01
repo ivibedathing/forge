@@ -312,16 +312,22 @@ than no showcase:
   behind a canopy is a pale smudge, and the point of putting it there is that
   the legs are legibly legs.
 
-  What is faked about it is everything above the skeleton. There is no
-  locomotion system: `tour_wildlife.rhai` carries it around a circle and the
-  clip plays at a fixed rate, so the stride is *tuned* to the speed rather than
-  driven by it, and nothing stops the feet skating if either is retuned. No
-  foot IK, so it walks through the hills' slopes rather than planting on them
-  — the ground query puts its root on the terrain, which is not the same
-  thing. No blending and no state machine, which is M9's rejection standing:
-  `Idle` is in the file and the tour never crossfades to it, because a
-  crossfade is exactly the nondeterminism that made two clips on one property a
-  validation error.
+  Two of the three things faked about it are gone as of **M32**.
+  `tour_wildlife.rhai` still carries it around a circle — the M30 division of
+  labour, and correct — but the clip is now driven by the ground it covers
+  (`stride: 1.6408`, measured off the clip by `engine list-joints`) rather than
+  played at a rate tuned to match, so retuning the circuit cannot make the feet
+  skate. And a `FootPlant` puts each foot on the hillside instead of leaving
+  the root on the terrain and the feet wherever the clip put them, which on a
+  slope is inside the hill. The measurement is the part worth keeping: the walk
+  covers 1.64 m a cycle and the tour was carrying it at 0.88 m/s, so every
+  stance foot had been sliding backwards at 0.76 m/s — a number nobody had
+  because nothing could measure it.
+
+  What is still faked: no blending and no state machine, which is M9's
+  rejection standing. `Idle` is in the file and the tour never crossfades to
+  it, because a crossfade is exactly the nondeterminism that made two clips on
+  one property a validation error.
 - **The blast** still has no light — but as of M17 that is a wiring job rather
   than a missing feature. A `PointLight` at the crate pile, pulsed for a dozen
   steps from `tour_director.rhai` (which already fires the explosion), would do

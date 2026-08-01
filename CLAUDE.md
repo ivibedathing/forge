@@ -9,12 +9,12 @@ it are still open (§9).
 
 ## Current state
 
-**M0–M31 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M32 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
-M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system. (M7 editor at scope E0–E2 +
-validation panel + `--watch`.)
+M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
+planting. (M7 editor at scope E0–E2 + validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -41,7 +41,9 @@ engine simulate <scene.json> --steps N [--input f] [--bake out.json] [--trace t.
 engine raycast <scene.json> --from x,y,z --dir x,y,z [--steps N] [--input f]
 engine filmstrip <scene.json> --out strip.png [--start S --end E --frames N --columns C]
 engine list-animations <scene-or-clip> [--schema]  # glTF clips too, with their channel targets (M30)
-engine list-joints <scene-or-mesh> [--entity Name] [--time T]  # the rig, and where it is (M30)
+engine list-joints <scene-or-mesh> [--entity Name] [--time T] [--steps N]
+#   the rig and where it is (M30); --steps for a pose the simulation reached, and a
+#   measured `stride` when the entity has a FootPlant (M32)
 engine road-centerline <scene.json> [--entity Name]  # where a Road actually went
 engine ui-layout <scene.json> [--width W --height H] [--entity N]...  # where the UI landed (M31)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
@@ -65,7 +67,8 @@ M17 fire fields). `PointLight` is a local light, ≤8 per scene. `Water`, `Tree`
 `Mesh` and no `Material` (a `Tree` is the exception on materials: the entity's `Material` is its
 bark). `Meadow` is ground cover on a seed→grass→weeds→straw→collapse life cycle (M29).
 `HudPanel` lays its children out and `HudImage` is a nine-sliced textured rectangle; `HudInteract`
-makes the element on its own entity clickable (M31).
+makes the element on its own entity clickable (M31). `FootPlant` puts a skinned character's feet on
+the `Terrain` under them, and `AnimationPlayer.stride` drives its clip by ground covered (M32).
 Scene-level blocks: `physics`, `environment` (M16), `daylight` (M21).
 
 ## Editor (M7, `crates/engine-editor`)
@@ -1267,6 +1270,84 @@ the 8×8 font's fully-on-or-off glyph pixels are what the whole verification sto
 lock and scroll, text input and focus, percentage sizes and flex-grow, rounded corners and shadows
 (all anti-aliasing, which is where the CPU rasterizer's bit-exactness lives), and world-space UI.
 
+## Locomotion and foot planting (M32, `designs/locomotion-design.md`)
+
+M30's walker slid and floated, and its own design doc said so. This removes those two fakes and
+nothing else. **Everything defaults to the pre-M32 behaviour** — `stride: 0` is the clock driving
+the clip, and a scene with no `FootPlant` poses exactly as it did — so the A/B said **30 of 30**
+comparable artifacts byte-identical, the seven exclusions being the new fixture and the six tour
+frames the `Walker`'s own edit re-blessed.
+
+- **The clip's phase is a field in the file, not state in the process, and the *bake* is what
+  settled that.** The obvious implementation is an accumulator in the sim loop beside
+  `ParticleSystem`; a particle is genuinely disposable and a half-finished stride is not, so a baked
+  scene that dropped it would reload the walker with its legs somewhere else and the bake's promise
+  — reload, re-render, bit-exactly — would be false for every walking character. So
+  `AnimationPlayer` gains `stride` (metres of ground one **cycle** covers) and `phase`, the engine
+  writes `phase` back after physics every fixed step, and the change-based bake splices it.
+  **Nothing in the render path changed signature**: `palette_for` was already reading the component.
+  The general rule this yields — *ask what the bake should contain, and the answer says whether
+  something is state or data.*
+- **`phase` counts cycles, not seconds**, so the locomotion system needs no clip duration and never
+  opens a glTF; `local_time` converts where the duration is already in hand. It wraps into `[0, 1)`
+  **on write-back**, so a long run does not bake a number whose f32 resolution has decayed.
+- **Driving `AnimationPlayer.speed` from a script does not work**, and the reason is invisible until
+  you look at a filmstrip: `local_time` is `t * speed`, so changing `speed` at t=10 from 1 to 2
+  teleports the phase from 10 to 20. Every acceleration is a pop. Phase continuity under a changing
+  rate *is* an integral, which is the whole reason a stored `phase` exists.
+- **`engine list-joints` measures `stride` off the clip** (`stride.measured`, over
+  `STRIDE_SAMPLES` = 64 moments, on an entity that also has a `FootPlant` so the feet are named). It
+  assumes nothing about gait: over each interval the **lowest** foot is the planted one and the
+  ground covered is how far it travelled in the skeleton's frame — biped, quadruped, or a hop, which
+  correctly measures zero. Computing it implicitly at render time was rejected: the measurement is
+  an algorithm, and an algorithm that silently set the clip rate would be a format contract, so a
+  refinement would move every walking character in every baseline. **The tour's walker covers
+  1.6408 m per cycle**, against the 0.884 m/s it was being carried at — a foot travelling 0.76 m/s
+  backwards through every stance, which is the fake as a number.
+- **`list-joints --steps N`**, and the fixture's own test is what forced it. A stride-driven pose is
+  *not* a pure function of (files, time) — its phase is what the run reached — so `--time` alone
+  reports the authored pose. The first version of the slip test baked to `/tmp` to reach the stepped
+  world and broke every relative asset path in the baked file (the trap this file already warns
+  about). A system whose state no report can reach is what M30 §6 says not to build.
+- **`FootPlant` plants against a `Terrain`, and that is a purity decision.** Raycasting the physics
+  world would make the pose a function of the simulation, which is exactly what lets `list-joints
+  --time` answer at all. So `ground` names an entity with a `Terrain`, checked
+  (`foot_plant_ground_not_found` / `_not_terrain`), and sampling goes through M22's one
+  implementation. **The stated cost: a character cannot stand on a crate.**
+- **The solve runs in skin space**, mapping the target back through `model⁻¹` rather than mapping
+  every quaternion forward — one inverse per entity per frame, and it cannot get a scale subtly
+  wrong (`foot_plant_non_uniform_scale` refuses one outright). Two lessons from writing it: the
+  knee's side must be chosen by **nearness to where the clip put it**, never by a fixed sign (a sign
+  flips the joint the first frame a leg passes through straight), and results must be written back
+  as **local** transforms with the hierarchy re-walked — editing globals detaches everything below,
+  and the symptom is a foot that reaches the ground with nothing joining it to the knee. The hips
+  drop first, by the largest deficit across legs; absent a `hips` joint the deficit is clamped and
+  one leg stretches, which is bounded and reads as wrong.
+- Scripts get `world.animation_phase`/`set_animation_phase` and the `stride` pair — **settable**,
+  unlike M30's joint getters, and the distinction is where the number lives: a joint is derived and
+  would be hidden state, while these are ordinary component fields the file carries. A game with its
+  own locomotion rule drives it through them rather than through a second system in the engine.
+  `FootPlant.max_drop`/`max_lift`/`align` animate freely, which is how a jump *stops* planting;
+  `stride` and `phase` are in `NOT_ANIMATABLE` because a clip driving its own clock is circular.
+
+Fixture `verify/m32_locomotion.json` at `--steps 45`: two copies of `rigged_walker.gltf` crossing one
+slope, one with a `FootPlant`. **The two walkers are the assertion**, M30's fixture logic — they
+share a file, a mesh and a clip, so anything that made both wrong would leave them identical. It
+renders at **`samples: 1`** because it needs terrain in frame (M22's rule, M29's answer), and four
+consecutive renders came back as one image, so the hard pin is measured. Both claims are also pinned
+**without a pixel**: a CLI test asserts each planted ankle's world Y equals `terrain-height(x, z) +
+sole` to a millimetre at four moments, and another measures foot **slip** — under a centimetre over
+two steps stride-driven, seven times that with the clock driving the same clip.
+
+**The tour is not where this is visible.** Station 01's walker is thirty metres back and mostly
+behind the lower-third card: the whole change moves **147 pixels** of `showcase_90` and nothing
+outside the existing tolerance on the other five. All six were re-blessed anyway, since the scene
+changed. Not here, deliberately: blending and crossfades (**still rejected**, and locomotion is the
+usual reason engines reach for a blend tree — a gait change here is a different `clip`), root motion
+(the inverse of this design; it would take `Transform.position` from scripts and physics, and there
+is no third owner), planting on physics colliders, arm/hand IK and authored pole targets, and toe
+joints.
+
 
 ## Showcase tour (`designs/showcase-tour.md`)
 
@@ -1339,9 +1420,10 @@ composition the vertex-stage seam was rebuilt for. It stands *between* the stati
 trees deliberately: a two-metre figure thirty metres back behind a canopy is a pale smudge. Five of
 the six showcase baselines were re-blessed for it and `showcase_450` was **byte-identical** — station
 03's camera is aimed the other way, which is the cheap confirmation that one added entity changed
-only the frames it is in. Faked and named as such in the tour doc: the stride is hand-tuned to the
-speed rather than driven by it, there is no foot IK, and `Idle` is in the file but never crossfaded
-to, because a crossfade is the nondeterminism M9 refused.
+only the frames it is in. **M32 unfaked two of the three the tour doc names**: the stride is
+now driven by the ground the walker covers (`stride: 1.6408`, the number `list-joints` measures off
+the clip) and its feet are planted on the terrain by a `FootPlant`. Still faked: `Idle` is in the
+file but never crossfaded to, because a crossfade is the nondeterminism M9 refused.
 
 Station 04 fires all three `Breakable` triggers in one run (collision at ~585, `break_entity` at 601,
 `explode` at 636). What is real: particles, physics, fragments, the ice (real
@@ -1427,10 +1509,10 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**25 of the 36 baselines are pinned by no test at all** — the sweep is their only check. The eleven a
+**25 of the 37 baselines are pinned by no test at all** — the sweep is their only check. The twelve a
 test actually diff-renders and asserts *matching* are `m12_hud`, `m16_environment`, `m17_fire`,
 `m18_water`, `m19_trees`, `m20_clouds`, `m21_daylight_1200`, `m22_terrain`, `m23_road`,
-`m30_skeletal` and `m31_ui`; everything else — `m4_lighting`, both `m8_drop`, `m9_t025`, both `m10`,
+`m30_skeletal`, `m31_ui` and `m32_locomotion`; everything else — `m4_lighting`, both `m8_drop`, `m9_t025`, both `m10`,
 `m11_lap`, `m13_smoke`, `m14_break`, the other four `m21_daylight_*`, `m26_materials`, both `m27_*`,
 both `m28_pointer_*`, `m29_meadow`, and all six `showcase_*` — rides on `bin/verify-baselines` alone.
 **This ratio has been getting worse, not better**: it was 16 of 35 when last counted, and M26/M28
@@ -1576,10 +1658,11 @@ bark is authored from them. **Alpha-cut leaves are still a missing feature**, no
 and an `alpha_cutoff` mean new `Tree` fields, a schema regeneration, and a validation pass.) After M23: road junctions (two roads crossing wants a patch primitive, not a ribbon), banked
 cross-sections, per-point road width, roads that follow a `Terrain` instead of carrying their own
 heights, and textures for asphalt grain (analytic markings beat a texture for anything periodic, but
-grain is not periodic). After M30: foot IK (the tour's walker rides the terrain by its root, which
-is not the same as planting on it), a locomotion system that drives clip rate from ground speed
-instead of leaving the stride tuned by hand, skinned collider proxies, and editor picking against
-the posed mesh. **Blending stays rejected**, not deferred — see the design's §1. After M31: a
+grain is not periodic). After M30: skinned collider proxies and editor picking against the
+posed mesh (foot IK and stride-driven locomotion landed in M32). After M32: planting against
+arbitrary colliders rather than only a `Terrain` (which wants an answer to the purity question M32
+declined to give), arm and hand IK with authored pole targets, toe joints, and a locomotion rule
+richer than one clip per gait. **Blending stays rejected**, not deferred — see the design's §1. After M31: a
 bitmap-font atlas (the sanctioned path to better text — a PNG plus an in-repo JSON of glyph cells,
 sampled nearest, no new dependency and no float, arriving as a `font` field whose absence is the 8×8
 font), pointer lock and scroll, text input and focus, per-side padding, and world-space UI (a health
