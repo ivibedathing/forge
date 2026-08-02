@@ -280,6 +280,22 @@ The cross-cutting ones. Per-system traps are in each note.
   parameters in an empty scene: if it puffs there, the problem is placement, not the pipeline.
 - **Dust has to out-contrast the ground, not match the material** (M44). Rock dust's honest colour
   is the colour of the rock, and a grey puff over grey ground at this exposure is nothing at all.
+- **Giving an existing `Breakable` a `material` changes what its *neighbours* do**, because M43's
+  scatter throws the pieces outward with real momentum. The tour's crate stack went from "the
+  boulder shatters one" to "the row goes down in four steps" on that one field, and the knock-on
+  was that the later `explode` had nothing left inside its radius. Budget for re-authoring the
+  scene around a break, not just the entity that breaks.
+- **`engine fracture` writes the material's *solid* density, and a hollow thing is not solid**
+  (M43/M44). Wood is 700 kg/m³; the tour's crate is 60, because a crate is mostly air. Conserving
+  the parent's mass across shards that tile its full volume is the honest reading and it is the
+  wrong one here: the smallest of ten Voronoi cells is ~2 kg, `world.explode` divides its impulse
+  by that mass, and the splinter leaves at 60 m/s. Keep the generator's number — M43 already did
+  exactly this to the tour's ice pillar, giving a 40 kg/m³ pillar 2500 kg/m³ glass.
+- **A fragment inherits its parent's `ccd`, and until the tour's crates went wooden it could not have any.** A thrown shard
+  is the tunnelling case this engine makes easiest to author: small, fast, and landing on a
+  `trimesh` terrain. The symptom is the silent one — 0.17 m of descent per step against ground at
+  −0.39 m, the body at −0.67 m and falling forever. `ccd` is still off unless the *parent* asks,
+  so nothing that broke before this changed by a byte.
 - **`builtin:cube`'s faces disagree on which way `u` runs, in pairs rather than in axes.** Anything
   strongly directional on a cube draws differently on all four sides. `builtin:plane`'s UVs are not
   the intuitive ones either — fixing both is deferred as its own change with its own A/B (M26).

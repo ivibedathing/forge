@@ -104,10 +104,18 @@ pub fn apply_breaks(
             .map(|t| *t)
             .unwrap_or_default();
         let material = world.get::<&Material>(entity).map(|m| (*m).clone()).ok();
-        let (linear, angular_degrees) = world
+        // `ccd` is inherited rather than fixed off, because a fragment is the
+        // body in this engine most likely to need it: it is thrown, it is
+        // smaller than the thing it came off, and a small fast convex hull
+        // against a `trimesh` terrain is the tunnelling case. The tour's
+        // wooden crates are what found it — a shard sailing at 8 m/s went
+        // through the ground on the way down and fell forever in silence.
+        // Inheriting keeps every scene that predates it byte-identical: nothing
+        // that breaks today sets `ccd` on the parent.
+        let (linear, angular_degrees, ccd) = world
             .get::<&RigidBody>(entity)
-            .map(|b| (b.linear_velocity, b.angular_velocity))
-            .unwrap_or((Vec3::ZERO, Vec3::ZERO));
+            .map(|b| (b.linear_velocity, b.angular_velocity, b.ccd))
+            .unwrap_or((Vec3::ZERO, Vec3::ZERO, false));
 
         let _ = world.despawn(entity);
         physics.remove_entity(entity);
@@ -232,7 +240,7 @@ pub fn apply_breaks(
                 gravity_scale: 1.0,
                 linear_damping: 0.0,
                 angular_damping: 0.0,
-                ccd: false,
+                ccd,
                 can_sleep: true,
                 locked_rotations: [false; 3],
             };
@@ -631,6 +639,47 @@ mod tests {
             positions
         };
         assert_eq!(run(), run());
+    }
+
+    /// A fragment is thrown, and it is smaller than the thing it came off,
+    /// which makes it the body most likely to cross a `trimesh` terrain
+    /// between two steps. It inherits the parent's `ccd` rather than being
+    /// fixed off, so a scene that needs it can say so — and one that does not
+    /// mention it is byte-identical to every break before this.
+    #[test]
+    fn a_fragment_inherits_the_ccd_of_what_it_broke_off() {
+        let ccd_of = |body: &str| -> Vec<bool> {
+            let source = CRATE_DROP.replace(
+                r#"{"type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5]},"#,
+                &format!(
+                    r#"{body}{{"type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5]}},"#
+                ),
+            );
+            let (mut scene, mut physics) = scene(&source);
+            let events =
+                apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
+            events[0]
+                .fragments
+                .iter()
+                .map(|(_, entity)| scene.world.get::<&RigidBody>(*entity).unwrap().ccd)
+                .collect()
+        };
+
+        assert_eq!(
+            ccd_of(r#"{"type": "RigidBody", "body": "dynamic", "ccd": true},"#),
+            [true, true],
+            "a parent that asks for continuous collision passes it to its pieces"
+        );
+        assert_eq!(
+            ccd_of(r#"{"type": "RigidBody", "body": "dynamic"},"#),
+            [false, false],
+            "and the default stays off, which is every scene that predates it"
+        );
+        assert_eq!(
+            ccd_of(""),
+            [false, false],
+            "a parent with no body at all has no ccd to inherit"
+        );
     }
 
     // ── Material-aware fracture (M43) ──────────────────────────────────

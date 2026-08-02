@@ -70,7 +70,7 @@ seconds](#past-the-fifteen-seconds).
 | 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — under fissured bark, four critters running loops, a rigged figure walking a circuit in front of them, the granite monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), **skeletal animation** (13 joints, textured), `Material` (`albedo_map`, `normal_map`, `orm_map`, `Material.asset`), `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
 | 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
 | 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
-| 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
+| 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates and splinters them into wood shards under a haze of sawdust, an ice pillar is broken by name, a blast finishes the crate standing clear of the pile | `RigidBody`, `Collider`, `Breakable` (`material: wood`, `Shard` fragments, M44 dust), `Shard`, `world.break_entity`, `world.explode` |
 | 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4 (tread `normal_map`), `Material.orm_map`, the `HudPanel` station card, the camera |
 | 900–1079 | 06 the way back | the descent home, over the burning fire and the debris field, and then all of the above again | the loop |
 
@@ -115,6 +115,19 @@ in the order the design doc lists them:
 
 Which crate each trigger claims is float-level detail that moves between
 optimisation levels; the CLI test pins the *sequence*, not the casualties.
+
+**`Crate6` exists so the third trigger has a casualty at all.** Once the crates
+became wood (M43/M44), the boulder stopped shattering one of them and started
+taking the whole stack: a `Breakable.material` throws its pieces *away from the
+impact*, so Crate1's shards arrive at Crate2 with enough momentum to clear its
+threshold, and the row goes down in four steps. That is the better picture — a
+boulder at 13 m/s should flatten a crate stack — but it left the blast at 636
+with nothing standing, because the survivors had tumbled outside its 6.5 m
+radius by then. No threshold-and-force pair recovers it: raise the threshold
+enough to stop the chain and the blast cannot break anything either. So the
+explosion got its own crate, at `(-1.0, 0.08, 13.5)` — inside the blast radius,
+and 1.5 m off the `z = 15` line the boulder rolls down, which clears its 0.9 m
+radius plus the crate's own half-metre.
 
 ### Past the fifteen seconds
 

@@ -123,3 +123,26 @@ events, and rapier's `NarrowPhase::register_pairs` is private — so every colli
 contact at load** silently lost its contacts and fell through the world forever. Bodies *dropped*
 from a height were unaffected, which is why every earlier fixture missed it. The first-step BVH now
 goes on a scratch clone (`bvh_cold`).
+
+**The crates became wood (M43/M44).** Station 04's five crates carried M14's four cube fragments
+until now; they are `material: "wood"` with ten generated `Shard` fragments each, so the boulder
+splinters them along the grain and each break throws M44's sawdust. Three things the change taught,
+none of them about shards:
+
+- **The three-trigger story does not survive a material.** Wood's scatter carries Crate1's shards
+  into Crate2 hard enough to break it, and the row goes down in four steps — leaving the blast at
+  636 with nothing standing inside its radius. There is no threshold-and-force pair that fixes it:
+  the window where debris does not chain-break is above the window where the blast still can.
+  `Crate6` is the answer, off the boulder's line and inside the blast — see `designs/showcase-tour.md`.
+- **Fragment mass is a scene-tuning input, not a physical constant.** `engine fracture` writes the
+  material's real density (wood 700 kg/m³) and the crates' own collider is 60 kg/m³, because a crate
+  is mostly air. Conserving the crate's 60 kg across shards that tile its full volume is the
+  physically honest choice and it is *unplayable* here: the smallest of ten Voronoi cells is ~2 kg,
+  the tour's `explode` divides a 210 impulse by that mass, and the splinter leaves at 60 m/s and
+  clears the terrain. The generator's density is what the scene keeps — which is also what M43 did
+  to the ice pillar in this same file, giving a 40 kg/m³ pillar 2500 kg/m³ glass.
+- **A thrown fragment wants CCD, and could not have it.** `breaking.rs` hard-coded `ccd: false` on
+  every fragment. A shard sailing at 8 m/s went *through* the terrain on the way down — descending
+  0.17 m a step against a `trimesh`, resting height −0.39 m, and the body at −0.67 m and falling
+  forever in silence. Fragments now inherit the parent's `ccd`, which is off for every scene that
+  does not say otherwise, so both golden traces and all 41 pinned baselines stayed byte-identical.
