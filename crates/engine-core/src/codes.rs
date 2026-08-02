@@ -345,8 +345,8 @@ registry! {
         "a GI bake file parses but its version, grid or basis disagrees with the component";
     TOO_MANY_GI_PROBES = "too_many_gi_probes", Input,
         "a LightProbeVolume's bounds and spacing would place more probes than the engine will bake";
-    MULTIPLE_GI_VOLUMES = "multiple_gi_volumes", Input,
-        "a scene has more than one LightProbeVolume, and the renderer draws only the finest one";
+    MULTIPLE_LIGHT_PROBE_VOLUMES = "multiple_light_probe_volumes", Input,
+        "a scene may have at most one LightProbeVolume; the renderer holds one field";
 
     // ── UI system (M31) ────────────────────────────────────────────────
     HUD_PARENT_NOT_FOUND = "hud_parent_not_found", Input,

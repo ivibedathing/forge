@@ -60,7 +60,7 @@ actually says.
 | `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. | `m19-trees.md` |
 | `Cloud` | A cluster of interpenetrating lobes that drifts; **owns its mesh**. | `m20-clouds.md` |
 | `Meadow` | Ground cover on a seed→grass→weeds→straw→collapse life cycle, animated entirely in the vertex stage. | `m29-meadows.md` |
-| `LightProbeVolume` | A box of baked irradiance probes; replaces the hemispheric fill with one that knows what is above a surface. Carries no geometry. | `m35-global-illumination.md` |
+| `LightProbeVolume` | A box of baked irradiance probes; replaces the hemispheric fill with one that knows what is above a surface. At most one per scene, and it carries no geometry. | `m35-global-illumination.md` |
 | `HudText` | Screen-anchored text at an integer scale of the 8×8 font. | `m11_6-hud.md` |
 | `HudRect` | A screen-anchored coloured rectangle — bars, backdrops, gauges. | `m11_6-hud.md` |
 | `HudPanel` | Lays its children out in a row, column, or freely; hugs its contents unless sized. | `m31-ui-system.md` |
@@ -139,9 +139,11 @@ engine fit-colliders <scene.json> [--entity Name] [--shape S] [--write]
 engine ui-layout <scene.json> [--width W --height H] [--entity N]... [--steps N] [--input f]
 #   where the UI landed (M31); --steps reports what a script *painted* (M36)
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is (M24)
-engine bake-gi <scene.json> [--entity Name] [--out path] [--samples N]
+engine bake-gi <scene.json> [--entity Name] [--out path] [--samples N] [--check]
 #   bakes a LightProbeVolume's transfer file; the only query-side command that
-#   *writes* into the project, and it reports probes, rays and relocations (M35)
+#   *writes* into the project, and it reports probes, rays and relocations (M35).
+#   --check writes nothing — it recomputes the digest and fails `gi_bake_stale`
+#   when the geometry has moved, which is the check `validate` cannot afford
 engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
 #   the irradiance the renderer would use here, the pre-M35 fallback beside it,
 #   the blend weight and how open the sky is — a number, not a picture (M35)
@@ -672,9 +674,12 @@ original four, entity spawning was M37 and a CPU wave evaluator was M41.) The re
   the design's §5.3 has the mechanism written. Also specular GI (a prefiltered radiance cube in the
   same volume — that is what IBL means here), point-light and emissive bounce (transfer is linear in
   intensity, so a per-light basis vector would be *exact* for a flickering campfire), dynamic
-  occluders, `Water`/`Cloud` receivers, more than one volume on the GPU, and **geometry-level bake
-  staleness** — `inputs_hash` is written but never read back, because recomputing it needs the
-  scene's whole triangle set and `validate` is the fast gate.
+  occluders, `Water`/`Cloud` receivers, and **more than one volume** — an interior at finer spacing
+  than the landscape around it, which is what the design's §4 originally allowed and what
+  `multiple_light_probe_volumes` now refuses; it wants an answer to four more bindings per volume,
+  not a CPU resolution rule. Geometry-level staleness is **no longer deferred** — it is
+  `bake-gi --check` plus `every_committed_gi_bake_matches_its_scene`, kept out of `validate`
+  because the digest needs the scene's whole triangle set (0.86 s on the tour against 0.17 s).
 - **Water** (after M41): wave-driven drift (a Gerstner wave's orbital velocity would carry a float
   along with it, and wants its own answer to whether a raft eventually crosses the pond), drag on a
   submerged swimmer as distinct from a floating hull, and waves that respond to the body — which the

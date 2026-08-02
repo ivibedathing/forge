@@ -2604,14 +2604,16 @@ fn template_layers_count_against_the_scene_budget() {
 
 // ── Global illumination (M35) ─────────────────────────────────
 
-/// One volume reaches the GPU, so a scene with two says so at `validate`.
+/// One volume reaches the GPU, so a second one is refused.
 ///
-/// A *warning*, because the scene is not wrong — `bake-gi` bakes both and
-/// `gi-probe` answers from either. What it prevents is invisible: an author who
-/// adds an interior volume and sees no change in the landscape around it has no
-/// way to tell that from a bad bake.
+/// An *error*, on `DirectionalLight`'s and `AmbientLight`'s precedent: those are
+/// "at most one per scene" for the same reason and have always been errors. GI
+/// has one more reason on top. A surplus light is *arbitrary* — some light
+/// applies. A surplus volume is **invisible**: it bakes, it validates, it
+/// answers `gi-probe`, and it lights nothing, which an author cannot tell apart
+/// from a bad bake by looking.
 #[test]
-fn a_second_probe_volume_warns_and_names_the_one_that_draws() {
+fn a_second_probe_volume_is_refused() {
     let source = r#"{
       "name": "s",
       "entities": [
@@ -2625,25 +2627,29 @@ fn a_second_probe_volume_warns_and_names_the_one_that_draws() {
     }"#;
     let errors: Vec<_> = validate_source(source, "test.json")
         .into_iter()
-        .filter(|e| e.error == codes::MULTIPLE_GI_VOLUMES)
+        .filter(|e| e.error == codes::MULTIPLE_LIGHT_PROBE_VOLUMES)
         .collect();
 
-    // Exactly one warning, on the volume that does *not* draw — the finest one
-    // is doing its job and has nothing to report.
-    assert_eq!(errors.len(), 1, "one warning per volume that is not drawn");
-    assert!(errors[0].is_warning());
-    let context = errors[0].context().expect("the warning carries context");
-    assert_eq!(context.entity.as_deref(), Some("Landscape"));
+    assert_eq!(
+        errors.len(),
+        1,
+        "one error for the scene, not one per volume"
+    );
     assert!(
-        errors[0].message.contains("\"Interior\""),
-        "the message must name the volume that wins: {}",
+        !errors[0].is_warning(),
+        "at-most-one is an error, not a warning"
+    );
+    // Both names, so the fix does not need a second look at the file.
+    assert!(
+        errors[0].message.contains("Landscape") && errors[0].message.contains("Interior"),
+        "the message must name both: {}",
         errors[0].message
     );
 }
 
 /// And one volume is silent, which is the case nearly every scene is in.
 #[test]
-fn a_single_probe_volume_is_not_warned_about() {
+fn a_single_probe_volume_is_fine() {
     let source = r#"{
       "name": "s",
       "entities": [
@@ -2652,5 +2658,5 @@ fn a_single_probe_volume_is_not_warned_about() {
             { "type": "LightProbeVolume", "spacing": 1.0, "bake": "gi/a.gi.json" } ] }
       ]
     }"#;
-    assert!(!codes_of(source).contains(&codes::MULTIPLE_GI_VOLUMES));
+    assert!(!codes_of(source).contains(&codes::MULTIPLE_LIGHT_PROBE_VOLUMES));
 }

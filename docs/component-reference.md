@@ -472,11 +472,12 @@ positioned, non-uniform scale being the normal case.
 { "type": "LightProbeVolume", "spacing": 4.0, "bake": "gi/showcase.gi.json" }
 ```
 
-Several volumes may overlap, which is how an interior gets finer spacing than
-the landscape around it; the smallest `spacing` wins, name-sorted where two
-tie. A point outside every volume falls back to `sky_ambient`, which is
-exactly the pre-M35 path — so [`blend`](LightProbeVolume::blend) exists to
-make that boundary a fade rather than a step.
+**A scene may hold at most one** (`multiple_light_probe_volumes`), following
+`DirectionalLight` and `AmbientLight` and for the same reason: the renderer
+holds one field, so a second volume would bake, validate, and light nothing.
+A point outside the volume falls back to `sky_ambient`, which is exactly the
+pre-M35 path — so [`blend`](LightProbeVolume::blend) exists to make that
+boundary a fade rather than a step.
 
 The bake is a file rather than a load-time computation because the loop is
 the product: a BVH build plus a few hundred thousand rays is seconds, and it
