@@ -35,7 +35,7 @@ frames the `Walker`'s own edit re-blessed.
   correctly measures zero. Computing it implicitly at render time was rejected: the measurement is
   an algorithm, and an algorithm that silently set the clip rate would be a format contract, so a
   refinement would move every walking character in every baseline. **The tour's walker covers
-  1.6408 m per cycle**, against the 0.884 m/s it was being carried at — a foot travelling 0.76 m/s
+  1.5894 m per cycle** (1.6408 before the rig's humanoid rework), against the 0.884 m/s it was being carried at — a foot travelling 0.76 m/s
   backwards through every stance, which is the fake as a number.
 - **`list-joints --steps N`**, and the fixture's own test is what forced it. A stride-driven pose is
   *not* a pure function of (files, time) — its phase is what the run reached — so `--time` alone

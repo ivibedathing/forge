@@ -161,7 +161,7 @@
           "clip": "../../meshes/rigged_walker.gltf#Walk",
           "speed": 1.0,
           "looping": true,
-          "stride": 1.6408
+          "stride": 1.5894
         },
         {
           "type": "FootPlant",
@@ -169,12 +169,12 @@
             {
               "ankle": "FootL",
               "chain": 2,
-              "sole": 0.09
+              "sole": 0.073
             },
             {
               "ankle": "FootR",
               "chain": 2,
-              "sole": 0.09
+              "sole": 0.073
             }
           ],
           "ground": "Ground",
@@ -219,7 +219,7 @@
           "clip": "../../meshes/rigged_walker.gltf#Walk",
           "speed": 1.0,
           "looping": true,
-          "stride": 1.6408
+          "stride": 1.5894
         }
       ]
     }

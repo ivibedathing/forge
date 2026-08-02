@@ -5120,7 +5120,7 @@ fn a_planted_ankle_stands_on_the_ground_and_an_unplanted_one_does_not() {
     };
 
     // The sole offset the fixture authors, in metres.
-    const SOLE: f64 = 0.09;
+    const SOLE: f64 = 0.073;
     let mut off_ground = 0;
     for time in ["0.0", "0.25", "0.5", "0.75"] {
         let planted = joints("Planted", time);
@@ -6254,7 +6254,7 @@ fn a_ragdoll_baked_mid_fall_reloads_into_the_same_heap() {
     assert_eq!(ragdoll["active"], true, "{ragdoll}");
     assert_eq!(
         ragdoll["pose"].as_array().map(Vec::len),
-        Some(13),
+        Some(16),
         "one entry per joint of the rig, {ragdoll}"
     );
 
@@ -6353,8 +6353,8 @@ fn fit_colliders_prints_a_proxy_set_and_leaves_the_file_alone() {
         .as_array()
         .unwrap_or_else(|| panic!("no parts in {report}"));
     // One per joint the skin actually weights, which for this rig is all
-    // thirteen — and each names a joint of the rig rather than an index.
-    assert_eq!(parts.len(), 13, "{report}");
+    // sixteen — and each names a joint of the rig rather than an index.
+    assert_eq!(parts.len(), 16, "{report}");
     assert!(
         parts.iter().any(|p| p["joint"] == "Head"),
         "the fitted set must name joints, {report}"

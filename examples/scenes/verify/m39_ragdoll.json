@@ -153,7 +153,7 @@
           "clip": "../../meshes/rigged_walker.gltf#Walk",
           "speed": 1.0,
           "looping": true,
-          "stride": 1.6408
+          "stride": 1.5894
         },
         {
           "type": "SkinnedCollider",
@@ -268,7 +268,7 @@
               "offset": [
                 0.0,
                 -0.02,
-                0.03
+                -0.06
               ]
             },
             {
@@ -282,7 +282,7 @@
               "offset": [
                 0.0,
                 -0.02,
-                0.03
+                -0.06
               ]
             }
           ]
@@ -359,7 +359,7 @@
           "clip": "../../meshes/rigged_walker.gltf#Walk",
           "speed": 1.0,
           "looping": true,
-          "stride": 1.6408
+          "stride": 1.5894
         },
         {
           "type": "SkinnedCollider",
@@ -474,7 +474,7 @@
               "offset": [
                 0.0,
                 -0.02,
-                0.03
+                -0.06
               ]
             },
             {
@@ -488,7 +488,7 @@
               "offset": [
                 0.0,
                 -0.02,
-                0.03
+                -0.06
               ]
             }
           ]

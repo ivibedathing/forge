@@ -17,8 +17,6 @@ What deliberately does *not* live here is anything that owns a generator's own
 vertex arrays — `push_quad`, `sweep`, `block` and the rig tables stay with the
 mesh they build, because they are the part that differs.
 
-`make_rigged_walker.py` predates this module and still carries its own copies;
-it is untouched rather than endorsed.
 """
 
 import base64
