@@ -1246,6 +1246,24 @@ pub struct Breakable {
     /// scatters like wood.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<FractureMaterial>,
+
+    /// Throw the material's burst of dust, sawdust, glitter or sparks at the
+    /// break (M44). Default **on**, and **does nothing without a `material`**
+    /// — there is no generic dust, only stone's and wood's and glass's and
+    /// metal's.
+    ///
+    /// The burst is a `ParticleEmitter` entity named `Parent.dust`, spawned at
+    /// the impact point and sized to the object, which despawns itself once
+    /// its last particle dies. It is an ordinary entity while it lives: it
+    /// traces, it bakes, and a script can find it by name.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub dust: bool,
+}
+
+/// `dust` is on by default, so only `false` is worth writing — a bake of an
+/// untouched `Breakable` then comes back byte-identical to what it was.
+fn is_yes(on: &bool) -> bool {
+    *on
 }
 
 /// What a `Breakable` is made of (M43).
@@ -1296,6 +1314,116 @@ pub struct FractureBehaviour {
 }
 
 impl FractureMaterial {
+    /// The burst this material throws off at the moment it breaks (M44),
+    /// sized for an object whose radius is `size` metres.
+    ///
+    /// Four different things, not one puff recoloured: stone makes hanging
+    /// grey dust, wood a short spray of sawdust that falls, glass a fine
+    /// bright glitter, and metal a shower of sparks that are lit rather than
+    /// lit-on. The burst is over in a fraction of a second — `duration` is the
+    /// *emission* window, and each particle then lives out its own lifetime —
+    /// and the emitter despawns itself once the last one dies.
+    ///
+    /// Everything that scales with the object scales with `size`: a puff on a
+    /// 3 m boulder cannot be the puff on a teacup, and speeds have to grow
+    /// with it too or a big break looks like it is happening in treacle.
+    pub fn dust(self, size: f32) -> ParticleEmitter {
+        let size = size.max(0.05);
+        let common = ParticleEmitter {
+            // A sphere: a break throws in every direction, and there is no
+            // aim to author.
+            spread: 180.0,
+            // A disc as wide as the thing that broke, so the burst comes off
+            // the whole face rather than out of one point in the middle of
+            // it — and so the cloud is wider than the object's silhouette
+            // from the first frame, which is what makes it visible at all.
+            radius: size,
+            despawn_when_done: true,
+            size_jitter: 0.4,
+            lifetime_jitter: 0.4,
+            speed_jitter: 0.5,
+            ..ParticleEmitter::default()
+        };
+        match self {
+            // Rock dust hangs: nearly no gravity, heavy drag, and it grows as
+            // it disperses. The one of the four that lingers.
+            Self::Stone => ParticleEmitter {
+                rate: 340.0,
+                duration: Some(0.18),
+                lifetime: 1.3,
+                speed: size * 2.6,
+                acceleration: Vec3::new(0.0, 0.25, 0.0),
+                drag: 2.6,
+                start_size: size * 0.42,
+                end_size: size * 1.5,
+                start_color: Vec3::new(0.78, 0.76, 0.71),
+                end_color: Vec3::new(0.7, 0.69, 0.66),
+                start_alpha: 0.75,
+                end_alpha: 0.0,
+                max_particles: 96,
+                ..common
+            },
+            // Sawdust and splinter chaff: browner, smaller, and it falls
+            // rather than hangs.
+            Self::Wood => ParticleEmitter {
+                rate: 200.0,
+                duration: Some(0.16),
+                lifetime: 0.7,
+                speed: size * 2.0,
+                acceleration: Vec3::new(0.0, -4.5, 0.0),
+                drag: 1.4,
+                start_size: size * 0.24,
+                end_size: size * 0.16,
+                start_color: Vec3::new(0.62, 0.44, 0.22),
+                end_color: Vec3::new(0.44, 0.3, 0.14),
+                start_alpha: 0.8,
+                end_alpha: 0.0,
+                max_particles: 48,
+                ..common
+            },
+            // Glass does not make dust, it makes glitter: fine, fast, lit
+            // additively so it reads as a catch of light rather than a smear.
+            Self::Glass => ParticleEmitter {
+                rate: 260.0,
+                duration: Some(0.1),
+                lifetime: 0.55,
+                speed: size * 3.4,
+                acceleration: Vec3::new(0.0, -9.0, 0.0),
+                drag: 0.3,
+                start_size: size * 0.13,
+                end_size: size * 0.05,
+                start_color: Vec3::new(0.82, 0.92, 0.97),
+                end_color: Vec3::new(0.55, 0.72, 0.8),
+                start_alpha: 0.95,
+                end_alpha: 0.0,
+                max_particles: 40,
+                blend: ParticleBlend::Additive,
+                stretch: 0.02,
+                ..common
+            },
+            // Sparks: the fewest, the fastest, stretched along their travel,
+            // and the only ones that cool as they go.
+            Self::Metal => ParticleEmitter {
+                rate: 340.0,
+                duration: Some(0.09),
+                lifetime: 0.5,
+                speed: size * 7.0,
+                acceleration: Vec3::new(0.0, -9.81, 0.0),
+                drag: 0.2,
+                start_size: size * 0.16,
+                end_size: size * 0.05,
+                start_color: Vec3::new(1.0, 0.78, 0.34),
+                end_color: Vec3::new(0.75, 0.2, 0.04),
+                start_alpha: 1.0,
+                end_alpha: 0.0,
+                max_particles: 36,
+                blend: ParticleBlend::Additive,
+                stretch: 0.14,
+                ..common
+            },
+        }
+    }
+
     /// This material's behaviour. The numbers are the milestone's model, and
     /// the ratios between them are what a render reads as "that is glass":
     /// glass throws its slivers roughly six times as far as stone drops its
@@ -1716,6 +1844,35 @@ pub struct ParticleEmitter {
     /// a lot (~0.2).
     #[schemars(range(min = 0.0))]
     pub stretch: f32,
+
+    /// Seconds of **emission** after this emitter's first step (M44). `> 0`.
+    ///
+    /// **Absent is M13: it emits forever.** Present, it is a burst — the puff
+    /// of dust a break throws, the spark shower off an impact — and when the
+    /// time is up emission stops exactly as `rate: 0` does: no new particles,
+    /// and the live ones finish their own `lifetime`.
+    ///
+    /// It is measured from when the *system* first sees the emitter, not from
+    /// scene time, so an emitter that arrives mid-run (a break's dust) burns
+    /// its burst from the moment it exists rather than being born already
+    /// spent. That start is derived state, like particle positions: it is not
+    /// baked, so a scene baked mid-puff reloads and puffs again — the same
+    /// thing the tour's fire already does, for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub duration: Option<f32>,
+
+    /// Despawn this emitter's entity once its `duration` is up **and** its
+    /// last particle has died (M44). Default `false`.
+    ///
+    /// This is what keeps a scene that breaks twenty crates from accumulating
+    /// twenty spent emitters. Requires `duration` — without one the emitter
+    /// never finishes and the flag could never fire, which is
+    /// `emitter_never_finishes` rather than a field that quietly does nothing.
+    ///
+    /// The despawn is an ordinary one: it traces as `despawned` like any
+    /// other, and the entity is simply gone from a bake taken afterwards.
+    pub despawn_when_done: bool,
 }
 
 impl Default for ParticleEmitter {
@@ -1745,6 +1902,8 @@ impl Default for ParticleEmitter {
             turbulence: 0.0,
             turbulence_scale: 1.0,
             stretch: 0.0,
+            duration: None,
+            despawn_when_done: false,
         }
     }
 }

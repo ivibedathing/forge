@@ -1522,6 +1522,10 @@
         "additionalProperties": false,
         "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse.",
         "properties": {
+          "dust": {
+            "description": "Throw the material's burst of dust, sawdust, glitter or sparks at the\nbreak (M44). Default **on**, and **does nothing without a `material`**\n— there is no generic dust, only stone's and wood's and glass's and\nmetal's.\n\nThe burst is a `ParticleEmitter` entity named `Parent.dust`, spawned at\nthe impact point and sized to the object, which despawns itself once\nits last particle dies. It is an ordinary entity while it lives: it\ntraces, it bakes, and a script can find it by name.",
+            "type": "boolean"
+          },
           "fragments": {
             "description": "What the entity becomes. At least one.",
             "items": {
@@ -2256,12 +2260,26 @@
             "default": "alpha",
             "description": "How the billboard combines with the scene behind it. `\"alpha\"` (default)\noccludes what it covers; `\"additive\"` adds light to it, so overlapping\nsprites brighten toward white and a thin one is nearly invisible.\n\nFire, sparks, and magic are additive; smoke, dust, and spray are not.\nAdditive particles draw after every alpha-blended one, so a flame glows\n*through* the smoke above it rather than being occluded by it — the\napproximation is deliberate and it is what a real fire looks like,\nsince that smoke is genuinely lit from below."
           },
+          "despawn_when_done": {
+            "default": false,
+            "description": "Despawn this emitter's entity once its `duration` is up **and** its\nlast particle has died (M44). Default `false`.\n\nThis is what keeps a scene that breaks twenty crates from accumulating\ntwenty spent emitters. Requires `duration` — without one the emitter\nnever finishes and the flag could never fire, which is\n`emitter_never_finishes` rather than a field that quietly does nothing.\n\nThe despawn is an ordinary one: it traces as `despawned` like any\nother, and the entity is simply gone from a bake taken afterwards.",
+            "type": "boolean"
+          },
           "drag": {
             "default": 0.0,
             "description": "Velocity damping per second. `>= 0`; 0 means none.",
             "format": "float",
             "minimum": 0.0,
             "type": "number"
+          },
+          "duration": {
+            "description": "Seconds of **emission** after this emitter's first step (M44). `> 0`.\n\n**Absent is M13: it emits forever.** Present, it is a burst — the puff\nof dust a break throws, the spark shower off an impact — and when the\ntime is up emission stops exactly as `rate: 0` does: no new particles,\nand the live ones finish their own `lifetime`.\n\nIt is measured from when the *system* first sees the emitter, not from\nscene time, so an emitter that arrives mid-run (a break's dust) burns\nits burst from the moment it exists rather than being born already\nspent. That start is derived state, like particle positions: it is not\nbaked, so a scene baked mid-puff reloads and puffs again — the same\nthing the tour's fire already does, for the same reason.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "end_alpha": {
             "default": 0.0,
@@ -4800,6 +4818,10 @@
             "additionalProperties": false,
             "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse.",
             "properties": {
+              "dust": {
+                "description": "Throw the material's burst of dust, sawdust, glitter or sparks at the\nbreak (M44). Default **on**, and **does nothing without a `material`**\n— there is no generic dust, only stone's and wood's and glass's and\nmetal's.\n\nThe burst is a `ParticleEmitter` entity named `Parent.dust`, spawned at\nthe impact point and sized to the object, which despawns itself once\nits last particle dies. It is an ordinary entity while it lives: it\ntraces, it bakes, and a script can find it by name.",
+                "type": "boolean"
+              },
               "fragments": {
                 "description": "What the entity becomes. At least one.",
                 "items": {
@@ -5534,12 +5556,26 @@
                 "default": "alpha",
                 "description": "How the billboard combines with the scene behind it. `\"alpha\"` (default)\noccludes what it covers; `\"additive\"` adds light to it, so overlapping\nsprites brighten toward white and a thin one is nearly invisible.\n\nFire, sparks, and magic are additive; smoke, dust, and spray are not.\nAdditive particles draw after every alpha-blended one, so a flame glows\n*through* the smoke above it rather than being occluded by it — the\napproximation is deliberate and it is what a real fire looks like,\nsince that smoke is genuinely lit from below."
               },
+              "despawn_when_done": {
+                "default": false,
+                "description": "Despawn this emitter's entity once its `duration` is up **and** its\nlast particle has died (M44). Default `false`.\n\nThis is what keeps a scene that breaks twenty crates from accumulating\ntwenty spent emitters. Requires `duration` — without one the emitter\nnever finishes and the flag could never fire, which is\n`emitter_never_finishes` rather than a field that quietly does nothing.\n\nThe despawn is an ordinary one: it traces as `despawned` like any\nother, and the entity is simply gone from a bake taken afterwards.",
+                "type": "boolean"
+              },
               "drag": {
                 "default": 0.0,
                 "description": "Velocity damping per second. `>= 0`; 0 means none.",
                 "format": "float",
                 "minimum": 0.0,
                 "type": "number"
+              },
+              "duration": {
+                "description": "Seconds of **emission** after this emitter's first step (M44). `> 0`.\n\n**Absent is M13: it emits forever.** Present, it is a burst — the puff\nof dust a break throws, the spark shower off an impact — and when the\ntime is up emission stops exactly as `rate: 0` does: no new particles,\nand the live ones finish their own `lifetime`.\n\nIt is measured from when the *system* first sees the emitter, not from\nscene time, so an emitter that arrives mid-run (a break's dust) burns\nits burst from the moment it exists rather than being born already\nspent. That start is derived state, like particle positions: it is not\nbaked, so a scene baked mid-puff reloads and puffs again — the same\nthing the tour's fire already does, for the same reason.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": [
+                  "number",
+                  "null"
+                ]
               },
               "end_alpha": {
                 "default": 0.0,

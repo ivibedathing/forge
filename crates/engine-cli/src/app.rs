@@ -603,6 +603,12 @@ impl ViewerApp {
                                         if let Some(scripts) = &mut sim.scripts {
                                             scripts.sync_names(&sim.scene.world);
                                         }
+                                        // A break's dust is a new emitter
+                                        // (M44), and the system tracks a list
+                                        // it built at load.
+                                        if broke.iter().any(|event| event.dust.is_some()) {
+                                            sim.particles.sync(&sim.scene.world);
+                                        }
                                     }
                                     Ok(_) => {}
                                     Err(e) => {
@@ -612,6 +618,21 @@ impl ViewerApp {
                                 }
                             }
                             sim.particles.step(&sim.scene.world, dt);
+                            // A spent burst reaps itself (M44), exactly as in
+                            // the headless loop — a played run and a simulated
+                            // one must not diverge, and a session left running
+                            // must not accumulate dead emitters.
+                            let spent = sim.particles.finished(&sim.scene.world);
+                            if !spent.is_empty() {
+                                for entity in spent {
+                                    let _ = sim.scene.world.despawn(entity);
+                                }
+                                sim.particles.sync(&sim.scene.world);
+                                sim.scene.refresh_names();
+                                if let Some(scripts) = &mut sim.scripts {
+                                    scripts.sync_names(&sim.scene.world);
+                                }
+                            }
                             sim.step_index += 1;
                             sim.accumulator -= dt;
                         }

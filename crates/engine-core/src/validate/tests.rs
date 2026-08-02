@@ -1358,6 +1358,27 @@ fn rejects_unknown_fragment_fields_with_a_suggestion() {
 }
 
 #[test]
+fn an_emitter_that_can_never_finish_may_not_ask_to_be_reaped() {
+    // `despawn_when_done` with no `duration` is a flag that could never fire,
+    // which is `breakable_without_collider`'s shape: dead configuration is an
+    // error, not a silent no-op.
+    let source = r#"{"name":"s","entities":[
+        {"name":"Puff","components":[
+            {"type":"Transform"},
+            {"type":"ParticleEmitter","rate":60.0,"despawn_when_done":true}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["emitter_never_finishes"]);
+
+    // With one, it is fine.
+    let bounded = source.replace(
+        r#""despawn_when_done":true"#,
+        r#""duration":0.2,"despawn_when_done":true"#,
+    );
+    assert!(codes_of(&bounded).is_empty(), "{:?}", codes_of(&bounded));
+}
+
+#[test]
 fn rejects_a_fragment_with_no_geometry() {
     // Before M43 this was `missing_field` on a required `mesh`. A fragment is
     // now a mesh reference *or* a shard, so the rule moved rather than went

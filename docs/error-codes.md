@@ -84,6 +84,7 @@ build fails.
 | `shard_degenerate` | 1 | a shard's points do not bound a volume: fewer than four, or all coplanar |
 | `shard_with_mesh` | 1 | a Shard owns its geometry, so the entity may not also carry a Mesh |
 | `fracture_failed` | 1 | engine fracture could not break the volume into the pieces asked for |
+| `emitter_never_finishes` | 1 | a ParticleEmitter sets despawn_when_done but has no duration to finish |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |
 | `daylight_palette_invalid` | 1 | a daylight palette needs at least two keyframes with strictly increasing hours |

@@ -651,7 +651,26 @@ pub(super) fn check_component(
 
         // Every emitter constraint is a schema range; the simulation reads
         // whatever validated, so there is nothing semantic left to check.
-        ComponentData::ParticleEmitter(_) => {}
+        // `despawn_when_done` needs a `duration` to be done *of* (M44): with
+        // none, the emitter never finishes and the flag could never fire —
+        // the `breakable_without_collider` shape, where a field that cannot
+        // do anything is an error rather than a silent no-op.
+        ComponentData::ParticleEmitter(ref emitter) => {
+            if emitter.despawn_when_done && emitter.duration.is_none() {
+                errors.push(
+                    cx.err(
+                        codes::EMITTER_NEVER_FINISHES,
+                        "this ParticleEmitter sets despawn_when_done but no duration, so it \
+                         emits forever and is never done; give it a duration or drop the flag"
+                            .to_string(),
+                        &format!("{component_path}/despawn_when_done"),
+                    )
+                    .entity(entity)
+                    .component("ParticleEmitter")
+                    .field("despawn_when_done"),
+                );
+            }
+        }
 
         // Every individual tree field is in range by the time we get here, and
         // the combination can still be absurd: branching is exponential, so

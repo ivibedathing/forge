@@ -280,6 +280,13 @@ pub fn run(
             if let Some(scripts) = &mut scripts {
                 scripts.sync_names(&scene.world);
             }
+            // A break's dust is a new emitter (M44), and the particle system
+            // tracks a list it built at load — so it has to be told. `sync`
+            // also picks up an emitter on a spawned template, which has been
+            // spawnable since M37 and inert ever since.
+            if broke.iter().any(|event| event.dust.is_some()) {
+                particles.sync(&scene.world);
+            }
             if let Some(trace) = trace.as_deref_mut() {
                 for event in &broke {
                     let fragments: Vec<&str> = event
@@ -291,6 +298,36 @@ pub fn run(
                         trace,
                         &json!({ "step": step, "broke": event.entity, "fragments": fragments }),
                     )?;
+                    // The dust is an entity, so it traces as one — the same
+                    // `spawned` line M37's shots write.
+                    if let Some((dust, _)) = &event.dust {
+                        write_line(trace, &json!({ "step": step, "spawned": dust }))?;
+                    }
+                }
+            }
+        }
+
+        // A spent burst reaps itself (M44): once a `despawn_when_done`
+        // emitter's duration is up and its last particle has died, the entity
+        // goes, so a scene that breaks twenty crates does not end the run
+        // carrying twenty dead emitters into its bake.
+        let spent = particles.finished(&scene.world);
+        if !spent.is_empty() {
+            let mut names = Vec::with_capacity(spent.len());
+            for entity in spent {
+                if let Ok(name) = scene.world.get::<&engine_core::components::Name>(entity).map(|n| n.0.clone()) {
+                    names.push(name);
+                }
+                let _ = scene.world.despawn(entity);
+            }
+            particles.sync(&scene.world);
+            scene.refresh_names();
+            if let Some(scripts) = &mut scripts {
+                scripts.sync_names(&scene.world);
+            }
+            if let Some(trace) = trace.as_deref_mut() {
+                for name in &names {
+                    write_line(trace, &json!({ "step": step, "despawned": name }))?;
                 }
             }
         }

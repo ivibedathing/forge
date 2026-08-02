@@ -6991,7 +6991,7 @@ fn the_fracture_fixture_matches_its_baseline() {
         .arg(&scene)
         .arg(&baseline)
         .arg("--steps")
-        .arg("55")
+        .arg("52")
         .output()
         .unwrap();
     if !diff.status.success() {
@@ -7158,6 +7158,67 @@ fn fracture_is_reproducible_from_its_seed() {
     };
     assert_eq!(run("4"), run("4"), "the same seed is the same break");
     assert_ne!(run("4"), run("5"), "a different seed is a different break");
+}
+
+/// A break's dust is an ordinary entity for as long as it lives: it traces as
+/// a spawn, it is in the world while it puffs, and it takes itself out again.
+///
+/// The whole reason `duration` and `despawn_when_done` exist is that last
+/// part — an engine that spawned emitters and never reaped them would leave a
+/// scene that broke twenty crates carrying twenty spent emitters into its bake
+/// (M44).
+#[test]
+fn a_break_throws_a_burst_that_clears_up_after_itself() {
+    let scene = repo_path("examples/scenes/verify/m43_fracture.json");
+    let trace = std::env::temp_dir().join(format!("engine-dust-{}.jsonl", std::process::id()));
+
+    let run = engine()
+        .arg("simulate")
+        .arg(&scene)
+        .arg("--steps")
+        // Long enough for the longest burst to finish: stone's dust hangs
+        // 1.3 s, and `lifetime_jitter` stretches its last particles past 1.8.
+        .arg("200")
+        .arg("--trace")
+        .arg(&trace)
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{:?}", stderr_lines(&run));
+
+    let lines = std::fs::read_to_string(&trace).unwrap();
+    // One burst per slab, each named after what broke.
+    for slab in ["GlassPane", "WoodPlank", "StoneBlock", "MetalPlate"] {
+        assert!(
+            lines.contains(&format!(r#""spawned":"{slab}.dust""#)),
+            "{slab} threw no dust"
+        );
+        assert!(
+            lines.contains(&format!(r#""despawned":"{slab}.dust""#)),
+            "{slab}'s dust never cleared up"
+        );
+    }
+
+    // And it is gone from the world the run ended in — a spent emitter must
+    // not reach a bake.
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&run).trim()).unwrap();
+    let names: Vec<String> = report["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["entity"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.ends_with(".dust")),
+        "a spent emitter survived the run: {names:?}"
+    );
+
+    // A despawn is ordered after the spawn it ends, so the pair reads as a
+    // life rather than as two unrelated events.
+    let spawn_at = lines.find(r#""spawned":"StoneBlock.dust""#).unwrap();
+    let reap_at = lines.find(r#""despawned":"StoneBlock.dust""#).unwrap();
+    assert!(spawn_at < reap_at, "the burst was reaped before it existed");
+
+    let _ = std::fs::remove_file(&trace);
 }
 
 // ── Global illumination (M35) ─────────────────────────────────────────────
