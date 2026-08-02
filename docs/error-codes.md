@@ -139,7 +139,7 @@ build fails.
 | `gi_bake_stale` | 1 | a GI bake was taken from a different scene than the one loading it; re-run `engine bake-gi` |
 | `gi_bake_malformed` | 1 | a GI bake file parses but its version, grid or basis disagrees with the component |
 | `too_many_gi_probes` | 1 | a LightProbeVolume's bounds and spacing would place more probes than the engine will bake |
-| `multiple_gi_volumes` | 1 | a scene has more than one LightProbeVolume, and the renderer draws only the finest one |
+| `multiple_light_probe_volumes` | 1 | a scene may have at most one LightProbeVolume; the renderer holds one field |
 | `hud_parent_not_found` | 1 | a HUD element's "parent" names no entity in the scene |
 | `hud_parent_not_panel` | 1 | a HUD element's "parent" must name an entity that has a HudPanel |
 | `hud_parent_cycle` | 1 | a chain of HUD "parent" references loops back on itself |

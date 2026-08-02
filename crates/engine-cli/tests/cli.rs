@@ -7367,3 +7367,155 @@ fn re_baking_the_fixture_reproduces_the_committed_file() {
          either the sampling sequence or the quantization moved"
     );
 }
+
+/// `--check` says the committed bake is current, and says so **without
+/// writing** — the property that lets a repo contract test run it.
+#[test]
+fn bake_gi_check_passes_on_a_current_bake() {
+    let committed = repo_path("examples/scenes/verify/gi/m35_gi.gi.json");
+    let before = std::fs::read(&committed).expect("the fixture's bake is committed");
+
+    let output = engine()
+        .arg("bake-gi")
+        .arg(gi_scene())
+        .arg("--check")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&output).trim()).unwrap();
+    assert_eq!(report["current"], serde_json::json!(true));
+    assert_eq!(report["entity"], serde_json::json!("Lighting"));
+    assert_eq!(
+        std::fs::read(&committed).unwrap(),
+        before,
+        "--check must not write; it just did"
+    );
+}
+
+/// Moving one wall makes the bake stale, and `--check` is the only thing in the
+/// engine that notices.
+///
+/// This is the failure the whole `inputs_hash` exists for: the scene still
+/// validates, still renders, and the light is quietly wrong. `validate` cannot
+/// afford to catch it — the digest needs the scene's whole triangle set — so it
+/// is a command, and this test is what says the command works.
+#[test]
+fn bake_gi_check_catches_a_scene_whose_geometry_moved() {
+    let dir = std::env::temp_dir().join("m35_check_stale");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("gi")).unwrap();
+    std::fs::copy(
+        repo_path("examples/scenes/verify/gi/m35_gi.gi.json"),
+        dir.join("gi/m35_gi.gi.json"),
+    )
+    .unwrap();
+
+    // The copy carries the committed bake unchanged, so the only difference
+    // between it and the fixture is the wall's position.
+    let mut scene: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(gi_scene()).unwrap()).unwrap();
+    for entity in scene["entities"].as_array_mut().unwrap() {
+        if entity["name"] == serde_json::json!("RedWall") {
+            for component in entity["components"].as_array_mut().unwrap() {
+                if component["type"] == serde_json::json!("Transform") {
+                    component["position"][0] =
+                        serde_json::json!(component["position"][0].as_f64().unwrap() + 0.1);
+                }
+            }
+        }
+    }
+    let moved = dir.join("m35_gi.json");
+    std::fs::write(&moved, serde_json::to_string_pretty(&scene).unwrap()).unwrap();
+
+    let output = engine()
+        .arg("bake-gi")
+        .arg(&moved)
+        .arg("--check")
+        .output()
+        .unwrap();
+    let lines = stderr_lines(&output);
+    assert_eq!(output.status.code(), Some(1), "{lines:?}");
+    assert_eq!(codes_of(&lines), ["gi_bake_stale"]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every committed bake still matches the scene it was baked from.
+///
+/// The repo half of the staleness decision. `validate` checks the bake's
+/// *header* against the component — grid, spacing, basis — because that is
+/// what it can afford; nothing in the fast gate notices that a wall moved.
+/// This does, on every scene in the repo that has a volume, with no allowlist:
+/// a scene that grows a `LightProbeVolume` is covered the moment it is
+/// committed, and a milestone that adds an entity to the tour fails here rather
+/// than shipping a picture lit by the geometry of two commits ago.
+///
+/// It is the M37–M43 merge's failure written as a test: the tour gained an
+/// entity's worth of geometry per milestone, all 1,050 probes moved on the
+/// re-bake, and every gate stayed green.
+#[test]
+fn every_committed_gi_bake_matches_its_scene() {
+    let mut checked = 0;
+    for scene in scenes_with_probe_volumes() {
+        let output = engine()
+            .arg("bake-gi")
+            .arg(&scene)
+            .arg("--check")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{} has a stale bake — re-run `engine bake-gi {}`: {:?}",
+            scene.display(),
+            scene.display(),
+            stderr_lines(&output)
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 2,
+        "expected the fixture and the tour, got {checked}"
+    );
+}
+
+/// Every scene under `examples/` carrying a `LightProbeVolume`, found by
+/// reading the files rather than from a list — a list is how the next scene
+/// with a volume goes unchecked.
+fn scenes_with_probe_volumes() -> Vec<PathBuf> {
+    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable") {
+            let path = entry.expect("readable").path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|e| e == "json")
+                && std::fs::read_to_string(&path)
+                    .is_ok_and(|text| text.contains("\"LightProbeVolume\""))
+            {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&repo_path("examples/scenes"), &mut found);
+    found.sort();
+    found
+}
+
+/// `--check` writes nothing, so `--out` has nothing to name.
+#[test]
+fn bake_gi_check_refuses_an_output_path() {
+    let output = engine()
+        .arg("bake-gi")
+        .arg(gi_scene())
+        .arg("--check")
+        .arg("--out")
+        .arg(std::env::temp_dir().join("never_written.gi.json"))
+        .output()
+        .unwrap();
+    let lines = stderr_lines(&output);
+    // 2, not 1: `invalid_invocation` is a usage error under the CLI contract.
+    assert_eq!(output.status.code(), Some(2), "{lines:?}");
+    assert_eq!(codes_of(&lines), ["invalid_invocation"]);
+}

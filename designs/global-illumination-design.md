@@ -194,11 +194,18 @@ unit box scaled and positioned, non-uniform scale being the normal case.
   pre-M35 look.
 - **`bounces`** is 1 or 2 (§5.4).
 
-Multiple volumes are allowed and are how a scene gives an interior finer spacing
-than the landscape it sits in; overlapping volumes resolve by **smallest spacing
-wins**, name-sorted for determinism where two tie. A pixel outside every volume
-falls back to `sky_ambient` — which is exactly the pre-M35 path, so the boundary
-of a volume is a fade, not a step (`blend`, in metres, at the volume's edge).
+**Amended after the build: a scene may hold at most one volume**, and a second is
+`multiple_light_probe_volumes` — see §12 item 6. This paragraph originally
+allowed several, resolving by smallest-spacing-wins, as the way to give an
+interior finer spacing than the landscape around it; §7's binding arithmetic
+already assumed one, so the rule was implemented everywhere except in the
+shader, which is a component that validates and does nothing. The interior-at-
+finer-spacing want survives as a deferral, and its shape is the multi-volume
+binding question rather than a resolution rule.
+
+A pixel outside the volume falls back to `sky_ambient` — which is exactly the
+pre-M35 path, so the boundary of a volume is a fade, not a step (`blend`, in
+metres, at the volume's edge).
 
 Rejected: a scene-level `gi` block beside `physics`/`environment`/`daylight`.
 Bounds are spatial and there can be several of them, which is what a `Transform`
@@ -326,12 +333,23 @@ would be several times smaller and is rejected on invariant 1.
 
 **A stale bake is an error, never a wrong render.** `inputs_hash` covers every
 input the bake read — the geometry-producing components of every entity, their
-transforms and albedos, the volume's own fields, and the bake's own parameters —
-and `engine validate` recomputes it. Mismatch is
-`gi_bake_stale`, exit 1, naming the command that fixes it. Absent file is
-`gi_bake_missing`. This is `scene_parse_desync`'s discipline: the failure mode
-that must not exist is the one where everything runs and the picture is quietly
-wrong.
+transforms and albedos, the volume's own fields, and the bake's own parameters.
+Mismatch is `gi_bake_stale`, exit 1, naming the command that fixes it. Absent
+file is `gi_bake_missing`. This is `scene_parse_desync`'s discipline: the failure
+mode that must not exist is the one where everything runs and the picture is
+quietly wrong.
+
+**Amended after the build: `validate` does not recompute the hash — `engine
+bake-gi --check` does.** Recomputing means collecting the scene's whole triangle
+set, which is 0.86s on the showcase tour against `validate`'s 0.17s and grows
+with the geometry while `validate` does not. So `validate` keeps the header
+checks it can afford — grid, spacing, basis, probe count, and the file's
+existence, which is what actually catches an edited *component* — and the
+geometry-level check is an explicit command with a repo test standing over the
+committed bakes (`every_committed_gi_bake_matches_its_scene`, no allowlist). The
+gate that catches this in practice is CI, not the author's next `validate`; what
+the decision gives up is the case where an author edits geometry, renders, and
+never runs the tests.
 
 ## 7. The shader seam, and the first anchor with two claimants
 
@@ -496,15 +514,22 @@ Settled during the build, from measurements rather than from argument:
    exactly, so open ground *must* barely move, and the frame with a canopy over
    it is the one that does.
 
-6. **One volume reaches the GPU** — added during G2, and the one place this
-   document was internally inconsistent. §4 allows several and specifies
-   smallest-spacing-wins; §7's own arithmetic ("group 2 goes from five bindings
-   to nine") assumes a single field, and a second volume costs either four more
-   bindings per volume or the hardware trilinear filtering that is the whole
-   reason the field is a texture rather than a buffer. So: `bake-gi` bakes every
-   volume, `gi-probe` answers from whichever contains the point, the renderer
-   draws the finest, and `multiple_gi_volumes` warns at `validate`. §4's rule is
-   therefore implemented everywhere except in the shader.
+6. **A scene has at most one volume** — added during G2 as the one place this
+   document was internally inconsistent, and settled after the M37–M43 merge.
+   §4 allowed several and specified smallest-spacing-wins; §7's own arithmetic
+   ("group 2 goes from five bindings to nine") assumes a single field, and a
+   second volume costs either four more bindings per volume or the hardware
+   trilinear filtering that is the whole reason the field is a texture rather
+   than a buffer. G2 shipped the gap as a warning; **the decision made it an
+   error — `multiple_light_probe_volumes` — which amends §4.** The precedent is
+   `DirectionalLight` and `AmbientLight`: at-most-one, errors, and for the same
+   reason. A warning was the wrong instrument because the failure it warns about
+   has no symptom — the second volume validates, bakes, and lights nothing.
+
+   What §4's rule was *for* is still a real want: an interior at finer spacing
+   than the landscape it sits in. That is now a deferral with a name (§12's
+   list), and the shape it would take is the multi-volume binding question, not
+   a resolution rule in the CPU.
 
 7. **The fixture has no ceiling**, against §11's wording. The light source here
    *is* the sky, and §3.1 pins GI to `sky_ambient`; a ceiling seals the sky out

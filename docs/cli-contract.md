@@ -116,9 +116,12 @@ engine fracture <scene.json> --entity Name [--material M] [--pieces N] [--seed S
 engine ui-layout <scene.json> [--width W --height H] [--entity Name]... [--steps N] [--input f]
                                              # where the UI landed; --steps for what a script painted
 engine terrain-height <scene.json> --at x,z [--entity Name]  # where the ground is
-engine bake-gi <scene.json> [--entity Name] [--out path] [--samples N]
+engine bake-gi <scene.json> [--entity Name] [--out path] [--samples N] [--check]
                                              # writes the baked transfer file; the only
-                                             # new command that writes into the project
+                                             # new command that writes into the project.
+                                             # --check writes nothing: it recomputes the
+                                             # digest and exits 1 (gi_bake_stale) when the
+                                             # scene has moved since the bake
 engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
                                              # the irradiance the renderer would use here,
                                              # and the pre-M35 fallback beside it

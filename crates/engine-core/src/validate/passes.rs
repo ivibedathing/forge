@@ -41,11 +41,14 @@ pub(super) fn camera(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Engin
     }
 }
 
-/// At most one directional and one ambient light, the camera's precedent.
+/// At most one directional light, one ambient light and one probe volume — the
+/// camera's precedent, applied to every component the engine can hold only one
+/// of.
 pub(super) fn lights(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
     let SceneFacts {
         directional_lights,
         ambient_lights,
+        probe_volumes,
         ..
     } = facts;
 
@@ -61,6 +64,14 @@ pub(super) fn lights(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Engin
             &ambient_lights,
             "AmbientLight",
             codes::MULTIPLE_AMBIENT_LIGHTS,
+        ),
+        // A probe volume joined them in M35 for the same reason and one more:
+        // the renderer holds a single field, so a second volume would bake,
+        // validate, and then silently light nothing.
+        (
+            &probe_volumes,
+            "LightProbeVolume",
+            codes::MULTIPLE_LIGHT_PROBE_VOLUMES,
         ),
     ] {
         if list.len() > 1 {
@@ -149,57 +160,6 @@ pub(super) fn daylight(
                 );
             }
         }
-    }
-}
-
-/// One probe volume reaches the GPU (M35).
-///
-/// A warning rather than an error, because the scene is not wrong: `bake-gi`
-/// bakes every volume and `gi-probe` answers from whichever contains the point,
-/// so the extra volumes are real, queryable data. What is limited is the
-/// *renderer*, which holds one field — four 3D textures and one placement in the
-/// frame uniform — and draws the finest volume, name-sorted where two tie.
-///
-/// It lands here rather than in a design note because the failure it prevents is
-/// invisible: a scene author who adds an interior volume and sees no change in
-/// the landscape around it has no way to tell that from a bad bake.
-pub(super) fn probe_volumes(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
-    let volumes = &facts.probe_volumes;
-    if volumes.len() < 2 {
-        return;
-    }
-    // The renderer's rule, spelled out here so the message can name the winner:
-    // smallest spacing, and the name-sorted first of a tie.
-    let mut sorted: Vec<&(String, f32, String)> = volumes.iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
-    let drawn = sorted
-        .iter()
-        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .expect("at least two");
-    let names: Vec<&str> = sorted.iter().map(|(n, _, _)| n.as_str()).collect();
-
-    for (name, _, path) in volumes.iter() {
-        if name == &drawn.0 {
-            continue;
-        }
-        errors.push(
-            cx.err(
-                codes::MULTIPLE_GI_VOLUMES,
-                format!(
-                    "the scene has {} LightProbeVolumes ({}), and the renderer draws \
-                     only the finest — {:?} at spacing {}. Entity {name:?} is baked and \
-                     answers `engine gi-probe`, but does not light anything",
-                    volumes.len(),
-                    names.join(", "),
-                    drawn.0,
-                    drawn.1,
-                ),
-                path,
-            )
-            .entity(name)
-            .component("LightProbeVolume")
-            .warning(),
-        );
     }
 }
 

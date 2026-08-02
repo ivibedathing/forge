@@ -253,18 +253,19 @@ pub fn evaluate(
     }
 }
 
-/// The volume a scene renders with, and where its bake sits — name-sorted, then
-/// smallest spacing wins.
+/// The volume a scene renders with, and where its bake sits.
 ///
-/// **One volume reaches the GPU in M35.** The design allows several and the
-/// resolution rule above is the one it specifies, but the shader holds a single
-/// field: four 3D textures and one placement in the frame uniform. A second
-/// volume would mean either four more bindings per volume or giving up the
-/// hardware trilinear filtering that is the whole reason the field is a texture.
-/// So `bake-gi` bakes every volume, `gi-probe` answers from whichever one
-/// contains the point, and the renderer draws the finest — which is the interior
-/// volume in the case the rule was written for. `multiple_gi_volumes` warns at
-/// `validate` so this is visible in the standard gate rather than in a render.
+/// **A scene has at most one**, which is `multiple_light_probe_volumes` at
+/// `validate` rather than a rule here. The shader holds a single field — four 3D
+/// textures and one placement in the frame uniform — and a second volume would
+/// mean either four more bindings per volume or giving up the hardware trilinear
+/// filtering that is the whole reason the field is a texture. Making that an
+/// error rather than a silent pick follows `DirectionalLight` and `AmbientLight`,
+/// which are at-most-one for the same reason and were errors already.
+///
+/// The name sort is therefore not a resolution rule; it is what keeps a scene
+/// that reached here **unvalidated** — the editor's live view, mid-edit —
+/// picking the same volume every frame instead of flickering between two.
 pub fn rendered_volume(scene: &crate::scene::Scene) -> Option<(String, LightProbeVolume, Vec3)> {
     let mut names: Vec<&str> = scene
         .names()
@@ -276,30 +277,20 @@ pub fn rendered_volume(scene: &crate::scene::Scene) -> Option<(String, LightProb
         .collect();
     names.sort();
 
-    let mut best: Option<(String, LightProbeVolume, Vec3)> = None;
-    for name in names {
-        let entity = scene.entity(name).expect("filtered above");
-        let volume = (*scene
-            .world
-            .get::<&LightProbeVolume>(entity)
-            .expect("filtered above"))
-        .clone();
-        let transform = scene
-            .world
-            .get::<&crate::components::Transform>(entity)
-            .map(|t| *t)
-            .unwrap_or_default();
-        let origin = transform.position - transform.scale * 0.5;
-        // Strictly less, so the name-sorted first of two equal spacings wins —
-        // determinism where the rule itself does not decide.
-        if best
-            .as_ref()
-            .is_none_or(|(_, held, _)| volume.spacing < held.spacing)
-        {
-            best = Some((name.to_string(), volume, origin));
-        }
-    }
-    best
+    let name = names.first()?;
+    let entity = scene.entity(name).expect("filtered above");
+    let volume = (*scene
+        .world
+        .get::<&LightProbeVolume>(entity)
+        .expect("filtered above"))
+    .clone();
+    let transform = scene
+        .world
+        .get::<&crate::components::Transform>(entity)
+        .map(|t| *t)
+        .unwrap_or_default();
+    let origin = transform.position - transform.scale * 0.5;
+    Some((name.to_string(), volume, origin))
 }
 
 /// Load a scene's bake and fold it for this frame — everything a caller needs to

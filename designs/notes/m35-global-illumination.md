@@ -103,19 +103,36 @@ The two shader transforms compose in one direction only —
 which are disjoint. `a_cascaded_surface_inside_a_volume_takes_both` asserts all
 five receivers carry both declarations rather than trusting that reading.
 
-## One volume reaches the GPU
+## A scene has at most one volume
 
-The design allows several volumes (smallest spacing wins, name-sorted on a tie)
-and §7's own arithmetic assumes one field: four 3D textures and one placement in
-the frame uniform, "group 2 goes from five bindings to nine". A second volume
-costs four more bindings per volume, or giving up the hardware trilinear
-filtering that is the entire reason the field is a texture rather than a buffer.
+The design allowed several (smallest spacing wins, name-sorted on a tie) and
+§7's own arithmetic assumes one field: four 3D textures and one placement in the
+frame uniform, "group 2 goes from five bindings to nine". A second volume costs
+four more bindings per volume, or giving up the hardware trilinear filtering that
+is the entire reason the field is a texture rather than a buffer.
 
-So: **`bake-gi` bakes every volume, `gi-probe` answers from whichever contains
-the point, the renderer draws the finest, and `multiple_gi_volumes` warns at
-`validate`.** The warning exists because the failure is invisible — an author who
-adds an interior volume and sees no change in the landscape around it has no way
-to tell that from a bad bake.
+G2 shipped that gap as a *warning* — several volumes validated, one rendered.
+The decision taken after the merge closed it the other way: **a second
+`LightProbeVolume` is `multiple_light_probe_volumes`, an error.** The precedent
+is `DirectionalLight` and `AmbientLight`, which are at-most-one *errors* already
+and for exactly this reason — the renderer holds one field, so the second one is
+not a lesser version of the effect, it is a component that does nothing.
+
+The warning was the worse half of the trade in a way worth writing down: a
+warning is only read by someone who suspects a problem, and the failure here has
+no symptom. An author who adds an interior volume and sees no change in the
+landscape around it cannot tell that from a bad bake. The error is read by
+everyone, because `validate` is the gate.
+
+What it cost to make it an error: three lines in `passes::lights` (the loop that
+was already raising the other two), one error code, and the deletion of a
+warning pass. What it *bought* is a simplification downstream —
+`evaluate::rendered_volume` no longer resolves between volumes, `gi-probe` no
+longer explains which one answered, and `bake-gi` dropped its multi-target loop
+and its `--out`-names-one-file guard onto `sole_entity_with`, the helper
+`water-height` and `road-centerline` already share. **The rule that lets a
+command be simple is the rule enforced at `validate`, not the one documented in
+a note.**
 
 ## What was measured, and what the numbers were
 
@@ -150,21 +167,29 @@ to tell that from a bad bake.
   a bake that is not tracked. A scene edited after its bake fails `validate` with
   `gi_bake_stale`, which is the cheapest place to catch it — but see the gap
   below.
-- **Geometry-level staleness is not checked.** `gi_bake_stale` compares the
-  component's `spacing`, `bounces` and derived grid against the header. It does
-  **not** recompute `inputs_hash`, because that needs the scene's whole triangle
-  set — half a million for the tour — and `validate` is the ~0.02 s gate every
-  other command runs first. So moving a wall and re-rendering silently keeps the
-  old bounce. `bake-gi` writes the hash and the format carries it; nothing reads
-  it back yet.
+- **`validate` does not catch geometry-level staleness — `bake-gi --check`
+  does.** `gi_bake_stale` at `validate` compares the component's `spacing`,
+  `bounces` and derived grid against the header, which catches an edited
+  *component*. It does not recompute `inputs_hash`, because that needs the
+  scene's whole triangle set: 504,970 triangles for the tour, **0.86 s against
+  `validate`'s 0.17 s**, and rising with every triangle added while `validate`
+  stays flat. So the geometry check is a command — `engine bake-gi <scene>
+  --check`, which collects, hashes, compares and writes nothing — with
+  `every_committed_gi_bake_matches_its_scene` standing over every committed bake
+  with no allowlist.
 
   **This is not hypothetical — the M37–M43 merge walked straight into it.** The
   tour gained an entity's worth of geometry per milestone, every one of the 1,050
   probes moved on the re-bake, and `inputs_hash` went from `852eb35b022c82d1` to
-  `9f833d7ff5a93b23`. `validate` was green the whole time, because `spacing`,
-  `bounces` and the derived grid had not changed. The re-bake happened because a
-  human knew the scene had moved, which is exactly the thing a gate is supposed
-  to replace.
+  `9f833d7ff5a93b23`. `validate` was green the whole time. The re-bake happened
+  because a human knew the scene had moved, which is exactly the thing a gate is
+  supposed to replace — and the contract test is that gate now, so the same merge
+  would fail `cargo test` rather than ship.
+
+  **What this still does not catch**: an author who edits geometry, renders, and
+  never runs the tests. That is the accepted cost of keeping `validate` at
+  0.17 s, and it is why `--check` is worth running by hand after moving anything
+  in a scene with a volume.
 - **A probe exactly on the volume's boundary has weight zero.** `blend` fades
   inward from each face and `weight()` returns 0 at distance 0, so a floor lying
   exactly on the volume's bottom face receives no GI at all. Size the volume to

@@ -437,8 +437,8 @@ enum Command {
     /// any machine, which is a stronger promise than any render here makes.
     BakeGi {
         scene: PathBuf,
-        /// Which volume, when the scene has more than one. Defaults to the only
-        /// one; with several, baking all of them is the default.
+        /// Which volume. A scene may have only one, so this is the usual
+        /// spelling-check argument rather than a choice.
         #[arg(long)]
         entity: Option<String>,
         /// Where to write it. Defaults to the `bake` path the component names,
@@ -450,6 +450,17 @@ enum Command {
         /// recorded in the file, because two sample counts are two artifacts.
         #[arg(long)]
         samples: Option<u32>,
+        /// Recompute the bake's `inputs_hash` and compare it against the
+        /// committed file, without writing anything. Exits non-zero when the
+        /// scene has moved since the bake.
+        ///
+        /// This is the geometry-level staleness check `validate` cannot afford:
+        /// it needs the scene's whole triangle set — 504,970 of them for the
+        /// showcase tour, 0.86s against `validate`'s 0.17s, and growing with
+        /// the geometry while `validate` does not — so it is an explicit
+        /// command rather than part of the fast gate.
+        #[arg(long)]
+        check: bool,
     },
 
     /// Ask what irradiance the renderer would use at a point and normal (M35).
@@ -768,7 +779,8 @@ fn main() {
             entity,
             out,
             samples,
-        } => bake_gi(scene, entity, out, samples),
+            check,
+        } => bake_gi(scene, entity, out, samples, check),
         Command::GiProbe {
             scene,
             at,
@@ -2222,12 +2234,16 @@ fn gi_field(
     engine_core::gi::evaluate::field_for_scene(scene, base, lights, environment)
 }
 
-/// Every entity carrying a `LightProbeVolume`, name-sorted so a multi-volume
-/// bake is deterministic in the order it reports.
-fn probe_volumes(scene: &Scene) -> Vec<String> {
-    let mut names: Vec<String> = scene
+/// The scene's `LightProbeVolume`, or `None` when it has none.
+///
+/// A scene may hold at most one — `multiple_light_probe_volumes` since the M35
+/// decisions — so this is a lookup rather than a resolution rule. `None` is not
+/// an error here: `gi-probe` answers "outside every volume" for a scene without
+/// one, which is a truthful answer and more useful than a refusal.
+fn probe_volume(scene: &Scene) -> Option<String> {
+    scene
         .names()
-        .filter(|name| {
+        .find(|name| {
             scene.entity(name).is_some_and(|entity| {
                 scene
                     .world
@@ -2236,134 +2252,190 @@ fn probe_volumes(scene: &Scene) -> Vec<String> {
             })
         })
         .map(str::to_string)
-        .collect();
-    names.sort();
-    names
 }
 
-/// `engine bake-gi <scene> [--entity NAME] [--out PATH] [--samples N]` (M35).
+/// `engine bake-gi <scene> [--entity NAME] [--out PATH] [--samples N] [--check]`
+/// (M35).
 ///
 /// Writes beside the scene by default, because asset paths resolve relative to
 /// the scene file and a bake written to `/tmp` is a bake the scene cannot load
 /// — the trap CLAUDE.md records for `simulate --bake`.
+///
+/// `--check` is the same command with the writing taken out: it collects the
+/// occluders, recomputes the digest, and compares. That is the whole
+/// geometry-level staleness check, and it lives here rather than in `validate`
+/// because it needs the scene's entire triangle set — 0.86s for the showcase
+/// tour against `validate`'s 0.17s, five times the fast gate on the largest
+/// scene in the repo and rising with every triangle added to it.
 fn bake_gi(
     scene_path: PathBuf,
     entity: Option<String>,
     out: Option<PathBuf>,
     samples: Option<u32>,
+    check: bool,
 ) -> Result<()> {
-    let scene = load_scene_for_bake(&scene_path)?;
-    let base_dir = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
-    let volumes = probe_volumes(&scene);
-
-    let targets: Vec<String> = match (&entity, volumes.len()) {
-        (Some(requested), _) => vec![volumes
-            .iter()
-            .find(|v| *v == requested)
-            .cloned()
-            .ok_or_else(|| {
-                EngineError::new(
-                    codes::ENTITY_NOT_FOUND,
-                    format!("no entity named {requested:?} with a LightProbeVolume component"),
-                )
-                .entity(requested)
-                .file(scene_path.display().to_string())
-                .suggest_from(requested, volumes.iter().map(String::as_str))
-            })?],
-        (None, 0) => {
-            return Err(EngineError::new(
-                codes::MISSING_COMPONENT,
-                "scene has no entity with a LightProbeVolume component",
-            )
-            .file(scene_path.display().to_string()))
-        }
-        // Several is the normal case for a scene that gives an interior finer
-        // spacing than its landscape, and baking one of them would leave the
-        // others stale — so all is the default rather than an error.
-        (None, _) => volumes.clone(),
-    };
-
-    if out.is_some() && targets.len() > 1 {
+    if check && out.is_some() {
         return Err(EngineError::new(
             codes::INVALID_INVOCATION,
-            format!(
-                "--out names one file but {} volumes would be baked ({}); \
-                 add --entity to pick one",
-                targets.len(),
-                targets.join(", ")
-            ),
+            "--check writes nothing, so --out has nothing to name",
         )
         .file(scene_path.display().to_string()));
     }
 
-    // Collected once and shared: the occluder set is the whole scene, so
-    // rebuilding it per volume would multiply the most expensive step by the
-    // number of volumes for no difference in the result.
+    let scene = load_scene_for_bake(&scene_path)?;
+    let base_dir = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let name = sole_entity_with::<engine_core::components::LightProbeVolume>(
+        &scene,
+        &scene_path,
+        &entity,
+        "LightProbeVolume",
+        "light probe volumes",
+    )?;
+
+    let handle = scene.entity(&name).expect("named above");
+    let volume = scene
+        .world
+        .get::<&engine_core::components::LightProbeVolume>(handle)
+        .expect("filtered above")
+        .clone();
+    let transform = transform_of(&scene, handle);
+    let target = match &out {
+        Some(path) => path.clone(),
+        None => base_dir.join(&volume.bake),
+    };
+
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let tris = engine_core::gi::bake::collect_occluders(&scene, &assets)?;
 
-    let mut reports = Vec::new();
-    for name in &targets {
-        let handle = scene.entity(name).expect("named above");
-        let volume = scene
-            .world
-            .get::<&engine_core::components::LightProbeVolume>(handle)
-            .expect("filtered above")
-            .clone();
-        let transform = transform_of(&scene, handle);
-
-        let params = engine_core::gi::bake::BakeParams {
-            samples: samples.unwrap_or(engine_core::gi::bake::DEFAULT_SAMPLES),
-            bounces: volume.bounces,
-        };
-
-        let (baked, stats) = engine_core::gi::bake::bake(
-            &scene_path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            name,
-            tris.clone(),
-            transform.position,
-            transform.scale,
+    if check {
+        return check_bake(
+            &scene_path,
+            &name,
             &volume,
-            &params,
+            &transform,
+            &target,
+            &tris,
+            samples,
         );
-
-        let target = match &out {
-            Some(path) => path.clone(),
-            None => base_dir.join(&volume.bake),
-        };
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                EngineError::new(
-                    codes::SCENE_WRITE_FAILED,
-                    format!("could not create {}: {e}", parent.display()),
-                )
-            })?;
-        }
-        std::fs::write(&target, baked.to_text()).map_err(|e| {
-            EngineError::new(
-                codes::SCENE_WRITE_FAILED,
-                format!("could not write {}: {e}", target.display()),
-            )
-        })?;
-
-        reports.push(serde_json::json!({
-            "entity": name,
-            "out": target.display().to_string(),
-            "grid": baked.header.grid,
-            "probes": stats.probes,
-            "rays": stats.rays,
-            "triangles": stats.triangles,
-            "relocated": stats.relocated,
-            "samples": params.samples,
-            "bounces": params.bounces,
-            "inputs_hash": baked.header.inputs_hash,
-        }));
     }
 
-    println!("{}", serde_json::json!({ "baked": reports }));
+    let params = engine_core::gi::bake::BakeParams {
+        samples: samples.unwrap_or(engine_core::gi::bake::DEFAULT_SAMPLES),
+        bounces: volume.bounces,
+    };
+
+    let (baked, stats) = engine_core::gi::bake::bake(
+        &scene_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        &name,
+        tris,
+        transform.position,
+        transform.scale,
+        &volume,
+        &params,
+    );
+
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            EngineError::new(
+                codes::SCENE_WRITE_FAILED,
+                format!("could not create {}: {e}", parent.display()),
+            )
+        })?;
+    }
+    std::fs::write(&target, baked.to_text()).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_WRITE_FAILED,
+            format!("could not write {}: {e}", target.display()),
+        )
+    })?;
+
+    let report = serde_json::json!({
+        "entity": name,
+        "out": target.display().to_string(),
+        "grid": baked.header.grid,
+        "probes": stats.probes,
+        "rays": stats.rays,
+        "triangles": stats.triangles,
+        "relocated": stats.relocated,
+        "samples": params.samples,
+        "bounces": params.bounces,
+        "inputs_hash": baked.header.inputs_hash,
+    });
+    println!("{}", serde_json::json!({ "baked": [report] }));
+    Ok(())
+}
+
+/// `bake-gi --check`: recompute the digest and compare, writing nothing.
+///
+/// The samples count comes from the **file** unless the caller names one,
+/// because rays per probe is a bake-time choice and a bake taken at 512 is not
+/// stale merely for having been taken at 512. Everything else is read from the
+/// scene as it stands now — spacing, bounces, the grid the transform implies,
+/// and the triangles — so every edit that would change the light is caught.
+fn check_bake(
+    scene_path: &Path,
+    name: &str,
+    volume: &engine_core::components::LightProbeVolume,
+    transform: &engine_core::components::Transform,
+    target: &Path,
+    tris: &[engine_core::gi::bake::Triangle],
+    samples: Option<u32>,
+) -> Result<()> {
+    let text = std::fs::read_to_string(target).map_err(|e| {
+        EngineError::new(
+            codes::GI_BAKE_MISSING,
+            format!(
+                "could not read {}: {e}; run `engine bake-gi`",
+                target.display()
+            ),
+        )
+        .entity(name)
+        .file(scene_path.display().to_string())
+    })?;
+    let baked = engine_core::gi::BakedGi::parse(&text).map_err(|bad| {
+        EngineError::new(
+            codes::GI_BAKE_MALFORMED,
+            format!("{}: {bad}", target.display()),
+        )
+        .entity(name)
+        .file(scene_path.display().to_string())
+    })?;
+
+    let params = engine_core::gi::bake::BakeParams {
+        samples: samples.unwrap_or(baked.header.samples),
+        bounces: volume.bounces,
+    };
+    let grid = engine_core::gi::grid_counts(transform.scale, volume.spacing);
+    let current = engine_core::gi::bake::hash_inputs(tris, &params, volume.spacing, grid);
+
+    if current != baked.header.inputs_hash {
+        return Err(EngineError::new(
+            codes::GI_BAKE_STALE,
+            format!(
+                "{} was baked from different inputs (file {}, scene now {}); \
+                 re-run `engine bake-gi`",
+                target.display(),
+                baked.header.inputs_hash,
+                current
+            ),
+        )
+        .entity(name)
+        .file(scene_path.display().to_string()));
+    }
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "entity": name,
+            "bake": target.display().to_string(),
+            "current": true,
+            "triangles": tris.len(),
+            "inputs_hash": current,
+        })
+    );
     Ok(())
 }
 
@@ -2383,13 +2455,11 @@ fn gi_probe(
     let scene = load_scene(&scene_path)?;
     let base_dir = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
 
-    // Smallest spacing wins where volumes overlap, name-sorted where two tie —
-    // the rule that lets an interior volume override the landscape one it sits
-    // inside. Resolved here rather than in the shader for the same reason the
-    // whole evaluation is CPU-side: `gi-probe` has to be able to say *which*
-    // volume answered.
-    let mut best: Option<(String, engine_core::components::LightProbeVolume, _)> = None;
-    for name in probe_volumes(&scene) {
+    // The scene's one volume, and only if the point is inside it. The bounds
+    // test is what stays interesting now that there is nothing to resolve
+    // between: "outside" is the case an agent hits when a probe reads like the
+    // fallback and it wants to know why.
+    let best = probe_volume(&scene).and_then(|name| {
         let handle = scene.entity(&name).expect("listed above");
         let volume = (*scene
             .world
@@ -2401,15 +2471,10 @@ fn gi_probe(
         let min = transform.position - half;
         let max = transform.position + half;
         if point.cmplt(min).any() || point.cmpgt(max).any() {
-            continue;
+            return None;
         }
-        let closer = best
-            .as_ref()
-            .is_none_or(|(_, current, _)| volume.spacing < current.spacing);
-        if closer {
-            best = Some((name, volume, transform));
-        }
-    }
+        Some((name, volume, transform))
+    });
 
     let Some((name, volume, transform)) = best else {
         // Outside every volume is not an error: it is the documented fallback,
