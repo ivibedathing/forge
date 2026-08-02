@@ -250,6 +250,20 @@ The cross-cutting ones. Per-system traps are in each note.
 - **A junction's shoulder quad across a mouth is degenerate and must stay skipped** (M40): all four
   of its corners lie on the mouth line, so the quad has zero area and a `NaN` normal. `mouth_of` is
   what excludes it, and nothing is lost — the shoulder there is the road's own.
+- **A frame-cost profile taken in release answers a question nobody in this repo asked.** `bin/engine`
+  builds **debug** by default, which is what the agent loop and the viewer actually run, and the two
+  profiles disagree about *which line is hot*: `powf` was 65% of the HUD rasterize in release and
+  20% of it in debug, where the cost was instead the un-inlined `Option`-returning helpers around it.
+  Optimise against the debug profile unless the target is a shipped binary — and note that
+  `#[inline(always)]` **is** honoured at `-O0`, so it is a real tool there rather than a hint.
+- **A viewer's frame rate is `max(cpu, gpu)`; a headless bench that drains the GPU measures their
+  sum.** Both are true numbers and they answer different questions — the bench attributes cost, the
+  window reports what you feel. Expect the window to improve by more than the bench does when the
+  fix is CPU-side, and do not treat the disagreement as a mismeasurement. Two further traps in
+  measuring the window: an **occluded** window returns early from `render_with` without drawing at
+  all (`Occluded` is absorbed as a skipped frame), so a run behind the terminal reports the CPU half
+  only at a flattering frame rate; and the **first** frame of the tour is ~1 s of Metal shader
+  compilation, so a bench that does not warm up reports the driver instead of the frame.
 - **A doc comment on an enum *variant* blinds the validation walk's closed-vocabulary check**, and
   since M43 there is a second half to it: **an `Option<T>` of a *named* type publishes
   `anyOf: [{$ref}, {"type": "null"}]`**, not the flat `"type": ["string", "null"]` an optional
@@ -510,7 +524,10 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   direct term is not counted twice and an unoccluded probe's sun transfer is exactly zero.
   `sun_samples` defaults to 0.
 - **Frame cost (M15)** → `m15-frame-cost.md`. The optimisation pass that took the viewer from ~34 ms
-  a frame to ~0.9 ms, none of which moved a pixel.
+  a frame to ~0.9 ms, none of which moved a pixel — and its sequel, which found the tour spending
+  **45% of a debug frame in `hud::rasterize`** for 0.86% of the window and took the debug viewer from
+  ~100 to ~240 fps, also without moving a pixel. `cargo run -p engine-cli --example frame_bench` is
+  the phase-by-phase measurement both passes were made from.
 
 ### Materials
 
