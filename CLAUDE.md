@@ -90,13 +90,8 @@ M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 w
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
 M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
-<<<<<<< HEAD
-M43 material-aware fracture, M44 the break's dust.
-(M35 is a design doc only — global illumination, not built. M7 editor at scope E0–E2 + validation
-=======
-M43 material-aware fracture, and M35 global illumination.
+M43 material-aware fracture, M44 the break's dust, and M35 global illumination.
 (M7 editor at scope E0–E2 + validation
->>>>>>> main
 panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
