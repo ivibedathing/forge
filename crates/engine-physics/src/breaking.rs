@@ -27,6 +27,14 @@ pub struct BreakEvent {
     pub entity: String,
     /// The spawned fragment entities, in fragment order.
     pub fragments: Vec<(String, Entity)>,
+    /// The burst of dust this break threw off (M44), if its material has one
+    /// and it was not turned off: `Parent.dust`, a `ParticleEmitter` entity
+    /// that despawns itself once its last particle dies.
+    ///
+    /// Reported separately from the fragments because it is not one: it has
+    /// no body, no collider and no mass, and a caller that gives fragments a
+    /// physics presence must not give it one.
+    pub dust: Option<(String, Entity)>,
 }
 
 /// Apply this step's breaks: the physics world's pending decisions plus
@@ -287,9 +295,74 @@ pub fn apply_breaks(
             fragments.push((fragment_name, spawned));
         }
 
+        // The burst (M44), after the fragments so its name cannot take one of
+        // theirs. It is an entity like any other from the moment it spawns —
+        // it just has no body, so nothing tells physics about it.
+        let dust = match breakable.material.filter(|_| breakable.dust) {
+            Some(material) => {
+                let mut dust_name = format!("{name}.dust");
+                let mut attempt = 2;
+                while taken_names.contains(&dust_name) {
+                    dust_name = format!("{name}.dust{attempt}");
+                    attempt += 1;
+                }
+                taken_names.insert(dust_name.clone());
+
+                // How big the thing that broke was, from the fragments it
+                // became: the furthest one's offset is the object's radius,
+                // and it needs no `Collider` to be there and no second
+                // opinion about a size the file already states.
+                let radius = breakable
+                    .fragments
+                    .iter()
+                    .map(|fragment| (fragment.offset * transform.scale).length())
+                    .fold(0.0f32, f32::max);
+
+                let mut emitter = material.dust(radius);
+                // Seeded from the entity's own name, so two crates of the same
+                // material do not throw the identical puff, and re-running the
+                // same scene throws the same one.
+                emitter.seed = name_seed(&name);
+
+                // **Outside the surface that was struck, not at the contact
+                // point.** A contact point sits *on* the object, so a burst
+                // born there is inside the silhouette of a thing that has not
+                // come apart yet, and every particle of it is depth-rejected
+                // by the very geometry it is supposed to be coming off — a
+                // puff that the sim produces, the renderer receives, and the
+                // frame does not show. Pushing it out along the face normal
+                // (which for a contact is the direction from the centre) is
+                // both what makes it visible and what a break actually does:
+                // dust is ejected *away* from the impact face.
+                let position = match pending_break.impact {
+                    Some(impact) => {
+                        let outward = (impact.point - transform.position)
+                            .normalize_or(Vec3::Y);
+                        impact.point + outward * (radius * 0.45)
+                    }
+                    // A scripted break has no impact, so the burst is the
+                    // whole object's: centred on it, and `radius` spreads it.
+                    None => transform.position,
+                };
+                let dust_transform = Transform {
+                    position,
+                    rotation: Vec3::ZERO,
+                    scale: Vec3::ONE,
+                };
+
+                let mut builder = EntityBuilder::new();
+                builder.add(Name(dust_name.clone()));
+                builder.add(dust_transform);
+                builder.add(emitter);
+                Some((dust_name, world.spawn(builder.build())))
+            }
+            None => None,
+        };
+
         events.push(BreakEvent {
             entity: name,
             fragments,
+            dust,
         });
     }
 
@@ -299,6 +372,21 @@ pub fn apply_breaks(
 /// The least upward a scattered fragment may be thrown, as a fraction of its
 /// scatter speed — see where it is applied.
 const MIN_LIFT: f32 = 0.2;
+
+/// A seed from an entity's name (M44), so a break's dust is that break's and
+/// re-running the scene throws the same one.
+///
+/// FNV-1a, written out here for the reason every other generator in this repo
+/// writes its own out: the sequence is part of what a run *means*, and a
+/// `DefaultHasher` is explicitly allowed to change between Rust releases.
+fn name_seed(name: &str) -> u32 {
+    let mut hash: u32 = 0x811C_9DC5;
+    for byte in name.as_bytes() {
+        hash ^= *byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
 
 /// A fragment's own spray direction, in `[-1, 1]` per axis (M43).
 ///
@@ -729,6 +817,188 @@ mod tests {
         assert!(
             glass > stone * 3.0,
             "glass left at {glass} m/s and stone at {stone} m/s"
+        );
+    }
+
+    // ── The break's dust (M44) ─────────────────────────────────────────
+
+    #[test]
+    fn a_material_throws_a_burst_that_dies_on_its_own() {
+        let (mut scene, mut physics) = scene(&shard_crate("stone"));
+        let events = apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
+
+        let (dust_name, dust) = events[0].dust.clone().expect("stone puffs");
+        assert_eq!(dust_name, "Crate.dust");
+        let emitter = scene
+            .world
+            .get::<&engine_core::components::ParticleEmitter>(dust)
+            .expect("the burst is an emitter");
+        assert!(emitter.duration.is_some(), "a burst is not a fountain");
+        assert!(emitter.despawn_when_done, "and it clears up after itself");
+        // No body, no collider: a puff is not a fragment, and physics must
+        // never have been told about it.
+        assert!(scene.world.get::<&RigidBody>(dust).is_err());
+        assert!(scene.world.get::<&Collider>(dust).is_err());
+        drop(emitter);
+
+        // It emits, then stops, then goes.
+        let mut particles = engine_core::particles::ParticleSystem::build(&scene.world);
+        let dt = 1.0 / 60.0;
+        for _ in 0..8 {
+            particles.step(&scene.world, dt);
+        }
+        let peak = particles.live_particles();
+        assert!(peak > 0, "the burst produced nothing");
+        assert!(
+            particles.finished(&scene.world).is_empty(),
+            "it is not done while it still has particles"
+        );
+
+        // Long enough for every particle to live out its lifetime.
+        for _ in 0..200 {
+            particles.step(&scene.world, dt);
+        }
+        assert_eq!(particles.live_particles(), 0, "every particle died");
+        assert_eq!(
+            particles.finished(&scene.world),
+            vec![dust],
+            "and the spent emitter asks to be reaped"
+        );
+    }
+
+    #[test]
+    fn dust_can_be_turned_off_and_needs_a_material() {
+        // Off by request.
+        let quiet = shard_crate("stone").replace(
+            r#""material": "stone""#,
+            r#""material": "stone", "dust": false"#,
+        );
+        let (mut quiet_scene, mut quiet_physics) = scene(&quiet);
+        let events = apply_breaks(
+            &mut quiet_scene.world,
+            &mut quiet_physics,
+            &["Crate".to_string()],
+        )
+        .unwrap();
+        assert!(events[0].dust.is_none(), "asked for no dust, got none");
+
+        // And there is no generic dust: a `Breakable` with no material is the
+        // M14 path start to finish, which is what keeps every pre-M43 scene
+        // rendering as it did.
+        let (mut plain, mut plain_physics) = scene(CRATE_DROP);
+        let events = apply_breaks(
+            &mut plain.world,
+            &mut plain_physics,
+            &["Crate".to_string()],
+        )
+        .unwrap();
+        assert!(events[0].dust.is_none(), "no material, no dust");
+    }
+
+    #[test]
+    fn each_material_throws_its_own_burst() {
+        // Not one puff recoloured: the four differ in what a viewer would
+        // actually name them by — how long they last, how fast they leave,
+        // and whether they are lit.
+        use engine_core::components::ParticleBlend;
+        let of = |material: &str| {
+            let (mut scene, mut physics) = scene(&shard_crate(material));
+            let events =
+                apply_breaks(&mut scene.world, &mut physics, &["Crate".to_string()]).unwrap();
+            let (_, dust) = events[0].dust.clone().expect("puffs");
+            let emitter = *scene
+                .world
+                .get::<&engine_core::components::ParticleEmitter>(dust)
+                .unwrap();
+            emitter
+        };
+        let (stone, wood, glass, metal) = (of("stone"), of("wood"), of("glass"), of("metal"));
+
+        assert!(
+            stone.lifetime > glass.lifetime * 2.0,
+            "rock dust hangs and glitter does not: {} vs {}",
+            stone.lifetime,
+            glass.lifetime
+        );
+        assert!(
+            metal.speed > stone.speed * 2.0,
+            "sparks fly and dust drifts: {} vs {}",
+            metal.speed,
+            stone.speed
+        );
+        assert!(stone.acceleration.y > 0.0, "dust rises");
+        assert!(wood.acceleration.y < 0.0, "sawdust falls");
+        assert_eq!(glass.blend, ParticleBlend::Additive, "glitter catches light");
+        assert_eq!(metal.blend, ParticleBlend::Additive, "so do sparks");
+        assert_eq!(stone.blend, ParticleBlend::Alpha, "dust occludes");
+    }
+
+    #[test]
+    fn the_burst_is_seeded_by_the_entity_that_broke() {
+        // Two identical crates must not throw the identical puff, and the
+        // same crate must throw the same one every run.
+        let source = shard_crate("stone").replace(
+            r#"{"name": "Ball", "components": ["#,
+            r#"{"name": "Crate2", "components": [
+              {"type": "Transform", "position": [3.0, 0.55, 0.0]},
+              {"type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5]},
+              {"type": "Breakable", "material": "stone", "fragments": [
+                {"points": [[-0.25,-0.25,-0.25],[0.25,-0.25,-0.25],
+                            [0.0,0.25,-0.25],[0.0,0.0,0.25]]}
+              ]}
+            ]},
+            {"name": "Ball", "components": ["#,
+        );
+        let seeds = || {
+            let (mut scene, mut physics) = scene(&source);
+            let events = apply_breaks(
+                &mut scene.world,
+                &mut physics,
+                &["Crate".to_string(), "Crate2".to_string()],
+            )
+            .unwrap();
+            events
+                .iter()
+                .filter_map(|event| event.dust.as_ref())
+                .map(|(_, dust)| {
+                    scene
+                        .world
+                        .get::<&engine_core::components::ParticleEmitter>(*dust)
+                        .unwrap()
+                        .seed
+                })
+                .collect::<Vec<u32>>()
+        };
+        let first = seeds();
+        assert_eq!(first.len(), 2);
+        assert_ne!(first[0], first[1], "two crates, two puffs");
+        assert_eq!(first, seeds(), "and the same run throws the same ones");
+    }
+
+    #[test]
+    fn the_burst_comes_off_the_struck_face() {
+        // Outside the surface, not at the contact point. A burst born *on*
+        // the object is inside the silhouette of something that has not come
+        // apart yet, and every particle of it is depth-rejected by the
+        // geometry it is supposed to be coming off — the sim produces it, the
+        // renderer receives it, and the frame does not show it. Measured, so
+        // the fix cannot be undone by a refactor that looks equivalent.
+        let (mut scene, mut physics) = scene(&shard_crate("stone"));
+        let mut events = Vec::new();
+        for _ in 0..300 {
+            physics.step(&mut scene.world, 0.0);
+            events.extend(apply_breaks(&mut scene.world, &mut physics, &[]).unwrap());
+            if !events.is_empty() {
+                break;
+            }
+        }
+        let (_, dust) = events[0].dust.clone().expect("puffs");
+        let at = scene.world.get::<&Transform>(dust).unwrap().position;
+        // The ball falls onto the top of the crate, whose centre is y = 0.55
+        // and whose top is y = 1.05.
+        assert!(
+            at.y > 1.05,
+            "the burst should sit clear of the face it came off: {at:?}"
         );
     }
 

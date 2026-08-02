@@ -479,6 +479,12 @@ pub fn set_field(
                 "turbulence" => c.turbulence = scalar,
                 "turbulence_scale" => c.turbulence_scale = scalar,
                 "stretch" => c.stretch = scalar,
+                // M44. Animating a burst's window is a strange thing to want,
+                // but the alternative is a schema field nothing can set, and
+                // this crate's rule is that there are none of those.
+                // `despawn_when_done` is absent for `blend`'s reason: it is
+                // not a number.
+                "duration" => c.duration = Some(scalar),
                 _ => return false,
             }
         }

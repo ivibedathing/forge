@@ -239,11 +239,18 @@ the scene. Inline points keep invariant 1 whole.
 **Storing hull faces beside the points.** Redundant, and redundancy here means the renderer and
 rapier can disagree about the same shard. The hull is computed once and shared.
 
-**Dust and debris particles at the break.** A `ParticleEmitter` spawned by the engine has nowhere
+**Dust and debris particles at the break.** ~~A `ParticleEmitter` spawned by the engine has nowhere
 good to die: particle state is derived and never baked, so an expired emitter left in the world
 re-puffs when its scene is reloaded, and a scene that breaks twenty crates accumulates twenty dead
 emitters in its bake. It is also already authorable — an M37 template plus a script line — so it is
-not blocked, just not the engine's. The visual gap is covered by the fine tail of §3.1.
+not blocked, just not the engine's. The visual gap is covered by the fine tail of §3.1.~~
+
+**Built in M44** — see `designs/notes/m44-break-dust.md`. The objection was the emitter's *death*,
+and the answer was to give it one: `ParticleEmitter.duration` bounds the emission and
+`despawn_when_done` takes the entity out once its last particle dies, so nothing accumulates and a
+bake taken after the puff contains no trace of it. The residual — a bake taken *mid*-puff reloads
+and puffs again — is the same thing the tour's fire already does, and it is the accepted price of
+particle state being derived rather than baked.
 
 **Denting metal instead of breaking it.** Plastic deformation is per-step mesh mutation, and this
 engine's geometry is a pure function of the file. A metal panel that permanently changed shape

@@ -609,7 +609,7 @@
       "scene": "examples/scenes/verify/m43_fracture.json",
       "args": [
         "--steps",
-        "55"
+        "52"
       ],
       "width": 800,
       "height": 450,

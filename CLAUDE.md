@@ -49,8 +49,8 @@ actually says.
 | `FootPlant` | Plants a skinned character's feet on the `Terrain` under it, dropping the hips to reach. | `m32-locomotion.md` |
 | `SkinnedCollider` | Hangs simple collision proxies off named joints, re-posed from the rig every step; a part may `fit` its bone. | `m33-skinned-colliders.md`, `m39-ragdolls.md` |
 | `Ragdoll` | Hands a skinned character's skeleton to physics — one-way, per entity — and carries the resulting `pose`. | `m39-ragdolls.md` |
-| `ParticleEmitter` | A seeded deterministic cone emitter around local **−Z**; M17's fields turn a smoke cone into flame. | `m13-particles-and-m17-fire.md` |
-| `Breakable` | Lists pre-authored fragments and the impulse that shatters the entity into them. Since M43 it names its `material`, which decides how the pieces behave once they are pieces. | `m14-breaking.md`, `m43-fracture.md` |
+| `ParticleEmitter` | A seeded deterministic cone emitter around local **−Z**; M17's fields turn a smoke cone into flame. Since M44 a `duration` makes it a burst, and `despawn_when_done` takes its entity away once the last particle dies. | `m13-particles-and-m17-fire.md`, `m44-break-dust.md` |
+| `Breakable` | Lists pre-authored fragments and the impulse that shatters the entity into them. Since M43 it names its `material`, which decides how the pieces behave once they are pieces — and throws that material's `dust`. | `m14-breaking.md`, `m43-fracture.md`, `m44-break-dust.md` |
 | `Shard` | A convex piece of a broken thing, as a point set that **owns its geometry** — the hull it draws is the hull it collides with. | `m43-fracture.md` |
 | `Wheel` | One raycast-suspension wheel on its own *visual* entity, naming the chassis it drives. | `m11_5-vehicles-and-wheels.md` |
 | `Water` | A body of water that **owns its surface** — Gerstner waves, depth colouring, foam, refraction. Since M41 it also carries the fluid's `density`, the one field nothing renders. | `m18-water.md`, `m27-water-refraction.md`, `m41-buoyancy.md` |
@@ -83,15 +83,20 @@ script spawns at runtime — `m37-entity-spawning.md`).
 
 ## Current state
 
-**M0–M43 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M44 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
 M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
+<<<<<<< HEAD
+M43 material-aware fracture, M44 the break's dust.
+(M35 is a design doc only — global illumination, not built. M7 editor at scope E0–E2 + validation
+=======
 M43 material-aware fracture, and M35 global illumination.
 (M7 editor at scope E0–E2 + validation
+>>>>>>> main
 panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
@@ -266,6 +271,15 @@ The cross-cutting ones. Per-system traps are in each note.
   (`0.12767969071865082` for a number the engine had seven digits of). Both apply only to shapes no
   pre-M43 caller produces, so every committed splice stayed byte-identical — **check that when
   adding a third**.
+- **A particle burst born at a contact point is invisible, and every diagnostic says it works**
+  (M44). A contact point is *on* the surface, and at the moment of a break the object is still
+  whole, so the particles spawn inside geometry that depth-rejects them: the trace has the spawn,
+  the system reports live particles, `instances()` hands the renderer a full list — and the frame
+  is empty. Push the burst **out along the face normal** by a fraction of the object's radius, which
+  is where dust actually comes from. What isolates this class of bug is rendering the same emitter
+  parameters in an empty scene: if it puffs there, the problem is placement, not the pipeline.
+- **Dust has to out-contrast the ground, not match the material** (M44). Rock dust's honest colour
+  is the colour of the rock, and a grey puff over grey ground at this exposure is nothing at all.
 - **`builtin:cube`'s faces disagree on which way `u` runs, in pairs rather than in axes.** Anything
   strongly directional on a cube draws differently on all four sides. `builtin:plane`'s UVs are not
   the intuitive ones either — fixing both is deferred as its own change with its own A/B (M26).
@@ -407,6 +421,11 @@ made without reading its note first. Paths are under `designs/notes/`.
   `engine fracture` with a per-material algorithm, and a `Breakable.material` that scatters the
   pieces away from the impact on the material's own speed, spin and surface. Both halves default to
   M14 exactly.
+- **The break's dust (M44)** → `m44-break-dust.md`. The burst a material throws off — hanging dust,
+  falling sawdust, glitter, sparks — and the `ParticleEmitter` **lifetime** that made it possible:
+  `duration` bounds the emission, `despawn_when_done` takes the entity away once the last particle
+  dies, and `ParticleSystem::sync` picks up an emitter the world gained (which is also what makes a
+  `ParticleEmitter` on an M37 template work at all — it never had).
 - **Skinned collider proxies (M33)** → `m33-skinned-colliders.md`. Simple shapes hung off named
   joints and re-posed from the rig each step, so a skinned character can be hit and can push things.
 - **Ragdolls (M39)** → `m39-ragdolls.md`. M33's one-way rule reversed for one entity at a time:
@@ -714,12 +733,12 @@ original four, entity spawning was M37 and a CPU wave evaluator was M41.) The re
   and spawning relative to another entity. Downstream of those, in the arena: endless waves, a
   working `RETRY`, and a save that restores a mid-level arena — all now ordinary work rather than
   blocked work, and none of them built.
-- **Breaking** (after M43): dust and debris *particles* at a break (deferred for a reason rather
-  than an omission — an engine-spawned `ParticleEmitter` has nowhere good to die, and a script can
-  already spawn one; `designs/fracture-design.md` §7), shards that break again (needs a depth rule,
-  and each level multiplies the collider set), a fracture source that is not a box, metal that
-  dents instead of parting (per-step mesh mutation, which the purity of geometry-from-file forbids),
-  and per-material `impulse_threshold` defaults.
+- **Breaking** (after M43/M44): shards that break again (needs a depth rule, and each level
+  multiplies the collider set), a fracture source that is not a box, metal that dents instead of
+  parting (per-step mesh mutation, which the purity of geometry-from-file forbids), per-material
+  `impulse_threshold` defaults, and a *decal* where something broke — the one thing a burst cannot
+  do, since particles all die. (Dust itself was M44; `designs/fracture-design.md` §7 records the
+  reversal and what answered its objection.)
 - **Deferred with an A/B attached**: fixing `builtin:plane`/`builtin:cube`'s UV layout, and changing
   `builtin:triangle`.
 

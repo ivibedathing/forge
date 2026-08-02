@@ -209,6 +209,10 @@ registry! {
     FRACTURE_FAILED = "fracture_failed", Input,
         "engine fracture could not break the volume into the pieces asked for";
 
+    // ── Emitter lifetime (M44) ─────────────────────────────────────────
+    EMITTER_NEVER_FINISHES = "emitter_never_finishes", Input,
+        "a ParticleEmitter sets despawn_when_done but has no duration to finish";
+
     // ── Environment (M16) ──────────────────────────────────────────────
     INVALID_ENVIRONMENT_VALUE = "invalid_environment_value", Input,
         "an environment setting is outside its meaningful range";

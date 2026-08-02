@@ -1367,6 +1367,9 @@ fn fracture(args: FractureArgs) -> Result<()> {
         fragments,
         impulse_threshold: threshold.or(existing.and_then(|b| b.impulse_threshold)),
         material: Some(material),
+        // A refracture keeps whether the object puffs, for the threshold's
+        // reason: it is a decision about the object, not about its shards.
+        dust: existing.is_none_or(|b| b.dust),
     };
 
     if write {

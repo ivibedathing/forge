@@ -1478,15 +1478,22 @@ drops its chunks) is the one claim the whole material model rests on.
 `engine fracture --write`, which is the milestone's other half: the generator is a command, so what
 the runtime sees is ordinary text a reader can diff, edit and re-generate from the same seed.
 
+**Since M44 the same frame is also the dust fixture**, which is why it is pinned at step 52 rather
+than 55: three frames earlier the shard patterns are indistinguishable and the bursts are at their
+densest, so one image carries both milestones. Each slab throws its own — a hanging grey cloud off
+the stone, sawdust off the wood, glitter off the glass, sparks off the metal — and each burst
+despawns itself once its last particle dies, which the trace shows as a `spawned`/`despawned` pair.
+
 No terrain in frame and `samples: 1`, so it carries a hard bit-exact pin
 (`the_fracture_fixture_matches_its_baseline`); three consecutive renders came back as one image.
 
 ```
 engine validate examples/scenes/verify/m43_fracture.json --strict
 engine diff-render examples/scenes/verify/m43_fracture.json \
-    examples/scenes/verify/baselines/m43_fracture.png --steps 55
-engine simulate examples/scenes/verify/m43_fracture.json --steps 55 --trace /tmp/f.jsonl
-grep -o '"broke":"[A-Za-z]*"' /tmp/f.jsonl   # all four, once each
+    examples/scenes/verify/baselines/m43_fracture.png --steps 52
+engine simulate examples/scenes/verify/m43_fracture.json --steps 200 --trace /tmp/f.jsonl
+grep -o '"broke":"[A-Za-z]*"' /tmp/f.jsonl        # all four, once each
+grep -oE '"(spawned|despawned)":"[A-Za-z]*\.dust"' /tmp/f.jsonl   # four bursts, born and reaped
 engine fracture examples/scenes/verify/m43_fracture.json --entity StoneBlock --seed 9
 ```
 
