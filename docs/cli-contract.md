@@ -124,7 +124,8 @@ engine bake-gi <scene.json> [--entity Name] [--out path] [--samples N] [--check]
                                              # scene has moved since the bake
 engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
                                              # the irradiance the renderer would use here,
-                                             # and the pre-M35 fallback beside it
+                                             # the pre-M35 fallback beside it, and the share
+                                             # of it that bounced off a sunlit surface
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
 engine list-components [--component Name]    # scene + component JSON Schemas
 engine list-components --markdown            # the same vocabulary, as prose

@@ -375,6 +375,9 @@ fn sky_band_weights(direction: Vec3) -> [f32; SKY_BANDS] {
 pub struct BakeParams {
     pub samples: u32,
     pub bounces: u32,
+    /// Sun directions to gather **bounced** sunlight for (M45), from
+    /// [`sun_directions`](crate::gi::sun_directions). Empty is M35 exactly.
+    pub sun: Vec<Vec3>,
 }
 
 impl Default for BakeParams {
@@ -382,6 +385,7 @@ impl Default for BakeParams {
         Self {
             samples: DEFAULT_SAMPLES,
             bounces: 1,
+            sun: Vec::new(),
         }
     }
 }
@@ -407,6 +411,14 @@ pub struct BakeStats {
 /// Normalized at the end so an unoccluded probe reproduces `sky_ambient`
 /// exactly — design §3.1, and the reason turning GI on cannot change the
 /// brightness of an open scene, only redistribute it.
+///
+/// Since M45 a hit also contributes to the **sun** basis, once per direction in
+/// `params.sun`: the surface's albedo times `N·L` times whether the sun reaches
+/// it. A ray that *escapes* contributes nothing there — the direct sun is the
+/// shader's own term with its own shadow map, and counting it here as well
+/// would light every surface twice. That asymmetry is the whole of the sun
+/// basis's design, and it is what leaves an unoccluded probe's sun transfer at
+/// zero and §3.1's guarantee exactly as it was.
 pub fn bake_volume(
     bvh: &Bvh,
     origin: Vec3,
@@ -427,12 +439,13 @@ pub fn bake_volume(
         for y in 0..grid[1] {
             for x in 0..grid[0] {
                 let at = origin + Vec3::new(x as f32, y as f32, z as f32) * spacing;
-                let (sky, rays, relocated) = bake_probe(bvh, at, spacing, params);
-                stats.rays += rays;
-                stats.relocated += u32::from(relocated);
+                let probe = bake_probe(bvh, at, spacing, params);
+                stats.rays += probe.rays;
+                stats.relocated += u32::from(probe.relocated);
                 probes.push(Probe {
                     p: [x, y, z],
-                    sky: sky.into_iter().map(|band| band.to_vec()).collect(),
+                    sky: probe.sky.into_iter().map(|band| band.to_vec()).collect(),
+                    sun: probe.sun.into_iter().map(|v| v.to_vec()).collect(),
                 });
             }
         }
@@ -442,15 +455,19 @@ pub fn bake_volume(
 }
 
 /// One probe's transfer, plus how many rays it cost and whether it had to move.
-fn bake_probe(
-    bvh: &Bvh,
-    at: Vec3,
-    spacing: f32,
-    params: &BakeParams,
-) -> ([[f32; NUMBERS_PER_BASIS]; SKY_BANDS], u64, bool) {
+struct ProbeBake {
+    sky: [[f32; NUMBERS_PER_BASIS]; SKY_BANDS],
+    /// One vector per `params.sun` direction; empty when there is no sun basis.
+    sun: Vec<[f32; NUMBERS_PER_BASIS]>,
+    rays: u64,
+    relocated: bool,
+}
+
+fn bake_probe(bvh: &Bvh, at: Vec3, spacing: f32, params: &BakeParams) -> ProbeBake {
     let (at, relocated) = relocate_if_buried(bvh, at, spacing, params.samples);
 
     let mut transfer = [[0.0f32; NUMBERS_PER_BASIS]; SKY_BANDS];
+    let mut sun = vec![[0.0f32; NUMBERS_PER_BASIS]; params.sun.len()];
     let mut rays = 0u64;
 
     for i in 0..params.samples {
@@ -459,7 +476,9 @@ fn bake_probe(
 
         let basis = sh_l1(dir);
         let (visible, tint) = match bvh.trace(at, dir, MAX_RAY) {
-            // Nothing in the way: the sky itself, at full strength.
+            // Nothing in the way: the sky itself, at full strength. Nothing for
+            // the sun basis either — see this function's doc comment; the direct
+            // sun already reaches this direction through the shader.
             None => (1.0, Vec3::ONE),
             Some((t, tri)) if params.bounces >= 1 => {
                 // One bounce: how much sky reaches the surface we hit, times
@@ -467,11 +486,16 @@ fn bake_probe(
                 let point = at + dir * t;
                 let (lit, secondary) = sky_reaching(bvh, point, tri.normal, params);
                 rays += secondary;
+                rays += gather_sun(bvh, point, tri, &basis, params, &mut sun);
                 (lit, tri.albedo)
             }
             Some(_) => (0.0, Vec3::ZERO),
         };
 
+        // The sky half only. A surface the sky cannot reach may still be in
+        // full sun, which is why `gather_sun` runs above this rather than
+        // under the same guard — that ordering *is* the milestone: the sharpest
+        // sun bounce in any scene comes off a wall whose sky access is poor.
         if visible <= 0.0 {
             continue;
         }
@@ -502,8 +526,63 @@ fn bake_probe(
             *value *= inv;
         }
     }
+    // The same normalization, so the two bases stay in each other's units and
+    // the one `LINEAR_GAIN` reconstructs both.
+    for direction in sun.iter_mut() {
+        for value in direction.iter_mut() {
+            *value *= inv;
+        }
+    }
 
-    (transfer, rays, relocated)
+    ProbeBake {
+        sky: transfer,
+        sun,
+        rays,
+        relocated,
+    }
+}
+
+/// Add one hit surface's **bounced sunlight** to a probe's sun basis (M45).
+///
+/// One shadow ray per sun direction, which is the whole marginal cost of the
+/// basis: the primary ray is already cast and its hit already found, so eight
+/// sun directions cost eight visibility queries rather than eight bakes.
+///
+/// Returns the rays it spent, so `bake-gi`'s report stays honest.
+fn gather_sun(
+    bvh: &Bvh,
+    point: Vec3,
+    tri: &Triangle,
+    basis: &[f32; SH_L1_COEFFS],
+    params: &BakeParams,
+    sun: &mut [[f32; NUMBERS_PER_BASIS]],
+) -> u64 {
+    let mut rays = 0;
+    let lifted = point + tri.normal * EPSILON;
+    for (k, travel) in params.sun.iter().enumerate() {
+        // `travel` is the direction the light *moves*, which is what a
+        // `DirectionalLight` stores, so the direction toward the sun is its
+        // negation — the same sign convention `mesh.wgsl`'s direct term uses.
+        let toward = -*travel;
+        let ndotl = tri.normal.dot(toward);
+        if ndotl <= 0.0 {
+            // Facing away: no sun on this surface, and no shadow ray needed
+            // to know it. Skipping the ray rather than casting and discarding
+            // keeps the reported count meaningful.
+            continue;
+        }
+        rays += 1;
+        if bvh.occluded(lifted, toward, MAX_RAY) {
+            continue;
+        }
+        for (coeff, b) in basis.iter().enumerate() {
+            let value = ndotl * b;
+            sun[k][coeff * CHANNELS] += value * tri.albedo.x;
+            sun[k][coeff * CHANNELS + 1] += value * tri.albedo.y;
+            sun[k][coeff * CHANNELS + 2] += value * tri.albedo.z;
+        }
+    }
+    rays
 }
 
 /// How much sky reaches a point on a surface, in `[0, 1]`.
@@ -630,6 +709,19 @@ pub fn hash_inputs(tris: &[Triangle], params: &BakeParams, spacing: f32, grid: [
     for tri in tris {
         h.vec3(tri.v0).vec3(tri.e1).vec3(tri.e2).vec3(tri.albedo);
     }
+    // The sun basis (M45) enters the digest **only when there is one**, which is
+    // what keeps every bake written before it byte-valid rather than uniformly
+    // stale. It is M17's rule for the particle RNG applied to a hash: skip the
+    // step entirely when the field is off, never feed it a defaulted value —
+    // a defaulted zero is arithmetically reasonable and still moves every digest
+    // in the repo. Feeding the directions rather than the count is what makes
+    // editing `sun_elevation` a stale bake.
+    if !params.sun.is_empty() {
+        h.u32(params.sun.len() as u32);
+        for direction in &params.sun {
+            h.vec3(*direction);
+        }
+    }
     h.finish()
 }
 
@@ -665,10 +757,16 @@ pub fn bake(
             spacing: volume.spacing,
             basis: [("sky".to_string(), SKY_BANDS as u32)]
                 .into_iter()
+                .chain(
+                    // Only when there is one, so a bake with no sun basis
+                    // writes the same header it wrote before M45.
+                    (!params.sun.is_empty()).then(|| ("sun".to_string(), params.sun.len() as u32)),
+                )
                 .collect(),
             samples: params.samples,
             bounces: volume.bounces,
             relocated: stats.relocated,
+            sun_dirs: params.sun.iter().map(Vec3::to_array).collect(),
         },
         probes,
     };
@@ -728,8 +826,10 @@ mod tests {
         let params = BakeParams {
             samples: 512,
             bounces: 1,
+            sun: Vec::new(),
         };
-        let (transfer, _, relocated) = bake_probe(&bvh, Vec3::ZERO, 4.0, &params);
+        let baked = bake_probe(&bvh, Vec3::ZERO, 4.0, &params);
+        let (transfer, relocated) = (baked.sky, baked.relocated);
         assert!(!relocated, "an empty scene buries nothing");
         let total: f32 = (0..SKY_BANDS).map(|b| transfer[b][0]).sum();
         assert!(
@@ -747,8 +847,9 @@ mod tests {
         let params = BakeParams {
             samples: 512,
             bounces: 1,
+            sun: Vec::new(),
         };
-        let (transfer, _, _) = bake_probe(&bvh, Vec3::ZERO, 4.0, &params);
+        let transfer = bake_probe(&bvh, Vec3::ZERO, 4.0, &params).sky;
 
         // Ground band, constant coefficient, per channel.
         let r = transfer[BAND_GROUND][0];
@@ -790,7 +891,7 @@ mod tests {
             tris.extend(face);
         }
         let bvh = Bvh::build(tris);
-        let (_, _, relocated) = bake_probe(&bvh, Vec3::ZERO, 4.0, &BakeParams::default());
+        let relocated = bake_probe(&bvh, Vec3::ZERO, 4.0, &BakeParams::default()).relocated;
         assert!(relocated, "a probe sealed inside a box must be relocated");
     }
 
@@ -846,6 +947,7 @@ mod tests {
         let params = BakeParams {
             samples: 64,
             bounces: 1,
+            sun: Vec::new(),
         };
         let run = || {
             bake(

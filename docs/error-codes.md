@@ -155,6 +155,7 @@ build fails.
 | `unknown_collision_layer` | 1 | warning: collides_with names a layer no collider is a member of |
 | `daylight_overrides_sky` | 1 | warning: daylight computes the sky and ambient, so the authored ones are never read |
 | `collider_mesh_size_mismatch` | 1 | warning: a Collider is a very different size from the builtin mesh it sits on |
+| `gi_sun_samples_unused` | 1 | warning: LightProbeVolume.sun_samples asks for an arc, but this scene's sun does not move |
 | `road_pins_overlap` | 1 | warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly |
 | `road_follow_rotated` | 1 | warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed |
 | `scene_unreadable` | 1 | the scene file could not be read |

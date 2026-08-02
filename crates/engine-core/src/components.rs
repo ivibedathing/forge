@@ -4223,6 +4223,26 @@ pub struct LightProbeVolume {
     /// the occlusion the volume measured.
     #[schemars(range(min = 0.0))]
     pub blend: f32,
+
+    /// Sun directions the bake gathers **bounced sunlight** for, `[0, 16]`
+    /// (M45).
+    ///
+    /// `0` is M35: the sun is a direct light with a shadow map and throws no
+    /// colour onto anything. Above zero, the bake samples the scene's own
+    /// daylight arc at this many points and stores what bounces off the
+    /// geometry for each — which is what makes a red wall redden the white one
+    /// beside it under a *sun* rather than only under the sky.
+    ///
+    /// **A scene whose sun does not move needs 1.** An authored
+    /// `DirectionalLight` with no `daylight` block has exactly one sun
+    /// direction, so the bake collapses to a single vector per probe whatever
+    /// this says, and anything above 1 buys nothing.
+    ///
+    /// It defaults to 0 because the file is the cost: a daylight scene at 8
+    /// stores 96 numbers per probe against the sky basis's 24. Bounced
+    /// moonlight is not gathered at any setting — see the design's §4.
+    #[schemars(range(min = 0, max = 16))]
+    pub sun_samples: u32,
 }
 
 impl Default for LightProbeVolume {
@@ -4233,6 +4253,9 @@ impl Default for LightProbeVolume {
             bounces: 1,
             intensity: 1.0,
             blend: 1.0,
+            // M35 exactly: the sun is a direct light and bounces nothing. The
+            // design's §5 argues why the effect is opt-in rather than free.
+            sun_samples: 0,
         }
     }
 }

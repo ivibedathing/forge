@@ -60,7 +60,7 @@ actually says.
 | `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. | `m19-trees.md` |
 | `Cloud` | A cluster of interpenetrating lobes that drifts; **owns its mesh**. | `m20-clouds.md` |
 | `Meadow` | Ground cover on a seed→grass→weeds→straw→collapse life cycle, animated entirely in the vertex stage. | `m29-meadows.md` |
-| `LightProbeVolume` | A box of baked irradiance probes; replaces the hemispheric fill with one that knows what is above a surface. At most one per scene, and it carries no geometry. | `m35-global-illumination.md` |
+| `LightProbeVolume` | A box of baked irradiance probes; replaces the hemispheric fill with one that knows what is above a surface. Since M45 its `sun_samples` also bounce the *sun*, so a red wall reddens its neighbour. At most one per scene, and it carries no geometry. | `m35-global-illumination.md`, `m45-sun-bounce.md` |
 | `HudText` | Screen-anchored text at an integer scale of the 8×8 font. | `m11_6-hud.md` |
 | `HudRect` | A screen-anchored coloured rectangle — bars, backdrops, gauges. | `m11_6-hud.md` |
 | `HudPanel` | Lays its children out in a row, column, or freely; hugs its contents unless sized. | `m31-ui-system.md` |
@@ -83,14 +83,15 @@ script spawns at runtime — `m37-entity-spawning.md`).
 
 ## Current state
 
-**M0–M44 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M45 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
 M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
-M43 material-aware fracture, M44 the break's dust, and M35 global illumination.
+M43 material-aware fracture, M44 the break's dust, M35 global illumination, and M45 bounced
+sunlight.
 (M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
@@ -275,6 +276,14 @@ The cross-cutting ones. Per-system traps are in each note.
   is empty. Push the burst **out along the face normal** by a fraction of the object's radius, which
   is where dust actually comes from. What isolates this class of bug is rendering the same emitter
   parameters in an empty scene: if it puffs there, the problem is placement, not the pipeline.
+- **A derived constant is derived against the thing it was derived for** (M45). GI's
+  `LINEAR_GAIN = 3.0` carries a correct proof that an unoccluded probe reconstructs `sky_ambient`
+  exactly — a proof *about the sky*, whose transfer is spread over the whole sphere. Reusing the
+  same reconstruction for a bounce concentrated on one wall makes SH-L1 ring, and the ringing is
+  **negative light**: the sun basis subtracted fill from every surface facing away from it, so
+  turning the feature on made 37% of the frame darker. `SUN_BAND_GAIN` pre-scales the sun's linear
+  bands by 1/3 so that one shader gain reconstructs them at an effective 1. Nobody chose to reuse
+  the constant — the coefficient array was simply already there.
 - **Dust has to out-contrast the ground, not match the material** (M44). Rock dust's honest colour
   is the colour of the rock, and a grey puff over grey ground at this exposure is nothing at all.
 - **Giving an existing `Breakable` a `material` changes what its *neighbours* do**, because M43's
@@ -494,6 +503,12 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   radiance, so the bounce follows `daylight` without re-baking; an unoccluded probe reconstructs
   `sky_ambient` exactly, which is why turning GI on cannot change an open scene's brightness. Two
   sky bands, not the three the design assumed.
+- **Bounced sunlight (M45)** → `m45-sun-bounce.md`, design in `designs/sun-bounce-design.md`.
+  A second basis in the same bake, sampled along the scene's own daylight arc and folded by the
+  angle to the live sun — **no shader edited, no binding added**, because evaluation was already a
+  CPU fold over N sources. It is *bounced-only*: a ray that escapes contributes nothing, so the
+  direct term is not counted twice and an unoccluded probe's sun transfer is exactly zero.
+  `sun_samples` defaults to 0.
 - **Frame cost (M15)** → `m15-frame-cost.md`. The optimisation pass that took the viewer from ~34 ms
   a frame to ~0.9 ms, none of which moved a pixel.
 
@@ -699,11 +714,13 @@ original four, entity spawning was M37 and a CPU wave evaluator was M41.) The re
   see `m38-shadow-cascades.md`. **Alpha-cut leaves are a missing feature**, not an
   authoring job: `Tree::leaf_material` synthesizes a `Material` from `leaf_color`/`leaf_roughness`
   alone, so leaf maps mean new `Tree` fields, a schema regeneration, and a validation pass.
-- **GI** (after M35): **bounced sunlight** — the largest deferral and the one a viewer notices, since
-  it is what makes a coloured wall tint its neighbour under a *sun* rather than only under the sky;
-  the design's §5.3 has the mechanism written. Also specular GI (a prefiltered radiance cube in the
+- **GI** (after M35/M45): bounced sunlight was **M45**, and what it left behind is a *sharper* sun
+  lobe — SH-L1 cannot hold one without ringing negative, so `SUN_BAND_GAIN` softens it and SH-L2
+  (nine coefficients, five more planes) is the milestone that would fix it. Also specular GI (a
+  prefiltered radiance cube in the
   same volume — that is what IBL means here), point-light and emissive bounce (transfer is linear in
-  intensity, so a per-light basis vector would be *exact* for a flickering campfire), dynamic
+  intensity, so a per-light basis vector would be *exact* for a flickering campfire), bounced
+  **moonlight** (the arc is sampled over the lit half only), dynamic
   occluders, `Water`/`Cloud` receivers, and **more than one volume** — an interior at finer spacing
   than the landscape around it, which is what the design's §4 originally allowed and what
   `multiple_light_probe_volumes` now refuses; it wants an answer to four more bindings per volume,

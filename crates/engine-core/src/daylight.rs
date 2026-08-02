@@ -468,6 +468,26 @@ impl DaylightSettings {
         (self.time_of_day + time * 24.0 / self.day_length).rem_euclid(24.0)
     }
 
+    /// The direction sunlight travels at a given **hour**, ignoring the clock
+    /// and the palette (M45).
+    ///
+    /// The GI bake needs the sun's arc as a set of directions, not as a
+    /// function of scene time: it samples where the sun *can* be, which is a
+    /// property of `sun_elevation` and `sun_azimuth` alone. Going through
+    /// [`evaluate`](Self::evaluate) instead would hand back the moon for every
+    /// sample after 18:00 and the palette's intensity along with it, neither of
+    /// which belongs in a transfer function.
+    pub fn sun_travel_at(&self, hours: f32) -> Vec3 {
+        arc(hours, self.sun_elevation, self.sun_azimuth).travel()
+    }
+
+    /// The `n` sun directions the GI bake samples this arc at (M45).
+    pub fn sun_sample_directions(&self, n: u32) -> impl Iterator<Item = Vec3> + '_ {
+        crate::gi::sun_sample_hours(n)
+            .into_iter()
+            .map(|hours| self.sun_travel_at(hours))
+    }
+
     /// Evaluate the whole day at `time` seconds of scene time.
     ///
     /// # The sun/moon handoff

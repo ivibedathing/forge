@@ -55,6 +55,34 @@ pub const LINEAR_GAIN: f32 = 3.0;
 /// black sky divides by the same number the shader would have divided by.
 const MEAN_FLOOR: f32 = 1.0e-4;
 
+/// What each SH band of the **sun** basis is pre-scaled by as it is folded in,
+/// so that the shader's one [`LINEAR_GAIN`] reconstructs it at an effective
+/// gain of 1 (M45).
+///
+/// **This exists because bounced sunlight made pixels darker.** SH-L1 is a
+/// four-number basis, and reconstruction is `c0 + 3·(c1·n)`. That gain of 3 is
+/// derived — it is what makes an unoccluded probe reproduce `sky_ambient(n)`
+/// exactly — and it is safe for the *sky* basis because sky transfer is spread
+/// over the whole sphere, so `c0` dominates. A sun bounce is not spread: it
+/// arrives from one wall. For a lobe concentrated in a single direction `u`,
+/// `c1 = c0·u`, and the reconstruction at `n = −u` is `c0·(1 − 3) = −2·c0`.
+/// **Negative light**, subtracted from the sky's fill, on every surface facing
+/// away from the bounce. Measured before it was understood: turning the sun
+/// basis on lowered the fixture's mean luminance by 0.012 and darkened 37% of
+/// its pixels.
+///
+/// Scaling the linear bands by `1/3` makes the effective gain 1, and
+/// `c0·(1 + u·n)` is non-negative for every normal — a softer lobe than the
+/// physical `max(0, u·n)`, and one that cannot ring. The cost is stated rather
+/// than hidden: the sun's bounce is *less* directional than the geometry says,
+/// so a wall's colour spreads a little further around a sphere than it should.
+/// A basis that could hold the sharp lobe is SH-L2, which is nine coefficients
+/// per source and five more texture planes — a different milestone.
+///
+/// The sky basis is untouched, which is why design §3.1's exactness survives.
+const SUN_BAND_GAIN: [f32; SH_L1_COEFFS] =
+    [1.0, 1.0 / LINEAR_GAIN, 1.0 / LINEAR_GAIN, 1.0 / LINEAR_GAIN];
+
 /// A volume's baked transfer folded against one frame's lighting.
 ///
 /// Four planes of RGBA, one per SH-L1 coefficient, in the probe order the bake
@@ -192,6 +220,64 @@ impl IrradianceField {
     }
 }
 
+/// Which baked sun directions a live sun sits between, and their weights (M45).
+///
+/// At most two entries, weighted so that a live direction landing exactly on a
+/// baked one reproduces that vector alone. The set is a great circle and the
+/// live sun is on it, so "the two nearest by angle, lerped by angle" is exact
+/// at every sample and smooth between them.
+///
+/// **Beyond 90° of every baked direction the answer is empty**, and that one
+/// line is what excludes the moon. `daylight` swings a single directional light
+/// between the two bodies, so at night `sun_direction` is the moon's — the
+/// mirror of the arc, 150° or more from the nearest sample — and the bounce
+/// switches off rather than lighting the scene from the wrong side. It is also
+/// what makes an *animated* `DirectionalLight` degrade instead of staying
+/// confidently wrong: the bake's hash cannot see an animation, so the fold is
+/// the only place that case can be handled at all.
+fn sun_blend(dirs: &[[f32; 3]], live: Vec3) -> Vec<(usize, f32)> {
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+    let live = live.normalize_or_zero();
+    if live == Vec3::ZERO {
+        return Vec::new();
+    }
+
+    // Angle to each baked direction, nearest first. `acos` of a clamped dot
+    // rather than the dot itself, because the weights below are linear in the
+    // angle and a dot would bunch them toward the ends.
+    let mut ranked: Vec<(usize, f32)> = dirs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let angle = Vec3::from_array(*d)
+                .normalize_or_zero()
+                .dot(live)
+                .clamp(-1.0, 1.0)
+                .acos();
+            (i, angle)
+        })
+        .collect();
+    ranked.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+
+    let (first, a1) = ranked[0];
+    if a1 >= std::f32::consts::FRAC_PI_2 {
+        return Vec::new();
+    }
+    let Some(&(second, a2)) = ranked.get(1) else {
+        return vec![(first, 1.0)];
+    };
+
+    // Inverse-angle weights: the nearer sample gets the larger share, and a
+    // live direction sitting exactly on one gets that one alone.
+    let total = a1 + a2;
+    if total <= 0.0 {
+        return vec![(first, 1.0)];
+    }
+    vec![(first, a2 / total), (second, a1 / total)]
+}
+
 /// Fold a bake against one frame's lighting.
 ///
 /// The two live sky bands come from `environment` when the scene draws a sky.
@@ -220,6 +306,11 @@ pub fn evaluate(
     // up-facing surface blue-gray under a saturated sky.
     let gain = lights.ambient / mean;
 
+    // Which baked sun directions this frame's sun falls between, and how much of
+    // each (M45). Empty for a bake with no sun basis, and empty at night —
+    // which is the same code path, so a moonlit frame costs nothing.
+    let sun_mix = sun_blend(&baked.header.sun_dirs, lights.sun_direction);
+
     let mut planes = std::array::from_fn(|_| Vec::with_capacity(baked.probes.len()));
     for probe in &baked.probes {
         let z = &probe.sky[BAND_ZENITH];
@@ -229,6 +320,18 @@ pub fn evaluate(
             for channel in 0..CHANNELS {
                 let i = coefficient * CHANNELS + channel;
                 rgba[channel] = gain[channel] * (zenith[channel] * z[i] + ground[channel] * g[i]);
+                // The sun's bounce rides the same coefficients, scaled by the
+                // live sun colour rather than by `gain`: `gain` is
+                // `sky_ambient`'s own per-channel normalization and has nothing
+                // to say about a directional light. What the transfer holds is
+                // bounced light only, so this adds to the fill without touching
+                // the direct term the shader computes.
+                for (k, weight) in &sun_mix {
+                    rgba[channel] += SUN_BAND_GAIN[coefficient]
+                        * lights.sun_color[channel]
+                        * weight
+                        * probe.sun[*k][i];
+                }
             }
             if coefficient == 0 {
                 // The constant band summed over both bands is the fraction of
@@ -353,6 +456,7 @@ mod tests {
                 samples: 64,
                 bounces: 1,
                 relocated: 0,
+                sun_dirs: Vec::new(),
             },
             probes,
         };
@@ -362,6 +466,7 @@ mod tests {
             bounces: 1,
             intensity: 1.0,
             blend: 0.0,
+            sun_samples: 0,
         };
         let lights = ResolvedLights {
             sun_direction: Vec3::NEG_Y,
@@ -407,6 +512,7 @@ mod tests {
             &BakeParams {
                 samples: 4096,
                 bounces: 1,
+                sun: Vec::new(),
             },
         );
         let field = field_from(probes, [2, 2, 2], &environment);
@@ -447,6 +553,7 @@ mod tests {
             &BakeParams {
                 samples: 4096,
                 bounces: 1,
+                sun: Vec::new(),
             },
         );
         let field = field_from(probes, [2, 2, 2], &environment);
@@ -468,6 +575,7 @@ mod tests {
                 Probe {
                     p: [0, 0, 0],
                     sky: vec![vec![0.0; NUMBERS_PER_BASIS]; 2],
+                    sun: Vec::new(),
                 };
                 8
             ]
@@ -492,6 +600,7 @@ mod tests {
                 .map(|i: u32| Probe {
                     p: [i % 2, (i / 2) % 2, i / 4],
                     sky: vec![vec![0.0; NUMBERS_PER_BASIS]; 2],
+                    sun: Vec::new(),
                 })
                 .collect(),
             [2, 2, 2],
@@ -524,6 +633,7 @@ mod tests {
         let params = BakeParams {
             samples: 512,
             bounces: 1,
+            sun: Vec::new(),
         };
         let (sheltered, _) = bake_volume(&bvh, Vec3::ZERO, [2, 2, 2], 1.0, &params);
         let (open, _) = bake_volume(&bvh, Vec3::new(100.0, 0.0, 100.0), [2, 2, 2], 1.0, &params);
