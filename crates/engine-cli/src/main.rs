@@ -2306,6 +2306,11 @@ fn bake_gi(
 
     let assets = engine_assets::AssetServer::for_scene(&scene_path);
     let tris = engine_core::gi::bake::collect_occluders(&scene, &assets)?;
+    // Which suns this bake covers (M45) — the scene's arc, or its one static
+    // direction, or none at all. Resolved from the scene rather than from the
+    // component, because a `daylight` block is what turns one direction into a
+    // set.
+    let sun = engine_core::gi::sun_directions(&scene, &volume);
 
     if check {
         return check_bake(
@@ -2315,6 +2320,7 @@ fn bake_gi(
             &transform,
             &target,
             &tris,
+            &sun,
             samples,
         );
     }
@@ -2322,6 +2328,7 @@ fn bake_gi(
     let params = engine_core::gi::bake::BakeParams {
         samples: samples.unwrap_or(engine_core::gi::bake::DEFAULT_SAMPLES),
         bounces: volume.bounces,
+        sun,
     };
 
     let (baked, stats) = engine_core::gi::bake::bake(
@@ -2362,6 +2369,7 @@ fn bake_gi(
         "relocated": stats.relocated,
         "samples": params.samples,
         "bounces": params.bounces,
+        "sun_directions": params.sun.len(),
         "inputs_hash": baked.header.inputs_hash,
     });
     println!("{}", serde_json::json!({ "baked": [report] }));
@@ -2375,6 +2383,11 @@ fn bake_gi(
 /// stale merely for having been taken at 512. Everything else is read from the
 /// scene as it stands now — spacing, bounces, the grid the transform implies,
 /// and the triangles — so every edit that would change the light is caught.
+///
+/// Eight arguments because a staleness check is a comparison against eight
+/// independent inputs; bundling them into a struct that exists for one call
+/// site would hide which ones the digest actually reads.
+#[allow(clippy::too_many_arguments)]
 fn check_bake(
     scene_path: &Path,
     name: &str,
@@ -2382,6 +2395,7 @@ fn check_bake(
     transform: &engine_core::components::Transform,
     target: &Path,
     tris: &[engine_core::gi::bake::Triangle],
+    sun: &[engine_core::math::Vec3],
     samples: Option<u32>,
 ) -> Result<()> {
     let text = std::fs::read_to_string(target).map_err(|e| {
@@ -2407,6 +2421,7 @@ fn check_bake(
     let params = engine_core::gi::bake::BakeParams {
         samples: samples.unwrap_or(baked.header.samples),
         bounces: volume.bounces,
+        sun: sun.to_vec(),
     };
     let grid = engine_core::gi::grid_counts(transform.scale, volume.spacing);
     let current = engine_core::gi::bake::hash_inputs(tris, &params, volume.spacing, grid);
@@ -2525,6 +2540,26 @@ fn gi_probe(
     let fallback = fallback_fill(normal, &lights, &environment);
     let weight = field.weight(point);
 
+    // How much of that came off a sunlit surface (M45), by folding the same
+    // bake a second time with the sun basis struck out and subtracting. A
+    // difference rather than a separate evaluation path, so the number reported
+    // is provably the one in `irradiance` and cannot drift from it — the
+    // question an author asks here is "is this pink because of the red wall",
+    // and a second model of the fold could answer it wrongly while agreeing
+    // everywhere else.
+    let sun_bounce = if baked.header.sun_dirs.is_empty() {
+        engine_core::math::Vec3::ZERO
+    } else {
+        let mut without = baked.clone();
+        without.header.sun_dirs.clear();
+        for probe in &mut without.probes {
+            probe.sun.clear();
+        }
+        irradiance
+            - engine_core::gi::evaluate(&without, &volume, &lights, &environment)
+                .sample(point, normal)
+    };
+
     println!(
         "{}",
         serde_json::json!({
@@ -2544,6 +2579,11 @@ fn gi_probe(
             // dark" is only answerable against what it is being compared to.
             "irradiance": irradiance.to_array(),
             "fallback": fallback.to_array(),
+            // The share of `irradiance` that bounced off a sunlit surface, and
+            // how many sun directions the bake covers. Zero on a bake with no
+            // sun basis, and zero at night whatever the bake holds.
+            "sun_bounce": sun_bounce.to_array(),
+            "sun_directions": baked.header.sun_dirs.len(),
             // `intensity` faded at the volume's edge; the renderer mixes the
             // two above by exactly this.
             "weight": weight,

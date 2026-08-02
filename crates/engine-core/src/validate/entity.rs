@@ -145,6 +145,10 @@ pub(super) fn walk<'a>(
     schemas: &ComponentSchemas,
     entities: &'a [Value],
     kind: Kind,
+    // Whether a `daylight` block drives the sun, so a GI bake covers an arc of
+    // directions rather than one (M45). A scene-level fact, and the only one
+    // this walk needs.
+    moving_sun: bool,
     errors: &mut Vec<EngineError>,
 ) -> SceneFacts<'a> {
     let mut seen_names: Vec<&str> = Vec::with_capacity(entities.len());
@@ -1482,6 +1486,29 @@ pub(super) fn walk<'a>(
                 );
             }
 
+            // Asking for an arc of sun directions in a scene whose sun does not
+            // move (M45). Not an error — the bake is correct, it just holds one
+            // direction — but silent otherwise, and the author who wrote 8 has
+            // a mental model that says the file grew eight-fold and it did not.
+            if volume.sun_samples > 1 && !moving_sun {
+                errors.push(
+                    cx.err(
+                        codes::GI_SUN_SAMPLES_UNUSED,
+                        format!(
+                            "entity {name:?} asks for {} sun samples, but this scene has \
+                             no `daylight` block driving the sun, so there is one sun \
+                             direction to bake and `sun_samples: 1` says the same thing",
+                            volume.sun_samples
+                        ),
+                        path,
+                    )
+                    .entity(name)
+                    .component("LightProbeVolume")
+                    .field("sun_samples")
+                    .warning(),
+                );
+            }
+
             // A bake taken before the volume was resized or re-tuned describes
             // a grid that no longer exists, so the renderer would index it with
             // coordinates it was never baked for. Cheap to catch: the header
@@ -1500,26 +1527,30 @@ pub(super) fn walk<'a>(
             let bake_file = base_dir.join(&volume.bake);
             if let Ok(text) = std::fs::read_to_string(&bake_file) {
                 if let Ok(baked) = crate::gi::BakedGi::parse(&text) {
-                    if !baked.matches(volume, scale) {
+                    let want_sun = crate::gi::sun_direction_count(volume.sun_samples, moving_sun);
+                    if !baked.matches(volume, scale, want_sun) {
                         let want = crate::gi::grid_counts(scale, volume.spacing);
                         errors.push(
                             cx.err(
                                 codes::GI_BAKE_STALE,
                                 format!(
                                     "entity {name:?} needs a {}×{}×{} grid at spacing {} \
-                                     with {} bounce(s), but {:?} was baked as {}×{}×{} at \
-                                     spacing {} with {}; re-run `engine bake-gi`",
+                                     with {} bounce(s) and {} sun direction(s), but {:?} \
+                                     was baked as {}×{}×{} at spacing {} with {} and {}; \
+                                     re-run `engine bake-gi`",
                                     want[0],
                                     want[1],
                                     want[2],
                                     volume.spacing,
                                     volume.bounces,
+                                    want_sun,
                                     volume.bake,
                                     baked.header.grid[0],
                                     baked.header.grid[1],
                                     baked.header.grid[2],
                                     baked.header.spacing,
                                     baked.header.bounces,
+                                    baked.header.sun_dirs.len(),
                                 ),
                                 path,
                             )

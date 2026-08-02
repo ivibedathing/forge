@@ -624,6 +624,15 @@
       "height": 360,
       "milestone": "M35",
       "pinned_by": "cli.rs::m35_gi_diff_renders"
+    },
+    {
+     "baseline": "examples/scenes/verify/baselines/m45_sun_bounce.png",
+     "scene": "examples/scenes/verify/m45_sun_bounce.json",
+     "args": [],
+     "width": 640,
+     "height": 360,
+     "milestone": "M45",
+     "pinned_by": "cli.rs::m45_sun_bounce_diff_renders"
     }
   ],
   "traces": [

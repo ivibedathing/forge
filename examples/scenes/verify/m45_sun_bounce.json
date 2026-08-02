@@ -1,0 +1,101 @@
+{
+  "name": "m45 bounced sunlight",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.24, 0.44, 0.86],
+    "sky_horizon": [0.7, 0.79, 0.93],
+    "sky_ground": [0.21, 0.19, 0.16],
+    "shadows": true,
+    "shadow_distance": 30.0,
+    "samples": 1
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "components": [
+        { "type": "Transform", "position": [0.0, 2.3, 7.6], "rotation": [-11.0, 0.0, 0.0] },
+        { "type": "Camera", "active": true }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-40.0, 70.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.96, 0.89], "intensity": 1.35 }
+      ]
+    },
+    {
+      "name": "Fill",
+      "components": [
+        { "type": "AmbientLight", "color": [1.0, 1.0, 1.0], "intensity": 0.18 }
+      ]
+    },
+
+    {
+      "name": "Floor",
+      "components": [
+        { "type": "Transform", "position": [0.0, -0.15, 0.0], "scale": [8.0, 0.3, 11.0] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.74, 0.74, 0.74], "roughness": 0.95 }
+      ]
+    },
+
+    {
+      "name": "RedWall",
+      "components": [
+        { "type": "Transform", "position": [-2.7, 1.6, -0.5], "scale": [0.3, 3.2, 7.5] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.86, 0.05, 0.04], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "WhiteWall",
+      "components": [
+        { "type": "Transform", "position": [2.7, 0.7, -0.5], "scale": [0.3, 1.4, 7.5] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.82, 0.82, 0.82], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "BackWall",
+      "components": [
+        { "type": "Transform", "position": [0.0, 1.6, -4.3], "scale": [5.7, 3.2, 0.3] },
+        { "type": "Mesh", "asset": "builtin:cube" },
+        { "type": "Material", "albedo": [0.78, 0.78, 0.78], "roughness": 0.95 }
+      ]
+    },
+
+    {
+      "name": "NearSphere",
+      "components": [
+        { "type": "Transform", "position": [-0.9, 0.75, -0.9], "scale": [1.5, 1.5, 1.5] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.85, 0.85, 0.85], "roughness": 0.6 }
+      ]
+    },
+    {
+      "name": "FarSphere",
+      "components": [
+        { "type": "Transform", "position": [1.5, 0.75, -0.9], "scale": [1.5, 1.5, 1.5] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.85, 0.85, 0.85], "roughness": 0.6 }
+      ]
+    },
+
+    {
+      "name": "Lighting",
+      "components": [
+        { "type": "Transform", "position": [0.0, 1.9, -0.5], "scale": [7.2, 4.6, 9.4] },
+        {
+          "type": "LightProbeVolume",
+          "spacing": 0.8,
+          "bake": "gi/m45_sun_bounce.gi.json",
+          "bounces": 1,
+          "intensity": 1.0,
+          "blend": 0.4,
+          "sun_samples": 1
+        }
+      ]
+    }
+  ]
+}

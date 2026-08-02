@@ -88,6 +88,7 @@ fn render(intensity: f32, with_gi: bool) -> Image {
         let params = bake::BakeParams {
             samples: 128,
             bounces: 1,
+            sun: Vec::new(),
         };
         let (baked, _) = bake::bake(
             "test.json",
@@ -243,6 +244,7 @@ fn the_shader_and_the_cpu_evaluator_agree() {
         &bake::BakeParams {
             samples: 256,
             bounces: 1,
+            sun: Vec::new(),
         },
     );
     let field = gi::evaluate(

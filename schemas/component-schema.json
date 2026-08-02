@@ -3988,6 +3988,14 @@
             "format": "float",
             "type": "number"
           },
+          "sun_samples": {
+            "default": 0,
+            "description": "Sun directions the bake gathers **bounced sunlight** for, `[0, 16]`\n(M45).\n\n`0` is M35: the sun is a direct light with a shadow map and throws no\ncolour onto anything. Above zero, the bake samples the scene's own\ndaylight arc at this many points and stores what bounces off the\ngeometry for each — which is what makes a red wall redden the white one\nbeside it under a *sun* rather than only under the sky.\n\n**A scene whose sun does not move needs 1.** An authored\n`DirectionalLight` with no `daylight` block has exactly one sun\ndirection, so the bake collapses to a single vector per probe whatever\nthis says, and anything above 1 buys nothing.\n\nIt defaults to 0 because the file is the cost: a daylight scene at 8\nstores 96 numbers per probe against the sky basis's 24. Bounced\nmoonlight is not gathered at any setting — see the design's §4.",
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 0,
+            "type": "integer"
+          },
           "type": {
             "const": "LightProbeVolume",
             "type": "string"
@@ -7283,6 +7291,14 @@
                 "exclusiveMinimum": 0.0,
                 "format": "float",
                 "type": "number"
+              },
+              "sun_samples": {
+                "default": 0,
+                "description": "Sun directions the bake gathers **bounced sunlight** for, `[0, 16]`\n(M45).\n\n`0` is M35: the sun is a direct light with a shadow map and throws no\ncolour onto anything. Above zero, the bake samples the scene's own\ndaylight arc at this many points and stores what bounces off the\ngeometry for each — which is what makes a red wall redden the white one\nbeside it under a *sun* rather than only under the sky.\n\n**A scene whose sun does not move needs 1.** An authored\n`DirectionalLight` with no `daylight` block has exactly one sun\ndirection, so the bake collapses to a single vector per probe whatever\nthis says, and anything above 1 buys nothing.\n\nIt defaults to 0 because the file is the cost: a daylight scene at 8\nstores 96 numbers per probe against the sky basis's 24. Bounced\nmoonlight is not gathered at any setting — see the design's §4.",
+                "format": "uint32",
+                "maximum": 16,
+                "minimum": 0,
+                "type": "integer"
               },
               "type": {
                 "const": "LightProbeVolume",

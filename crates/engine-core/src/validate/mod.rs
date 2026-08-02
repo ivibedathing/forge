@@ -125,7 +125,27 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         }
     };
 
-    let mut facts = entity::walk(&cx, &schemas, entities, entity::Kind::ENTITY, &mut errors);
+    // Whether the sun's direction is a set rather than one direction, which is
+    // what decides how many sun-basis vectors a GI bake should hold (M45).
+    // Read from the raw JSON because `validate` never builds a `Scene`;
+    // `gi::sun_direction_count` is the one place the rule itself lives.
+    let moving_sun = object
+        .get("daylight")
+        .and_then(Value::as_object)
+        .is_some_and(|day| {
+            day.get("drives_sun")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+        });
+
+    let mut facts = entity::walk(
+        &cx,
+        &schemas,
+        entities,
+        entity::Kind::ENTITY,
+        moving_sun,
+        &mut errors,
+    );
 
     // Templates (M37) take the same per-entry walk — same schema, same ranges,
     // same per-entity cross-component rules — under their own codes and their
@@ -139,6 +159,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
             &schemas,
             templates,
             entity::Kind::TEMPLATE,
+            moving_sun,
             &mut errors,
         )),
         Some(other) => {

@@ -388,6 +388,8 @@ registry! {
         "warning: daylight computes the sky and ambient, so the authored ones are never read";
     COLLIDER_MESH_SIZE_MISMATCH = "collider_mesh_size_mismatch", Input,
         "warning: a Collider is a very different size from the builtin mesh it sits on";
+    GI_SUN_SAMPLES_UNUSED = "gi_sun_samples_unused", Input,
+        "warning: LightProbeVolume.sun_samples asks for an arc, but this scene's sun does not move";
     ROAD_PINS_OVERLAP = "road_pins_overlap", Input,
         "warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly";
     ROAD_FOLLOW_ROTATED = "road_follow_rotated", Input,

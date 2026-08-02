@@ -144,6 +144,70 @@ pub fn probe_count_for(volume: &LightProbeVolume, scale: Vec3) -> u64 {
     probe_count(grid_counts(scale, volume.spacing))
 }
 
+/// Hours of the day the sun basis is sampled at, for `n` samples (M45).
+///
+/// Sunrise is 06:00 and sunset 18:00 at every `sun_elevation` — M21 fixed that
+/// deliberately — so the lit half is a constant rather than a function of the
+/// scene, and the samples are **centred in their bands** the way
+/// [`bake::sample_direction`] centres its own: `+0.5`, so the set is symmetric
+/// about noon and adding a sample refines it rather than reshuffling it.
+///
+/// This is a **format contract**. A baked file sits under a render baseline, so
+/// changing where the arc is sampled invalidates every bake that used it.
+pub fn sun_sample_hours(n: u32) -> Vec<f32> {
+    (0..n)
+        .map(|k| 6.0 + 12.0 * (k as f32 + 0.5) / n as f32)
+        .collect()
+}
+
+/// The sun directions a scene's bake covers — the whole "which sun" question,
+/// answered in one place because the bake, `validate` and `bake-gi --check`
+/// must agree on it exactly (M45).
+///
+/// Three cases, and the middle one is the common one in this repo:
+///
+/// * `sun_samples: 0` — no sun basis at all, which is M35.
+/// * **No `daylight` driving the sun** — the scene's `DirectionalLight` has one
+///   direction, so the set is that one direction whatever `sun_samples` says.
+///   Anything above 1 would store the same vector repeatedly.
+/// * **`daylight` with `drives_sun`** — the arc at [`sun_sample_hours`].
+pub fn sun_directions(scene: &crate::scene::Scene, volume: &LightProbeVolume) -> Vec<Vec3> {
+    let moving = moves_the_sun(scene.daylight.as_ref());
+    if sun_direction_count(volume.sun_samples, moving) == 0 {
+        return Vec::new();
+    }
+    match (&scene.daylight, moving) {
+        (Some(day), true) => day.sun_sample_directions(volume.sun_samples).collect(),
+        // The resolved rig rather than the component, so the M4 fallback sun a
+        // scene with no light components gets is the one the bake covers —
+        // the same direction the direct term will use.
+        _ => vec![scene.lights().resolved().sun_direction],
+    }
+}
+
+/// Whether a scene's `daylight` block makes the sun's direction a *set*.
+pub fn moves_the_sun(daylight: Option<&crate::daylight::DaylightSettings>) -> bool {
+    daylight.is_some_and(|day| day.drives_sun)
+}
+
+/// How many sun directions a bake covers — the counting half of
+/// [`sun_directions`], split out because `validate` has to reach the same
+/// answer from the raw JSON without building a `Scene`.
+///
+/// Two implementations of this rule is exactly how a `validate` that passes and
+/// a bake that disagrees get written, so there is one.
+pub fn sun_direction_count(sun_samples: u32, moving_sun: bool) -> usize {
+    if sun_samples == 0 {
+        0
+    } else if moving_sun {
+        sun_samples as usize
+    } else {
+        // A sun that does not move has one direction, so the extra samples
+        // would store the same vector over and over.
+        1
+    }
+}
+
 /// One probe's transfer, as it appears on its own line of the bake file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Probe {
@@ -154,6 +218,22 @@ pub struct Probe {
     /// Transfer per sky band, in [`SKY_BANDS`] order, each an SH-L1 vector of
     /// [`NUMBERS_PER_BASIS`] numbers laid out coefficient-major.
     pub sky: Vec<Vec<f32>>,
+
+    /// Transfer per sun direction (M45), one SH-L1 vector each, in the order of
+    /// the header's `sun_hours`.
+    ///
+    /// **Absent when the volume asks for no sun basis**, which is what keeps
+    /// every bake written before M45 byte-identical: `skip_serializing_if`
+    /// means an empty vector writes no key at all, and `default` means a file
+    /// without the key parses.
+    ///
+    /// What is stored here is *bounced* sunlight only — a ray that escaped to
+    /// the sky contributed nothing, because the direct sun is the shader's job
+    /// and counting it twice would light every surface twice. See the design's
+    /// §2; it is also why an unoccluded probe's `sun` is all zeros and why
+    /// design §3.1's exactness survived this milestone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sun: Vec<Vec<f32>>,
 }
 
 impl Probe {
@@ -161,7 +241,9 @@ impl Probe {
     /// that parses as JSON but carries a 9-number vector is `gi_bake_malformed`,
     /// not a panic three stages later in an upload.
     pub fn is_well_formed(&self) -> bool {
-        self.sky.len() == SKY_BANDS && self.sky.iter().all(|v| v.len() == NUMBERS_PER_BASIS)
+        self.sky.len() == SKY_BANDS
+            && self.sky.iter().all(|v| v.len() == NUMBERS_PER_BASIS)
+            && self.sun.iter().all(|v| v.len() == NUMBERS_PER_BASIS)
     }
 }
 
@@ -199,6 +281,21 @@ pub struct BakeHeader {
     /// neighbour. The number that says whether a volume is badly placed.
     #[serde(default)]
     pub relocated: u32,
+
+    /// The sun **directions** the basis was baked for (M45), in the order each
+    /// probe's `sun` array stores them, as the direction the light *travels*.
+    ///
+    /// Directions rather than the hours they were generated from, because that
+    /// is the form both kinds of scene have: an arc walked at N times, and a
+    /// static `DirectionalLight` that has no hour at all. It is also what the
+    /// fold interpolates by — the angle to `ResolvedLights.sun_direction`,
+    /// which is already resolved and is the same quantity the direct term
+    /// uses, so the two cannot disagree about where the sun is.
+    ///
+    /// Absent (and skipped) when there is no sun basis, which is what keeps a
+    /// pre-M45 file byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sun_dirs: Vec<[f32; 3]>,
 }
 
 /// A parsed bake file.
@@ -273,6 +370,20 @@ impl BakedGi {
                     probe.sky.iter().map(Vec::len).collect::<Vec<_>>(),
                 )));
             }
+            // The header says how many sun directions there are and every probe
+            // must agree, or the fold reads a neighbour's direction. Checked
+            // here for the same reason line order is: it parses as valid JSON
+            // and renders light from the wrong time of day.
+            if probe.sun.len() != header.sun_dirs.len() {
+                return Err(BakeError::Malformed(format!(
+                    "probe {:?} on line {} carries {} sun vectors but the header \
+                     lists {} sun directions",
+                    probe.p,
+                    index + 1,
+                    probe.sun.len(),
+                    header.sun_dirs.len(),
+                )));
+            }
             probes.push(probe);
         }
 
@@ -318,13 +429,16 @@ impl BakedGi {
         let mut out = serde_json::to_string(&self.header).expect("header serializes");
         out.push('\n');
         for probe in &self.probes {
-            let quantized = Probe {
-                p: probe.p,
-                sky: probe
-                    .sky
+            let quantize_all = |vectors: &Vec<Vec<f32>>| -> Vec<Vec<f32>> {
+                vectors
                     .iter()
                     .map(|v| v.iter().copied().map(quantize).collect())
-                    .collect(),
+                    .collect()
+            };
+            let quantized = Probe {
+                p: probe.p,
+                sky: quantize_all(&probe.sky),
+                sun: quantize_all(&probe.sun),
             };
             out.push_str(&serde_json::to_string(&quantized).expect("probe serializes"));
             out.push('\n');
@@ -335,10 +449,20 @@ impl BakedGi {
     /// Whether this bake still describes `volume`. Catches a component edited
     /// after its bake without recomputing the whole input digest — cheap, and it
     /// is the mismatch an author hits most.
-    pub fn matches(&self, volume: &LightProbeVolume, scale: Vec3) -> bool {
+    ///
+    /// `sun` is [`sun_directions`] for the scene holding this volume, passed in
+    /// rather than derived because the answer depends on the scene's `daylight`
+    /// block and this type only knows about the component. Comparing the count
+    /// rather than the directions themselves is deliberate: a moved
+    /// `sun_elevation` changes the *directions* and is caught by `inputs_hash`
+    /// at `bake-gi --check`, while `sun_samples` going from 8 to 6 is a
+    /// component edit and belongs in the cheap check with `spacing` and
+    /// `bounces`.
+    pub fn matches(&self, volume: &LightProbeVolume, scale: Vec3, sun: usize) -> bool {
         self.header.grid == grid_counts(scale, volume.spacing)
             && self.header.spacing.to_bits() == volume.spacing.to_bits()
             && self.header.bounces == volume.bounces
+            && self.header.sun_dirs.len() == sun
     }
 }
 
@@ -513,11 +637,13 @@ mod tests {
                 samples: 256,
                 bounces: 1,
                 relocated: 0,
+                sun_dirs: Vec::new(),
             },
             probes: (0..8)
                 .map(|i| Probe {
                     p: [i % 2, (i / 2) % 2, i / 4],
                     sky: vec![vec![0.5; NUMBERS_PER_BASIS]; SKY_BANDS],
+                    sun: Vec::new(),
                 })
                 .collect(),
         };

@@ -7503,6 +7503,95 @@ fn scenes_with_probe_volumes() -> Vec<PathBuf> {
     found
 }
 
+// ── Bounced sunlight (M45) ────────────────────────────────────────────────
+
+fn sun_bounce_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m45_sun_bounce.json")
+}
+
+/// One `gi-probe` on the M45 fixture, parsed.
+fn sun_probe(at: &str, normal: &str) -> serde_json::Value {
+    let output = engine()
+        .arg("gi-probe")
+        .arg(sun_bounce_scene())
+        .arg("--at")
+        .arg(at)
+        .arg("--normal")
+        .arg(normal)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    serde_json::from_str(stdout_of(&output).trim()).unwrap()
+}
+
+/// Bit-reproducible for `m35_gi.png`'s reasons — no terrain, no ground cover,
+/// `samples: 1`. Measured before blessing: five renders, one image.
+#[test]
+fn m45_sun_bounce_diff_renders() {
+    pin_baseline(
+        "examples/scenes/verify/m45_sun_bounce.json",
+        "examples/scenes/verify/baselines/m45_sun_bounce.png",
+        &[],
+    );
+}
+
+/// **The postcard**: a surface facing a sunlit red wall gathers red light off
+/// it, and the same surface facing away does not.
+///
+/// This is the effect M35 could not produce at all — its basis is the sky, and
+/// the sky is not what makes a red wall red. The two probes sit on opposite
+/// flanks of the same sphere, so the only difference between them is which way
+/// they face.
+#[test]
+fn the_sun_carries_a_wall_s_colour_onto_what_faces_it() {
+    let toward = sun_probe("-1.75,0.8,-0.9", "-1,0,0");
+    let away = sun_probe("-0.05,0.8,-0.9", "1,0,0");
+
+    let bounce = |v: &serde_json::Value| vec3_of(&v["sun_bounce"]);
+    let facing = bounce(&toward);
+    let behind = bounce(&away);
+
+    assert!(
+        facing[0] > facing[1] * 4.0,
+        "a surface a metre from a sunlit red wall must gather strongly red \
+         light; got {facing:?}"
+    );
+    assert!(
+        behind[0] < behind[1] * 1.4,
+        "the far side of the same sphere faces no red wall and must stay \
+         near-neutral; got {behind:?}"
+    );
+    assert_eq!(toward["sun_directions"], serde_json::json!(1));
+}
+
+/// Turning the sun basis on may **only ever add light**.
+///
+/// The test that would have caught the bug this milestone actually hit. SH-L1
+/// reconstructs as `c0 + 3·(c1·n)`, and a bounce concentrated on one wall has
+/// a linear band large enough for that gain of 3 to drive the sum *negative*
+/// on surfaces facing away — subtracting from the sky's fill. It shipped as a
+/// render that was measurably darker with GI's newest feature switched on, and
+/// nothing else in the suite would have said so.
+#[test]
+fn bounced_sunlight_never_darkens_a_surface() {
+    // Every corner of the fixture, facing every axis: if a negative lobe
+    // exists anywhere in this volume, one of these finds it.
+    for at in [
+        "-1.75,0.8,-0.9",
+        "2.4,0.6,-0.9",
+        "0.0,0.15,-0.9",
+        "0.0,2.4,-3.0",
+    ] {
+        for normal in ["1,0,0", "-1,0,0", "0,1,0", "0,-1,0", "0,0,1", "0,0,-1"] {
+            let bounce = vec3_of(&sun_probe(at, normal)["sun_bounce"]);
+            assert!(
+                bounce.iter().all(|c| *c >= -1e-6),
+                "the sun basis subtracted light at {at} facing {normal}: {bounce:?}"
+            );
+        }
+    }
+}
+
 /// `--check` writes nothing, so `--out` has nothing to name.
 #[test]
 fn bake_gi_check_refuses_an_output_path() {
