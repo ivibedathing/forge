@@ -87,7 +87,7 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
 Those edits are why the six showcase baselines were re-blessed — the sweep confirmed the other 25
 held bit-exactly, since no engine code was touched.
 
-**M30 adds the `Walker`** to station 01: thirteen joints out of `examples/meshes/rigged_walker.gltf`
+**M30 adds the `Walker`** to station 01: sixteen joints out of `examples/meshes/rigged_walker.gltf`
 playing a one-second `Walk`, carried around a circuit by `tour_wildlife.rhai` while the clip does the
 legs — the milestone's division of labour, since no script ever touches a joint. It is the repo's
 only **skinned × textured** draw (`plate_normal` + `plate_orm`, the truck's maps), which is the
@@ -96,7 +96,7 @@ trees deliberately: a two-metre figure thirty metres back behind a canopy is a p
 the six showcase baselines were re-blessed for it and `showcase_450` was **byte-identical** — station
 03's camera is aimed the other way, which is the cheap confirmation that one added entity changed
 only the frames it is in. **M32 unfaked two of the three the tour doc names**: the stride is
-now driven by the ground the walker covers (`stride: 1.6408`, the number `list-joints` measures off
+now driven by the ground the walker covers (`stride`, the number `list-joints` measures off
 the clip) and its feet are planted on the terrain by a `FootPlant`. **M33 gave it five collision
 proxies**, which is the tour's use of `SkinnedCollider` — and re-blessed all six baselines for a
 reason worth reading in that section: the walker touches nothing, and adding bodies to a rapier
