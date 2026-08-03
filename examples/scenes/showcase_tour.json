@@ -4024,6 +4024,49 @@
           ]
         }
       ]
+    },
+    {
+      "name": "Soldier",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            7.08,
+            -0.486,
+            -14.44
+          ],
+          "rotation": [
+            0.0,
+            -126.9,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../meshes/rigged_soldier.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.26,
+            0.3,
+            0.24
+          ],
+          "roughness": 0.72,
+          "metallic": 0.05,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../meshes/rigged_soldier.gltf#Idle",
+          "looping": true
+        }
+      ]
     }
   ],
   "templates": [
