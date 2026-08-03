@@ -555,6 +555,11 @@ impl ViewerApp {
                                 if let Some(scripts) = &mut sim.scripts {
                                     scripts.sync_names(&sim.scene.world);
                                 }
+                                // A spawned template may carry a
+                                // `ParticleEmitter` — sync here, exactly
+                                // where the headless loop does, or the
+                                // emitter never emits (M44).
+                                sim.particles.sync(&sim.scene.world);
                             }
                             if let Some(physics) = &mut sim.physics {
                                 // `step_index` is 0-based and incremented
@@ -564,6 +569,14 @@ impl ViewerApp {
                                 let events = physics
                                     .step(&mut sim.scene.world, (sim.step_index + 1) as f32 * dt);
                                 sim.contacts.apply(&events);
+                            }
+                            // Particles step between physics and the despawns,
+                            // matching the headless loop step for step: a dust
+                            // emitter a break spawns below is stepped from the
+                            // *next* step in both loops, or a recorded input
+                            // stops reproducing what the window did.
+                            sim.particles.step(&sim.scene.world, dt);
+                            if let Some(physics) = &mut sim.physics {
                                 // Despawns (M37) apply here, beside the
                                 // breaks and before them, matching the
                                 // headless loop step for step.
@@ -617,7 +630,6 @@ impl ViewerApp {
                                     }
                                 }
                             }
-                            sim.particles.step(&sim.scene.world, dt);
                             // A spent burst reaps itself (M44), exactly as in
                             // the headless loop — a played run and a simulated
                             // one must not diverge, and a session left running
@@ -626,6 +638,13 @@ impl ViewerApp {
                             if !spent.is_empty() {
                                 for entity in spent {
                                     let _ = sim.scene.world.despawn(entity);
+                                    // An authored emitter may also carry a
+                                    // body; a despawn that skips physics
+                                    // leaves a ghost collider, so this path
+                                    // removes both, like every other despawn.
+                                    if let Some(physics) = &mut sim.physics {
+                                        physics.remove_entity(entity);
+                                    }
                                 }
                                 sim.particles.sync(&sim.scene.world);
                                 sim.scene.refresh_names();
@@ -674,14 +693,6 @@ impl ViewerApp {
                 // never calls `world.set_samples` rebuilds nothing — and the
                 // cost of the rebuild is what makes a settings screen's
                 // QUALITY row a deliberate action rather than a slider.
-                // One fold per frame, against the sky this frame is drawing —
-                // which is the whole point of baking transfer rather than
-                // radiance: a cycling day moves the bounce light with it, and
-                // nothing was re-baked to make that happen.
-                let gi_field = gi.as_ref().map(|(volume, baked)| {
-                    engine_core::gi::evaluate(baked, volume, lights, environment)
-                });
-
                 let wanted_samples = environment.samples.max(1);
                 // Cascades are the second such field (M38): the count decides
                 // whether the shadow map binds as a 2D texture or an array, so
@@ -690,7 +701,7 @@ impl ViewerApp {
                 let wanted_cascades = environment.shadow_cascades.clamp(1, 4);
                 if renderer.samples() != wanted_samples
                     || renderer.cascades() != wanted_cascades
-                    || renderer.gi_enabled() != gi_field.is_some()
+                    || renderer.gi_enabled() != gi.is_some()
                 {
                     let (width, height) = target.size();
                     let format = renderer.format();
@@ -702,7 +713,7 @@ impl ViewerApp {
                         format,
                         wanted_samples,
                         wanted_cascades,
-                        gi_field.is_some(),
+                        gi.is_some(),
                     );
                     (*depth, *msaa) = frame_attachments(
                         &target.gpu.device,
@@ -734,6 +745,15 @@ impl ViewerApp {
                     *lights,
                     *environment,
                 );
+                // One fold per frame, against the sky this frame is drawing —
+                // the *resolved* daylight above, not the load-time block, so
+                // a cycling day moves the bounce light with it exactly as a
+                // screenshot at this step would. That is the whole point of
+                // baking transfer rather than radiance: nothing was re-baked
+                // to make it happen.
+                let gi_field = gi.as_ref().map(|(volume, baked)| {
+                    engine_core::gi::evaluate(baked, volume, &lights, &environment)
+                });
                 let (width, height) = target.size();
                 let view_projection = scene_renderer::view_projection(
                     camera,

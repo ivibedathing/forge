@@ -764,7 +764,12 @@ pub fn bake(
                 )
                 .collect(),
             samples: params.samples,
-            bounces: volume.bounces,
+            // From `params`, like `samples` beside it: the header records what
+            // the bake *ran with*. Every current caller copies
+            // `volume.bounces` into `params`, but a caller that ever passes a
+            // different count must not get a header that lies about it —
+            // `BakedGi::matches` trusts this field against the volume's.
+            bounces: params.bounces,
             relocated: stats.relocated,
             sun_dirs: params.sun.iter().map(Vec3::to_array).collect(),
         },

@@ -2560,20 +2560,28 @@ fn the_showcase_tour_runs_fifteen_deterministic_seconds() {
     // falls forever in silence — no error, no failed validation, just a
     // scene that renders wrong — so the tour asserts the floor holds.
     //
-    // The floor is **below the deepest ground**, not below zero: M42 dug the
-    // pond's basin to −1.94 m, and a crate fragment thrown into it by the
-    // explosion comes to rest at −1.67, which is resting rather than falling.
-    // The constant only has to separate "on the ground somewhere" from
-    // "falling forever" — a body that loses contact at step 600 is past
-    // −100 m by step 900 — so it tracks the terrain rather than the origin.
-    // (Found in M43: adding one collider to the tour moved a fragment into
-    // the basin for the first time.)
-    let lost_below = -3.0;
+    // The floor is **below the deepest ground the body stands on**, not one
+    // constant for the arena: M42 dug the pond's basin to −1.94 m, and a
+    // crate fragment thrown into it by the explosion comes to rest at −1.67,
+    // which is resting rather than falling. That allowance belongs to the
+    // basin alone — everywhere else the ground sits near zero, and a global
+    // −3.0 floor would wave through a body wedged 2.5 m under it anywhere in
+    // the arena. The constant only has to separate "on the ground somewhere"
+    // from "falling forever" — a body that loses contact at step 600 is past
+    // −100 m by step 900. (Found in M43: adding one collider to the tour
+    // moved a fragment into the basin for the first time.)
+    let basin_center = [15.0, 5.5]; // the tour Terrain's authored basin
+    let basin_reach = 6.5; // radius 2.8 + falloff 3.2, plus a body's extent
     let last = lines
         .iter()
         .filter(|l| l["step"] == 900 && l.get("position").is_some());
     for row in last {
+        let x = row["position"][0].as_f64().unwrap();
         let y = row["position"][1].as_f64().unwrap();
+        let z = row["position"][2].as_f64().unwrap();
+        let in_basin =
+            ((x - basin_center[0]).powi(2) + (z - basin_center[1]).powi(2)).sqrt() < basin_reach;
+        let lost_below = if in_basin { -3.0 } else { -1.0 };
         assert!(
             y > lost_below,
             "{} ended up at y={y}: it fell through the world",

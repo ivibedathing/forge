@@ -1685,12 +1685,16 @@ fn fit_colliders(
                     source = edited;
                 }
             }
-            let encoded = serde_json::to_value(parts).map_err(|e| {
+            let mut encoded = serde_json::to_value(parts).map_err(|e| {
                 EngineError::new(
                     codes::SCENE_PARSE_DESYNC,
                     format!("a fitted part did not encode: {e}"),
                 )
             })?;
+            // Seven digits, not seventeen: these came from f32s, and a scene
+            // file full of `0.12767969071865082` is precision nobody wrote —
+            // the fracture `--write` path does the same.
+            engine_core::formatter::shorten_floats(&mut encoded);
             let mut fields = vec![("parts".to_string(), encoded)];
             fields.extend(kept);
             let edited = engine_core::formatter::apply_add_component(
