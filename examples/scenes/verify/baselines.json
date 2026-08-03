@@ -534,6 +534,105 @@
       "height": 360,
       "milestone": "M36",
       "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m37_spawn.png",
+      "scene": "examples/scenes/verify/m37_spawn.json",
+      "args": [
+        "--steps",
+        "120"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M37",
+      "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m38_shadow_cascades.png",
+      "scene": "examples/scenes/verify/m38_shadow_cascades.json",
+      "args": [],
+      "width": 640,
+      "height": 360,
+      "milestone": "M38",
+      "pinned_by": "hand"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m39_ragdoll.png",
+      "scene": "examples/scenes/verify/m39_ragdoll.json",
+      "args": [
+        "--steps",
+        "75"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M39",
+      "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m40_track.png",
+      "scene": "examples/scenes/verify/m40_track.json",
+      "args": [
+        "--steps",
+        "180"
+      ],
+      "width": 800,
+      "height": 450,
+      "milestone": "M40",
+      "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m41_buoyancy.png",
+      "scene": "examples/scenes/verify/m41_buoyancy.json",
+      "args": [
+        "--steps",
+        "480"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M41",
+      "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m42_basins.png",
+      "scene": "examples/scenes/verify/m42_basins.json",
+      "args": [
+        "--steps",
+        "180"
+      ],
+      "width": 800,
+      "height": 450,
+      "milestone": "M42",
+      "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m43_fracture.png",
+      "scene": "examples/scenes/verify/m43_fracture.json",
+      "args": [
+        "--steps",
+        "52"
+      ],
+      "width": 800,
+      "height": 450,
+      "milestone": "M43",
+      "pinned_by": "cli.rs"
+    },
+    {
+      "baseline": "examples/scenes/verify/baselines/m35_gi.png",
+      "scene": "examples/scenes/verify/m35_gi.json",
+      "args": [],
+      "width": 640,
+      "height": 360,
+      "milestone": "M35",
+      "pinned_by": "cli.rs::m35_gi_diff_renders"
+    },
+    {
+     "baseline": "examples/scenes/verify/baselines/m45_sun_bounce.png",
+     "scene": "examples/scenes/verify/m45_sun_bounce.json",
+     "args": [],
+     "width": 640,
+     "height": 360,
+     "milestone": "M45",
+     "pinned_by": "cli.rs::m45_sun_bounce_diff_renders"
     }
   ],
   "traces": [

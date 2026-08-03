@@ -27,10 +27,22 @@ something an agent can retune by editing four numbers.
     python3 examples/meshes/make_weapons.py
 """
 
-import base64
 import json
 import pathlib
-import struct
+
+from gltf_build import (
+    ARRAY_BUFFER,
+    BOX_FACES,
+    ELEMENT_ARRAY_BUFFER,
+    FACE_UVS,
+    FLOAT,
+    UNSIGNED_SHORT,
+    Buffer,
+    bounds,
+    flat,
+    floats,
+    shorts,
+)
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -72,29 +84,12 @@ WEAPONS = {
     ],
 }
 
-FLOAT, UNSIGNED_SHORT = 5126, 5123
-ARRAY_BUFFER, ELEMENT_ARRAY_BUFFER = 34962, 34963
-
-# Faces of a unit box: outward normal, its four corners in signed units, and
-# the UV span each corner takes. Counter-clockwise seen from outside, matching
-# wgpu's default front face — a wrongly wound box renders nothing at all.
-FACES = [
-    ((0, 1, 0), [(-1, 1, -1), (1, 1, -1), (1, 1, 1), (-1, 1, 1)]),
-    ((0, -1, 0), [(-1, -1, 1), (1, -1, 1), (1, -1, -1), (-1, -1, -1)]),
-    ((0, 0, 1), [(-1, -1, 1), (-1, 1, 1), (1, 1, 1), (1, -1, 1)]),
-    ((0, 0, -1), [(1, -1, -1), (1, 1, -1), (-1, 1, -1), (-1, -1, -1)]),
-    ((1, 0, 0), [(1, -1, 1), (1, 1, 1), (1, 1, -1), (1, -1, -1)]),
-    ((-1, 0, 0), [(-1, -1, -1), (-1, 1, -1), (-1, 1, 1), (-1, -1, 1)]),
-]
-FACE_UVS = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
-
-
 def build(boxes):
     """Flat-shaded geometry for a list of boxes: every face owns its vertices,
     so the edges stay crisp instead of averaging into a rounded lump."""
     positions, normals, uvs, indices = [], [], [], []
     for centre, half in boxes:
-        for normal, corners in FACES:
+        for normal, corners in BOX_FACES:
             base = len(positions)
             for corner, uv in zip(corners, FACE_UVS):
                 positions.append(
@@ -109,39 +104,18 @@ def build(boxes):
 def document_for(name, boxes):
     positions, normals, uvs, indices = build(boxes)
 
-    blob = bytearray()
-    views = []
-    accessors = []
+    buffer = Buffer()
+    view, accessor = buffer.view, buffer.accessor
 
-    def view(data, target=None):
-        while len(blob) % 4:
-            blob.append(0)
-        entry = {"buffer": 0, "byteOffset": len(blob), "byteLength": len(data)}
-        if target is not None:
-            entry["target"] = target
-        blob.extend(data)
-        views.append(entry)
-        return len(views) - 1
-
-    def accessor(entry):
-        accessors.append(entry)
-        return len(accessors) - 1
-
-    def floats(values):
-        return struct.pack(f"<{len(values)}f", *values)
-
-    def flat(rows):
-        return [c for row in rows for c in row]
-
-    columns = list(zip(*positions))
+    position_min, position_max = bounds(positions)
     position_a = accessor(
         {
             "bufferView": view(floats(flat(positions)), ARRAY_BUFFER),
             "componentType": FLOAT,
             "count": len(positions),
             "type": "VEC3",
-            "min": [min(c) for c in columns],
-            "max": [max(c) for c in columns],
+            "min": position_min,
+            "max": position_max,
         }
     )
     normal_a = accessor(
@@ -162,9 +136,7 @@ def document_for(name, boxes):
     )
     index_a = accessor(
         {
-            "bufferView": view(
-                struct.pack(f"<{len(indices)}H", *indices), ELEMENT_ARRAY_BUFFER
-            ),
+            "bufferView": view(shorts(indices), ELEMENT_ARRAY_BUFFER),
             "componentType": UNSIGNED_SHORT,
             "count": len(indices),
             "type": "SCALAR",
@@ -199,15 +171,9 @@ def document_for(name, boxes):
                     ],
                 }
             ],
-            "accessors": accessors,
-            "bufferViews": views,
-            "buffers": [
-                {
-                    "byteLength": len(blob),
-                    "uri": "data:application/octet-stream;base64,"
-                    + base64.b64encode(bytes(blob)).decode("ascii"),
-                }
-            ],
+            "accessors": buffer.accessors,
+            "bufferViews": buffer.views,
+            "buffers": buffer.buffers(),
         },
         positions,
         indices,

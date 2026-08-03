@@ -84,6 +84,7 @@ pub fn render(
         height,
         hud,
         lines,
+        None,
     )
     .map(|(image, _)| image)
 }
@@ -112,6 +113,10 @@ pub fn render_with_adapter(
     height: u32,
     hud: &HudTree,
     lines: &[String],
+    // The scene's irradiance field, already folded against `lights` and
+    // `environment` (M35). `None` renders exactly what this rendered before GI
+    // existed — which is what every committed baseline was blessed through.
+    gi: Option<&engine_core::gi::IrradianceField>,
 ) -> Result<(Image, String)> {
     let (width, height) = (width.max(1), height.max(1));
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -142,7 +147,13 @@ pub fn render_with_adapter(
     let msaa = (samples > 1)
         .then(|| scene_renderer::msaa_color_texture(&gpu.device, FORMAT, width, height, samples));
 
-    let mut renderer = SceneRenderer::with_samples(&gpu.device, FORMAT, samples);
+    let mut renderer = SceneRenderer::configured(
+        &gpu.device,
+        FORMAT,
+        samples,
+        environment.shadow_cascades,
+        gi.is_some(),
+    );
     let view_projection =
         scene_renderer::view_projection(camera, camera_model, width as f32 / height as f32);
 
@@ -172,6 +183,7 @@ pub fn render_with_adapter(
             time,
             clear: scene_renderer::DEFAULT_CLEAR,
             hud: canvas.as_ref(),
+            gi,
         },
     );
 

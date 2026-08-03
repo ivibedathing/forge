@@ -54,8 +54,9 @@ pub fn run(
         scene.daylight.clone(),
         scene.environment,
         &assets,
+        &scene.templates,
     )?;
-    let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets)?;
+    let mut physics = PhysicsWorld::build(&scene.world, &scene.physics, &assets, &scene.templates)?;
     let mut particles = ParticleSystem::build(&scene.world);
     // Snapshots where every stride-driven entity starts, so step 1 measures
     // real displacement rather than a jump from the origin (M32).
@@ -145,7 +146,40 @@ pub fn run(
                     impulse: blast.impulse,
                 });
             }
+            for kick in scripts.take_kicks() {
+                physics.queue_ragdoll_impulse(&kick.entity, &kick.part, Vec3::from(kick.impulse));
+            }
         }
+
+        // Entities `world.spawn_entity` created this step enter physics *here* —
+        // after the scripts, before the physics step — so a bullet moves on
+        // the step it was fired rather than hanging in the air for a frame
+        // (M37). Empty for every scene with no `templates` block, which is
+        // what keeps such a scene on exactly the pre-M37 path.
+        let spawned = scripts
+            .as_ref()
+            .map(ScriptHost::take_spawns)
+            .unwrap_or_default();
+        if !spawned.is_empty() {
+            for (name, entity) in &spawned {
+                insert_spawned(&mut physics, &scene.world, *entity, name, &assets)?;
+            }
+            scene.refresh_names();
+            if let Some(scripts) = &mut scripts {
+                scripts.sync_names(&scene.world);
+            }
+            // A spawned template may carry a `ParticleEmitter`, and the
+            // particle system tracks a list it built at load — so it has to
+            // be told here, before this step's `particles.step`, or the
+            // emitter never emits at all (M44).
+            particles.sync(&scene.world);
+            if let Some(trace) = trace.as_deref_mut() {
+                for (name, _) in &spawned {
+                    write_line(trace, &json!({ "step": step, "spawned": name }))?;
+                }
+            }
+        }
+
         // The scene time this step *ends* at, which is the time the render
         // would draw after `step` steps — so a skinned collider proxy (M33)
         // sits where the picture puts the joint it rides.
@@ -209,6 +243,35 @@ pub fn run(
         }
         contacts += events.len() as u64;
 
+        // Despawns (M37) apply here, beside the breaks, for the breaks'
+        // reason: the entity traced its final position above, and nothing
+        // later in this step can find a name that vanished mid-step.
+        let despawned = scripts
+            .as_ref()
+            .map(ScriptHost::take_despawns)
+            .unwrap_or_default();
+        if !despawned.is_empty() {
+            for name in &despawned {
+                // Skipped rather than an error when the name is already gone:
+                // a script may despawn something that broke earlier in the
+                // same step, which is `apply_breaks`' rule for a forced name.
+                let Some(entity) = scene.entity(name) else {
+                    continue;
+                };
+                let _ = scene.world.despawn(entity);
+                physics.remove_entity(entity);
+            }
+            scene.refresh_names();
+            if let Some(scripts) = &mut scripts {
+                scripts.sync_names(&scene.world);
+            }
+            if let Some(trace) = trace.as_deref_mut() {
+                for name in &despawned {
+                    write_line(trace, &json!({ "step": step, "despawned": name }))?;
+                }
+            }
+        }
+
         // Breaks apply after physics, before the next step's scripts: the
         // broken entity traced its final position above, and its fragments
         // enter the rows from the next step.
@@ -222,6 +285,12 @@ pub fn run(
             if let Some(scripts) = &mut scripts {
                 scripts.sync_names(&scene.world);
             }
+            // A break's dust is a new emitter (M44), and the particle system
+            // tracks a list it built at load — so it has to be told. (An
+            // emitter on a spawned template is the spawn block's job, above.)
+            if broke.iter().any(|event| event.dust.is_some()) {
+                particles.sync(&scene.world);
+            }
             if let Some(trace) = trace.as_deref_mut() {
                 for event in &broke {
                     let fragments: Vec<&str> = event
@@ -233,6 +302,41 @@ pub fn run(
                         trace,
                         &json!({ "step": step, "broke": event.entity, "fragments": fragments }),
                     )?;
+                    // The dust is an entity, so it traces as one — the same
+                    // `spawned` line M37's shots write.
+                    if let Some((dust, _)) = &event.dust {
+                        write_line(trace, &json!({ "step": step, "spawned": dust }))?;
+                    }
+                }
+            }
+        }
+
+        // A spent burst reaps itself (M44): once a `despawn_when_done`
+        // emitter's duration is up and its last particle has died, the entity
+        // goes, so a scene that breaks twenty crates does not end the run
+        // carrying twenty dead emitters into its bake.
+        let spent = particles.finished(&scene.world);
+        if !spent.is_empty() {
+            let mut names = Vec::with_capacity(spent.len());
+            for entity in spent {
+                if let Ok(name) = scene.world.get::<&engine_core::components::Name>(entity).map(|n| n.0.clone()) {
+                    names.push(name);
+                }
+                let _ = scene.world.despawn(entity);
+                // An authored emitter may also carry a body — nothing forbids
+                // the combination — and a despawn that skips physics leaves a
+                // ghost collider other bodies still bounce off. The script-
+                // despawn path above does both; so does this one.
+                physics.remove_entity(entity);
+            }
+            particles.sync(&scene.world);
+            scene.refresh_names();
+            if let Some(scripts) = &mut scripts {
+                scripts.sync_names(&scene.world);
+            }
+            if let Some(trace) = trace.as_deref_mut() {
+                for name in &names {
+                    write_line(trace, &json!({ "step": step, "despawned": name }))?;
                 }
             }
         }
@@ -258,6 +362,11 @@ pub fn run(
         scene.environment = scripts.environment();
     }
 
+    // How many entities the run spawned (M37). Zero for every scene with no
+    // `templates` block, and the report omits it at zero, so a pre-M37
+    // report is byte-identical.
+    let spawned = scripts.as_ref().map_or(0, ScriptHost::total_spawned);
+
     Ok(StepRun {
         physics,
         particles,
@@ -265,7 +374,60 @@ pub fn run(
         hud,
         interaction,
         quit_at_step,
+        spawned,
     })
+}
+
+/// Give one just-spawned entity its rapier presence (M37).
+///
+/// The ECS write already happened inside `world.spawn_entity`; this is the physics
+/// half, reading the components the template left on the entity — including
+/// anything the script wrote between the spawn and the end of the step, which
+/// is what makes `world.set_linear_velocity` on the line after a spawn arrive
+/// as the body's *initial* velocity rather than a correction one step later.
+pub fn insert_spawned(
+    physics: &mut PhysicsWorld,
+    world: &engine_core::hecs::World,
+    entity: engine_core::hecs::Entity,
+    name: &str,
+    assets: &engine_assets::AssetServer,
+) -> Result<()> {
+    let transform = world
+        .get::<&Transform>(entity)
+        .map(|t| *t)
+        .unwrap_or_default();
+    let body = world.get::<&RigidBody>(entity).map(|b| *b).ok();
+    let collider = world
+        .get::<&engine_core::components::Collider>(entity)
+        .map(|c| (*c).clone())
+        .ok();
+    let break_threshold = world
+        .get::<&engine_core::components::Breakable>(entity)
+        .ok()
+        .and_then(|b| b.impulse_threshold);
+    let mesh = world
+        .get::<&engine_core::components::Mesh>(entity)
+        .map(|m| m.asset.clone())
+        .ok();
+    // A spawned shard (M43) collides with its own hull, exactly as an
+    // authored one does — a template may carry a `Shard` like any component.
+    let shard = world
+        .get::<&engine_core::components::Shard>(entity)
+        .map(|s| (*s).clone())
+        .ok();
+    physics.insert_entity(
+        entity,
+        &engine_physics::Presence {
+            name,
+            transform: &transform,
+            body: body.as_ref(),
+            collider: collider.as_ref(),
+            break_threshold,
+            entity_mesh: mesh.as_deref(),
+            shard: shard.as_ref(),
+            meshes: assets,
+        },
+    )
 }
 
 /// What stepping a scene produced: the physics world (for queries), the
@@ -287,6 +449,11 @@ pub struct StepRun {
     /// nothing — the step index itself, 0-based like every other step number
     /// the CLI reports.
     pub quit_at_step: Option<u32>,
+    /// How many entities `world.spawn_entity` created over the whole run (M37).
+    /// **Not** how many are alive — a run that fired and expired forty bullets
+    /// reports forty, which is the number that answers "did my gun fire at
+    /// all" when the frame shows nothing.
+    pub spawned: u64,
 }
 
 fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
@@ -680,6 +847,39 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                 }
             }
         }
+        // A ragdoll (M39), and this one *must* bake for M32's reason exactly,
+        // one system further on: the skeleton of a corpse lives in
+        // `Ragdoll.pose`, so a baked scene that dropped it would reload the
+        // character standing up in its bind pose and the bake's promise —
+        // reload, re-render, bit-exactly — would be false for every dead body
+        // in every scene. `active` goes with it: without the flag the reloaded
+        // pose would be a corpse the clip immediately animates out of.
+        if def
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentData::Ragdoll(_)))
+        {
+            if let Ok(current) = scene.world.get::<&engine_core::components::Ragdoll>(entity) {
+                let rest = def
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        ComponentData::Ragdoll(r) => Some(r.clone()),
+                        _ => None,
+                    })
+                    .expect("guarded above");
+                if current.active != rest.active {
+                    edits.push(field_edit("active", "Ragdoll", Value::Bool(current.active)));
+                }
+                if current.pose != rest.pose {
+                    edits.push(field_edit(
+                        "pose",
+                        "Ragdoll",
+                        serde_json::to_value(&current.pose).unwrap_or(Value::Null),
+                    ));
+                }
+            }
+        }
         bake_light!(PointLight, engine_core::components::PointLight);
         bake_light!(DirectionalLight, engine_core::components::DirectionalLight);
         bake_light!(AmbientLight, engine_core::components::AmbientLight);
@@ -852,6 +1052,14 @@ pub fn simulate_command(
     // rewritten number could not.
     if let Some(step) = outcome.quit_at_step {
         result["quit_at_step"] = json!(step);
+    }
+    // Present only when the run actually spawned something (M37), for the same
+    // reason: a scene with no `templates` block reports exactly what it did
+    // before spawning existed. This is a *total*, not a live count — a gun
+    // that fired and expired forty bullets reports forty, which is the number
+    // that answers "did it fire at all" when the last frame shows nothing.
+    if outcome.spawned > 0 {
+        result["spawned"] = json!(outcome.spawned);
     }
     if let Some(path) = &bake_path {
         result["baked"] = json!(path.display().to_string());

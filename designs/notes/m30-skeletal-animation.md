@@ -68,8 +68,13 @@ other stand, and the bent one's shadow bends with it. **Measured rather than ass
 might go the other way): this baseline is *not* per-build-profile, unlike trees and clouds — three
 joints of slerp is not enough libm to reach a pixel, and a hundred-joint rig may not inherit that.
 Test assets are generated text glTF like `pyramid.gltf`: `make_rigged_arm.py` (3 joints, the fixture)
-and `make_rigged_walker.py` (13 joints in a branching tree, `Walk` + `Idle`, UVs — the tour's
-character, and the only **skinned × textured** draw in the repo).
+and `make_rigged_walker.py` (16 joints in a branching tree — neck and elbows included, since a
+stick-straight arm is a mannequin's — `Walk` + `Idle`, UVs — the tour's
+character, and the first **skinned × textured** draw in the repo — the tour's campfire `Soldier`
+is the second). The walker's gait is built from
+named phase events (heel strike, toe-off, mid-swing) rather than one offset sine per joint; the
+first version bent the knee on an offset sine and put peak flexion in mid-stance, which buckled
+the planted leg — the single change that most made the character read as broken.
 
 Not here, deliberately: blending, crossfades and state machines (M9 §8's rejection still standing —
 blending reintroduces exactly the nondeterminism that made two clips on one property an error), IK

@@ -73,7 +73,18 @@ build fails.
 | `duplicate_collider_part` | 1 | two parts of one SkinnedCollider report under the same name |
 | `too_many_collider_parts` | 1 | a SkinnedCollider lists more parts than the physics world builds |
 | `collider_part_shape_unsupported` | 1 | a SkinnedCollider part names a mesh shape, which a proxy cannot be |
+| `ragdoll_without_proxies` | 1 | a Ragdoll is on an entity with no SkinnedCollider; the bodies are the proxies |
+| `ragdoll_disconnected_parts` | 1 | a Ragdoll's parts form more than one tree, which is a ragdoll in pieces |
+| `ragdoll_unknown_joint` | 1 | a Ragdoll joint override names a joint no part of the SkinnedCollider rides |
+| `ragdoll_duplicate_joint` | 1 | two Ragdoll joint overrides name the same joint |
+| `ragdoll_bad_hinge` | 1 | a Ragdoll hinge axis is zero-length, or its range runs backwards |
+| `collider_part_fit_unsupported` | 1 | a sphere part asks to fit the bone, and a sphere has no length to solve |
 | `breakable_without_collider` | 1 | a Breakable sets impulse_threshold but the entity has no Collider to be hit on |
+| `fragment_geometry` | 1 | a fragment is a mesh reference or a shard's points, never both and never neither |
+| `shard_degenerate` | 1 | a shard's points do not bound a volume: fewer than four, or all coplanar |
+| `shard_with_mesh` | 1 | a Shard owns its geometry, so the entity may not also carry a Mesh |
+| `fracture_failed` | 1 | engine fracture could not break the volume into the pieces asked for |
+| `emitter_never_finishes` | 1 | a ParticleEmitter sets despawn_when_done but has no duration to finish |
 | `invalid_environment_value` | 1 | an environment setting is outside its meaningful range |
 | `invalid_daylight_value` | 1 | a daylight setting is outside its meaningful range |
 | `daylight_palette_invalid` | 1 | a daylight palette needs at least two keyframes with strictly increasing hours |
@@ -82,14 +93,29 @@ build fails.
 | `water_waves_self_intersect` | 1 | the sum of Water wave steepness exceeds 1, which folds the surface through itself |
 | `terrain_with_mesh` | 1 | a Terrain entity owns its own surface; it may not also have a Mesh or a Material |
 | `terrain_layer_range_inverted` | 1 | a Terrain layer's height or slope range runs backwards, so it covers nothing |
+| `terrain_basin_no_effect` | 1 | a Terrain basin has no depth or no footprint, so it cuts nothing (warning) |
+| `terrain_basin_outside_patch` | 1 | a Terrain basin's footprint misses the patch entirely, usually a center written in local rather than world XZ (warning) |
 | `road_with_mesh` | 1 | a Road entity owns its own surface; it may not also have a Mesh or a Material |
 | `road_too_few_points` | 1 | a Road needs at least two centerline points, or three to close |
 | `road_corner_does_not_fit` | 1 | two corner radii need more of the edge between them than it has |
 | `road_corner_needs_radius` | 1 | a sharp corner turns too far to mitre; give it a radius |
 | `too_many_road_kerbs` | 1 | a Road kerbs more corners than the shader's span array holds |
+| `road_terrain_not_found` | 1 | a Road's "follow_terrain" names no entity in the scene |
+| `road_terrain_invalid` | 1 | a Road's "follow_terrain" must name an entity that has a Terrain component |
+| `junction_with_mesh` | 1 | a Junction entity owns its own surface; it may not also have a Mesh or a Material |
+| `junction_too_few_arms` | 1 | a Junction needs at least two arms to bound a patch |
+| `junction_road_not_found` | 1 | a Junction arm's "road" names no entity in the scene |
+| `junction_road_invalid` | 1 | a Junction arm's "road" must name an entity that has a Road component |
+| `junction_arm_closed` | 1 | a Junction arm names a closed road, which has no free end to meet |
+| `junction_duplicate_arm` | 1 | two Junction arms name the same end of the same road |
 | `script_parse_error` | 1 | a script file does not compile |
 | `script_missing_step_fn` | 1 | a script defines no `fn step(world, step)` |
 | `script_runtime_error` | 1 | a script failed while running |
+| `template_not_object` | 1 | an entry in "templates" is not a JSON object |
+| `missing_template_name` | 1 | a template has no "name" field |
+| `empty_template_name` | 1 | a template's "name" is the empty string |
+| `duplicate_template_name` | 1 | a template's name is shared with another template or with an entity |
+| `template_forbidden_component` | 1 | a component whose scene-level budget a spawn could violate may not appear in a template |
 | `wheel_vehicle_not_found` | 1 | a Wheel's "vehicle" names no entity in the scene |
 | `wheel_vehicle_invalid` | 1 | a Wheel's "vehicle" must be a different entity with a dynamic RigidBody |
 | `wheel_with_physics` | 1 | a Wheel entity may not have its own RigidBody or Collider; the chassis owns all collision |
@@ -103,6 +129,17 @@ build fails.
 | `meadow_terrain_invalid` | 1 | a Meadow's "terrain" must name an entity that has a Terrain component |
 | `meadow_stages_invalid` | 1 | a Meadow needs at least two life-cycle stages with strictly increasing "at" |
 | `too_many_growth_stages` | 1 | a Meadow has more life-cycle stages than the shader's table holds |
+| `buoyancy_water_missing` | 1 | a Buoyancy must name the Water entity it floats on |
+| `buoyancy_water_not_found` | 1 | a Buoyancy's "water" names no entity in the scene |
+| `buoyancy_water_invalid` | 1 | a Buoyancy's "water" must name an entity that has a Water component |
+| `buoyancy_without_body` | 1 | a Buoyancy needs a dynamic RigidBody and a Collider on the same entity |
+| `light_probe_volume_with_mesh` | 1 | a LightProbeVolume entity is a region of space, not geometry; it may not also have a Mesh or a Material |
+| `light_probe_volume_without_transform` | 1 | a LightProbeVolume takes its bounds from its Transform, so it needs one |
+| `gi_bake_missing` | 1 | a LightProbeVolume's "bake" names a file that is not there; run `engine bake-gi` |
+| `gi_bake_stale` | 1 | a GI bake was taken from a different scene than the one loading it; re-run `engine bake-gi` |
+| `gi_bake_malformed` | 1 | a GI bake file parses but its version, grid or basis disagrees with the component |
+| `too_many_gi_probes` | 1 | a LightProbeVolume's bounds and spacing would place more probes than the engine will bake |
+| `multiple_light_probe_volumes` | 1 | a scene may have at most one LightProbeVolume; the renderer holds one field |
 | `hud_parent_not_found` | 1 | a HUD element's "parent" names no entity in the scene |
 | `hud_parent_not_panel` | 1 | a HUD element's "parent" must name an entity that has a HudPanel |
 | `hud_parent_cycle` | 1 | a chain of HUD "parent" references loops back on itself |
@@ -118,6 +155,9 @@ build fails.
 | `unknown_collision_layer` | 1 | warning: collides_with names a layer no collider is a member of |
 | `daylight_overrides_sky` | 1 | warning: daylight computes the sky and ambient, so the authored ones are never read |
 | `collider_mesh_size_mismatch` | 1 | warning: a Collider is a very different size from the builtin mesh it sits on |
+| `gi_sun_samples_unused` | 1 | warning: LightProbeVolume.sun_samples asks for an arc, but this scene's sun does not move |
+| `road_pins_overlap` | 1 | warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly |
+| `road_follow_rotated` | 1 | warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed |
 | `scene_unreadable` | 1 | the scene file could not be read |
 | `scene_parse_desync` | 2 | internal bug: the scene passed validation but failed to parse |
 | `entity_not_found` | 1 | no entity has the requested name |

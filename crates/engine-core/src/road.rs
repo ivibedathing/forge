@@ -32,10 +32,19 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use glam::{Vec2, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 
 use crate::components::Road;
 use crate::mesh::MeshData;
+
+/// The terrain a road follows, when it named one (M40).
+///
+/// Re-exported rather than redeclared: a meadow standing on the ground and a
+/// road riding over it need the same pair — the height field and the transform
+/// that turns its unit grid into world metres — and two structurally identical
+/// types would be two places to fix when `world_height_at` changes what it
+/// needs.
+pub use crate::meadow::Ground;
 
 /// Most kerbed corners one road may carry. The shader's span array is
 /// fixed-size, so this is a real limit rather than a tuning knob — validation
@@ -86,6 +95,19 @@ pub struct CenterPoint {
     /// Metres travelled along the centerline — the same `v` the markings are
     /// painted in.
     pub v: f32,
+    /// Width of the asphalt here, in metres (M40). The road's own `width`
+    /// unless a `RoadPoint` asked for another; the shoulder each side scales in
+    /// the same proportion.
+    pub width: f32,
+    /// Roll of the cross-section here, in **radians**, positive raising the
+    /// driver's right edge (M40). The file authors degrees; the conversion
+    /// happens once, on the way in.
+    ///
+    /// Published for the same reason the heading is: anything placed *on* a
+    /// banked corner — a car on the grid, a marshal's post, a junction reading
+    /// this road's mouth — needs the roll, and a generator re-deriving it from
+    /// the polygon is how two implementations of one road start disagreeing.
+    pub bank: f32,
 }
 
 /// A road's generated geometry, plus everything about it the shader cannot
@@ -129,12 +151,20 @@ thread_local! {
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct RoadKey(Vec<u32>);
 
-fn cache_key(road: &Road) -> RoadKey {
-    let mut key = Vec::with_capacity(road.points.len() * 4 + 12);
+fn cache_key(road: &Road, model: Mat4, ground: Option<Ground<'_>>) -> RoadKey {
+    let mut key = Vec::with_capacity(road.points.len() * 6 + 16);
     key.push(road.closed as u32);
     for point in &road.points {
         key.extend(point.position.to_array().iter().map(|f| f.to_bits()));
         key.push(point.radius.to_bits());
+        // `None` has to key differently from any authored value, so the option
+        // rides as a discriminant word beside the bits. `f32::to_bits` covers
+        // the whole u32 range, so a sentinel would collide with a real width.
+        key.push(point.width.is_some() as u32);
+        key.push(point.width.unwrap_or(0.0).to_bits());
+        key.push(point.bank.is_some() as u32);
+        key.push(point.bank.unwrap_or(0.0).to_bits());
+        key.push(point.pin_height as u32);
     }
     for value in [
         road.width,
@@ -142,6 +172,10 @@ fn cache_key(road: &Road) -> RoadKey {
         road.skirt,
         road.segment_length,
         road.segment_angle,
+        road.auto_bank,
+        road.auto_bank_radius,
+        road.follow_smoothing,
+        road.follow_blend,
         road.markings.kerb_max_radius,
         road.markings.kerb_stripe,
         road.markings.center_width,
@@ -149,6 +183,44 @@ fn cache_key(road: &Road) -> RoadKey {
         road.markings.center_gap,
     ] {
         key.push(value.to_bits());
+    }
+    // The model matrix and the terrain enter the key **only** when the road
+    // actually follows one (M40). A road with absolute heights is placed by a
+    // transform the renderer applies, so its ribbon is the same vertices
+    // wherever the entity sits — and keeping the key free of the matrix is what
+    // lets an animated road transform reuse one upload, exactly as it did
+    // before M40.
+    if let (Some(name), Some(ground)) = (&road.follow_terrain, ground) {
+        key.extend(name.bytes().map(u32::from));
+        key.extend(model.to_cols_array().map(f32::to_bits));
+        key.extend([
+            ground.terrain.seed,
+            ground.terrain.segments,
+            ground.terrain.octaves,
+            ground.terrain.height.to_bits(),
+            ground.terrain.feature_scale.to_bits(),
+            ground.terrain.warp.to_bits(),
+            ground.terrain.persistence.to_bits(),
+            ground.transform.position.x.to_bits(),
+            ground.transform.position.y.to_bits(),
+            ground.transform.position.z.to_bits(),
+            ground.transform.scale.x.to_bits(),
+            ground.transform.scale.y.to_bits(),
+            ground.transform.scale.z.to_bits(),
+        ]);
+        // Basins are part of the ground the road samples (M42): `height_at`
+        // subtracts them, so two terrain states differing only in a basin
+        // are different roads. Terrain's own surface cache learned the same
+        // lesson — see `basins_are_in_the_surface_cache_key`.
+        for basin in &ground.terrain.basins {
+            key.extend([
+                basin.center[0].to_bits(),
+                basin.center[1].to_bits(),
+                basin.radius.to_bits(),
+                basin.depth.to_bits(),
+                basin.falloff.to_bits(),
+            ]);
+        }
     }
     RoadKey(key)
 }
@@ -160,13 +232,20 @@ fn cache_key(road: &Road) -> RoadKey {
 const SURFACE_CACHE_LIMIT: usize = 64;
 
 /// The road's surface, generated once per distinct geometry.
-pub fn surface(road: &Road) -> Arc<RoadSurface> {
-    let key = cache_key(road);
+///
+/// `model` is the entity's flattened transform and `ground` the terrain it
+/// named, both of which matter only when [`Road::follow_terrain`] is set — a
+/// road with absolute heights ignores them and keys the cache without them, so
+/// nothing about a pre-M40 road's caching changed. Pass `None` when the scene
+/// has no such terrain; the road falls back to its authored heights, which is
+/// the same thing validation reports as `road_terrain_invalid`.
+pub fn surface(road: &Road, model: Mat4, ground: Option<Ground<'_>>) -> Arc<RoadSurface> {
+    let key = cache_key(road, model, ground);
     SURFACE_CACHE.with(|cache| {
         if let Some(held) = cache.borrow().get(&key) {
             return Arc::clone(held);
         }
-        let built = Arc::new(build(road));
+        let built = Arc::new(build(road, model, ground));
         let mut cache = cache.borrow_mut();
         if cache.len() >= SURFACE_CACHE_LIMIT {
             // Anything nothing else still holds is a surface no live road is
@@ -392,23 +471,16 @@ fn walk(road: &Road, fillets: &[Fillet]) -> Vec<Sample> {
     samples
 }
 
-/// Interpolate the authored heights along the walked centerline.
+/// Where each authored point lands on the walked centerline, as plan distance,
+/// sorted along the road.
 ///
-/// Monotone cubic (Fritsch–Carlson), not linear and not Catmull-Rom. Linear
-/// ramps put a discontinuity in the *grade* at every corner, which the car
-/// feels as a bump exactly where it is loaded up; plain Catmull-Rom smooths
-/// that but overshoots, so a road authored to reach 5 m crests at 5.4 and the
-/// file stops predicting the scene. Monotone cubic is smooth and never leaves
-/// the authored range.
-fn heights(road: &Road, samples: &[Sample], total: f32) -> Vec<f32> {
+/// A corner's mark is the middle of its arc, so the quantity being profiled is
+/// constant along a straight and turns over through the corner. Height, width
+/// and bank all hang off these same marks (M40) — three profiles over one set
+/// of knots, rather than three answers to "where is point 4".
+fn corner_marks(road: &Road, samples: &[Sample]) -> Vec<(f32, usize)> {
     let count = road.points.len();
-    if samples.is_empty() {
-        return Vec::new();
-    }
-
-    // Each corner's height is pinned at the middle of its arc, so the grade is
-    // constant along a straight and turns over through the corner.
-    let mut marks: Vec<(f32, f32)> = Vec::with_capacity(count);
+    let mut marks: Vec<(f32, usize)> = Vec::with_capacity(count);
     for i in 0..count {
         let on_corner: Vec<usize> = samples
             .iter()
@@ -417,102 +489,456 @@ fn heights(road: &Road, samples: &[Sample], total: f32) -> Vec<f32> {
             .map(|(k, _)| k)
             .collect();
         if let Some(&middle) = on_corner.get(on_corner.len() / 2) {
-            marks.push((samples[middle].plan_distance, road.points[i].position.y));
+            marks.push((samples[middle].plan_distance, i));
         }
     }
-    if marks.is_empty() {
-        let flat = road.points.first().map_or(0.0, |p| p.position.y);
-        return vec![flat; samples.len()];
-    }
     marks.sort_by(|a, b| a.0.total_cmp(&b.0));
+    marks
+}
 
-    // A closed road wraps: the segment after the last mark runs to the first
-    // one again, one lap further along. An open road just ends.
-    let mut knots = marks.clone();
-    if road.closed {
-        knots.push((marks[0].0 + total, marks[0].1));
-    }
-    if knots.len() < 2 {
-        return vec![knots[0].1; samples.len()];
-    }
+/// A quantity interpolated along the centerline through the authored points.
+///
+/// Monotone cubic (Fritsch–Carlson), not linear and not Catmull-Rom. Linear
+/// ramps put a discontinuity in the *grade* at every corner, which the car
+/// feels as a bump exactly where it is loaded up; plain Catmull-Rom smooths
+/// that but overshoots, so a road authored to reach 5 m crests at 5.4 and the
+/// file stops predicting the scene. Monotone cubic is smooth and never leaves
+/// the authored range.
+///
+/// M23 had this inline in `heights`. M40 needs the same curve for the width and
+/// the bank, and for the same reason each time — a linear ramp in width creases
+/// the road at every corner, and a linear ramp in bank steps the roll rate
+/// where the car is loaded up. **The extraction moved no expression**: Rust does
+/// not contract float arithmetic into FMA without an explicit `mul_add`, so
+/// unlike this repo's WGSL splices, code motion here is exact by construction.
+struct Profile {
+    /// `(plan distance, value)`, sorted, with a closed road's wrap appended.
+    knots: Vec<(f32, f32)>,
+    tangents: Vec<f32>,
+    closed: bool,
+    total: f32,
+}
 
-    let secants: Vec<f32> = knots
-        .windows(2)
-        .map(|w| {
-            let run = w[1].0 - w[0].0;
-            if run.abs() < 1e-6 {
-                0.0
-            } else {
-                (w[1].1 - w[0].1) / run
-            }
-        })
-        .collect();
-
-    // Fritsch–Carlson tangents: the average of the neighbouring secants, zeroed
-    // at a turning point and limited to three times the smaller neighbour,
-    // which is what stops the curve leaving the data's range.
-    let last = knots.len() - 1;
-    let tangents: Vec<f32> = (0..knots.len())
-        .map(|k| {
-            let before = if k == 0 {
-                if road.closed {
-                    secants[secants.len() - 1]
-                } else {
-                    secants[0]
-                }
-            } else {
-                secants[k - 1]
+impl Profile {
+    /// `marks` must be sorted by distance and non-empty.
+    fn new(marks: Vec<(f32, f32)>, closed: bool, total: f32) -> Self {
+        // A closed road wraps: the segment after the last mark runs to the first
+        // one again, one lap further along. An open road just ends.
+        let mut knots = marks.clone();
+        if closed {
+            knots.push((marks[0].0 + total, marks[0].1));
+        }
+        if knots.len() < 2 {
+            return Self {
+                knots,
+                tangents: Vec::new(),
+                closed,
+                total,
             };
-            let after = if k == last {
-                if road.closed {
-                    secants[0]
-                } else {
-                    secants[last - 1]
-                }
-            } else {
-                secants[k]
-            };
-            if before * after <= 0.0 {
-                0.0
-            } else {
-                let average = (before + after) / 2.0;
-                let limit = 3.0 * before.abs().min(after.abs());
-                average.clamp(-limit, limit)
-            }
-        })
-        .collect();
+        }
 
-    let first_mark = knots[0].0;
-    let evaluate = |distance: f32| -> f32 {
+        let secants: Vec<f32> = knots
+            .windows(2)
+            .map(|w| {
+                let run = w[1].0 - w[0].0;
+                if run.abs() < 1e-6 {
+                    0.0
+                } else {
+                    (w[1].1 - w[0].1) / run
+                }
+            })
+            .collect();
+
+        // Fritsch–Carlson tangents: the average of the neighbouring secants,
+        // zeroed at a turning point and limited to three times the smaller
+        // neighbour, which is what stops the curve leaving the data's range.
+        let last = knots.len() - 1;
+        let tangents: Vec<f32> = (0..knots.len())
+            .map(|k| {
+                let before = if k == 0 {
+                    if closed {
+                        secants[secants.len() - 1]
+                    } else {
+                        secants[0]
+                    }
+                } else {
+                    secants[k - 1]
+                };
+                let after = if k == last {
+                    if closed {
+                        secants[0]
+                    } else {
+                        secants[last - 1]
+                    }
+                } else {
+                    secants[k]
+                };
+                if before * after <= 0.0 {
+                    0.0
+                } else {
+                    let average = (before + after) / 2.0;
+                    let limit = 3.0 * before.abs().min(after.abs());
+                    average.clamp(-limit, limit)
+                }
+            })
+            .collect();
+
+        Self {
+            knots,
+            tangents,
+            closed,
+            total,
+        }
+    }
+
+    fn evaluate(&self, distance: f32) -> f32 {
+        if self.knots.len() < 2 {
+            return self.knots[0].1;
+        }
+        let last = self.knots.len() - 1;
+        let first_mark = self.knots[0].0;
+
         // Bring the sample onto the knot range. A closed road's marks cover one
         // lap starting at the first corner's, so anything before it belongs to
         // the wrapped final segment.
         let mut d = distance;
-        if road.closed && d < first_mark {
-            d += total;
+        if self.closed && d < first_mark {
+            d += self.total;
         }
-        let k = knots
+        let k = self
+            .knots
             .windows(2)
             .position(|w| d >= w[0].0 && d <= w[1].0)
             .unwrap_or(if d < first_mark { 0 } else { last - 1 });
 
-        let (s0, h0) = knots[k];
-        let (s1, h1) = knots[k + 1];
+        let (s0, h0) = self.knots[k];
+        let (s1, h1) = self.knots[k + 1];
         let run = s1 - s0;
         if run.abs() < 1e-6 {
             return h0;
         }
         let t = ((d - s0) / run).clamp(0.0, 1.0);
-        let (m0, m1) = (tangents[k] * run, tangents[k + 1] * run);
+        let (m0, m1) = (self.tangents[k] * run, self.tangents[k + 1] * run);
         let t2 = t * t;
         let t3 = t2 * t;
         (2.0 * t3 - 3.0 * t2 + 1.0) * h0
             + (t3 - 2.0 * t2 + t) * m0
             + (-2.0 * t3 + 3.0 * t2) * h1
             + (t3 - t2) * m1
+    }
+}
+
+/// Interpolate the authored heights along the walked centerline.
+fn heights(road: &Road, samples: &[Sample], total: f32, marks: &[(f32, usize)]) -> Vec<f32> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    if marks.is_empty() {
+        let flat = road.points.first().map_or(0.0, |p| p.position.y);
+        return vec![flat; samples.len()];
+    }
+    let profile = Profile::new(
+        marks
+            .iter()
+            .map(|&(d, i)| (d, road.points[i].position.y))
+            .collect(),
+        road.closed,
+        total,
+    );
+    samples
+        .iter()
+        .map(|s| profile.evaluate(s.plan_distance))
+        .collect()
+}
+
+/// The local asphalt width at every sample, as a **multiple** of the road's own
+/// `width` (M40).
+///
+/// `None` when no point authored a width, which is the answer for every road
+/// written before M40 — and the caller skips the multiply entirely rather than
+/// scaling by a vector of exact ones, so a pre-M40 road reaches the vertex
+/// arithmetic through the code it always did.
+fn width_scales(
+    road: &Road,
+    samples: &[Sample],
+    total: f32,
+    marks: &[(f32, usize)],
+) -> Option<Vec<f32>> {
+    if !road.points.iter().any(|p| p.width.is_some()) {
+        return None;
+    }
+    let nominal = if road.width.abs() < 1e-6 {
+        return None;
+    } else {
+        road.width
+    };
+    if marks.is_empty() {
+        return None;
+    }
+    let profile = Profile::new(
+        marks
+            .iter()
+            .map(|&(d, i)| (d, road.points[i].width.unwrap_or(nominal)))
+            .collect(),
+        road.closed,
+        total,
+    );
+    Some(
+        samples
+            .iter()
+            .map(|s| profile.evaluate(s.plan_distance) / nominal)
+            .collect(),
+    )
+}
+
+/// The bank a corner takes from [`Road::auto_bank`], in degrees, signed so the
+/// **outside** of the turn is raised.
+///
+/// `fillet.sign` is `+1` for a right-hand turn, whose outside is the driver's
+/// left — and a positive bank raises the driver's right — so the sign is
+/// negated. Getting this backwards builds a circuit that throws the car off at
+/// every corner, which is exactly why the field exists instead of leaving the
+/// sign to the file.
+fn auto_bank_degrees(road: &Road, fillet: &Fillet, radius: f32) -> f32 {
+    if road.auto_bank <= 0.0 || fillet.turn <= 1e-3 || radius <= 0.0 {
+        return 0.0;
+    }
+    let reference = road.auto_bank_radius.max(1e-3);
+    let magnitude = road.auto_bank * reference / radius.max(reference);
+    -fillet.sign * magnitude
+}
+
+/// The roll of the cross-section at every sample, in **radians**.
+///
+/// `None` when nothing banks this road at all, so an unbanked road keeps M23's
+/// horizontal cross-section frame untouched rather than rotating it by an angle
+/// that happens to be zero.
+fn bank_angles(
+    road: &Road,
+    fillets: &[Fillet],
+    samples: &[Sample],
+    total: f32,
+    marks: &[(f32, usize)],
+) -> Option<Vec<f32>> {
+    let explicit = road.points.iter().any(|p| p.bank.is_some());
+    if !explicit && road.auto_bank <= 0.0 {
+        return None;
+    }
+    if marks.is_empty() {
+        return None;
+    }
+    let profile = Profile::new(
+        marks
+            .iter()
+            .map(|&(d, i)| {
+                let point = &road.points[i];
+                let degrees = point
+                    .bank
+                    .unwrap_or_else(|| auto_bank_degrees(road, &fillets[i], point.radius));
+                (d, degrees.to_radians())
+            })
+            .collect(),
+        road.closed,
+        total,
+    );
+    Some(
+        samples
+            .iter()
+            .map(|s| profile.evaluate(s.plan_distance))
+            .collect(),
+    )
+}
+
+/// Longest the smoothing filter walks either side of a sample, in samples.
+///
+/// A backstop rather than a policy: at the default 2 m sampling this is 512 m
+/// of window, far past any `follow_smoothing` worth authoring, and it stops a
+/// road cut into 100,000 samples with a 5 km smoothing radius from turning a
+/// linear filter into a quadratic one.
+const MAX_SMOOTHING_TAPS: usize = 256;
+
+/// Arc distance between two points on the centerline, the short way round on a
+/// closed road.
+fn arc_gap(a: f32, b: f32, total: f32, closed: bool) -> f32 {
+    let direct = (a - b).abs();
+    if closed && total > 0.0 {
+        direct.min(total - direct)
+    } else {
+        direct
+    }
+}
+
+/// The height profile of a road that follows a terrain (M40).
+///
+/// Three layers, in order: the ground, smoothed along the road; the authored
+/// `y` values as a clearance riding on top of it; and a local correction at
+/// each pinned point.
+fn followed_heights(
+    road: &Road,
+    samples: &[Sample],
+    total: f32,
+    marks: &[(f32, usize)],
+    width_scales: Option<&Vec<f32>>,
+    model: Mat4,
+    ground: Ground<'_>,
+) -> Vec<f32> {
+    // The ribbon is built in the entity's local space and placed by `model`, so
+    // the ground has to be asked in world space and the answer brought back.
+    // A road whose transform rolls or pitches has no single answer here — local
+    // `y` would no longer be world "up" — which is what `road_follow_rotated`
+    // warns about; the arithmetic below is exact for the translation, uniform
+    // scale and yaw a road is actually placed with.
+    let lift = model.w_axis.y;
+    let scale_y = {
+        let s = model.y_axis.length();
+        if s.abs() < 1e-6 {
+            1.0
+        } else {
+            s
+        }
     };
 
-    samples.iter().map(|s| evaluate(s.plan_distance)).collect()
+    // Sampled **across** the road, not only down its middle, and the highest of
+    // the three wins.
+    //
+    // The cross-section is level, so a road whose centerline lies on the ground
+    // has its uphill edge buried in the hillside — and this engine does not
+    // carve the terrain, so buried means the ground pokes through the asphalt.
+    // Riding the highest ground the road covers puts the downhill edge in the
+    // air instead, which is the failure the `skirt` already exists to hide. It
+    // matters more the wider the road is, which is why per-point width and this
+    // arrived together.
+    let edge = |i: usize| {
+        let half = road.width.max(0.0) / 2.0 + road.shoulder.max(0.0);
+        half * width_scales.map_or(1.0, |scales| scales[i]) * samples[i].mitre
+    };
+    let sampled: Vec<f32> = samples
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let across = right_of(s.direction) * edge(i);
+            let highest = [Vec2::ZERO, across, -across]
+                .into_iter()
+                .map(|offset| {
+                    let local = Vec3::new(s.position.x + offset.x, 0.0, s.position.y + offset.y);
+                    let world = model.transform_point3(local);
+                    crate::terrain::world_height_at(
+                        ground.terrain,
+                        ground.transform,
+                        world.x,
+                        world.z,
+                    )
+                })
+                .fold(f32::MIN, f32::max);
+            (highest - lift) / scale_y
+        })
+        .collect();
+
+    // Smooth along the road. Terrain is noise; a road that reproduces it is
+    // undrivable, and the width of this filter is the difference between a
+    // road that lies on the ground and one that follows every rut in it.
+    let radius = road.follow_smoothing.max(0.0);
+    let smoothed: Vec<f32> = if radius <= 0.0 {
+        sampled.clone()
+    } else {
+        let n = sampled.len();
+        (0..n)
+            .map(|i| {
+                let here = samples[i].plan_distance;
+                let mut sum = sampled[i];
+                let mut count = 1.0f32;
+                for step in 1..=MAX_SMOOTHING_TAPS {
+                    let mut reached = false;
+                    for direction in [-1isize, 1] {
+                        let offset = direction * step as isize;
+                        let k = if road.closed {
+                            // The closing sample repeats the first, so the ring
+                            // of *distinct* samples is one shorter.
+                            let ring = n.saturating_sub(1).max(1);
+                            (i as isize + offset).rem_euclid(ring as isize) as usize
+                        } else {
+                            let k = i as isize + offset;
+                            if k < 0 || k as usize >= n {
+                                continue;
+                            }
+                            k as usize
+                        };
+                        if arc_gap(samples[k].plan_distance, here, total, road.closed) > radius {
+                            continue;
+                        }
+                        sum += sampled[k];
+                        count += 1.0;
+                        reached = true;
+                    }
+                    if !reached {
+                        break;
+                    }
+                }
+                sum / count
+            })
+            .collect()
+    };
+
+    // The authored clearance above that ground. Pinned points say an absolute
+    // height instead, so they contribute no clearance knot — a road whose every
+    // point is pinned simply follows the pins.
+    let clearance: Vec<f32> = {
+        let knots: Vec<(f32, f32)> = marks
+            .iter()
+            .filter(|&&(_, i)| !road.points[i].pin_height)
+            .map(|&(d, i)| (d, road.points[i].position.y))
+            .collect();
+        if knots.is_empty() {
+            vec![0.0; samples.len()]
+        } else {
+            let profile = Profile::new(knots, road.closed, total);
+            samples
+                .iter()
+                .map(|s| profile.evaluate(s.plan_distance))
+                .collect()
+        }
+    };
+
+    let mut heights: Vec<f32> = smoothed
+        .iter()
+        .zip(&clearance)
+        .map(|(&ground_here, &above)| ground_here + above)
+        .collect();
+
+    // Pins, as local corrections. Each one is the gap between the height the
+    // author demanded and the height following the ground produced, faded out
+    // over `follow_blend` metres either side — so the road reaches the pin
+    // exactly and goes back to hugging the ground. With no pins this loop does
+    // nothing at all.
+    let blend = road.follow_blend.max(0.0);
+    for &(distance, i) in marks {
+        let point = &road.points[i];
+        if !point.pin_height {
+            continue;
+        }
+        // The height the pin has to correct is the followed profile *at* the
+        // pin, which is the sample the mark came from.
+        let at = samples
+            .iter()
+            .position(|s| s.plan_distance >= distance)
+            .unwrap_or(0)
+            .min(heights.len() - 1);
+        let delta = point.position.y - heights[at];
+        if blend <= 0.0 {
+            heights[at] += delta;
+            continue;
+        }
+        for (k, height) in heights.iter_mut().enumerate() {
+            let t = (arc_gap(samples[k].plan_distance, distance, total, road.closed) / blend)
+                .clamp(0.0, 1.0);
+            // Smoothstep, so the correction leaves and rejoins the ground
+            // profile with no kink in the grade — the same thing the monotone
+            // cubic is protecting everywhere else.
+            *height += delta * (1.0 - t * t * (3.0 - 2.0 * t));
+        }
+    }
+
+    heights
 }
 
 /// Which corners are tight enough to kerb, as spans in `v`.
@@ -565,7 +991,7 @@ fn kerb_spans(road: &Road, samples: &[Sample], v: &[f32], total: f32) -> Vec<Ker
     spans
 }
 
-fn build(road: &Road) -> RoadSurface {
+fn build(road: &Road, model: Mat4, ground: Option<Ground<'_>>) -> RoadSurface {
     let fillets = fillets(road);
     let mut samples = walk(road, &fillets);
 
@@ -597,7 +1023,28 @@ fn build(road: &Road) -> RoadSurface {
         samples.last().expect("non-empty").plan_distance
     };
 
-    let heights = heights(road, &samples, plan_total);
+    // One set of marks, three profiles over it (M40). Width comes first: a
+    // road following a terrain samples the ground across its own cross-section,
+    // so it has to know how wide it is there before it knows how high it is.
+    let marks = corner_marks(road, &samples);
+    let width_scales = width_scales(road, &samples, plan_total, &marks);
+    let heights = match (&road.follow_terrain, ground) {
+        (Some(_), Some(ground)) => followed_heights(
+            road,
+            &samples,
+            plan_total,
+            &marks,
+            width_scales.as_ref(),
+            model,
+            ground,
+        ),
+        // A road naming a terrain the scene does not have falls back to its
+        // authored heights rather than to zero, and validation says so
+        // (`road_terrain_invalid`) — the render path does not re-litigate what
+        // validation already reported, which is `meadow_terrain_invalid`'s rule.
+        _ => heights(road, &samples, plan_total, &marks),
+    };
+    let banks = bank_angles(road, &fillets, &samples, plan_total, &marks);
 
     // The centerline in 3D, and `v` as its true arc length: markings are
     // measured along the road as driven, not along its shadow on the ground.
@@ -645,6 +1092,33 @@ fn build(road: &Road) -> RoadSurface {
             Vec3::new(r.x, 0.0, r.y)
         })
         .collect();
+    // Banking rolls that frame about the local heading (M40). The rotation is
+    // rigid, so `u` — cross-section arc length — is untouched and every marking
+    // stays exactly where it was; the normals fall out of the existing
+    // `right × along` below with no special case. An unbanked road skips this
+    // entirely rather than rotating by an angle that happens to be zero.
+    let rights: Vec<Vec3> = match &banks {
+        None => rights,
+        Some(banks) => rights
+            .iter()
+            .enumerate()
+            .map(|(i, right)| {
+                let bank = banks[i];
+                if bank == 0.0 {
+                    return *right;
+                }
+                let ahead = centers[(i + 1).min(centers.len() - 1)];
+                let behind = centers[i.saturating_sub(1)];
+                let heading = samples[i].direction;
+                let along = (ahead - behind).normalize_or(Vec3::new(heading.x, 0.0, heading.y));
+                // `along × right` is −Y on a level road, so rotating `right`
+                // about the heading by a positive angle would *lower* the
+                // driver's right edge. The angle is negated so a positive bank
+                // raises it, which is what the field says it does.
+                Quat::from_axis_angle(along, -bank) * *right
+            })
+            .collect(),
+    };
     let segment_normals: Vec<Vec3> = (0..centers.len().saturating_sub(1))
         .map(|i| {
             let along = (centers[i + 1] - centers[i]).normalize_or(Vec3::NEG_Z);
@@ -683,7 +1157,15 @@ fn build(road: &Road) -> RoadSurface {
     for (i, center) in centers.iter().enumerate() {
         let right = rights[i];
         let normal = normals[i];
-        let mitre = samples[i].mitre;
+        // Per-point width scales the whole cross-section, exactly the way a
+        // mitre does and folded into the same factor (M40): the *positions*
+        // widen while `uv[1]` keeps the nominal column, so the shader's
+        // `|u| > half + shoulder` still finds the skirt with nothing extra
+        // uploaded and no third vertex channel.
+        let mitre = match &width_scales {
+            Some(scales) => samples[i].mitre * scales[i],
+            None => samples[i].mitre,
+        };
 
         // The drivable surface.
         for column in columns {
@@ -759,10 +1241,13 @@ fn build(road: &Road) -> RoadSurface {
             .iter()
             .zip(&samples)
             .zip(&v)
-            .map(|((position, sample), v)| CenterPoint {
+            .enumerate()
+            .map(|(i, ((position, sample), v))| CenterPoint {
                 position: *position,
                 direction: sample.direction,
                 v: *v,
+                width: road.width * width_scales.as_ref().map_or(1.0, |scales| scales[i]),
+                bank: banks.as_ref().map_or(0.0, |banks| banks[i]),
             })
             .collect(),
     }
@@ -867,11 +1352,11 @@ mod tests {
             points: vec![
                 RoadPoint {
                     position: Vec3::new(0.0, 0.0, 0.0),
-                    radius: 0.0,
+                    ..RoadPoint::default()
                 },
                 RoadPoint {
                     position: Vec3::new(0.0, 0.0, -20.0),
-                    radius: 0.0,
+                    ..RoadPoint::default()
                 },
             ],
             closed: false,
@@ -889,18 +1374,22 @@ mod tests {
                 RoadPoint {
                     position: Vec3::new(-30.0, 0.0, -30.0),
                     radius: 10.0,
+                    ..RoadPoint::default()
                 },
                 RoadPoint {
                     position: Vec3::new(30.0, 0.0, -30.0),
                     radius: 10.0,
+                    ..RoadPoint::default()
                 },
                 RoadPoint {
                     position: Vec3::new(30.0, 0.0, 30.0),
                     radius: 10.0,
+                    ..RoadPoint::default()
                 },
                 RoadPoint {
                     position: Vec3::new(-30.0, 0.0, 30.0),
                     radius: 10.0,
+                    ..RoadPoint::default()
                 },
             ],
             closed: true,
@@ -911,8 +1400,46 @@ mod tests {
     }
 
     #[test]
+    fn basins_are_in_the_road_cache_key() {
+        // Two terrain states differing only in a basin are different ground
+        // for a road that follows one (M42): `height_at` subtracts the basin,
+        // and a key that missed it handed back the ribbon built for the old
+        // ground — a road floating over a freshly dug hollow, with no rebuild
+        // until some unrelated field changed. Terrain's own cache pins the
+        // same lesson in `basins_are_in_the_surface_cache_key`.
+        let mut road = straight();
+        road.follow_terrain = Some("Ground".into());
+        let flat = crate::components::Terrain::default();
+        let mut dug = flat.clone();
+        dug.basins = vec![crate::components::TerrainBasin {
+            center: [0.0, -10.0],
+            radius: 4.0,
+            depth: 2.0,
+            falloff: 3.0,
+        }];
+        let transform = crate::components::Transform::default();
+        let before = cache_key(
+            &road,
+            Mat4::IDENTITY,
+            Some(Ground {
+                terrain: &flat,
+                transform: &transform,
+            }),
+        );
+        let after = cache_key(
+            &road,
+            Mat4::IDENTITY,
+            Some(Ground {
+                terrain: &dug,
+                transform: &transform,
+            }),
+        );
+        assert_ne!(before.0, after.0);
+    }
+
+    #[test]
     fn the_drivable_surface_faces_up() {
-        let built = build(&square());
+        let built = build(&square(), Mat4::IDENTITY, None);
         let mesh = &built.mesh;
         // The first four quads of every cross-section are the road surface;
         // check every triangle whose vertices are all surface columns.
@@ -936,7 +1463,7 @@ mod tests {
 
     #[test]
     fn the_skirt_faces_outward() {
-        let built = build(&square());
+        let built = build(&square(), Mat4::IDENTITY, None);
         let mesh = &built.mesh;
         for triangle in mesh.indices.chunks_exact(3) {
             let column = |i: u32| (i as usize) % 9;
@@ -962,7 +1489,7 @@ mod tests {
     #[test]
     fn u_is_cross_section_arc_length() {
         let road = straight();
-        let built = build(&road);
+        let built = build(&road, Mat4::IDENTITY, None);
         let edge = road.width / 2.0 + road.shoulder;
         // One cross-section: five surface columns then the two skirts.
         let uvs: Vec<f32> = built.mesh.uvs[..9].iter().map(|uv| uv[1]).collect();
@@ -986,7 +1513,7 @@ mod tests {
 
     #[test]
     fn v_is_distance_along_the_road() {
-        let built = build(&straight());
+        let built = build(&straight(), Mat4::IDENTITY, None);
         assert!((built.length - 20.0).abs() < 1e-3, "{}", built.length);
         let last = built.mesh.uvs.last().expect("vertices")[0];
         assert!((last - 20.0).abs() < 1e-3);
@@ -994,7 +1521,7 @@ mod tests {
 
     #[test]
     fn a_closed_road_closes() {
-        let built = build(&square());
+        let built = build(&square(), Mat4::IDENTITY, None);
         // Four 60 m edges with 10 m corners: the straights lose 2 × 10 m of
         // tangent each and the corners give back a quarter circle apiece.
         let expected = 4.0 * (60.0 - 20.0) + 2.0 * std::f32::consts::PI * 10.0;
@@ -1021,7 +1548,7 @@ mod tests {
         // carry the first one's averaged normal, the quad that closes the ring
         // shades against a different normal on each side and the road wears a
         // lighting crease exactly where it should be seamless.
-        let built = build(&square());
+        let built = build(&square(), Mat4::IDENTITY, None);
         let stride = 9;
         let first = &built.mesh.normals[..stride];
         let last = &built.mesh.normals[built.mesh.normals.len() - stride..];
@@ -1039,7 +1566,7 @@ mod tests {
         for (point, height) in road.points.iter_mut().zip([0.0, 6.0, 0.0, 0.0]) {
             point.position.y = height;
         }
-        let built = build(&road);
+        let built = build(&road, Mat4::IDENTITY, None);
         let highest = built
             .mesh
             .positions
@@ -1062,7 +1589,7 @@ mod tests {
             point.position.y = height;
         }
         road.segment_length = 2.0;
-        let built = build(&road);
+        let built = build(&road, Mat4::IDENTITY, None);
         let centre: Vec<Vec3> = built
             .mesh
             .positions
@@ -1097,7 +1624,7 @@ mod tests {
             kerb_max_radius: 12.0,
             ..RoadMarkings::default()
         };
-        let built = build(&road);
+        let built = build(&road, Mat4::IDENTITY, None);
         assert_eq!(built.kerbs.len(), 4, "every corner is tight enough");
         for kerb in &built.kerbs {
             // The square runs clockwise seen from above, so every corner turns
@@ -1121,7 +1648,7 @@ mod tests {
             center_gap: 6.0,
             ..RoadMarkings::default()
         };
-        let built = build(&road);
+        let built = build(&road, Mat4::IDENTITY, None);
         let laps = built.length / built.dash_period;
         assert!(
             (laps - laps.round()).abs() < 1e-3,
@@ -1134,18 +1661,27 @@ mod tests {
     fn one_surface_per_geometry_is_shared() {
         // The renderer's geometry cache keys on the mesh's address.
         let road = square();
-        assert!(Arc::ptr_eq(&surface(&road).mesh, &surface(&road).mesh));
+        assert!(Arc::ptr_eq(
+            &surface(&road, Mat4::IDENTITY, None).mesh,
+            &surface(&road, Mat4::IDENTITY, None).mesh
+        ));
 
         // Colour is read per pixel and moves no vertex, so it must not mint a
         // new surface — an editor colour picker would otherwise re-upload the
         // whole road every frame it is dragged.
         let mut repainted = road.clone();
         repainted.color = Vec3::new(0.5, 0.1, 0.1);
-        assert!(Arc::ptr_eq(&surface(&road).mesh, &surface(&repainted).mesh));
+        assert!(Arc::ptr_eq(
+            &surface(&road, Mat4::IDENTITY, None).mesh,
+            &surface(&repainted, Mat4::IDENTITY, None).mesh
+        ));
 
         let mut wider = road.clone();
         wider.width = 9.0;
-        assert!(!Arc::ptr_eq(&surface(&road).mesh, &surface(&wider).mesh));
+        assert!(!Arc::ptr_eq(
+            &surface(&road, Mat4::IDENTITY, None).mesh,
+            &surface(&wider, Mat4::IDENTITY, None).mesh
+        ));
     }
 
     #[test]
@@ -1191,9 +1727,10 @@ mod tests {
             RoadPoint {
                 position: Vec3::new(-30.0, 0.0, 0.0),
                 radius: 0.0,
+                ..RoadPoint::default()
             },
         );
-        let built = build(&road);
+        let built = build(&road, Mat4::IDENTITY, None);
         let first = Vec3::from_array(built.mesh.positions[2]); // the centre column
         assert!(
             first.distance(Vec3::new(-30.0, 0.0, 0.0)) < 1e-3,
@@ -1211,10 +1748,11 @@ mod tests {
             RoadPoint {
                 position: Vec3::new(0.0, 0.0, -10.0),
                 radius: 0.0,
+                ..RoadPoint::default()
             },
         );
         assert!(geometry_problems(&road).is_empty());
-        let built = build(&road);
+        let built = build(&road, Mat4::IDENTITY, None);
         assert!((built.length - 20.0).abs() < 1e-3);
     }
 }

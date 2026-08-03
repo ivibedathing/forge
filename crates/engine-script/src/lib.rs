@@ -25,12 +25,14 @@ use std::sync::Arc;
 
 use engine_core::components::{
     AmbientLight, AnimationPlayer, Breakable, DirectionalLight, HudImage, HudPanel, HudRect,
-    HudText, Mesh, Name, ParticleEmitter, PointLight, RigidBody, Script, Terrain, Transform, Wheel,
+    HudText, Mesh, Name, ParticleEmitter, PointLight, Ragdoll as RagdollData, RigidBody, Script,
+    Terrain, Transform, Water, Wheel,
 };
 use engine_core::contact::ContactState;
 use engine_core::daylight::{Daylight, DaylightSettings};
 use engine_core::input::{self, InputState, Pointer};
-use engine_core::scene::EnvironmentSettings;
+use engine_core::scene::{EnvironmentSettings, TemplateDef};
+use engine_core::spawn::{SpawnLedger, SpawnRefusal};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
 use rhai::packages::{
@@ -54,6 +56,26 @@ const MAX_HUD_CHARS: usize = 96;
 /// engine.
 fn runtime(message: String) -> Box<EvalAltResult> {
     Box::new(EvalAltResult::ErrorRuntime(message.into(), Position::NONE))
+}
+
+/// Which asset does this entity draw? The first link of the chain both the
+/// joint queries (M30) and the clip check (M36) walk, shared so the sentence a
+/// script sees when it asks a rig question of an entity that has no mesh stays
+/// one sentence rather than two copies of it.
+///
+/// Only the first link: what the two do with the asset diverges deliberately.
+/// `joint_world` looks the rig up straight away, while `check_clip` has to
+/// compare the asset against the one the clip names *first*, so that a clip out
+/// of the wrong file reports the mismatch rather than "carries no skin".
+fn rig_asset(
+    world: &hecs::World,
+    entity: hecs::Entity,
+    name: &str,
+) -> std::result::Result<String, Box<EvalAltResult>> {
+    world
+        .get::<&Mesh>(entity)
+        .map(|mesh| mesh.asset.clone())
+        .map_err(|_| runtime(format!("entity {name:?} has no Mesh, so it has no rig")))
 }
 
 /// Where save slots live, relative to the scene file (M36).
@@ -123,6 +145,16 @@ pub struct QueuedExplosion {
     pub impulse: f32,
 }
 
+/// A kick queued by `world.ragdoll_impulse`, waiting for the next physics
+/// step. `QueuedExplosion`'s shape and its reason: plain data, so the
+/// scripting crate never depends on the crate that owns physics.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueuedKick {
+    pub entity: String,
+    pub part: String,
+    pub impulse: [f32; 3],
+}
+
 struct CompiledScript {
     /// The entity the `Script` component sits on — error context.
     owner: String,
@@ -146,6 +178,9 @@ pub struct ScriptHost {
     /// Blasts queued by `world.explode`, drained via
     /// [`ScriptHost::take_explosions`].
     explosions: Rc<RefCell<Vec<QueuedExplosion>>>,
+    /// Kicks queued by `world.ragdoll_impulse` (M39), drained via
+    /// [`ScriptHost::take_kicks`].
+    kicks: Rc<RefCell<Vec<QueuedKick>>>,
     /// The scene's day/night block (M21), or `None`. Held as *settings* and
     /// evaluated once per step from the step number, so scripts read the same
     /// clock the renderer does and a replay reads it identically.
@@ -170,6 +205,30 @@ pub struct ScriptHost {
     /// relative to the scene file, and a save in `/tmp` is a save nobody can
     /// commit.
     save_dir: Rc<PathBuf>,
+    /// The scene's `templates` and the per-run instance bookkeeping (M37).
+    /// Empty for a scene with no `templates` block, which is what puts such a
+    /// scene on exactly the pre-M37 path.
+    ledger: Rc<RefCell<SpawnLedger>>,
+    /// Entities `world.spawn_entity` put into the world this step, in call order,
+    /// drained by the caller via [`ScriptHost::take_spawns`] so it can give
+    /// each one a rapier body. The ECS write already happened; this is the
+    /// physics half, and it lives here because the scripting crate does not
+    /// depend on the physics crate.
+    spawns: Rc<RefCell<Vec<(String, hecs::Entity)>>>,
+    /// Names `world.despawn_entity` queued, drained via
+    /// [`ScriptHost::take_despawns`]. Queued rather than immediate, for
+    /// `take_breaks`' reason: the entity writes its final position into the
+    /// trace before it disappears, and nothing later in this step finds a name
+    /// that vanished mid-step.
+    despawns: Rc<RefCell<Vec<String>>>,
+    /// Names spawned since the last [`ScriptHost::sync_names`], overlaying the
+    /// immutable `names` table.
+    ///
+    /// Two maps rather than one mutable one: `names` is consulted by every
+    /// lookup in every script ever written, and making that path take a
+    /// `RefCell` borrow it never needed to pay for spawning would be a cost
+    /// on scenes that spawn nothing.
+    fresh_names: Rc<RefCell<HashMap<String, hecs::Entity>>>,
 }
 
 /// What scripts see: the world, entity names, and the fixed timestep.
@@ -206,6 +265,8 @@ struct WorldApi {
     breaks: Rc<RefCell<Vec<String>>>,
     /// `world.explode`: blasts queued for the next physics step.
     explosions: Rc<RefCell<Vec<QueuedExplosion>>>,
+    /// `world.ragdoll_impulse`: kicks queued for the next physics step (M39).
+    kicks: Rc<RefCell<Vec<QueuedKick>>>,
     /// The day evaluated at this step, or `None` when the scene has no
     /// `daylight` block — in which case asking for the time is a runtime
     /// error rather than a made-up noon.
@@ -222,6 +283,12 @@ struct WorldApi {
     environment: Rc<RefCell<EnvironmentSettings>>,
     /// `world.save`/`world.load` (M36): where the slots live.
     save_dir: Rc<PathBuf>,
+    /// `world.spawn_entity` / `world.despawn_entity` / `world.spawn_count` (M37).
+    ledger: Rc<RefCell<SpawnLedger>>,
+    spawns: Rc<RefCell<Vec<(String, hecs::Entity)>>>,
+    despawns: Rc<RefCell<Vec<String>>>,
+    /// Names spawned since the last `sync_names`, consulted after `names`.
+    fresh_names: Rc<RefCell<HashMap<String, hecs::Entity>>>,
 }
 
 impl WorldApi {
@@ -243,12 +310,21 @@ impl WorldApi {
     }
 
     fn entity(&self, name: &str) -> std::result::Result<hecs::Entity, Box<EvalAltResult>> {
-        self.names.get(name).copied().ok_or_else(|| {
-            Box::new(EvalAltResult::ErrorRuntime(
-                format!("no entity named {name:?}").into(),
-                Position::NONE,
-            ))
-        })
+        if let Some(entity) = self.names.get(name).copied() {
+            return Ok(entity);
+        }
+        // Only then the overlay (M37): an entity `world.spawn_entity` created this
+        // step is not in the immutable table yet, and the whole point of
+        // returning its name is that the next line can address it. The order
+        // is the fast path first — a scene that spawns nothing never reaches
+        // the borrow.
+        if let Some(entity) = self.fresh_names.borrow().get(name).copied() {
+            return Ok(entity);
+        }
+        Err(Box::new(EvalAltResult::ErrorRuntime(
+            format!("no entity named {name:?}").into(),
+            Position::NONE,
+        )))
     }
 
     /// Borrow one component mutably for the duration of a closure; `what`
@@ -414,6 +490,56 @@ impl WorldApi {
         ))
     }
 
+    /// The height of a water surface at a world XZ position, in world metres
+    /// (M41) — the terrain twin, with two differences that are the whole
+    /// character of water.
+    ///
+    /// It **moves**, so the answer is taken at this step's `time`, evaluated
+    /// once per step, so two calls in one step cannot disagree about where the
+    /// wave is.
+    ///
+    /// That clock is the time the step **begins** at (`step_index · dt`), while
+    /// physics and the render are handed the time it *ends* at. The offset is
+    /// one step and it predates this call — but water is the first thing in the
+    /// script API where it is *visible*, because it is the first surface that
+    /// moves. A script comparing its own reading against `engine water-height`
+    /// wants `--steps N-1` after `--steps N`, and a script placing a prop on
+    /// the water is one step behind the buoyancy in the same frame. At 60 Hz
+    /// on a lake that is under a millimetre; on a fast swell it is not.
+    ///
+    /// And it **ends**: a column outside the patch is a runtime error rather
+    /// than a number, because the alternative is a script that cheerfully sails
+    /// a boat across a lawn. A script that expects to reach the edge tests the
+    /// XZ itself; there is nothing water can return that means "no water here"
+    /// and is also a height.
+    fn water_height_at(
+        &mut self,
+        name: &str,
+        x: f32,
+        z: f32,
+    ) -> std::result::Result<f32, Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow();
+        let water = world.get::<&Water>(entity).map_err(|_| {
+            Box::new(EvalAltResult::ErrorRuntime(
+                format!("entity {name:?} has no Water").into(),
+                Position::NONE,
+            ))
+        })?;
+        let transform = world
+            .get::<&Transform>(entity)
+            .map(|t| *t)
+            .unwrap_or_default();
+        engine_core::water::sample_at(&water, &transform, x, z, self.time)
+            .map(|sample| sample.height)
+            .ok_or_else(|| {
+                Box::new(EvalAltResult::ErrorRuntime(
+                    format!("({x}, {z}) is outside the water surface {name:?}").into(),
+                    Position::NONE,
+                ))
+            })
+    }
+
     /// Where one joint of a skinned entity is right now, as a **world**
     /// matrix (M30).
     ///
@@ -438,10 +564,7 @@ impl WorldApi {
         let entity = self.entity(name)?;
         let world = self.world.borrow();
 
-        let asset = world
-            .get::<&Mesh>(entity)
-            .map(|mesh| mesh.asset.clone())
-            .map_err(|_| runtime(format!("entity {name:?} has no Mesh, so it has no rig")))?;
+        let asset = rig_asset(&world, entity, name)?;
         let rig = self.rigs.get(&asset).ok_or_else(|| {
             runtime(format!(
                 "entity {name:?} references {asset:?}, which carries no skin"
@@ -516,10 +639,7 @@ impl WorldApi {
             return Ok(());
         };
 
-        let mesh = world
-            .get::<&Mesh>(entity)
-            .map(|mesh| mesh.asset.clone())
-            .map_err(|_| runtime(format!("entity {name:?} has no Mesh, so it has no rig")))?;
+        let mesh = rig_asset(&world, entity, name)?;
         if mesh != asset {
             // M30's `skeletal_player_mesh_mismatch`, as a runtime error: a clip
             // out of a file the entity does not draw would silently never play.
@@ -891,6 +1011,126 @@ fn curated_engine() -> rhai::Engine {
                 return Err(runtime(format!("samples must be 1 or 4, got {samples}")));
             }
             w.environment.borrow_mut().samples = samples as u32;
+            Ok(())
+        },
+    );
+    engine.register_fn("shadow_cascades", |w: &mut WorldApi| {
+        w.environment.borrow().shadow_cascades as i64
+    });
+    engine.register_fn(
+        "set_shadow_cascades",
+        |w: &mut WorldApi, cascades: i64| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Same terms as `set_samples`, and for the same reason: changing it
+            // rebuilds every pipeline (M38 §4), so a settings screen offering it
+            // is offering a deliberate action, not a slider.
+            if !(1..=4).contains(&cascades) {
+                return Err(runtime(format!(
+                    "shadow cascades must be 1 to 4, got {cascades}"
+                )));
+            }
+            w.environment.borrow_mut().shadow_cascades = cascades as u32;
+            Ok(())
+        },
+    );
+
+    // ── Entity spawning (M37) ─────────────────────────────────────────
+    //
+    // The one call that makes a run able to grow. It names a template the
+    // *scene file* declares — never geometry from the script — so the file
+    // stays the whole truth about what can exist (invariant 2), and it hands
+    // back the instance's name so the rest of the existing API works on it
+    // with no second vocabulary.
+    engine.register_fn(
+        "spawn_entity",
+        |w: &mut WorldApi,
+         template: &str,
+         x: f64,
+         y: f64,
+         z: f64|
+         -> std::result::Result<String, Box<EvalAltResult>> {
+            let position = glam::Vec3::new(x as f32, y as f32, z as f32);
+            let spawned = {
+                let mut world = w.world.borrow_mut();
+                w.ledger.borrow_mut().spawn(&mut world, template, position)
+            };
+            match spawned {
+                Ok((name, entity)) => {
+                    // Visible to the rest of *this* step through the overlay,
+                    // and to physics through the queue the caller drains
+                    // between scripts and the physics step — so a bullet moves
+                    // on the step it was fired rather than hanging for a frame.
+                    w.fresh_names.borrow_mut().insert(name.clone(), entity);
+                    w.spawns.borrow_mut().push((name.clone(), entity));
+                    Ok(name)
+                }
+                // A typo in a template name is a bug, and the deterministic
+                // failure is M10's answer to it.
+                Err(SpawnRefusal::UnknownTemplate) => {
+                    let ledger = w.ledger.borrow();
+                    let known = ledger.template_names();
+                    Err(runtime(if known.is_empty() {
+                        format!(
+                            "no template named {template:?}; this scene declares no \
+                             \"templates\" block"
+                        )
+                    } else {
+                        format!(
+                            "no template named {template:?}; this scene declares {}",
+                            known.join(", ")
+                        )
+                    }))
+                }
+                // Not an error: a gun that fires faster than its bullets
+                // expire is an ordinary game, and crashing the run is a worse
+                // answer than not firing. The empty name is the value the
+                // script checks.
+                Err(SpawnRefusal::AtLimit) => Ok(String::new()),
+            }
+        },
+    );
+    engine.register_fn(
+        "spawn_count",
+        |w: &mut WorldApi, template: &str| -> std::result::Result<i64, Box<EvalAltResult>> {
+            w.ledger
+                .borrow()
+                .live_count(template)
+                .map(i64::from)
+                .ok_or_else(|| runtime(format!("no template named {template:?}")))
+        },
+    );
+    engine.register_fn(
+        "spawn_limit",
+        |w: &mut WorldApi, template: &str| -> std::result::Result<i64, Box<EvalAltResult>> {
+            w.ledger
+                .borrow()
+                .limit(template)
+                .map(i64::from)
+                .ok_or_else(|| runtime(format!("no template named {template:?}")))
+        },
+    );
+    engine.register_fn(
+        "despawn_entity",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Validated at call time, `break_entity`'s rule: an unknown name
+            // is a deterministic error rather than a silent no-op.
+            let entity = w.entity(name)?;
+            // Scripts are compiled once when the run starts and run from their
+            // ASTs, so one whose owner is gone keeps running against names
+            // that no longer exist — a failure two hundred steps from its
+            // cause. Refused here instead.
+            if w.world.borrow().get::<&Script>(entity).is_ok() {
+                return Err(runtime(format!(
+                    "entity {name:?} carries a Script, which cannot be despawned: the \
+                     script is already compiled and would keep running against an \
+                     entity that no longer exists"
+                )));
+            }
+            // The ledger frees the slot now, so a script that despawns and
+            // respawns within one step is not blocked by its own corpse. The
+            // world and physics catch up after this step's physics, where
+            // breaks are applied and for the same reason.
+            w.ledger.borrow_mut().forget(name);
+            w.despawns.borrow_mut().push(name.to_string());
             Ok(())
         },
     );
@@ -1408,6 +1648,21 @@ fn curated_engine() -> rhai::Engine {
         },
     );
 
+    // Water (M18/M41): read-only for terrain's reason — a surface's shape is a
+    // function of its authored fields and the clock, and a script-settable one
+    // is hidden state (invariant 2). What a script needs is the answer terrain
+    // already gives for the ground: where is the surface under this point, now.
+    engine.register_fn(
+        "water_height",
+        |w: &mut WorldApi,
+         name: &str,
+         x: f64,
+         z: f64|
+         -> std::result::Result<f64, Box<EvalAltResult>> {
+            w.water_height_at(name, x as f32, z as f32).map(f64::from)
+        },
+    );
+
     // Joints (M30): read-only, and the only two skeletal calls the API
     // exposes. There is deliberately no setter — a script-settable joint is
     // hidden state (invariant 2) and the pose must stay a function of (files,
@@ -1457,6 +1712,69 @@ fn curated_engine() -> rhai::Engine {
             .iter()
             .map(|v| Dynamic::from(f64::from(*v)))
             .collect())
+        },
+    );
+
+    // Ragdolls (M39). `ragdoll` and `is_ragdoll` are an ordinary component
+    // read and write — `active` is a bool the file carries, so the handoff
+    // bakes and reloads like any other state. There is deliberately no setter
+    // for the pose: a script-written joint is hidden state (M30's rule, M21's
+    // before it), and `ragdoll_impulse` is the sanctioned way to move one,
+    // through the solver where the joint limits still apply.
+    engine.register_fn(
+        "ragdoll",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            // Idempotent: the state is a bool, not an event, so firing twice —
+            // or firing at something the file already shipped as a corpse —
+            // is a no-op rather than a second handoff.
+            w.with_component::<RagdollData, _>(name, "Ragdoll", |r| {
+                r.active = true;
+            })
+        },
+    );
+    engine.register_fn(
+        "is_ragdoll",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<bool, Box<EvalAltResult>> {
+            w.with_component::<RagdollData, _>(name, "Ragdoll", |r| r.active)
+        },
+    );
+    engine.register_fn(
+        "ragdoll_impulse",
+        |w: &mut WorldApi,
+         name: &str,
+         part: &str,
+         x: f64,
+         y: f64,
+         z: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            // Refused rather than ignored on a character still animating: a
+            // kinematic proxy absorbs an impulse without moving, so the silent
+            // version of this call is one that appears to work and does
+            // nothing — the failure a located error exists for.
+            let active = w.with_component::<RagdollData, _>(name, "Ragdoll", |r| r.active)?;
+            if !active {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!(
+                        "entity {name:?} is not a ragdoll yet; call world.ragdoll({name:?}) \
+                         first — an impulse to a kinematic hitbox does nothing"
+                    )
+                    .into(),
+                    Position::NONE,
+                )));
+            }
+            let impulse = [x as f32, y as f32, z as f32];
+            if !impulse.iter().all(|v| v.is_finite()) {
+                return Err(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("ragdoll impulse must be finite, got [{x}, {y}, {z}]").into(),
+                    Position::NONE,
+                )));
+            }
+            w.kicks.borrow_mut().push(QueuedKick {
+                entity: name.to_string(),
+                part: part.to_string(),
+                impulse,
+            });
+            Ok(())
         },
     );
 
@@ -1528,13 +1846,19 @@ fn curated_engine() -> rhai::Engine {
     engine.register_fn(
         "set_animation_clip",
         |w: &mut WorldApi, name: &str, clip: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            // The unchanged case first, and it is the overwhelmingly common
+            // one: a script asks for the gait it wants every step and switches
+            // a handful of times in a run. Answering it costs one component
+            // read — the validation walk and the two allocations below belong
+            // to the step that actually cuts, not to the 3,000 that do not.
+            if w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| p.clip == clip)?
+            {
+                return Ok(());
+            }
             w.check_clip(name, clip)?;
             let stored = clip.to_string();
             w.with_component::<AnimationPlayer, _>(name, "AnimationPlayer", |p| {
-                if p.clip == stored {
-                    return;
-                }
-                p.clip = stored.clone();
+                p.clip = stored;
                 // Reset, never carried over: a phase is a fraction of a *cycle*
                 // and two clips do not share one, so carrying it is M32's
                 // `speed` trap in another place — the pose teleports on the
@@ -1727,6 +2051,7 @@ impl ScriptHost {
         daylight: Option<DaylightSettings>,
         environment: EnvironmentSettings,
         rigs: &dyn engine_core::skeleton::RigSource,
+        templates: &[TemplateDef],
     ) -> Result<Option<Self>> {
         let base_dir = scene_path.parent().unwrap_or(Path::new(""));
         let engine = curated_engine();
@@ -1794,11 +2119,16 @@ impl ScriptHost {
             state: Rc::new(RefCell::new(HashMap::new())),
             breaks: Rc::new(RefCell::new(Vec::new())),
             explosions: Rc::new(RefCell::new(Vec::new())),
+            kicks: Rc::new(RefCell::new(Vec::new())),
             daylight,
             rigs: Rc::new(skins),
             quit: Rc::new(Cell::new(false)),
             environment: Rc::new(RefCell::new(environment)),
             save_dir: Rc::new(base_dir.join(SAVE_DIR)),
+            ledger: Rc::new(RefCell::new(SpawnLedger::new(templates, world))),
+            spawns: Rc::new(RefCell::new(Vec::new())),
+            despawns: Rc::new(RefCell::new(Vec::new())),
+            fresh_names: Rc::new(RefCell::new(HashMap::new())),
         }))
     }
 
@@ -1826,6 +2156,11 @@ impl ScriptHost {
     /// and scripts address entities by name.
     pub fn sync_names(&mut self, world: &World) {
         self.names = name_table(world);
+        // The overlay's whole job is to bridge the gap between a live spawn
+        // and the next rebuild, so a rebuild is exactly when it stops being
+        // needed. Clearing it here (rather than letting it grow) is what keeps
+        // the two-map lookup honest: a name is in exactly one of them.
+        self.fresh_names.borrow_mut().clear();
     }
 
     /// Drain the breaks scripts queued this step, in call order.
@@ -1833,9 +2168,40 @@ impl ScriptHost {
         self.breaks.borrow_mut().drain(..).collect()
     }
 
+    /// Drain the entities `world.spawn_entity` created this step, in call order (M37).
+    ///
+    /// They are already in the ECS — this is the list the caller gives rapier
+    /// bodies to, between the script step and the physics step.
+    pub fn take_spawns(&self) -> Vec<(String, hecs::Entity)> {
+        self.spawns.borrow_mut().drain(..).collect()
+    }
+
+    /// Drain the names `world.despawn_entity` queued this step, in call order (M37).
+    /// Applied by the caller after physics, beside the breaks.
+    pub fn take_despawns(&self) -> Vec<String> {
+        self.despawns.borrow_mut().drain(..).collect()
+    }
+
+    /// Whether this scene can spawn anything at all — the guard that keeps a
+    /// scene with no `templates` block on exactly the pre-M37 path.
+    pub fn can_spawn(&self) -> bool {
+        !self.ledger.borrow().is_empty()
+    }
+
+    /// How many entities this run has spawned in total, for the `simulate`
+    /// report.
+    pub fn total_spawned(&self) -> u64 {
+        self.ledger.borrow().total_spawned()
+    }
+
     /// Drain the explosions scripts queued this step, in call order.
     pub fn take_explosions(&self) -> Vec<QueuedExplosion> {
         self.explosions.borrow_mut().drain(..).collect()
+    }
+
+    /// Drain the ragdoll kicks scripts queued this step, in call order (M39).
+    pub fn take_kicks(&self) -> Vec<QueuedKick> {
+        self.kicks.borrow_mut().drain(..).collect()
     }
 
     /// Run every script's `step` for step index `step`, with `input` as the
@@ -1878,9 +2244,14 @@ impl ScriptHost {
             hud: Rc::new(RefCell::new(Vec::new())),
             breaks: Rc::clone(&self.breaks),
             explosions: Rc::clone(&self.explosions),
+            kicks: Rc::clone(&self.kicks),
             quit: Rc::clone(&self.quit),
             environment: Rc::clone(&self.environment),
             save_dir: Rc::clone(&self.save_dir),
+            ledger: Rc::clone(&self.ledger),
+            spawns: Rc::clone(&self.spawns),
+            despawns: Rc::clone(&self.despawns),
+            fresh_names: Rc::clone(&self.fresh_names),
         };
 
         let mut failure: Option<EngineError> = None;
@@ -1998,6 +2369,27 @@ mod tests {
         dir
     }
 
+    /// The default host every test but one wants: 60 Hz, no daylight, a
+    /// default `environment`, builtin assets. The two `unwrap`s are the
+    /// fixture's own assertion — a scene with a `Script` on it builds a host,
+    /// and a test whose script does not compile should fail here rather than
+    /// silently step nothing. The exception is the test that seeds an
+    /// *authored* `environment`, which spells `ScriptHost::build` out because
+    /// the seed is the thing it is asserting on.
+    fn host_for(scene: &Scene, path: &Path) -> ScriptHost {
+        ScriptHost::build(
+            &scene.world,
+            path,
+            60,
+            None,
+            Default::default(),
+            &engine_core::mesh::BuiltinAssets,
+            &scene.templates,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
     #[test]
     fn scripts_move_entities_deterministically() {
         let dir = temp_dir("move");
@@ -2010,16 +2402,7 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         for step in 0..150 {
             host.step(
                 &mut scene.world,
@@ -2048,16 +2431,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.position("Nobody"); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2088,16 +2462,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { let x = 0; loop { x += 1; } }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2147,16 +2512,7 @@ mod tests {
                 if step == 1 { world.look_at("Mover", 5.0, 0.25, 0.0); }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let entity = scene.entity("Mover").unwrap();
 
         host.step(
@@ -2218,16 +2574,7 @@ mod tests {
                 world.set_state("vw", world.viewport_width());
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let entity = scene.entity("Mover").unwrap();
 
         let mut held = InputState::default();
@@ -2286,16 +2633,7 @@ mod tests {
             ),
         ] {
             let (mut scene, path) = scene_with_script(&dir, source);
-            let host = ScriptHost::build(
-                &scene.world,
-                &path,
-                60,
-                None,
-                Default::default(),
-                &engine_core::mesh::BuiltinAssets,
-            )
-            .unwrap()
-            .unwrap();
+            let host = host_for(&scene, &path);
             let error = host
                 .step(
                     &mut scene.world,
@@ -2326,16 +2664,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.cursor_ground(0.0); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2376,16 +2705,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
 
         let mut held = InputState::default();
         held.set_cursor(glam::Vec2::new(0.25, 0.5));
@@ -2427,16 +2747,7 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
 
         let mut held = InputState::default();
         held.press("ArrowUp");
@@ -2465,16 +2776,7 @@ mod tests {
 
         let (mut scene, path) =
             scene_with_script(&dir, r#"fn step(world, step) { world.key("ArowUp"); }"#);
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2504,16 +2806,7 @@ mod tests {
                 world.set_position("Mover", f[0], f[1], f[2]);
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let entity = scene.entity("Mover").unwrap();
 
         // Physics writes yaws past ±90° as the gimbal twin (±180, θ, ±180),
@@ -2575,16 +2868,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -2640,16 +2924,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -2691,16 +2966,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.set_engine_force("Mover", 1.0); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2723,16 +2989,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.linear_velocity("Mover"); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2764,16 +3021,7 @@ mod tests {
                 world.set_position("Mover", 0.0, y, 0.0);
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let entity = scene.entity("Mover").unwrap();
         let y_of = |scene: &Scene| scene.world.get::<&Transform>(entity).unwrap().position.y;
 
@@ -2829,16 +3077,7 @@ mod tests {
                 }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let hud = host
             .step(
                 &mut scene.world,
@@ -2872,16 +3111,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.touching("Nobody"); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2907,16 +3137,7 @@ mod tests {
                 while i < 17 { world.hud("line"); i += 1; }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2936,16 +3157,7 @@ mod tests {
 
         let (mut scene, path) =
             scene_with_script(&dir, "fn step(world, step) { world.hud(\"caf\u{e9}\"); }");
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -2990,16 +3202,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -3053,16 +3256,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -3093,16 +3287,7 @@ mod tests {
         // Missing components are structured errors, like every accessor.
         let (mut scene, path) =
             scene_with_script(&dir, r#"fn step(world, step) { world.hud_text("Mover"); }"#);
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -3141,16 +3326,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         let rate_now = |scene: &Scene| {
             scene
                 .world
@@ -3193,16 +3369,7 @@ mod tests {
                 &dir,
                 &format!("fn step(world, step) {{ world.set_particle_rate(\"Puff\", {bad}); }}"),
             );
-            let host = ScriptHost::build(
-                &scene.world,
-                &path,
-                60,
-                None,
-                Default::default(),
-                &engine_core::mesh::BuiltinAssets,
-            )
-            .unwrap()
-            .unwrap();
+            let host = host_for(&scene, &path);
             let error = host
                 .step(
                     &mut scene.world,
@@ -3226,16 +3393,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.particle_rate("Mover"); }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -3288,16 +3446,7 @@ mod tests {
         let scene_path = dir.join("scene.json");
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         host.step(
             &mut scene.world,
             0,
@@ -3344,16 +3493,7 @@ mod tests {
             std::fs::write(dir.join("scripts/test.rhai"), &script).unwrap();
             let mut scene =
                 Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-            let host = ScriptHost::build(
-                &scene.world,
-                &scene_path,
-                60,
-                None,
-                Default::default(),
-                &engine_core::mesh::BuiltinAssets,
-            )
-            .unwrap()
-            .unwrap();
+            let host = host_for(&scene, &scene_path);
             let error = host
                 .step(
                     &mut scene.world,
@@ -3387,16 +3527,7 @@ mod tests {
         ]}"#;
         std::fs::write(&scene_path, scene_json).unwrap();
         let mut scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
-        let host = ScriptHost::build(
-            &scene.world,
-            &scene_path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &scene_path);
         let error = host
             .step(
                 &mut scene.world,
@@ -3445,16 +3576,7 @@ mod tests {
                 world.set_position("Mover", laps, 0.0, world.state("missing", -7.5));
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         for step in 0..8 {
             host.step(
                 &mut scene.world,
@@ -3493,6 +3615,89 @@ mod tests {
         (scene, scene_path)
     }
 
+    /// M39's three calls. `ragdoll` and `is_ragdoll` are an ordinary component
+    /// write and read; `ragdoll_impulse` is queued like an explosion, and is a
+    /// **located error** on a character that has not ragdolled — an impulse to
+    /// a kinematic proxy is a call that appears to work and does nothing.
+    #[test]
+    fn ragdoll_fires_once_and_an_impulse_before_it_is_refused() {
+        let dir = temp_dir("ragdoll");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(
+            dir.join("scripts/test.rhai"),
+            r#"fn step(world, step) {
+                if step == 0 {
+                    world.set_state("before", if world.is_ragdoll("Walker") { 1.0 } else { 0.0 });
+                    world.ragdoll("Walker");
+                    world.set_state("after", if world.is_ragdoll("Walker") { 1.0 } else { 0.0 });
+                    world.ragdoll("Walker");
+                    world.ragdoll_impulse("Walker", "Head", 0.0, 1.0, 0.0);
+                }
+                if step == 1 { world.ragdoll_impulse("Other", "Head", 0.0, 1.0, 0.0); }
+            }"#,
+        )
+        .unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Walker","components":[
+                {"type":"Transform"},
+                {"type":"Ragdoll"},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]},
+            {"name":"Other","components":[{"type":"Transform"},{"type":"Ragdoll"}]}
+        ]}"#;
+        let path = dir.join("scene.json");
+        std::fs::write(&path, scene_json).unwrap();
+        let mut scene = Scene::instantiate(serde_json::from_str(scene_json).unwrap());
+        let host = host_for(&scene, &path);
+
+        host.step(
+            &mut scene.world,
+            0,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+        .unwrap();
+
+        // The flag is a plain component field, so the write is visible to the
+        // same step that made it — and firing twice is a no-op, because the
+        // state is a bool rather than an event.
+        let entity = scene.entity("Walker").unwrap();
+        assert!(
+            scene
+                .world
+                .get::<&engine_core::components::Ragdoll>(entity)
+                .unwrap()
+                .active,
+            "world.ragdoll must set Ragdoll.active"
+        );
+        let kicks = host.take_kicks();
+        assert_eq!(kicks.len(), 1, "{kicks:?}");
+        assert_eq!(kicks[0].entity, "Walker");
+        assert_eq!(kicks[0].part, "Head");
+        assert!(host.take_kicks().is_empty(), "draining drains");
+
+        // And an impulse to a character still animating is refused rather than
+        // silently absorbed by a kinematic body.
+        let error = host
+            .step(
+                &mut scene.world,
+                1,
+                &InputState::default(),
+                &Pointer::default(),
+                &engine_core::ui::Interaction::default(),
+                &ContactState::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.message.contains("not a ragdoll yet"),
+            "{}",
+            error.message
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn break_entity_queues_and_validates_at_call_time() {
         let dir = temp_dir("break");
@@ -3504,16 +3709,7 @@ mod tests {
                 if step == 2 { world.break_entity("Ghost"); }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
 
         host.step(
             &mut scene.world,
@@ -3568,16 +3764,7 @@ mod tests {
                 if step == 2 { world.explode(0.0, 0.0, 0.0, 1.0, -1.0); }
             }"#,
         );
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
 
         host.step(
             &mut scene.world,
@@ -3631,6 +3818,196 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    // ── Entity spawning (M37) ─────────────────────────────────────
+
+    /// A scene with a template, and a script that spawns from it.
+    fn scene_with_template(dir: &Path, script: &str) -> (Scene, std::path::PathBuf) {
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join("scripts/test.rhai"), script).unwrap();
+        let scene_json = r#"{"name":"s","entities":[
+            {"name":"Gun","components":[
+                {"type":"Transform"},
+                {"type":"Script","source":"scripts/test.rhai"}
+            ]}
+        ],"templates":[
+            {"name":"Bullet","limit":2,"components":[
+                {"type":"Transform","scale":[0.5,0.5,0.5]},
+                {"type":"Mesh","asset":"builtin:sphere"},
+                {"type":"RigidBody","body":"dynamic"},
+                {"type":"Collider","shape":"sphere","radius":0.5}
+            ]}
+        ]}"#;
+        let scene_path = dir.join("scene.json");
+        std::fs::write(&scene_path, scene_json).unwrap();
+        let scene = Scene::from_source(scene_json, &scene_path.display().to_string()).unwrap();
+        (scene, scene_path)
+    }
+
+    fn step_once(host: &ScriptHost, scene: &mut Scene, step: u64) -> Result<Vec<String>> {
+        host.step(
+            &mut scene.world,
+            step,
+            &InputState::default(),
+            &Pointer::default(),
+            &engine_core::ui::Interaction::default(),
+            &ContactState::default(),
+        )
+    }
+
+    /// The whole point of returning the name: the very next line addresses the
+    /// new entity through the ordinary API, with no second vocabulary and no
+    /// waiting a step for a name table to catch up.
+    #[test]
+    fn a_spawned_entity_is_addressable_on_the_line_after_the_spawn() {
+        let dir = temp_dir("spawn");
+        let (mut scene, path) = scene_with_template(
+            &dir,
+            r#"fn step(world, step) {
+                let b = world.spawn_entity("Bullet", 1.0, 2.0, 3.0);
+                world.set_linear_velocity(b, 0.0, 0.0, -40.0);
+                world.hud(b + " at " + world.position(b)[1]);
+            }"#,
+        );
+        let host = host_for(&scene, &path);
+        let hud = step_once(&host, &mut scene, 0).unwrap();
+        assert_eq!(hud, ["Bullet#1 at 2.0"]);
+
+        let spawns = host.take_spawns();
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].0, "Bullet#1");
+        // The template's scale survived; only the position was overwritten.
+        let transform = *scene.world.get::<&Transform>(spawns[0].1).unwrap();
+        assert_eq!(transform.position, glam::Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(transform.scale, glam::Vec3::splat(0.5));
+        // And the velocity the script wrote is on the component the caller
+        // will hand rapier, so it arrives as the body's initial velocity.
+        let body = *scene.world.get::<&RigidBody>(spawns[0].1).unwrap();
+        assert_eq!(body.linear_velocity, glam::Vec3::new(0.0, 0.0, -40.0));
+        assert!(host.take_spawns().is_empty(), "draining drains");
+    }
+
+    /// Hitting the cap is not an error — it is a value the script reads.
+    #[test]
+    fn spawning_past_the_limit_returns_an_empty_name_rather_than_failing() {
+        let dir = temp_dir("limit");
+        let (mut scene, path) = scene_with_template(
+            &dir,
+            r#"fn step(world, step) {
+                let b = world.spawn_entity("Bullet", 0.0, 0.0, 0.0);
+                world.hud("got [" + b + "] live=" + world.spawn_count("Bullet")
+                          + "/" + world.spawn_limit("Bullet"));
+            }"#,
+        );
+        let host = host_for(&scene, &path);
+        assert_eq!(
+            step_once(&host, &mut scene, 0).unwrap(),
+            ["got [Bullet#1] live=1/2"]
+        );
+        assert_eq!(
+            step_once(&host, &mut scene, 1).unwrap(),
+            ["got [Bullet#2] live=2/2"]
+        );
+        assert_eq!(
+            step_once(&host, &mut scene, 2).unwrap(),
+            ["got [] live=2/2"],
+            "the third spawn is refused, and says so as a value"
+        );
+    }
+
+    /// A typo, on the other hand, *is* a bug, and gets M10's deterministic
+    /// failure with the known names in the message.
+    #[test]
+    fn an_unknown_template_is_a_located_script_error() {
+        let dir = temp_dir("unknown-template");
+        let (mut scene, path) = scene_with_template(
+            &dir,
+            r#"fn step(world, step) { world.spawn_entity("Bulet", 0.0, 0.0, 0.0); }"#,
+        );
+        let host = host_for(&scene, &path);
+        let error = step_once(&host, &mut scene, 0).unwrap_err();
+        assert_eq!(error.error, "script_runtime_error");
+        assert!(
+            error.message.contains("no template named \"Bulet\"")
+                && error.message.contains("Bullet"),
+            "{}",
+            error.message
+        );
+    }
+
+    /// Despawn is queued rather than immediate, and frees the ledger's slot at
+    /// the call so a fire-and-reap loop is not blocked by its own corpse.
+    #[test]
+    fn despawn_queues_the_removal_and_frees_the_slot() {
+        let dir = temp_dir("despawn");
+        let (mut scene, path) = scene_with_template(
+            &dir,
+            r#"fn step(world, step) {
+                if step == 0 {
+                    world.spawn_entity("Bullet", 0.0, 0.0, 0.0);
+                    world.spawn_entity("Bullet", 0.0, 0.0, 0.0);
+                }
+                if step == 1 {
+                    world.despawn_entity("Bullet#1");
+                    // The slot is free immediately, so this succeeds — and the
+                    // name is #3, never a reused #1.
+                    world.hud(world.spawn_entity("Bullet", 0.0, 0.0, 0.0));
+                }
+            }"#,
+        );
+        let mut host = host_for(&scene, &path);
+        step_once(&host, &mut scene, 0).unwrap();
+        let _ = host.take_spawns();
+        scene.refresh_names();
+        host.sync_names(&scene.world);
+
+        assert_eq!(step_once(&host, &mut scene, 1).unwrap(), ["Bullet#3"]);
+        assert_eq!(host.take_despawns(), ["Bullet#1"]);
+        assert!(host.take_despawns().is_empty(), "draining drains");
+        // The world still holds it: applying the removal is the caller's job,
+        // and it happens after this step's physics.
+        assert!(scene
+            .world
+            .get::<&Transform>(scene.entity("Bullet#1").unwrap())
+            .is_ok());
+    }
+
+    /// A script whose owner vanished would keep running against names that no
+    /// longer exist, which fails two hundred steps from its cause.
+    #[test]
+    fn a_script_owner_cannot_be_despawned() {
+        let dir = temp_dir("despawn-script");
+        let (mut scene, path) = scene_with_template(
+            &dir,
+            r#"fn step(world, step) { world.despawn_entity("Gun"); }"#,
+        );
+        let host = host_for(&scene, &path);
+        let error = step_once(&host, &mut scene, 0).unwrap_err();
+        assert!(
+            error.message.contains("carries a Script"),
+            "{}",
+            error.message
+        );
+    }
+
+    /// A scene with no `templates` block cannot spawn at all, and says so
+    /// rather than inventing a template.
+    #[test]
+    fn a_scene_without_templates_says_it_has_none() {
+        let dir = temp_dir("no-templates");
+        let (mut scene, path) = scene_with_script(
+            &dir,
+            r#"fn step(world, step) { world.spawn_entity("Bullet", 0.0, 0.0, 0.0); }"#,
+        );
+        let host = host_for(&scene, &path);
+        assert!(!host.can_spawn());
+        let error = step_once(&host, &mut scene, 0).unwrap_err();
+        assert!(
+            error.message.contains("declares no \"templates\" block"),
+            "{}",
+            error.message
+        );
+    }
+
     #[test]
     fn sync_names_lets_scripts_reach_spawned_entities() {
         let dir = temp_dir("sync");
@@ -3638,16 +4015,7 @@ mod tests {
             &dir,
             r#"fn step(world, step) { world.set_position("Fragment", 1.0, 2.0, 3.0); }"#,
         );
-        let mut host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let mut host = host_for(&scene, &path);
 
         // Before the spawn the name is unknown — a runtime error.
         let error = host
@@ -3688,16 +4056,7 @@ mod tests {
     fn no_time_or_io_exists_in_the_sandbox() {
         let dir = temp_dir("sandbox");
         let (mut scene, path) = scene_with_script(&dir, r#"fn step(world, step) { timestamp(); }"#);
-        let host = ScriptHost::build(
-            &scene.world,
-            &path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap();
+        let host = host_for(&scene, &path);
         let error = host
             .step(
                 &mut scene.world,
@@ -3728,19 +4087,6 @@ mod tests {
             )
             .unwrap();
         }
-    }
-
-    fn host_for(scene: &Scene, path: &Path) -> ScriptHost {
-        ScriptHost::build(
-            &scene.world,
-            path,
-            60,
-            None,
-            Default::default(),
-            &engine_core::mesh::BuiltinAssets,
-        )
-        .unwrap()
-        .unwrap()
     }
 
     /// M36. The round trip is the whole promise: what one run saved, a
@@ -3869,6 +4215,7 @@ mod tests {
             None,
             authored,
             &engine_core::mesh::BuiltinAssets,
+            &scene.templates,
         )
         .unwrap()
         .unwrap();

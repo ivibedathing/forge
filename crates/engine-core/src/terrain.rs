@@ -89,18 +89,70 @@ pub fn noise2(p: Vec2, salt: u32) -> f32 {
 }
 
 /// The height field at a world XZ position, in metres above the patch's own Y,
-/// before `Transform.scale.y`.
+/// before `Transform.scale.y`: the [`relief_at`] noise with every
+/// [`TerrainBasin`] cut out of it.
 ///
 /// Sampled in **world** space so that two patches sharing a description meet
 /// seamlessly, and so that moving a patch moves it through the landscape rather
-/// than carrying its hills along.
+/// than carrying its hills along. Basins are authored in the same space for the
+/// same reason.
+///
+/// The no-basin case is a **branch back to M22's expression** rather than a
+/// subtraction of zero. The two are numerically identical, but a scene authored
+/// before M42 should provably take the code path its baseline was blessed under
+/// instead of a new one that happens to agree.
+///
+/// [`TerrainBasin`]: crate::components::TerrainBasin
+pub fn height_at(terrain: &Terrain, x: f32, z: f32) -> f32 {
+    let relief = relief_at(terrain, x, z);
+    if terrain.basins.is_empty() {
+        return relief;
+    }
+    relief - basin_drop(terrain, x, z)
+}
+
+/// How far the basins lower the ground at a world XZ position, in metres before
+/// `Transform.scale.y` — the **deepest** basin covering the point, never the sum
+/// of them. `TerrainBasin`'s own docs carry the argument.
+fn basin_drop(terrain: &Terrain, x: f32, z: f32) -> f32 {
+    let mut drop = 0.0f32;
+    for basin in &terrain.basins {
+        let dx = x - basin.center[0];
+        let dz = z - basin.center[1];
+        let distance = (dx * dx + dz * dz).sqrt();
+
+        let weight = if distance <= basin.radius {
+            1.0
+        } else if basin.falloff > 0.0 {
+            let t = ((distance - basin.radius) / basin.falloff).clamp(0.0, 1.0);
+            // 1 − smoothstep(t), the interpolant `noise2` already uses, so the
+            // wall leaves the floor and meets the untouched field with a zero
+            // derivative at both ends.
+            1.0 - t * t * (3.0 - 2.0 * t)
+        } else {
+            // A zero-width wall: inside is floor, outside is untouched. The
+            // discontinuity is the authored one.
+            0.0
+        };
+
+        drop = drop.max(basin.depth * weight);
+    }
+    drop
+}
+
+/// The fBm relief alone (M22), before any basin is cut — the height field as it
+/// stood through M41, kept as one unedited expression so that the no-basin path
+/// is the one every existing baseline was blessed under.
 ///
 /// The sum is normalised by the total amplitude of its octaves, which is what
 /// makes [`Terrain::height`] mean metres regardless of `octaves` and
 /// `persistence`: adding an octave must add detail, not altitude. (The same
 /// argument that made water's `Q` divide by steepness rather than by wave
 /// count.)
-pub fn height_at(terrain: &Terrain, x: f32, z: f32) -> f32 {
+///
+/// A patch at `height: 0` returns 0 here and is still basined — flat ground with
+/// a pond in it is a legitimate thing to ask for.
+fn relief_at(terrain: &Terrain, x: f32, z: f32) -> f32 {
     if terrain.height == 0.0 {
         return 0.0;
     }
@@ -193,6 +245,11 @@ struct GridKey {
     origin_z: u32,
     size_x: u32,
     size_z: u32,
+    /// `(center.x, center.z, radius, depth, falloff)` per basin, as bit
+    /// patterns and in the authored order. Two patches differing only in their
+    /// basins are different ground, and sharing an `Arc` between them would
+    /// hand the second one the first one's hole.
+    basins: Vec<[u32; 5]>,
 }
 
 thread_local! {
@@ -226,6 +283,19 @@ pub fn surface_grid(terrain: &Terrain, origin: Vec2, size: Vec2) -> Arc<MeshData
         origin_z: origin.y.to_bits(),
         size_x: size.x.to_bits(),
         size_z: size.y.to_bits(),
+        basins: terrain
+            .basins
+            .iter()
+            .map(|b| {
+                [
+                    b.center[0].to_bits(),
+                    b.center[1].to_bits(),
+                    b.radius.to_bits(),
+                    b.depth.to_bits(),
+                    b.falloff.to_bits(),
+                ]
+            })
+            .collect(),
     };
 
     SURFACE_CACHE.with(|cache| {
@@ -311,6 +381,7 @@ fn build_surface(terrain: &Terrain, origin: Vec2, size: Vec2) -> MeshData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::TerrainBasin;
     use crate::mesh::BuiltinMesh;
 
     fn rolling() -> Terrain {
@@ -531,5 +602,197 @@ mod tests {
             })
             .count();
         assert!(differing > 180, "seeds barely differ: {differing}/200");
+    }
+
+    // ── Basins (M42) ─────────────────────────────────────────────────────
+
+    fn basin(center: [f32; 2], radius: f32, depth: f32, falloff: f32) -> TerrainBasin {
+        TerrainBasin {
+            center,
+            radius,
+            depth,
+            falloff,
+        }
+    }
+
+    #[test]
+    fn no_basins_is_the_untouched_field() {
+        // The M22 path, bit for bit. This is the property every pre-M42
+        // baseline in the repo rests on, so it is worth an assertion rather
+        // than an argument.
+        let plain = rolling();
+        let with_empty_list = Terrain {
+            basins: Vec::new(),
+            ..plain.clone()
+        };
+        for i in 0..500 {
+            let (x, z) = (i as f32 * 0.31 - 40.0, i as f32 * 0.17 - 20.0);
+            assert_eq!(
+                height_at(&plain, x, z).to_bits(),
+                height_at(&with_empty_list, x, z).to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn a_basin_lowers_its_floor_by_exactly_its_depth() {
+        let plain = rolling();
+        let dug = Terrain {
+            basins: vec![basin([6.0, -3.0], 4.0, 2.5, 3.0)],
+            ..plain.clone()
+        };
+
+        // Anywhere on the floor: the full depth, not a fraction of it.
+        for (x, z) in [(6.0, -3.0), (9.9, -3.0), (6.0, 0.9), (3.0, -5.0)] {
+            let drop = height_at(&plain, x, z) - height_at(&dug, x, z);
+            assert!(
+                (drop - 2.5).abs() < 1e-5,
+                "floor at ({x}, {z}) dropped {drop}, want 2.5"
+            );
+        }
+
+        // Beyond the wall: untouched, to the bit.
+        for (x, z) in [(14.0, -3.0), (6.0, 12.0), (-30.0, 40.0)] {
+            assert_eq!(
+                height_at(&plain, x, z).to_bits(),
+                height_at(&dug, x, z).to_bits(),
+                "the field moved {} m outside the basin at ({x}, {z})",
+                height_at(&plain, x, z) - height_at(&dug, x, z)
+            );
+        }
+    }
+
+    #[test]
+    fn the_wall_is_monotone_and_meets_the_ground_smoothly() {
+        // A basin is a shape an author places by eye and then puts water in, so
+        // the wall has to climb without a step and arrive at the surrounding
+        // field without a crease — the same thing `the_field_is_continuous`
+        // asks of the noise.
+        let flat = Terrain {
+            height: 0.0,
+            basins: vec![basin([0.0, 0.0], 2.0, 1.6, 5.0)],
+            ..Terrain::default()
+        };
+
+        let mut previous = height_at(&flat, 0.0, 0.0);
+        let mut gradients = Vec::new();
+        for i in 1..=1400 {
+            let x = i as f32 * 0.01;
+            let h = height_at(&flat, x, 0.0);
+            assert!(h >= previous - 1e-6, "the wall dips at x={x}");
+            assert!(h <= 1e-6, "the wall rises above the field at x={x}: {h}");
+            gradients.push((h - previous) / 0.01);
+            previous = h;
+        }
+
+        // The wall spans (2, 7]; the rim is the last sample inside it. A
+        // smoothstep leaves with a zero derivative, a linear ramp does not.
+        let rim = gradients[(7.0 / 0.01) as usize - 2];
+        assert!(rim.abs() < 0.02, "the rim has a crease: dy/dx {rim}");
+        assert!(
+            gradients.iter().cloned().fold(0.0, f32::max) > 0.3,
+            "the wall never actually climbs"
+        );
+    }
+
+    #[test]
+    fn a_zero_falloff_is_a_vertical_wall() {
+        let flat = Terrain {
+            height: 0.0,
+            basins: vec![basin([0.0, 0.0], 3.0, 2.0, 0.0)],
+            ..Terrain::default()
+        };
+        assert_eq!(height_at(&flat, 2.999, 0.0), -2.0);
+        assert_eq!(height_at(&flat, 3.001, 0.0), 0.0);
+    }
+
+    #[test]
+    fn overlapping_basins_take_the_deepest_not_the_sum() {
+        // The rule that lets a lake be authored as three circles. Under a sum
+        // the overlap digs to 2.4 m and the "lake" is a ring of pits.
+        let flat = Terrain {
+            height: 0.0,
+            basins: vec![
+                basin([-2.0, 0.0], 3.0, 1.2, 2.0),
+                basin([2.0, 0.0], 3.0, 1.2, 2.0),
+            ],
+            ..Terrain::default()
+        };
+        // (0, 0) is inside both floors.
+        assert_eq!(height_at(&flat, 0.0, 0.0), -1.2);
+
+        // And "deepest", not "first" or "last": a shallow basin laid over a
+        // deep one must not fill it in.
+        let nested = Terrain {
+            height: 0.0,
+            basins: vec![
+                basin([0.0, 0.0], 5.0, 3.0, 1.0),
+                basin([0.0, 0.0], 5.0, 0.5, 1.0),
+            ],
+            ..Terrain::default()
+        };
+        assert_eq!(height_at(&nested, 0.0, 0.0), -3.0);
+    }
+
+    #[test]
+    fn a_basin_survives_a_flat_patch() {
+        // `height: 0` early-returns before the noise is ever summed, which is
+        // the one place a basin could have been dropped on the floor.
+        let flat = Terrain {
+            height: 0.0,
+            basins: vec![basin([0.0, 0.0], 1.0, 0.75, 2.0)],
+            ..Terrain::default()
+        };
+        assert_eq!(height_at(&flat, 0.0, 0.0), -0.75);
+    }
+
+    #[test]
+    fn the_collider_surface_follows_the_basin() {
+        // The generated grid *is* the trimesh collider, so this is the
+        // assertion that a body dropped into a pond lands in it rather than on
+        // the plain the noise would have given.
+        let terrain = Terrain {
+            segments: 64,
+            basins: vec![basin([0.0, 0.0], 6.0, 2.0, 6.0)],
+            ..rolling()
+        };
+        let size = Vec2::splat(60.0);
+        let grid = surface_grid(&terrain, Vec2::ZERO, size);
+
+        let mut floor_vertices = 0;
+        for position in &grid.positions {
+            let (x, z) = (position[0] * size.x, position[2] * size.y);
+            assert!(
+                (position[1] - height_at(&terrain, x, z)).abs() < 1e-6,
+                "the grid disagrees with the height field at ({x}, {z})"
+            );
+            if x * x + z * z < 36.0 {
+                floor_vertices += 1;
+            }
+        }
+        assert!(
+            floor_vertices > 10,
+            "the floor is not resolved: {floor_vertices}"
+        );
+    }
+
+    #[test]
+    fn basins_are_in_the_surface_cache_key() {
+        // Two patches differing only in their basins are different ground;
+        // sharing an `Arc` would hand the second one the first one's hole.
+        let plain = rolling();
+        let dug = Terrain {
+            basins: vec![basin([0.0, 0.0], 4.0, 1.0, 4.0)],
+            ..plain.clone()
+        };
+        let deeper = Terrain {
+            basins: vec![basin([0.0, 0.0], 4.0, 2.0, 4.0)],
+            ..plain.clone()
+        };
+        let grid = |t: &Terrain| surface_grid(t, Vec2::ZERO, Vec2::splat(50.0));
+
+        assert!(!Arc::ptr_eq(&grid(&plain), &grid(&dug)));
+        assert!(!Arc::ptr_eq(&grid(&dug), &grid(&deeper)));
+        assert!(Arc::ptr_eq(&grid(&dug), &grid(&dug)));
     }
 }

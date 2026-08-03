@@ -21,10 +21,28 @@
           }
         ]
       },
+      "ColliderFit": {
+        "description": "How a proxy's size is decided (M39). See [`ColliderPart::fit`].",
+        "enum": [
+          "bone"
+        ],
+        "type": "string"
+      },
       "ColliderPart": {
         "additionalProperties": false,
         "description": "One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's\nframe (M33).\n\nFlat and discriminated by `shape`, exactly as [`Collider`] is and for the\nsame reasons — the schema-driven walk and the editor's generated inspector\nboth read flat structs, and `jq` and an LLM both write them. `cuboid`,\n`sphere` and `capsule` only: `trimesh` and `convex_hull` describe a\nspecific mesh, and a proxy exists precisely because that mesh lives on the\nGPU where physics cannot reach it (`collider_part_shape_unsupported`).",
         "properties": {
+          "fit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ColliderFit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Solve this part's length from the posed bone instead of holding the\nauthored one (M39). Absent — the default, and every pre-M39 part — is\nM33's rule exactly: only the placement follows the rig, never the size.\n\n`\"bone\"` takes a `capsule`'s `half_height`, or a `cuboid`'s Y\nhalf-extent, from the posed distance between this part's joint and that\njoint's first child, so a proxy set fitted to a rest pose keeps fitting\na skeleton the solver is moving. A joint with no child keeps the\nauthored value, which is what a hand or a head has."
+          },
           "half_extents": {
             "description": "`cuboid` only. Each component `> 0`.",
             "items": {
@@ -121,9 +139,19 @@
         ],
         "type": "string"
       },
+      "FractureMaterial": {
+        "description": "What a `Breakable` is made of (M43).\n\n`glass` shatters into radial slivers that fly far and fast; `wood` splits\ninto splinters along the grain and tumbles about its long axis; `stone`\nbreaks into chunky blocks that barely scatter, so a granite block comes\napart and its pieces *drop*; `metal` tears into a few large plates that\nmove together and slide.\n\nFour, because four is what the fracture generator has distinct algorithms\nfor and what the runtime has distinct behaviour for. A fifth would need\nboth, and \"generic\" is spelled by leaving the field out.\n\nNOTE: leave these variants undocumented, for [`ParticleBlend`]'s reason —\na doc comment on an enum *variant* makes schemars emit oneOf/const instead\nof a flat `\"enum\": [...]`, which blinds the validation walk's\nclosed-vocabulary check. Measured here: `\"material\": \"wud\"` reported\nnothing at all until these four comments moved up into this one.",
+        "enum": [
+          "glass",
+          "wood",
+          "stone",
+          "metal"
+        ],
+        "type": "string"
+      },
       "Fragment": {
         "additionalProperties": false,
-        "description": "One piece a `Breakable` entity shatters into (M14).\n\n`mesh` follows `Mesh.asset` rules (builtin or relative glTF path).\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model.\n`half_extents` is the fragment's cuboid collider in fragment-local units —\n`scale` scales it, exactly as `Transform.scale` scales a `Collider`.\nCuboid-only fragment colliders are deliberate v1 scope.",
+        "description": "One piece a `Breakable` entity shatters into (M14, shards since M43).\n\nA fragment is **either** a mesh reference or a shard, and exactly one of the\ntwo (`fragment_geometry`):\n\n- `mesh` follows `Mesh.asset` rules (builtin or relative glTF path), and\n  `half_extents` is its cuboid collider in fragment-local units — M14's\n  shape, where shards are boxes to the solver.\n- `points` is a convex point set (M43) that becomes a [`Shard`]: the\n  fragment's collider *is* its geometry, so `half_extents` alongside it is\n  an error rather than a number physics quietly ignores.\n\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model. `scale`\nscales the collider, exactly as `Transform.scale` does.",
         "properties": {
           "density": {
             "default": 1.0,
@@ -133,22 +161,24 @@
             "type": "number"
           },
           "half_extents": {
-            "default": [
-              0.5,
-              0.5,
-              0.5
-            ],
-            "description": "Cuboid collider half-extents. The default matches `builtin:cube`, so\na fragment that is a scaled builtin cube needs no collider authoring.",
+            "description": "Cuboid collider half-extents, for a `mesh` fragment. The default is\n`[0.5, 0.5, 0.5]`, matching `builtin:cube`, so a fragment that is a\nscaled builtin cube needs no collider authoring.\n\nOptional rather than defaulted-in-place since M43: a shard's collider\nis its own hull, so the difference between \"absent\" and \"written at the\ndefault\" is the difference between a valid fragment and a claim about a\ncollider physics never builds.",
             "items": {
               "format": "float",
               "type": "number"
             },
             "maxItems": 3,
             "minItems": 3,
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "mesh": {
-            "type": "string"
+            "description": "The piece's geometry as a mesh reference. Exclusive with `points`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "offset": {
             "default": [
@@ -164,6 +194,24 @@
             "maxItems": 3,
             "minItems": 3,
             "type": "array"
+          },
+          "points": {
+            "description": "The piece's geometry as a convex point set in parent-local metres\n(M43) — what `engine fracture` writes. Exclusive with `mesh`.",
+            "items": {
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "maxItems": 32,
+            "minItems": 4,
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "rotation": {
             "default": [
@@ -195,9 +243,6 @@
             "type": "array"
           }
         },
-        "required": [
-          "mesh"
-        ],
         "type": "object"
       },
       "GrowthStage": {
@@ -310,6 +355,96 @@
         ],
         "type": "string"
       },
+      "JointPose": {
+        "additionalProperties": false,
+        "description": "One joint's local placement while a [`Ragdoll`] owns the skeleton (M39).\n\n**`rotation` is a quaternion, `w` last — the one rotation in this format\nthat is not XYZ Euler degrees.** `CLAUDE.md` names the reason under Traps:\nXYZ Euler clamps the middle angle to ±90°, so an orientation the solver\nintegrated past that comes back as the `(±180, θ, ±180)` twin, and a\nragdoll's joints go past it in the first second. M30 drew the same line for\nskeletal clips, and the distinction is *who wrote the numbers*: these are\nthe engine's, like a DCC tool's, not an agent's.",
+        "properties": {
+          "joint": {
+            "description": "The joint this places. Every joint of the rig appears exactly once.",
+            "type": "string"
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "description": "`[x, y, z, w]`, glTF's order and rapier's.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "scale": {
+            "description": "Carried only when it is not 1: a ragdoll does not scale bones, so this\nis whatever the clip had at the moment of handoff.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "translation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Metres, in the parent joint's frame.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        },
+        "required": [
+          "joint"
+        ],
+        "type": "object"
+      },
+      "JunctionArm": {
+        "additionalProperties": false,
+        "description": "One road arriving at a [`Junction`].",
+        "properties": {
+          "end": {
+            "$ref": "#/$defs/JunctionEnd",
+            "default": "end",
+            "description": "Which end of it arrives."
+          },
+          "road": {
+            "default": "",
+            "description": "Name of the entity carrying the `Road` that arrives here (invariant 4).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "JunctionEnd": {
+        "description": "Which end of a road arrives at a [`Junction`].",
+        "oneOf": [
+          {
+            "const": "start",
+            "description": "The road's first point.",
+            "type": "string"
+          },
+          {
+            "const": "end",
+            "description": "The road's last point. A closed road has no free end, so an arm onto one\nis a validation error.",
+            "type": "string"
+          }
+        ]
+      },
       "ParticleBlend": {
         "description": "How a particle's color combines with what is already on screen.\n\nNOTE: leave these variants undocumented. A doc comment on an enum *variant*\nmakes schemars emit oneOf/const instead of a flat `\"enum\": [...]`, which\nblinds the validation walk's closed-vocabulary check — the same trap\n[`ColliderShapeKind`] carries a note about.",
         "enum": [
@@ -344,6 +479,56 @@
         },
         "required": [
           "ankle"
+        ],
+        "type": "object"
+      },
+      "RagdollJoint": {
+        "additionalProperties": false,
+        "description": "A per-joint override of [`Ragdoll`]'s default cone (M39).\n\nA ragdoll whose every joint is a 45° cone reads as a bag. A knee that only\nbends one way, and only backwards, is what makes it read as a body — and\nboth numbers being in the file is what makes it tunable without touching\nRust.",
+        "properties": {
+          "hinge": {
+            "description": "Turn this joint into a hinge about this axis in the **child** part's\nlocal frame, instead of a cone. An elbow or a knee.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "joint": {
+            "description": "The joint to override. Some part of the `SkinnedCollider` must ride it,\nand it must not be the root — a root part has no joint to constrain.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Half-angle of the cone, in degrees. Ignored when `hinge` is set.",
+            "format": "float",
+            "maximum": 180.0,
+            "minimum": 0.0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "range": {
+            "description": "The hinge's travel in degrees, `[min, max]`. `hinge` only.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "joint"
         ],
         "type": "object"
       },
@@ -467,13 +652,27 @@
         "additionalProperties": false,
         "description": "One authored point on a road's centerline.\n\nThe road is a **polygon with corner radii**, not a spline: a closed polygon\nreturns to its own first vertex and its exterior angles sum to exactly one\nturn, so position and heading close without solving anything. Nothing here\ncarries a heading, deliberately — a heading is derived, and a stored one can\nbe edited into disagreeing with the points on either side of it.",
         "properties": {
+          "bank": {
+            "default": null,
+            "description": "Roll of the cross-section here, in degrees, positive raising the\ndriver's **right** edge (M40).\n\nAbsent falls through to [`Road::auto_bank`], which is the way to author\na circuit: auto-banking knows which way the road turns and so raises the\noutside of every corner without the file carrying a sign that has to\nagree with the winding of a polygon being edited beside it. Reach for an\nexplicit value for the cases auto-banking cannot know — a banked\nstraight, a corner deliberately flat.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pin_height": {
+            "default": false,
+            "description": "Read `position.y` as an absolute height even though the road follows a\nterrain (M40) — a bridge deck, a level a junction has to meet.\n\nThe pin is a *local* correction to the followed profile, faded out over\n[`Road::follow_blend`] metres either side, so the road reaches this\nheight exactly and goes back to hugging the ground. Two pins closer\ntogether than that blend pull on each other and neither is reached\nexactly; validation warns (`road_pins_overlap`).\n\nWithout `follow_terrain` every height is already absolute and this does\nnothing.",
+            "type": "boolean"
+          },
           "position": {
             "default": [
               0.0,
               0.0,
               0.0
             ],
-            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.",
+            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.\n\nWith [`Road::follow_terrain`] set, `y` means something different: it is\nthe **clearance above the sampled ground**, so `0` sits the road on the\nterrain. [`pin_height`](Self::pin_height) turns it back into an absolute\nheight for one point.",
             "items": {
               "format": "float",
               "type": "number"
@@ -485,6 +684,58 @@
           "radius": {
             "default": 0.0,
             "description": "Radius of the arc rounding this corner, in metres. `>= 0`.\n\n`0` is a sharp vertex — mitred, which is exactly right for a point that\nis not really a turn (a start line partway along a straight) and wrong\nfor one that is: past\n[`MAX_SHARP_TURN_DEGREES`](crate::road::MAX_SHARP_TURN_DEGREES) of turn\nthe mitre folds back through the road and validation refuses it.\n\nThe two arcs meeting on one edge have to fit on it, which is the other\nthing a polygon cannot guarantee (`road_corner_does_not_fit`).",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "width": {
+            "default": null,
+            "description": "Width of the asphalt here, in metres, overriding the road's `width`\n(M40). Absent — the default — is the road's own width, so a file that\nnever mentions this is the M23 road exactly. `> 0`.\n\nInterpolated along the centerline by the same monotone cubic the heights\nuse, so a road never bulges wider than the widest width authored on it.\n**The whole cross-section scales, shoulder included**: `u` — signed\nmetres across the road — has to mean one thing at every `v` for the\nshader to find the asphalt edge, so the widening is one factor on the\nsection rather than a metre value added to the asphalt alone. Paint\nscales with it: a section at 1.5× width wears a 1.5× wider edge line.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TerrainBasin": {
+        "additionalProperties": false,
+        "description": "One circular depression a [`Terrain`] cuts into its height field (M42): a\nflat floor, a smoothstepped wall, and how far down the floor sits.\n\nThe shape is `radius` metres of floor surrounded by `falloff` metres of wall,\nso the whole footprint is `radius + falloff` and the shoreline of any water\nput here lands somewhere on the wall. **Two numbers rather than one**: a\nsingle radius with a falloff to nothing gives a dish, and a dish deep enough\nto hold water has walls gentle enough that the waterline creeps far past\nwhere it was authored.\n\n**Overlapping basins take the deepest, not the sum.** Overlapping circles are\nhow anything that is not a circle gets authored — a lake is three of them, a\nchannel a line of them — and under a sum every overlap digs to twice the\ndepth, turning a lake into a ring of pits. The cost is a faint crease where\ntwo basins are equally deep, which is under the water in every use this was\nbuilt for.",
+        "properties": {
+          "center": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Where the basin is centred, in **world** XZ metres — the same space\neverything else about a terrain is sampled in, and the same numbers the\n`Water` entity's `Transform.position` is written in.\n\nWorld rather than the patch's local space for M22's reason: heights are\na function of world position, which is what lets two patches sharing one\ndescription meet seamlessly. A basin in local space would be dragged\naround by its patch and would break that.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "depth": {
+            "default": 0.0,
+            "description": "Metres the floor drops below the surrounding field, `>= 0`.\n\nIn the same space as [`Terrain::height`] — metres of relief at\n`Transform.scale.y` 1, so the patch's vertical scale multiplies a basin\nexactly as it multiplies the hills. A second convention here would make\na patch at `scale.y: 2` disagree with itself about which of its numbers\nare metres.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "falloff": {
+            "default": 4.0,
+            "description": "Metres of wall between the floor's edge and the untouched field, `>= 0`.\n\nSmoothstepped, with the interpolant the value noise already uses, so the\nwall meets the surrounding ground with a zero derivative and the rim has\nno crease. 0 is a vertical wall, which reads as a quarry rather than a\npond and is occasionally what is wanted.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "radius": {
+            "default": 0.0,
+            "description": "Metres of flat floor at the centre, `>= 0`. 0 is legitimate and makes\nthe basin a smooth conical hollow of `falloff` metres.",
             "format": "float",
             "minimum": 0.0,
             "type": "number"
@@ -1271,6 +1522,10 @@
         "additionalProperties": false,
         "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse.",
         "properties": {
+          "dust": {
+            "description": "Throw the material's burst of dust, sawdust, glitter or sparks at the\nbreak (M44). Default **on**, and **does nothing without a `material`**\n— there is no generic dust, only stone's and wood's and glass's and\nmetal's.\n\nThe burst is a `ParticleEmitter` entity named `Parent.dust`, spawned at\nthe impact point and sized to the object, which despawns itself once\nits last particle dies. It is an ordinary entity while it lives: it\ntraces, it bakes, and a script can find it by name.",
+            "type": "boolean"
+          },
           "fragments": {
             "description": "What the entity becomes. At least one.",
             "items": {
@@ -1287,6 +1542,17 @@
               "number",
               "null"
             ]
+          },
+          "material": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/FractureMaterial"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What this is made of (M43), which decides how the pieces behave once\nthey are pieces: how hard they scatter away from the impact, how much\nthey tumble, and what their surfaces are like.\n\n**Absent is M14 unchanged** — fragments take the parent's motion and\nnothing else, on `friction: 0.5, restitution: 0.0`. A material is also\nwhat `engine fracture` generates shard geometry for, but the two halves\nare independent: a wooden crate that breaks into authored boxes still\nscatters like wood."
           },
           "type": {
             "const": "Breakable",
@@ -1994,12 +2260,26 @@
             "default": "alpha",
             "description": "How the billboard combines with the scene behind it. `\"alpha\"` (default)\noccludes what it covers; `\"additive\"` adds light to it, so overlapping\nsprites brighten toward white and a thin one is nearly invisible.\n\nFire, sparks, and magic are additive; smoke, dust, and spray are not.\nAdditive particles draw after every alpha-blended one, so a flame glows\n*through* the smoke above it rather than being occluded by it — the\napproximation is deliberate and it is what a real fire looks like,\nsince that smoke is genuinely lit from below."
           },
+          "despawn_when_done": {
+            "default": false,
+            "description": "Despawn this emitter's entity once its `duration` is up **and** its\nlast particle has died (M44). Default `false`.\n\nThis is what keeps a scene that breaks twenty crates from accumulating\ntwenty spent emitters. Requires `duration` — without one the emitter\nnever finishes and the flag could never fire, which is\n`emitter_never_finishes` rather than a field that quietly does nothing.\n\nThe despawn is an ordinary one: it traces as `despawned` like any\nother, and the entity is simply gone from a bake taken afterwards.",
+            "type": "boolean"
+          },
           "drag": {
             "default": 0.0,
             "description": "Velocity damping per second. `>= 0`; 0 means none.",
             "format": "float",
             "minimum": 0.0,
             "type": "number"
+          },
+          "duration": {
+            "description": "Seconds of **emission** after this emitter's first step (M44). `> 0`.\n\n**Absent is M13: it emits forever.** Present, it is a burst — the puff\nof dust a break throws, the spark shower off an impact — and when the\ntime is up emission stops exactly as `rate: 0` does: no new particles,\nand the live ones finish their own `lifetime`.\n\nIt is measured from when the *system* first sees the emitter, not from\nscene time, so an emitter that arrives mid-run (a break's dust) burns\nits burst from the moment it exists rather than being born already\nspent. That start is derived state, like particle positions: it is not\nbaked, so a scene baked mid-puff reloads and puffs again — the same\nthing the tour's fire already does, for the same reason.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "end_alpha": {
             "default": 0.0,
@@ -2402,6 +2682,13 @@
             "minItems": 3,
             "type": "array"
           },
+          "density": {
+            "default": 1000.0,
+            "description": "Density of the fluid in kg/m³, `> 0`. Fresh water is 1000 (the default),\nsea water about 1025.\n\nThe **only** field here that nothing renders. It is what a [`Buoyancy`]\nbody weighs the water it displaces against, and it lives on the lake\nrather than on the boat because it is a property of the fluid: two hulls\nin one pond disagreeing about how dense the water is would not be a knob,\nit would be a bug. The authoring knob for \"this floats higher\" already\nexists and is [`Collider::density`], in the same unit.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
           "depth_fade": {
             "default": 2.5,
             "description": "Metres of water the view has to pass through to reach `deep_color` and\nfull `opacity`. `> 0`.\n\nBeer-Lambert absorption against the depth of whatever is behind the\nsurface, so the same water is clear at the edge of a pond and opaque in\nthe middle — which is most of how a surface reads as *deep* rather than\nas a coloured pane. A clear alpine lake is 6 or more; a silty pond is\nunder 1.",
@@ -2693,6 +2980,14 @@
         "additionalProperties": false,
         "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M22).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
         "properties": {
+          "basins": {
+            "default": [],
+            "description": "Circular depressions cut into the height field, in **world** XZ (M42).\n\nEmpty (the default) is M22's landscape exactly — the noise is the whole\nanswer. This is the only way to say \"the ground dips *here*\": everything\nelse about a patch describes a texture of relief rather than a place, and\na body of water needs a place.\n\nCut inside [`height_at`](crate::terrain::height_at), so the drawn\nsurface, its normals, the `trimesh` collider standing on it,\n`world.terrain_height`, a `Road` that follows this patch and a `Meadow`\ngrowing on it all follow from the one implementation.",
+            "items": {
+              "$ref": "#/$defs/TerrainBasin"
+            },
+            "type": "array"
+          },
           "bump": {
             "default": 0.30000001192092896,
             "description": "Per-pixel normal perturbation from the detail noise, `[0, 1]`.\n\nBumpiness with no displacement behind it — nothing physical may depend on\nit, which is what allows detail far finer than the grid or the collider.\nIt fades with view distance, because sub-pixel normal variation aliases\ninto sparkle that reads as broken rather than as low quality (the lesson\nwater's detail ripples already paid for).",
@@ -2792,6 +3087,20 @@
         "additionalProperties": false,
         "description": "A road: a circuit, a street, a mountain pass.\n\nThe entity owns its surface geometry — one continuous ribbon generated from\nthe centerline — so a `Road` entity carries **no** `Mesh` and no `Material`\n(`road_with_mesh`), the same rule [`Water`] follows and for the same reason.\n\nAsphalt, shoulders and the embankment skirt are all the **same** triangles.\nThat is not a saving, it is the point: road and shoulder as two surfaces at\nslightly different heights build a ledge along the asphalt edge, and a wheel\nthat drops off it wedges against the step and stops the car dead. There is\nno seam between segments either, because consecutive cross-sections share\ntheir vertices.\n\nPhysics reads the same mesh: a `Collider` with `\"shape\": \"trimesh\"` on a\nroad entity needs no `asset` and no `Mesh`, because the road is the\ngeometry. Friction and collision layers stay on the `Collider`, where every\nother surface in the engine keeps them.",
         "properties": {
+          "auto_bank": {
+            "default": 0.0,
+            "description": "Bank every corner by this many degrees at a radius of\n[`auto_bank_radius`](Self::auto_bank_radius), scaling as `1 / radius`\nfor anything wider and capped here for anything tighter (M40). `0` —\nthe default — leaves the road flat. `>= 0`.\n\n**The engine picks the sign**, raising the outside of each turn, and\nthat is the whole reason this field exists next to\n[`RoadPoint::bank`]. Which way a corner banks is a fact about the\nwinding of the polygon it belongs to; deriving it per corner by hand is\nhow a circuit ends up with one corner that throws the car off.\n\nIt is a shape knob, not a physical one. Banking a corner for a *speed*\nis `atan(v² / gR)` and wants a velocity a road cannot know — the answer\nfor a kart and an F1 car differ by 20°.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "auto_bank_radius": {
+            "default": 20.0,
+            "description": "The corner radius [`auto_bank`](Self::auto_bank) is quoted at, in\nmetres. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
           "bank_color": {
             "default": [
               0.20000000298023224,
@@ -2831,6 +3140,43 @@
             "minItems": 3,
             "type": "array"
           },
+          "follow_blend": {
+            "default": 30.0,
+            "description": "How far either side of a [`pinned`](RoadPoint::pin_height) point its\nheight correction fades out, in metres. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "follow_smoothing": {
+            "default": 12.0,
+            "description": "How far along the road the sampled ground is averaged, in metres.\n`>= 0`, and `0` reproduces the terrain exactly, bumps and all.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "follow_terrain": {
+            "default": null,
+            "description": "Name of a `Terrain` entity this road rides on (M40). Absent — the\ndefault — is a road whose heights are absolute, which is every road\nbefore M40.\n\nWith it set, each point's `y` becomes a **clearance above the ground**\nand the terrain is sampled at every centerline sample rather than only\nat the authored points, then smoothed over\n[`follow_smoothing`](Self::follow_smoothing) metres — terrain is noise,\nand a road that reproduces it is undrivable.\n\nThe road does **not** carve the terrain: a height field stays the one\nsource of truth for where the ground is. Where the smoothed road passes\nbelow the real ground the ground pokes through it, and the answers are\nmore clearance, a [`pinned`](RoadPoint::pin_height) point, or more\nsmoothing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grain": {
+            "default": 0.0,
+            "description": "How strongly the asphalt is grained, `[0, 1]`. `0` — the default — is\nthe flat colour M23 shipped (M40).\n\nA value-noise field in the road's own `(u, v)`, so it follows every\ncurve and grade the way the markings do, perturbing albedo and\nroughness. Deliberately not a normal perturbation: grain that tilts the\nshading normal sparkles under a moving camera at exactly the frequencies\na deterministic renderer should not be producing.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "grain_scale": {
+            "default": 0.3499999940395355,
+            "description": "Size of one grain cell, in metres. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
           "markings": {
             "$ref": "#/$defs/RoadMarkings",
             "default": {
@@ -2861,20 +3207,26 @@
           "points": {
             "default": [
               {
+                "bank": null,
+                "pin_height": false,
                 "position": [
                   0.0,
                   0.0,
                   0.0
                 ],
-                "radius": 0.0
+                "radius": 0.0,
+                "width": null
               },
               {
+                "bank": null,
+                "pin_height": false,
                 "position": [
                   0.0,
                   0.0,
                   -20.0
                 ],
-                "radius": 0.0
+                "radius": 0.0,
+                "width": null
               }
             ],
             "description": "The centerline, corner by corner, in the order they are driven. At\nleast two points; a closed road needs at least three.",
@@ -2947,6 +3299,133 @@
             "exclusiveMinimum": 0.0,
             "format": "float",
             "type": "number"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Where roads meet: the patch of asphalt a ribbon cannot be (M40).\n\nA [`Road`] is swept along a curve, which is the wrong primitive for a\ncrossroads — two ribbons crossing leave a hole. A junction is instead the\narea **bounded by the mouths of the roads that reach it**: each arm names a\nroad and which end of it arrives, and the patch stretches to whatever those\nmouths turn out to be.\n\nThe mouths are read off each road's finished surface — the same\n[`RoadSurface`](crate::road::RoadSurface) the renderer draws and physics\nbuilds its trimesh from — so a junction cannot disagree with the road it\njoins about where that road ended, how wide it was there, what height it\nreached, or how far it was banked. That is the `engine road-centerline` rule\napplied inside the engine: nothing re-derives a curve someone else built.\n\n**The junction does not trim its roads.** It would be the tidier result and\nit inverts the ownership every recipe here follows: a road's geometry would\nbecome a function of which junctions happen to name it, and `engine inspect`\non the road would stop predicting the road. The author ends each road at the\njunction's mouth, and because the patch stretches, \"roughly there\" is enough\n— an arm stopping 2 m short simply makes the patch 2 m longer on that side.\n\nLike every other recipe, the entity owns its geometry and so carries **no**\n`Mesh` and no `Material` (`junction_with_mesh`), and a `Collider` with\n`\"shape\": \"trimesh\"` on it takes the patch.",
+        "properties": {
+          "arms": {
+            "default": [],
+            "description": "The roads that meet here, in any order — the patch is built in\nrotational order about the mouths whatever order they are listed in. At\nleast two.",
+            "items": {
+              "$ref": "#/$defs/JunctionArm"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "bank_color": {
+            "default": [
+              0.20000000298023224,
+              0.17000000178813934,
+              0.12999999523162842
+            ],
+            "description": "Linear RGB of the embankment. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "color": {
+            "default": [
+              0.09000000357627869,
+              0.09000000357627869,
+              0.10000000149011612
+            ],
+            "description": "Linear RGB of the asphalt. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "corner_segments": {
+            "default": 6,
+            "description": "How finely each of those corners is cut. `>= 1`.",
+            "format": "uint32",
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "flare": {
+            "default": 1.0,
+            "description": "How far the corner between two arms reaches out toward where their edges\nwould have crossed, `[0, 1]`.\n\n`1` — the default — is the full flare, a quadratic Bézier through that\nintersection, which is the shape a real corner has. `0` is the straight\nchord from one mouth's corner to the next.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "grain": {
+            "default": 0.0,
+            "description": "How strongly the asphalt is grained, `[0, 1]` — [`Road::grain`] on a\npatch, so a junction and the roads reaching it can wear the same\nsurface.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "grain_scale": {
+            "default": 0.3499999940395355,
+            "description": "Size of one grain cell, in metres. `> 0`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "roughness": {
+            "default": 0.9200000166893005,
+            "description": "Surface roughness, `[0, 1]`.",
+            "format": "float",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "shoulder": {
+            "default": 1.5,
+            "description": "Shoulder around the patch, in metres — the same surface, for the same\nreason a road's is. `>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "shoulder_color": {
+            "default": [
+              0.17000000178813934,
+              0.20000000298023224,
+              0.14000000059604645
+            ],
+            "description": "Linear RGB of the shoulder. Each component `[0, 1]`.",
+            "items": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "skirt": {
+            "default": 0.6000000238418579,
+            "description": "How far the embankment drops below the shoulder's outer edge, in metres.\n`>= 0`.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "type": {
+            "const": "Junction",
+            "type": "string"
           }
         },
         "required": [
@@ -3334,6 +3813,198 @@
           "parts"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Physics driving a skinned character's skeleton (M39).\n\nM33 said the pose drives the proxies and nothing reads them back, and called\nthat its whole design. **This reverses that sentence for one entity, once,\npermanently.** When `active` turns true the entity's `SkinnedCollider`\nproxies stop being kinematic followers and become dynamic bodies wired\ntogether with rapier joints; from that step on the skeleton is a report of\nwhere they ended up.\n\n**The pose stays in the file, which is why invariant 2 survives the\nreversal.** `pose` is written back after every step, exactly as M32 writes\n`AnimationPlayer.phase` back, and `locomotion::posed_globals_at` reads it\nbefore it looks at a clip — so the render, `engine list-joints`,\n`engine list-colliders` and `world.joint_position` all see the ragdolled\nskeleton through the seam they already shared. M32's rule is what settled\nit: a ragdoll halfway to the floor, baked and reloaded, has to land in the\nsame heap, and a pose living in the physics world would reload standing up.\n\nThe bodies **are** the proxies, so the hitbox that was shot is the body that\nfalls, and the collider set does not change on handoff — which matters\nbecause that set is an input to rapier's broad phase.\n\nSee `designs/ragdoll-design.md`.",
+        "properties": {
+          "active": {
+            "default": false,
+            "description": "Whether physics owns the skeleton. A scene may ship this true and its\ncharacter is a corpse from step 0; `world.ragdoll(name)` sets it, and\nnothing clears it — the handoff is one-way (design §3).",
+            "type": "boolean"
+          },
+          "angular_damping": {
+            "default": 0.6000000238418579,
+            "description": "The same, for spin — and the one that stops a corpse pinwheeling.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "density": {
+            "default": 985.0,
+            "description": "kg/m³, `Collider.density`'s unit. Each part's mass is its shape's\nvolume times this. Defaults to a shade under water, which is roughly\nwhat a person is.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "joints": {
+            "description": "Joints that want something other than the default cone.",
+            "items": {
+              "$ref": "#/$defs/RagdollJoint"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "default": 45.0,
+            "description": "Half-angle in degrees of the cone every joint gets unless `joints`\noverrides it.",
+            "format": "float",
+            "maximum": 180.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "linear_damping": {
+            "default": 0.05000000074505806,
+            "description": "Velocity damping on every part. Deliberately above a physically honest\nvalue: a real body tumbles for longer than a game wants to watch, and\nthis is the dial that fixes it.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "pose": {
+            "description": "The skeleton, once physics owns it: one entry per joint of the rig,\nwritten by the engine after every step. Absent until the handoff.\n\nIt is in the file rather than in the physics world because that is what\nmakes a baked ragdoll reload into the same heap — see the type's docs.",
+            "items": {
+              "$ref": "#/$defs/JointPose"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "type": {
+            "const": "Ragdoll",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Makes a dynamic body float on a named [`Water`] surface (M41).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M41 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
+        "properties": {
+          "angular_drag": {
+            "default": 2.0,
+            "description": "Angular damping in 1/s, scaled by submersion exactly as [`drag`] is.\n`>= 0`.\n\nUsually wants to be the larger of the two: water stops a hull from\nspinning far more effectively than it stops it from drifting, and a boat\nthat rolls for twenty seconds after a wave reads as weightless.\n\n[`drag`]: Buoyancy::drag",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "drag": {
+            "default": 1.0,
+            "description": "Linear damping in 1/s applied **in proportion to how submerged the body\nis**, `>= 0`.\n\nAdded on top of [`RigidBody::linear_damping`], not replacing it: that\nfield is the body's drag in air, and this is the water's. Water drag is\nnot a property of the boat, which is exactly why it cannot be authored on\nthe `RigidBody` — a hull thrown clear of the pond has to stop being\ndamped the moment it leaves, and a half-submerged one is dragged half as\nhard.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "samples": {
+            "default": 2,
+            "description": "Columns per axis across the body's footprint, `[1, 4]`. Default 2, so a\nhull is sampled at four points.\n\nThe fidelity knob, and it decides whether the body can **turn**: at 1\nthere is a single upward push through the middle and a raft cannot right\nitself or ride a slope, because a force through the centre of mass makes\nno torque. At 2 each quarter of the hull feels its own wave, which is\nwhat makes a boat pitch into a swell instead of hovering over it. Past\nthat the returns fall off quickly — 3 and 4 are for a long hull spanning\nseveral wavelengths.",
+            "format": "uint32",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": {
+            "const": "Buoyancy",
+            "type": "string"
+          },
+          "water": {
+            "default": "",
+            "description": "The [`Water`] entity this body floats on, by name. Required.\n\nNamed rather than found by overlap, for [`Meadow::terrain`]'s reason: one\nimplementation of \"where is the surface\", pointed at explicitly. A scene\nwith two ponds has to say which one, and a scene with one still says it,\nso the file records what the physics did.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A convex piece of a broken thing (M43), as a point set that **owns its\ngeometry** — so an entity with one carries no `Mesh`, the rule `Water`,\n`Terrain`, `Cloud`, `Road`, `Junction` and `Meadow` already follow.\n\nIt is `Tree`'s exception on materials: the entity's own `Material` is the\nshard's surface, because a shard of a painted crate is painted.\n\nThe drawn solid is the convex hull of `points`, flat-shaded, and a\n`convex_hull` `Collider` on the same entity collides with that same hull —\nthe file carries points rather than faces precisely so the two cannot be\ndifferent shapes.\n\nOrdinary authored data, not a runtime-only artifact: rubble on the ground is\na pile of these. `engine fracture` is what usually writes them.",
+        "properties": {
+          "points": {
+            "description": "The convex point set, in entity-local metres, scaled by\n`Transform.scale` like every other length. At least 4, at most 32, and\nthey must bound a volume (`shard_degenerate`).",
+            "items": {
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "maxItems": 32,
+            "minItems": 4,
+            "type": "array"
+          },
+          "type": {
+            "const": "Shard",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "points"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "Defines the serialized component union alongside everything that must stay\nin step with it.\n\nThe name list feeds `did_you_mean` suggestions and the spawn arm feeds\nA region of space holding a grid of baked light probes (M35).\n\nThe fill light every other surface gets is a lie: `sky_ambient` hands the\nwhole sky hemisphere to the inside of a forest, the underside of a truck and\na bare patch of open ground alike, because nothing in the engine knows that\ngeometry stands between a surface and the sky. A `LightProbeVolume` replaces\nthat constant with a function of *where you are standing and which way you\nare facing* — which is what puts contact darkening under an object and lets\ncolour travel off a coloured wall.\n\nLike [`Water`], [`Terrain`], [`Road`], [`Cloud`] and [`Meadow`], the entity\ncarries a `Transform` and this component and **no `Mesh` and no `Material`**\n(`light_probe_volume_with_mesh`). Unlike those, it grows no geometry at all:\nthe `Transform` is read purely as *bounds* — a unit box scaled and\npositioned, non-uniform scale being the normal case.\n\n```json\n{ \"type\": \"LightProbeVolume\", \"spacing\": 4.0, \"bake\": \"gi/showcase.gi.json\" }\n```\n\n**A scene may hold at most one** (`multiple_light_probe_volumes`), following\n`DirectionalLight` and `AmbientLight` and for the same reason: the renderer\nholds one field, so a second volume would bake, validate, and light nothing.\nA point outside the volume falls back to `sky_ambient`, which is exactly the\npre-M35 path — so [`blend`](LightProbeVolume::blend) exists to make that\nboundary a fade rather than a step.\n\nThe bake is a file rather than a load-time computation because the loop is\nthe product: a BVH build plus a few hundred thousand rays is seconds, and it\nwould otherwise be paid by every `screenshot`, every `diff-render` and every\neditor reload.",
+        "properties": {
+          "bake": {
+            "default": "",
+            "description": "Path to the baked transfer file, relative to the **scene file**\n(invariant 3), conventionally `gi/<name>.gi.json`.\n\nWritten by `engine bake-gi`. A path that is not there is\n`gi_bake_missing`; one taken from a different version of the scene is\n`gi_bake_stale`. Neither is a warning, because a bake that disagrees\nwith its geometry renders light that is quietly wrong — the one failure\nmode this system is built to make impossible.",
+            "type": "string"
+          },
+          "blend": {
+            "default": 1.0,
+            "description": "Metres of fade at the volume's edge, `>= 0`.\n\nOver this distance the volume's irradiance crosses to whatever lies\noutside it — another volume, or the `sky_ambient` fallback. Without it\nthe boundary is a visible step, since the two models disagree by exactly\nthe occlusion the volume measured.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "bounces": {
+            "default": 1,
+            "description": "Light bounces the bake gathers, `[1, 2]`.\n\nBounce one holds nearly all of the visible difference; bounce two costs\nanother pass over the volume and mostly lifts the black out of deep\nocclusion.",
+            "format": "uint32",
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "intensity": {
+            "default": 1.0,
+            "description": "Scales the whole effect, `>= 0`.\n\nExists so an authoring pass can dial GI back without re-baking, and so\n`0.0` is a one-field A/B against the pre-M35 look. Animatable, which is\nhow a scene fades GI in.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "spacing": {
+            "default": 4.0,
+            "description": "Metres between probes, `> 0`.\n\nA spacing, not a resolution: resizing a volume keeps its GI detail\ninstead of stretching it, and two volumes at the same spacing agree\nwhere they meet. Probe counts are derived from this and the `Transform`\nscale, reported by `bake-gi`, and bounded by `too_many_gi_probes`.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": "number"
+          },
+          "sun_samples": {
+            "default": 0,
+            "description": "Sun directions the bake gathers **bounced sunlight** for, `[0, 16]`\n(M45).\n\n`0` is M35: the sun is a direct light with a shadow map and throws no\ncolour onto anything. Above zero, the bake samples the scene's own\ndaylight arc at this many points and stores what bounces off the\ngeometry for each — which is what makes a red wall redden the white one\nbeside it under a *sun* rather than only under the sky.\n\n**A scene whose sun does not move needs 1.** An authored\n`DirectionalLight` with no `daylight` block has exactly one sun\ndirection, so the bake collapses to a single vector per probe whatever\nthis says, and anything above 1 buys nothing.\n\nIt defaults to 0 because the file is the cost: a daylight scene at 8\nstores 96 numbers per probe against the sky basis's 24. Bounced\nmoonlight is not gathered at any setting — see the design's §4.",
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "const": "LightProbeVolume",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -3363,9 +4034,14 @@
     "Cloud",
     "Terrain",
     "Road",
+    "Junction",
     "Meadow",
     "FootPlant",
-    "SkinnedCollider"
+    "SkinnedCollider",
+    "Ragdoll",
+    "Buoyancy",
+    "Shard",
+    "LightProbeVolume"
   ],
   "scene": {
     "$defs": {
@@ -3389,10 +4065,28 @@
           }
         ]
       },
+      "ColliderFit": {
+        "description": "How a proxy's size is decided (M39). See [`ColliderPart::fit`].",
+        "enum": [
+          "bone"
+        ],
+        "type": "string"
+      },
       "ColliderPart": {
         "additionalProperties": false,
         "description": "One proxy of a [`SkinnedCollider`]: a simple shape fixed in one joint's\nframe (M33).\n\nFlat and discriminated by `shape`, exactly as [`Collider`] is and for the\nsame reasons — the schema-driven walk and the editor's generated inspector\nboth read flat structs, and `jq` and an LLM both write them. `cuboid`,\n`sphere` and `capsule` only: `trimesh` and `convex_hull` describe a\nspecific mesh, and a proxy exists precisely because that mesh lives on the\nGPU where physics cannot reach it (`collider_part_shape_unsupported`).",
         "properties": {
+          "fit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ColliderFit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Solve this part's length from the posed bone instead of holding the\nauthored one (M39). Absent — the default, and every pre-M39 part — is\nM33's rule exactly: only the placement follows the rig, never the size.\n\n`\"bone\"` takes a `capsule`'s `half_height`, or a `cuboid`'s Y\nhalf-extent, from the posed distance between this part's joint and that\njoint's first child, so a proxy set fitted to a rest pose keeps fitting\na skeleton the solver is moving. A joint with no child keeps the\nauthored value, which is what a hand or a head has."
+          },
           "half_extents": {
             "description": "`cuboid` only. Each component `> 0`.",
             "items": {
@@ -4132,6 +4826,10 @@
             "additionalProperties": false,
             "description": "Breaks into pre-authored fragments (M14) — on a hard enough collision,\ninside an explosion, or when a script calls `world.break_entity`.\n\nOn break the entity is replaced, after that step's physics, by one\ndynamic-body entity per fragment (`Parent.frag0`, `Parent.frag1`, …),\neach inheriting the parent's `Material` and motion. Fragments are\nordinary entities afterwards: they render, trace, and bake like anything\nelse.",
             "properties": {
+              "dust": {
+                "description": "Throw the material's burst of dust, sawdust, glitter or sparks at the\nbreak (M44). Default **on**, and **does nothing without a `material`**\n— there is no generic dust, only stone's and wood's and glass's and\nmetal's.\n\nThe burst is a `ParticleEmitter` entity named `Parent.dust`, spawned at\nthe impact point and sized to the object, which despawns itself once\nits last particle dies. It is an ordinary entity while it lives: it\ntraces, it bakes, and a script can find it by name.",
+                "type": "boolean"
+              },
               "fragments": {
                 "description": "What the entity becomes. At least one.",
                 "items": {
@@ -4148,6 +4846,17 @@
                   "number",
                   "null"
                 ]
+              },
+              "material": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/FractureMaterial"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What this is made of (M43), which decides how the pieces behave once\nthey are pieces: how hard they scatter away from the impact, how much\nthey tumble, and what their surfaces are like.\n\n**Absent is M14 unchanged** — fragments take the parent's motion and\nnothing else, on `friction: 0.5, restitution: 0.0`. A material is also\nwhat `engine fracture` generates shard geometry for, but the two halves\nare independent: a wooden crate that breaks into authored boxes still\nscatters like wood."
               },
               "type": {
                 "const": "Breakable",
@@ -4855,12 +5564,26 @@
                 "default": "alpha",
                 "description": "How the billboard combines with the scene behind it. `\"alpha\"` (default)\noccludes what it covers; `\"additive\"` adds light to it, so overlapping\nsprites brighten toward white and a thin one is nearly invisible.\n\nFire, sparks, and magic are additive; smoke, dust, and spray are not.\nAdditive particles draw after every alpha-blended one, so a flame glows\n*through* the smoke above it rather than being occluded by it — the\napproximation is deliberate and it is what a real fire looks like,\nsince that smoke is genuinely lit from below."
               },
+              "despawn_when_done": {
+                "default": false,
+                "description": "Despawn this emitter's entity once its `duration` is up **and** its\nlast particle has died (M44). Default `false`.\n\nThis is what keeps a scene that breaks twenty crates from accumulating\ntwenty spent emitters. Requires `duration` — without one the emitter\nnever finishes and the flag could never fire, which is\n`emitter_never_finishes` rather than a field that quietly does nothing.\n\nThe despawn is an ordinary one: it traces as `despawned` like any\nother, and the entity is simply gone from a bake taken afterwards.",
+                "type": "boolean"
+              },
               "drag": {
                 "default": 0.0,
                 "description": "Velocity damping per second. `>= 0`; 0 means none.",
                 "format": "float",
                 "minimum": 0.0,
                 "type": "number"
+              },
+              "duration": {
+                "description": "Seconds of **emission** after this emitter's first step (M44). `> 0`.\n\n**Absent is M13: it emits forever.** Present, it is a burst — the puff\nof dust a break throws, the spark shower off an impact — and when the\ntime is up emission stops exactly as `rate: 0` does: no new particles,\nand the live ones finish their own `lifetime`.\n\nIt is measured from when the *system* first sees the emitter, not from\nscene time, so an emitter that arrives mid-run (a break's dust) burns\nits burst from the moment it exists rather than being born already\nspent. That start is derived state, like particle positions: it is not\nbaked, so a scene baked mid-puff reloads and puffs again — the same\nthing the tour's fire already does, for the same reason.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": [
+                  "number",
+                  "null"
+                ]
               },
               "end_alpha": {
                 "default": 0.0,
@@ -5263,6 +5986,13 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "density": {
+                "default": 1000.0,
+                "description": "Density of the fluid in kg/m³, `> 0`. Fresh water is 1000 (the default),\nsea water about 1025.\n\nThe **only** field here that nothing renders. It is what a [`Buoyancy`]\nbody weighs the water it displaces against, and it lives on the lake\nrather than on the boat because it is a property of the fluid: two hulls\nin one pond disagreeing about how dense the water is would not be a knob,\nit would be a bug. The authoring knob for \"this floats higher\" already\nexists and is [`Collider::density`], in the same unit.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
               "depth_fade": {
                 "default": 2.5,
                 "description": "Metres of water the view has to pass through to reach `deep_color` and\nfull `opacity`. `> 0`.\n\nBeer-Lambert absorption against the depth of whatever is behind the\nsurface, so the same water is clear at the edge of a pond and opaque in\nthe middle — which is most of how a surface reads as *deep* rather than\nas a coloured pane. A clear alpine lake is 6 or more; a silty pond is\nunder 1.",
@@ -5554,6 +6284,14 @@
             "additionalProperties": false,
             "description": "A patch of ground: displaced terrain with a procedurally shaded surface\n(M22).\n\nThe entity carries **no** [`Mesh`] and **no** [`Material`] — `Terrain` owns\nboth, like [`Water`] — and having either is `terrain_with_mesh`. Geometry is\na tessellated unit grid sized by `Transform.scale`, displaced by an fBm\nheight field; `Transform.scale.y` multiplies that displacement, so [`height`]\nis what you get at scale 1.\n\nHeights are sampled in **world** XZ, so two patches with the same fields meet\nseamlessly and moving one moves it *through* the field rather than dragging\nits hills along.\n\nUnlike water's waves, the height field is evaluated on the **CPU**: terrain\ndoes not animate, so the surface is generated once and cached, and there is\nexactly one implementation for the renderer, the collider (a `trimesh`\n`Collider` with no asset uses this surface) and\n`world.terrain_height(name, x, z)` to share. Appearance is the opposite —\nper-pixel, in the shader, mirrored by nothing, which is what licenses detail\nfar finer than the grid.\n\n[`height`]: Terrain::height",
             "properties": {
+              "basins": {
+                "default": [],
+                "description": "Circular depressions cut into the height field, in **world** XZ (M42).\n\nEmpty (the default) is M22's landscape exactly — the noise is the whole\nanswer. This is the only way to say \"the ground dips *here*\": everything\nelse about a patch describes a texture of relief rather than a place, and\na body of water needs a place.\n\nCut inside [`height_at`](crate::terrain::height_at), so the drawn\nsurface, its normals, the `trimesh` collider standing on it,\n`world.terrain_height`, a `Road` that follows this patch and a `Meadow`\ngrowing on it all follow from the one implementation.",
+                "items": {
+                  "$ref": "#/$defs/TerrainBasin"
+                },
+                "type": "array"
+              },
               "bump": {
                 "default": 0.30000001192092896,
                 "description": "Per-pixel normal perturbation from the detail noise, `[0, 1]`.\n\nBumpiness with no displacement behind it — nothing physical may depend on\nit, which is what allows detail far finer than the grid or the collider.\nIt fades with view distance, because sub-pixel normal variation aliases\ninto sparkle that reads as broken rather than as low quality (the lesson\nwater's detail ripples already paid for).",
@@ -5653,6 +6391,20 @@
             "additionalProperties": false,
             "description": "A road: a circuit, a street, a mountain pass.\n\nThe entity owns its surface geometry — one continuous ribbon generated from\nthe centerline — so a `Road` entity carries **no** `Mesh` and no `Material`\n(`road_with_mesh`), the same rule [`Water`] follows and for the same reason.\n\nAsphalt, shoulders and the embankment skirt are all the **same** triangles.\nThat is not a saving, it is the point: road and shoulder as two surfaces at\nslightly different heights build a ledge along the asphalt edge, and a wheel\nthat drops off it wedges against the step and stops the car dead. There is\nno seam between segments either, because consecutive cross-sections share\ntheir vertices.\n\nPhysics reads the same mesh: a `Collider` with `\"shape\": \"trimesh\"` on a\nroad entity needs no `asset` and no `Mesh`, because the road is the\ngeometry. Friction and collision layers stay on the `Collider`, where every\nother surface in the engine keeps them.",
             "properties": {
+              "auto_bank": {
+                "default": 0.0,
+                "description": "Bank every corner by this many degrees at a radius of\n[`auto_bank_radius`](Self::auto_bank_radius), scaling as `1 / radius`\nfor anything wider and capped here for anything tighter (M40). `0` —\nthe default — leaves the road flat. `>= 0`.\n\n**The engine picks the sign**, raising the outside of each turn, and\nthat is the whole reason this field exists next to\n[`RoadPoint::bank`]. Which way a corner banks is a fact about the\nwinding of the polygon it belongs to; deriving it per corner by hand is\nhow a circuit ends up with one corner that throws the car off.\n\nIt is a shape knob, not a physical one. Banking a corner for a *speed*\nis `atan(v² / gR)` and wants a velocity a road cannot know — the answer\nfor a kart and an F1 car differ by 20°.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "auto_bank_radius": {
+                "default": 20.0,
+                "description": "The corner radius [`auto_bank`](Self::auto_bank) is quoted at, in\nmetres. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
               "bank_color": {
                 "default": [
                   0.20000000298023224,
@@ -5692,6 +6444,43 @@
                 "minItems": 3,
                 "type": "array"
               },
+              "follow_blend": {
+                "default": 30.0,
+                "description": "How far either side of a [`pinned`](RoadPoint::pin_height) point its\nheight correction fades out, in metres. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "follow_smoothing": {
+                "default": 12.0,
+                "description": "How far along the road the sampled ground is averaged, in metres.\n`>= 0`, and `0` reproduces the terrain exactly, bumps and all.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "follow_terrain": {
+                "default": null,
+                "description": "Name of a `Terrain` entity this road rides on (M40). Absent — the\ndefault — is a road whose heights are absolute, which is every road\nbefore M40.\n\nWith it set, each point's `y` becomes a **clearance above the ground**\nand the terrain is sampled at every centerline sample rather than only\nat the authored points, then smoothed over\n[`follow_smoothing`](Self::follow_smoothing) metres — terrain is noise,\nand a road that reproduces it is undrivable.\n\nThe road does **not** carve the terrain: a height field stays the one\nsource of truth for where the ground is. Where the smoothed road passes\nbelow the real ground the ground pokes through it, and the answers are\nmore clearance, a [`pinned`](RoadPoint::pin_height) point, or more\nsmoothing.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "grain": {
+                "default": 0.0,
+                "description": "How strongly the asphalt is grained, `[0, 1]`. `0` — the default — is\nthe flat colour M23 shipped (M40).\n\nA value-noise field in the road's own `(u, v)`, so it follows every\ncurve and grade the way the markings do, perturbing albedo and\nroughness. Deliberately not a normal perturbation: grain that tilts the\nshading normal sparkles under a moving camera at exactly the frequencies\na deterministic renderer should not be producing.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "grain_scale": {
+                "default": 0.3499999940395355,
+                "description": "Size of one grain cell, in metres. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
               "markings": {
                 "$ref": "#/$defs/RoadMarkings",
                 "default": {
@@ -5722,20 +6511,26 @@
               "points": {
                 "default": [
                   {
+                    "bank": null,
+                    "pin_height": false,
                     "position": [
                       0.0,
                       0.0,
                       0.0
                     ],
-                    "radius": 0.0
+                    "radius": 0.0,
+                    "width": null
                   },
                   {
+                    "bank": null,
+                    "pin_height": false,
                     "position": [
                       0.0,
                       0.0,
                       -20.0
                     ],
-                    "radius": 0.0
+                    "radius": 0.0,
+                    "width": null
                   }
                 ],
                 "description": "The centerline, corner by corner, in the order they are driven. At\nleast two points; a closed road needs at least three.",
@@ -5808,6 +6603,133 @@
                 "exclusiveMinimum": 0.0,
                 "format": "float",
                 "type": "number"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Where roads meet: the patch of asphalt a ribbon cannot be (M40).\n\nA [`Road`] is swept along a curve, which is the wrong primitive for a\ncrossroads — two ribbons crossing leave a hole. A junction is instead the\narea **bounded by the mouths of the roads that reach it**: each arm names a\nroad and which end of it arrives, and the patch stretches to whatever those\nmouths turn out to be.\n\nThe mouths are read off each road's finished surface — the same\n[`RoadSurface`](crate::road::RoadSurface) the renderer draws and physics\nbuilds its trimesh from — so a junction cannot disagree with the road it\njoins about where that road ended, how wide it was there, what height it\nreached, or how far it was banked. That is the `engine road-centerline` rule\napplied inside the engine: nothing re-derives a curve someone else built.\n\n**The junction does not trim its roads.** It would be the tidier result and\nit inverts the ownership every recipe here follows: a road's geometry would\nbecome a function of which junctions happen to name it, and `engine inspect`\non the road would stop predicting the road. The author ends each road at the\njunction's mouth, and because the patch stretches, \"roughly there\" is enough\n— an arm stopping 2 m short simply makes the patch 2 m longer on that side.\n\nLike every other recipe, the entity owns its geometry and so carries **no**\n`Mesh` and no `Material` (`junction_with_mesh`), and a `Collider` with\n`\"shape\": \"trimesh\"` on it takes the patch.",
+            "properties": {
+              "arms": {
+                "default": [],
+                "description": "The roads that meet here, in any order — the patch is built in\nrotational order about the mouths whatever order they are listed in. At\nleast two.",
+                "items": {
+                  "$ref": "#/$defs/JunctionArm"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "bank_color": {
+                "default": [
+                  0.20000000298023224,
+                  0.17000000178813934,
+                  0.12999999523162842
+                ],
+                "description": "Linear RGB of the embankment. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "color": {
+                "default": [
+                  0.09000000357627869,
+                  0.09000000357627869,
+                  0.10000000149011612
+                ],
+                "description": "Linear RGB of the asphalt. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "corner_segments": {
+                "default": 6,
+                "description": "How finely each of those corners is cut. `>= 1`.",
+                "format": "uint32",
+                "maximum": 64,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "flare": {
+                "default": 1.0,
+                "description": "How far the corner between two arms reaches out toward where their edges\nwould have crossed, `[0, 1]`.\n\n`1` — the default — is the full flare, a quadratic Bézier through that\nintersection, which is the shape a real corner has. `0` is the straight\nchord from one mouth's corner to the next.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "grain": {
+                "default": 0.0,
+                "description": "How strongly the asphalt is grained, `[0, 1]` — [`Road::grain`] on a\npatch, so a junction and the roads reaching it can wear the same\nsurface.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "grain_scale": {
+                "default": 0.3499999940395355,
+                "description": "Size of one grain cell, in metres. `> 0`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "roughness": {
+                "default": 0.9200000166893005,
+                "description": "Surface roughness, `[0, 1]`.",
+                "format": "float",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "shoulder": {
+                "default": 1.5,
+                "description": "Shoulder around the patch, in metres — the same surface, for the same\nreason a road's is. `>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "shoulder_color": {
+                "default": [
+                  0.17000000178813934,
+                  0.20000000298023224,
+                  0.14000000059604645
+                ],
+                "description": "Linear RGB of the shoulder. Each component `[0, 1]`.",
+                "items": {
+                  "format": "float",
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "skirt": {
+                "default": 0.6000000238418579,
+                "description": "How far the embankment drops below the shoulder's outer edge, in metres.\n`>= 0`.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "type": {
+                "const": "Junction",
+                "type": "string"
               }
             },
             "required": [
@@ -6195,6 +7117,198 @@
               "parts"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Physics driving a skinned character's skeleton (M39).\n\nM33 said the pose drives the proxies and nothing reads them back, and called\nthat its whole design. **This reverses that sentence for one entity, once,\npermanently.** When `active` turns true the entity's `SkinnedCollider`\nproxies stop being kinematic followers and become dynamic bodies wired\ntogether with rapier joints; from that step on the skeleton is a report of\nwhere they ended up.\n\n**The pose stays in the file, which is why invariant 2 survives the\nreversal.** `pose` is written back after every step, exactly as M32 writes\n`AnimationPlayer.phase` back, and `locomotion::posed_globals_at` reads it\nbefore it looks at a clip — so the render, `engine list-joints`,\n`engine list-colliders` and `world.joint_position` all see the ragdolled\nskeleton through the seam they already shared. M32's rule is what settled\nit: a ragdoll halfway to the floor, baked and reloaded, has to land in the\nsame heap, and a pose living in the physics world would reload standing up.\n\nThe bodies **are** the proxies, so the hitbox that was shot is the body that\nfalls, and the collider set does not change on handoff — which matters\nbecause that set is an input to rapier's broad phase.\n\nSee `designs/ragdoll-design.md`.",
+            "properties": {
+              "active": {
+                "default": false,
+                "description": "Whether physics owns the skeleton. A scene may ship this true and its\ncharacter is a corpse from step 0; `world.ragdoll(name)` sets it, and\nnothing clears it — the handoff is one-way (design §3).",
+                "type": "boolean"
+              },
+              "angular_damping": {
+                "default": 0.6000000238418579,
+                "description": "The same, for spin — and the one that stops a corpse pinwheeling.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "density": {
+                "default": 985.0,
+                "description": "kg/m³, `Collider.density`'s unit. Each part's mass is its shape's\nvolume times this. Defaults to a shade under water, which is roughly\nwhat a person is.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "joints": {
+                "description": "Joints that want something other than the default cone.",
+                "items": {
+                  "$ref": "#/$defs/RagdollJoint"
+                },
+                "type": "array"
+              },
+              "limit": {
+                "default": 45.0,
+                "description": "Half-angle in degrees of the cone every joint gets unless `joints`\noverrides it.",
+                "format": "float",
+                "maximum": 180.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "linear_damping": {
+                "default": 0.05000000074505806,
+                "description": "Velocity damping on every part. Deliberately above a physically honest\nvalue: a real body tumbles for longer than a game wants to watch, and\nthis is the dial that fixes it.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "pose": {
+                "description": "The skeleton, once physics owns it: one entry per joint of the rig,\nwritten by the engine after every step. Absent until the handoff.\n\nIt is in the file rather than in the physics world because that is what\nmakes a baked ragdoll reload into the same heap — see the type's docs.",
+                "items": {
+                  "$ref": "#/$defs/JointPose"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "Ragdoll",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Makes a dynamic body float on a named [`Water`] surface (M41).\n\nArchimedes, sampled: the body's collider is divided into columns, each column\nis asked how deep it sits under the wave above it, and each pushes up with\nthe weight of the water it displaces. Because the pushes land at their own\ncolumns rather than at the centre of mass, a hull that rolls has more of\nitself submerged on the low side and rights itself — the pitch and roll come\nout of the same sum as the lift, with nothing modelling them separately.\n\n**Absent, nothing floats**, which is the pre-M41 engine exactly. The\ncomponent needs a `RigidBody` that is dynamic and a `Collider` to have a\nshape at all, and validation says so rather than letting a scene author a\ncomponent that silently does nothing.",
+            "properties": {
+              "angular_drag": {
+                "default": 2.0,
+                "description": "Angular damping in 1/s, scaled by submersion exactly as [`drag`] is.\n`>= 0`.\n\nUsually wants to be the larger of the two: water stops a hull from\nspinning far more effectively than it stops it from drifting, and a boat\nthat rolls for twenty seconds after a wave reads as weightless.\n\n[`drag`]: Buoyancy::drag",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "drag": {
+                "default": 1.0,
+                "description": "Linear damping in 1/s applied **in proportion to how submerged the body\nis**, `>= 0`.\n\nAdded on top of [`RigidBody::linear_damping`], not replacing it: that\nfield is the body's drag in air, and this is the water's. Water drag is\nnot a property of the boat, which is exactly why it cannot be authored on\nthe `RigidBody` — a hull thrown clear of the pond has to stop being\ndamped the moment it leaves, and a half-submerged one is dragged half as\nhard.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "samples": {
+                "default": 2,
+                "description": "Columns per axis across the body's footprint, `[1, 4]`. Default 2, so a\nhull is sampled at four points.\n\nThe fidelity knob, and it decides whether the body can **turn**: at 1\nthere is a single upward push through the middle and a raft cannot right\nitself or ride a slope, because a force through the centre of mass makes\nno torque. At 2 each quarter of the hull feels its own wave, which is\nwhat makes a boat pitch into a swell instead of hovering over it. Past\nthat the returns fall off quickly — 3 and 4 are for a long hull spanning\nseveral wavelengths.",
+                "format": "uint32",
+                "maximum": 4,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "type": {
+                "const": "Buoyancy",
+                "type": "string"
+              },
+              "water": {
+                "default": "",
+                "description": "The [`Water`] entity this body floats on, by name. Required.\n\nNamed rather than found by overlap, for [`Meadow::terrain`]'s reason: one\nimplementation of \"where is the surface\", pointed at explicitly. A scene\nwith two ponds has to say which one, and a scene with one still says it,\nso the file records what the physics did.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A convex piece of a broken thing (M43), as a point set that **owns its\ngeometry** — so an entity with one carries no `Mesh`, the rule `Water`,\n`Terrain`, `Cloud`, `Road`, `Junction` and `Meadow` already follow.\n\nIt is `Tree`'s exception on materials: the entity's own `Material` is the\nshard's surface, because a shard of a painted crate is painted.\n\nThe drawn solid is the convex hull of `points`, flat-shaded, and a\n`convex_hull` `Collider` on the same entity collides with that same hull —\nthe file carries points rather than faces precisely so the two cannot be\ndifferent shapes.\n\nOrdinary authored data, not a runtime-only artifact: rubble on the ground is\na pile of these. `engine fracture` is what usually writes them.",
+            "properties": {
+              "points": {
+                "description": "The convex point set, in entity-local metres, scaled by\n`Transform.scale` like every other length. At least 4, at most 32, and\nthey must bound a volume (`shard_degenerate`).",
+                "items": {
+                  "items": {
+                    "format": "float",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "maxItems": 32,
+                "minItems": 4,
+                "type": "array"
+              },
+              "type": {
+                "const": "Shard",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "points"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Defines the serialized component union alongside everything that must stay\nin step with it.\n\nThe name list feeds `did_you_mean` suggestions and the spawn arm feeds\nA region of space holding a grid of baked light probes (M35).\n\nThe fill light every other surface gets is a lie: `sky_ambient` hands the\nwhole sky hemisphere to the inside of a forest, the underside of a truck and\na bare patch of open ground alike, because nothing in the engine knows that\ngeometry stands between a surface and the sky. A `LightProbeVolume` replaces\nthat constant with a function of *where you are standing and which way you\nare facing* — which is what puts contact darkening under an object and lets\ncolour travel off a coloured wall.\n\nLike [`Water`], [`Terrain`], [`Road`], [`Cloud`] and [`Meadow`], the entity\ncarries a `Transform` and this component and **no `Mesh` and no `Material`**\n(`light_probe_volume_with_mesh`). Unlike those, it grows no geometry at all:\nthe `Transform` is read purely as *bounds* — a unit box scaled and\npositioned, non-uniform scale being the normal case.\n\n```json\n{ \"type\": \"LightProbeVolume\", \"spacing\": 4.0, \"bake\": \"gi/showcase.gi.json\" }\n```\n\n**A scene may hold at most one** (`multiple_light_probe_volumes`), following\n`DirectionalLight` and `AmbientLight` and for the same reason: the renderer\nholds one field, so a second volume would bake, validate, and light nothing.\nA point outside the volume falls back to `sky_ambient`, which is exactly the\npre-M35 path — so [`blend`](LightProbeVolume::blend) exists to make that\nboundary a fade rather than a step.\n\nThe bake is a file rather than a load-time computation because the loop is\nthe product: a BVH build plus a few hundred thousand rays is seconds, and it\nwould otherwise be paid by every `screenshot`, every `diff-render` and every\neditor reload.",
+            "properties": {
+              "bake": {
+                "default": "",
+                "description": "Path to the baked transfer file, relative to the **scene file**\n(invariant 3), conventionally `gi/<name>.gi.json`.\n\nWritten by `engine bake-gi`. A path that is not there is\n`gi_bake_missing`; one taken from a different version of the scene is\n`gi_bake_stale`. Neither is a warning, because a bake that disagrees\nwith its geometry renders light that is quietly wrong — the one failure\nmode this system is built to make impossible.",
+                "type": "string"
+              },
+              "blend": {
+                "default": 1.0,
+                "description": "Metres of fade at the volume's edge, `>= 0`.\n\nOver this distance the volume's irradiance crosses to whatever lies\noutside it — another volume, or the `sky_ambient` fallback. Without it\nthe boundary is a visible step, since the two models disagree by exactly\nthe occlusion the volume measured.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "bounces": {
+                "default": 1,
+                "description": "Light bounces the bake gathers, `[1, 2]`.\n\nBounce one holds nearly all of the visible difference; bounce two costs\nanother pass over the volume and mostly lifts the black out of deep\nocclusion.",
+                "format": "uint32",
+                "maximum": 2,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "intensity": {
+                "default": 1.0,
+                "description": "Scales the whole effect, `>= 0`.\n\nExists so an authoring pass can dial GI back without re-baking, and so\n`0.0` is a one-field A/B against the pre-M35 look. Animatable, which is\nhow a scene fades GI in.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "spacing": {
+                "default": 4.0,
+                "description": "Metres between probes, `> 0`.\n\nA spacing, not a resolution: resizing a volume keeps its GI detail\ninstead of stretching it, and two volumes at the same spacing agree\nwhere they meet. Probe counts are derived from this and the `Transform`\nscale, reported by `bake-gi`, and bounded by `too_many_gi_probes`.",
+                "exclusiveMinimum": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "sun_samples": {
+                "default": 0,
+                "description": "Sun directions the bake gathers **bounced sunlight** for, `[0, 16]`\n(M45).\n\n`0` is M35: the sun is a direct light with a shadow map and throws no\ncolour onto anything. Above zero, the bake samples the scene's own\ndaylight arc at this many points and stores what bounces off the\ngeometry for each — which is what makes a red wall redden the white one\nbeside it under a *sun* rather than only under the sky.\n\n**A scene whose sun does not move needs 1.** An authored\n`DirectionalLight` with no `daylight` block has exactly one sun\ndirection, so the bake collapses to a single vector per probe whatever\nthis says, and anything above 1 buys nothing.\n\nIt defaults to 0 because the file is the cost: a daylight scene at 8\nstores 96 numbers per probe against the sky basis's 24. Bounced\nmoonlight is not gathered at any setting — see the design's §4.",
+                "format": "uint32",
+                "maximum": 16,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "const": "LightProbeVolume",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -6426,6 +7540,14 @@
             "minimum": 1,
             "type": "integer"
           },
+          "shadow_cascades": {
+            "default": 1,
+            "description": "How many nested shadow maps the sun renders (M38): `1`–`4`, default\n`1`. Each cascade covers a third the extent of the one outside it and\nis therefore three times sharper, so `3` at a `shadow_distance` of\n240 m gives 1.3 cm texels near the camera where 11.7 cm is all a single\nmap can offer. Costs one caster pass and 16 MB per cascade.",
+            "format": "uint32",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
           "shadow_distance": {
             "default": 60.0,
             "description": "How far from the camera the shadow map covers, in meters. The map is a\nfixed resolution, so this trades area against sharpness: a 40 m box is\ncrisp, a 200 m box is blocky. Strictly positive.",
@@ -6494,9 +7616,19 @@
         },
         "type": "object"
       },
+      "FractureMaterial": {
+        "description": "What a `Breakable` is made of (M43).\n\n`glass` shatters into radial slivers that fly far and fast; `wood` splits\ninto splinters along the grain and tumbles about its long axis; `stone`\nbreaks into chunky blocks that barely scatter, so a granite block comes\napart and its pieces *drop*; `metal` tears into a few large plates that\nmove together and slide.\n\nFour, because four is what the fracture generator has distinct algorithms\nfor and what the runtime has distinct behaviour for. A fifth would need\nboth, and \"generic\" is spelled by leaving the field out.\n\nNOTE: leave these variants undocumented, for [`ParticleBlend`]'s reason —\na doc comment on an enum *variant* makes schemars emit oneOf/const instead\nof a flat `\"enum\": [...]`, which blinds the validation walk's\nclosed-vocabulary check. Measured here: `\"material\": \"wud\"` reported\nnothing at all until these four comments moved up into this one.",
+        "enum": [
+          "glass",
+          "wood",
+          "stone",
+          "metal"
+        ],
+        "type": "string"
+      },
       "Fragment": {
         "additionalProperties": false,
-        "description": "One piece a `Breakable` entity shatters into (M14).\n\n`mesh` follows `Mesh.asset` rules (builtin or relative glTF path).\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model.\n`half_extents` is the fragment's cuboid collider in fragment-local units —\n`scale` scales it, exactly as `Transform.scale` scales a `Collider`.\nCuboid-only fragment colliders are deliberate v1 scope.",
+        "description": "One piece a `Breakable` entity shatters into (M14, shards since M43).\n\nA fragment is **either** a mesh reference or a shard, and exactly one of the\ntwo (`fragment_geometry`):\n\n- `mesh` follows `Mesh.asset` rules (builtin or relative glTF path), and\n  `half_extents` is its cuboid collider in fragment-local units — M14's\n  shape, where shards are boxes to the solver.\n- `points` is a convex point set (M43) that becomes a [`Shard`]: the\n  fragment's collider *is* its geometry, so `half_extents` alongside it is\n  an error rather than a number physics quietly ignores.\n\n`offset`/`rotation`/`scale` place the fragment relative to the parent\nentity, so the assembled fragments overlay the unbroken model. `scale`\nscales the collider, exactly as `Transform.scale` does.",
         "properties": {
           "density": {
             "default": 1.0,
@@ -6506,22 +7638,24 @@
             "type": "number"
           },
           "half_extents": {
-            "default": [
-              0.5,
-              0.5,
-              0.5
-            ],
-            "description": "Cuboid collider half-extents. The default matches `builtin:cube`, so\na fragment that is a scaled builtin cube needs no collider authoring.",
+            "description": "Cuboid collider half-extents, for a `mesh` fragment. The default is\n`[0.5, 0.5, 0.5]`, matching `builtin:cube`, so a fragment that is a\nscaled builtin cube needs no collider authoring.\n\nOptional rather than defaulted-in-place since M43: a shard's collider\nis its own hull, so the difference between \"absent\" and \"written at the\ndefault\" is the difference between a valid fragment and a claim about a\ncollider physics never builds.",
             "items": {
               "format": "float",
               "type": "number"
             },
             "maxItems": 3,
             "minItems": 3,
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "mesh": {
-            "type": "string"
+            "description": "The piece's geometry as a mesh reference. Exclusive with `points`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "offset": {
             "default": [
@@ -6537,6 +7671,24 @@
             "maxItems": 3,
             "minItems": 3,
             "type": "array"
+          },
+          "points": {
+            "description": "The piece's geometry as a convex point set in parent-local metres\n(M43) — what `engine fracture` writes. Exclusive with `mesh`.",
+            "items": {
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "maxItems": 32,
+            "minItems": 4,
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "rotation": {
             "default": [
@@ -6568,9 +7720,6 @@
             "type": "array"
           }
         },
-        "required": [
-          "mesh"
-        ],
         "type": "object"
       },
       "GrowthStage": {
@@ -6683,6 +7832,96 @@
         ],
         "type": "string"
       },
+      "JointPose": {
+        "additionalProperties": false,
+        "description": "One joint's local placement while a [`Ragdoll`] owns the skeleton (M39).\n\n**`rotation` is a quaternion, `w` last — the one rotation in this format\nthat is not XYZ Euler degrees.** `CLAUDE.md` names the reason under Traps:\nXYZ Euler clamps the middle angle to ±90°, so an orientation the solver\nintegrated past that comes back as the `(±180, θ, ±180)` twin, and a\nragdoll's joints go past it in the first second. M30 drew the same line for\nskeletal clips, and the distinction is *who wrote the numbers*: these are\nthe engine's, like a DCC tool's, not an agent's.",
+        "properties": {
+          "joint": {
+            "description": "The joint this places. Every joint of the rig appears exactly once.",
+            "type": "string"
+          },
+          "rotation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "description": "`[x, y, z, w]`, glTF's order and rapier's.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "scale": {
+            "description": "Carried only when it is not 1: a ragdoll does not scale bones, so this\nis whatever the clip had at the moment of handoff.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "translation": {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "description": "Metres, in the parent joint's frame.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          }
+        },
+        "required": [
+          "joint"
+        ],
+        "type": "object"
+      },
+      "JunctionArm": {
+        "additionalProperties": false,
+        "description": "One road arriving at a [`Junction`].",
+        "properties": {
+          "end": {
+            "$ref": "#/$defs/JunctionEnd",
+            "default": "end",
+            "description": "Which end of it arrives."
+          },
+          "road": {
+            "default": "",
+            "description": "Name of the entity carrying the `Road` that arrives here (invariant 4).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "JunctionEnd": {
+        "description": "Which end of a road arrives at a [`Junction`].",
+        "oneOf": [
+          {
+            "const": "start",
+            "description": "The road's first point.",
+            "type": "string"
+          },
+          {
+            "const": "end",
+            "description": "The road's last point. A closed road has no free end, so an arm onto one\nis a validation error.",
+            "type": "string"
+          }
+        ]
+      },
       "ParticleBlend": {
         "description": "How a particle's color combines with what is already on screen.\n\nNOTE: leave these variants undocumented. A doc comment on an enum *variant*\nmakes schemars emit oneOf/const instead of a flat `\"enum\": [...]`, which\nblinds the validation walk's closed-vocabulary check — the same trap\n[`ColliderShapeKind`] carries a note about.",
         "enum": [
@@ -6745,6 +7984,56 @@
         },
         "required": [
           "ankle"
+        ],
+        "type": "object"
+      },
+      "RagdollJoint": {
+        "additionalProperties": false,
+        "description": "A per-joint override of [`Ragdoll`]'s default cone (M39).\n\nA ragdoll whose every joint is a 45° cone reads as a bag. A knee that only\nbends one way, and only backwards, is what makes it read as a body — and\nboth numbers being in the file is what makes it tunable without touching\nRust.",
+        "properties": {
+          "hinge": {
+            "description": "Turn this joint into a hinge about this axis in the **child** part's\nlocal frame, instead of a cone. An elbow or a knee.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "joint": {
+            "description": "The joint to override. Some part of the `SkinnedCollider` must ride it,\nand it must not be the root — a root part has no joint to constrain.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Half-angle of the cone, in degrees. Ignored when `hinge` is set.",
+            "format": "float",
+            "maximum": 180.0,
+            "minimum": 0.0,
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "range": {
+            "description": "The hinge's travel in degrees, `[min, max]`. `hinge` only.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "joint"
         ],
         "type": "object"
       },
@@ -6868,13 +8157,27 @@
         "additionalProperties": false,
         "description": "One authored point on a road's centerline.\n\nThe road is a **polygon with corner radii**, not a spline: a closed polygon\nreturns to its own first vertex and its exterior angles sum to exactly one\nturn, so position and heading close without solving anything. Nothing here\ncarries a heading, deliberately — a heading is derived, and a stored one can\nbe edited into disagreeing with the points on either side of it.",
         "properties": {
+          "bank": {
+            "default": null,
+            "description": "Roll of the cross-section here, in degrees, positive raising the\ndriver's **right** edge (M40).\n\nAbsent falls through to [`Road::auto_bank`], which is the way to author\na circuit: auto-banking knows which way the road turns and so raises the\noutside of every corner without the file carrying a sign that has to\nagree with the winding of a polygon being edited beside it. Reach for an\nexplicit value for the cases auto-banking cannot know — a banked\nstraight, a corner deliberately flat.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pin_height": {
+            "default": false,
+            "description": "Read `position.y` as an absolute height even though the road follows a\nterrain (M40) — a bridge deck, a level a junction has to meet.\n\nThe pin is a *local* correction to the followed profile, faded out over\n[`Road::follow_blend`] metres either side, so the road reaches this\nheight exactly and goes back to hugging the ground. Two pins closer\ntogether than that blend pull on each other and neither is reached\nexactly; validation warns (`road_pins_overlap`).\n\nWithout `follow_terrain` every height is already absolute and this does\nnothing.",
+            "type": "boolean"
+          },
           "position": {
             "default": [
               0.0,
               0.0,
               0.0
             ],
-            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.",
+            "description": "Where the centerline passes, in the entity's local space. `y` is the\nroad *surface* height there; the profile between points is a monotone\ncubic through these, so the grade turns over smoothly and never\novershoots an authored height.\n\nWith [`Road::follow_terrain`] set, `y` means something different: it is\nthe **clearance above the sampled ground**, so `0` sits the road on the\nterrain. [`pin_height`](Self::pin_height) turns it back into an absolute\nheight for one point.",
             "items": {
               "format": "float",
               "type": "number"
@@ -6886,6 +8189,86 @@
           "radius": {
             "default": 0.0,
             "description": "Radius of the arc rounding this corner, in metres. `>= 0`.\n\n`0` is a sharp vertex — mitred, which is exactly right for a point that\nis not really a turn (a start line partway along a straight) and wrong\nfor one that is: past\n[`MAX_SHARP_TURN_DEGREES`](crate::road::MAX_SHARP_TURN_DEGREES) of turn\nthe mitre folds back through the road and validation refuses it.\n\nThe two arcs meeting on one edge have to fit on it, which is the other\nthing a polygon cannot guarantee (`road_corner_does_not_fit`).",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "width": {
+            "default": null,
+            "description": "Width of the asphalt here, in metres, overriding the road's `width`\n(M40). Absent — the default — is the road's own width, so a file that\nnever mentions this is the M23 road exactly. `> 0`.\n\nInterpolated along the centerline by the same monotone cubic the heights\nuse, so a road never bulges wider than the widest width authored on it.\n**The whole cross-section scales, shoulder included**: `u` — signed\nmetres across the road — has to mean one thing at every `v` for the\nshader to find the asphalt edge, so the widening is one factor on the\nsection rather than a metre value added to the asphalt alone. Paint\nscales with it: a section at 1.5× width wears a 1.5× wider edge line.",
+            "exclusiveMinimum": 0.0,
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TemplateDef": {
+        "additionalProperties": false,
+        "description": "One spawnable template in a scene file (M37).\n\nDeliberately not a variant of [`EntityDef`]: a template is a *declaration*\nrather than a thing, and the difference shows up in every consumer —\n`Scene::instantiate` skips it, the renderer never sees it, `simulate` never\ntraces it, and `validate` runs the per-entity walk on it but none of the\nscene-level budget passes.",
+        "properties": {
+          "components": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ComponentData"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "default": 64,
+            "description": "The most instances of this template that may be **live** at once —\nspawned minus despawned. Spawning at the limit spawns nothing and\nreturns the empty string, which is a value the script reads rather\nthan a crash: a gun that fires faster than its bullets expire is an\nordinary game, not a bug.\n\nA number in the file rather than a hard-coded ceiling because every\ninstance is a collider and the collider set is an input to the broad\nphase — a scene that wants ten thousand bullets should have to say so\nwhere `engine inspect` can read it. `>= 1`.",
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "What `world.spawn_entity` names, and the stem of every instance's name\n(`Bullet` spawns `Bullet#1`, `Bullet#2`, …). Unique among templates\n*and* distinct from every entity name: one address space, because\n`world.spawn_entity(\"Drone\")` and `world.set_position(\"Drone\", …)` must never\nbe able to mean two different things.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "TerrainBasin": {
+        "additionalProperties": false,
+        "description": "One circular depression a [`Terrain`] cuts into its height field (M42): a\nflat floor, a smoothstepped wall, and how far down the floor sits.\n\nThe shape is `radius` metres of floor surrounded by `falloff` metres of wall,\nso the whole footprint is `radius + falloff` and the shoreline of any water\nput here lands somewhere on the wall. **Two numbers rather than one**: a\nsingle radius with a falloff to nothing gives a dish, and a dish deep enough\nto hold water has walls gentle enough that the waterline creeps far past\nwhere it was authored.\n\n**Overlapping basins take the deepest, not the sum.** Overlapping circles are\nhow anything that is not a circle gets authored — a lake is three of them, a\nchannel a line of them — and under a sum every overlap digs to twice the\ndepth, turning a lake into a ring of pits. The cost is a faint crease where\ntwo basins are equally deep, which is under the water in every use this was\nbuilt for.",
+        "properties": {
+          "center": {
+            "default": [
+              0.0,
+              0.0
+            ],
+            "description": "Where the basin is centred, in **world** XZ metres — the same space\neverything else about a terrain is sampled in, and the same numbers the\n`Water` entity's `Transform.position` is written in.\n\nWorld rather than the patch's local space for M22's reason: heights are\na function of world position, which is what lets two patches sharing one\ndescription meet seamlessly. A basin in local space would be dragged\naround by its patch and would break that.",
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "depth": {
+            "default": 0.0,
+            "description": "Metres the floor drops below the surrounding field, `>= 0`.\n\nIn the same space as [`Terrain::height`] — metres of relief at\n`Transform.scale.y` 1, so the patch's vertical scale multiplies a basin\nexactly as it multiplies the hills. A second convention here would make\na patch at `scale.y: 2` disagree with itself about which of its numbers\nare metres.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "falloff": {
+            "default": 4.0,
+            "description": "Metres of wall between the floor's edge and the untouched field, `>= 0`.\n\nSmoothstepped, with the interpolant the value noise already uses, so the\nwall meets the surrounding ground with a zero derivative and the rim has\nno crease. 0 is a vertical wall, which reads as a quarry rather than a\npond and is occasionally what is wanted.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "radius": {
+            "default": 0.0,
+            "description": "Metres of flat floor at the centre, `>= 0`. 0 is legitimate and makes\nthe basin a smooth conical hollow of `falloff` metres.",
             "format": "float",
             "minimum": 0.0,
             "type": "number"
@@ -7074,6 +8457,13 @@
           }
         ],
         "description": "Scene-level physics settings; absent means the defaults, so scenes\nwithout physics don't change (M8)."
+      },
+      "templates": {
+        "description": "Shapes a script may spawn at runtime (M37) — declared here, never\ninstantiated when the scene loads. Absent means the pre-M37 engine\nexactly: nothing can be spawned, and no code path differs.\n\nA template is an [`EntityDef`] plus a `limit`, and it exists so a\nspawn can name something *the file already declares* rather than\nconstructing geometry from a script, which would put scene data in a\n`.rhai` and break invariant 2.",
+        "items": {
+          "$ref": "#/$defs/TemplateDef"
+        },
+        "type": "array"
       }
     },
     "required": [

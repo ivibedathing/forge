@@ -111,6 +111,46 @@ pub(crate) struct FrameUniform {
     /// buffer it is bound to, which is why the other five shaders that spell
     /// this struct out did not have to change.
     pub(crate) view_proj: [[f32; 4]; 4],
+    /// The bound probe volume's placement (M35). xyz = the world position of
+    /// probe `[0, 0, 0]`, w = metres between probes.
+    ///
+    /// Appended after `view_proj` under the rule that has held since M17: a
+    /// uniform struct grows only at its end, so every field above keeps the
+    /// offset the shaders already read it from. Only the GI variants declare
+    /// these three, and a shader may declare a prefix of the buffer it is bound
+    /// to.
+    pub(crate) gi_origin: [f32; 4],
+    /// xyz = probes along each axis, w = `LightProbeVolume.intensity`.
+    pub(crate) gi_grid: [f32; 4],
+    /// x = `blend` in metres, y = 1.0 when a field is actually bound; z and w
+    /// unused.
+    ///
+    /// `y` exists because the GI *pipelines* are compiled for the whole frame
+    /// while a field may still be absent — a scene whose volume failed to load,
+    /// or the frame before one is uploaded. Zero there sends every fragment to
+    /// the fallback, which is the pre-M35 expression.
+    pub(crate) gi_params: [f32; 4],
+}
+
+/// World → each cascade's light clip (M38), innermost first.
+///
+/// A binding of its own in the frame-textures group rather than a tail on
+/// [`FrameUniform`], because `water.wgsl`'s copy of that struct stops at
+/// `params`: a field appended after `point_lights` is only reachable by a
+/// shader that declares `point_lights` too, and water would have had to grow a
+/// `PointLightData` and a light array it does not use in order to read a
+/// matrix. Group 2's layout already differs between the two cascade modes, so
+/// an entry that exists only in the cascaded one costs the default path
+/// nothing.
+///
+/// Always [`MAX_SHADOW_CASCADES`] long whatever the scene asked for — the live
+/// count is a `const` in the spliced shader, since the pipelines know it at
+/// build time and a uniform lane would be a second place for it to be wrong.
+/// Slots past the count hold the identity and nothing indexes them.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct CascadeUniform {
+    pub(crate) view_proj: [[[f32; 4]; 4]; MAX_SHADOW_CASCADES as usize],
 }
 
 /// One skinned draw's joint palette, matching WGSL `JointPalette` (M30).
@@ -240,7 +280,8 @@ pub(crate) struct RoadUniform {
     pub(crate) shoulder: [f32; 4],
     /// rgb = embankment colour, w = 1 when a start line is painted.
     pub(crate) bank: [f32; 4],
-    /// x = where that line is, in metres along the centerline; rest padding.
+    /// x = where that line is, in metres along the centerline; y = grain
+    /// amount (0 = off), z = grain cell size in metres; w padding.
     pub(crate) start: [f32; 4],
     /// `(start_v, end_v, side, stripe)` per kerbed corner. Unused slots are
     /// zeroed and never read — the shader loops to the count.
@@ -502,7 +543,16 @@ pub(crate) fn road_uniform(item: &RoadItem) -> RoadUniform {
             .bank_color
             .extend(if markings.start_line { 1.0 } else { 0.0 })
             .to_array(),
-        start: [markings.start_line_at, 0.0, 0.0, 0.0],
+        // Grain rides in the start line's spare lanes (M40) rather than
+        // growing the struct: `RoadUniform`'s field order is a wire format
+        // matched positionally against the WGSL declaration, and a junction's
+        // patch reads the same uniform.
+        start: [
+            markings.start_line_at,
+            road.grain.clamp(0.0, 1.0),
+            road.grain_scale.max(1e-3),
+            0.0,
+        ],
         kerbs,
     }
 }

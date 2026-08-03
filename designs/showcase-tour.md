@@ -68,9 +68,9 @@ seconds](#past-the-fifteen-seconds).
 | steps | station | what is on screen | systems |
 |-------|---------|-------------------|---------|
 | 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — under fissured bark, four critters running loops, a rigged figure walking a circuit in front of them, the granite monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), **skeletal animation** (13 joints, textured), `Material` (`albedo_map`, `normal_map`, `orm_map`, `Material.asset`), `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
-| 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, and firelight pooling on the grass | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color` |
+| 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, firelight pooling on the grass, and a rigged soldier standing at the pit's rim with the firelight on its arm | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color`, **skeletal animation** (17 joints, textured, point-lit) |
 | 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
-| 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates, an ice pillar is broken by name, a blast finishes the rest | `RigidBody`, `Collider`, `Breakable`, `world.break_entity`, `world.explode` |
+| 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates and splinters them into wood shards under a haze of sawdust, an ice pillar is broken by name, a blast finishes the crate standing clear of the pile | `RigidBody`, `Collider`, `Breakable` (`material: wood`, `Shard` fragments, M44 dust), `Shard`, `world.break_entity`, `world.explode` |
 | 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4 (tread `normal_map`), `Material.orm_map`, the `HudPanel` station card, the camera |
 | 900–1079 | 06 the way back | the descent home, over the burning fire and the debris field, and then all of the above again | the loop |
 
@@ -115,6 +115,19 @@ in the order the design doc lists them:
 
 Which crate each trigger claims is float-level detail that moves between
 optimisation levels; the CLI test pins the *sequence*, not the casualties.
+
+**`Crate6` exists so the third trigger has a casualty at all.** Once the crates
+became wood (M43/M44), the boulder stopped shattering one of them and started
+taking the whole stack: a `Breakable.material` throws its pieces *away from the
+impact*, so Crate1's shards arrive at Crate2 with enough momentum to clear its
+threshold, and the row goes down in four steps. That is the better picture — a
+boulder at 13 m/s should flatten a crate stack — but it left the blast at 636
+with nothing standing, because the survivors had tumbled outside its 6.5 m
+radius by then. No threshold-and-force pair recovers it: raise the threshold
+enough to stop the chain and the blast cannot break anything either. So the
+explosion got its own crate, at `(-1.0, 0.08, 13.5)` — inside the blast radius,
+and 1.5 m off the `z = 15` line the boulder rolls down, which clears its 0.9 m
+radius plus the crate's own half-metre.
 
 ### Past the fifteen seconds
 
@@ -302,10 +315,10 @@ than no showcase:
 - **The walker is really skinned** as of M30 — thirteen joints, a one-second
   `Walk` clip out of `rigged_walker.gltf`, posed on the CPU and applied to the
   vertices on the GPU, casting a shadow that walks with it because the skinned
-  caster is its own pipeline. It is also the tour's only **skinned *and*
+  caster is its own pipeline. It was the tour's first **skinned *and*
   textured** draw, which is the composition M30 rebuilt the vertex-stage seam
   for: `plate_normal` and `plate_orm` panel it, the same two maps the truck
-  wears. It is in the frame for stations 01, 02, 04 and 05 (the water station's
+  wears (the campfire `Soldier` is the second). It is in the frame for stations 01, 02, 04 and 05 (the water station's
   camera is aimed the other way), and it is placed *between* the station-01
   camera and the trees on purpose — a two-metre figure thirty metres back and
   behind a canopy is a pale smudge, and the point of putting it there is that
@@ -336,6 +349,18 @@ than no showcase:
   rejection standing. `Idle` is in the file and the tour never crossfades to
   it, because a crossfade is exactly the nondeterminism that made two clips on
   one property a validation error.
+- **A second rigged figure stands at the campfire** — the arena shooter's seventeen-joint
+  `rigged_soldier.gltf`, playing its 3.6-second upper-body `Idle` at the pit's rim, close enough
+  (2.4 m from the fire's centre) that the flickering `FireLight` reads on its fire-side arm — the
+  tour's one *point-lit* skinned draw. It is deliberately the **minimal** skinned entity:
+  `Transform`, `Mesh`, `Material`, `AnimationPlayer`, and nothing physics can see. No
+  `SkinnedCollider`, no `Ragdoll`, because adding any collider to a rapier world perturbs every
+  body in it (the M33 lesson, paid again by M37's embers), and a collider-free soldier left both
+  golden traces and all 41 bit-exact baselines byte-identical — the cost was five re-blessed tour
+  frames (it is a distant sliver in 450, 585, 646 and 810) and a refreshed GI bake for its
+  triangles. No `FootPlant` either: `Idle` animates only the upper body, the feet never leave the
+  bind pose, and a flat stand at the height `engine terrain-height` reports is enough. The walker
+  is the maximal rigged entity and the soldier the minimal one; the pair brackets the range.
 - **The blast** still has no light — but as of M17 that is a wiring job rather
   than a missing feature. A `PointLight` at the crate pile, pulsed for a dozen
   steps from `tour_director.rhai` (which already fires the explosion), would do

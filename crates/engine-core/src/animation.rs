@@ -479,6 +479,12 @@ pub fn set_field(
                 "turbulence" => c.turbulence = scalar,
                 "turbulence_scale" => c.turbulence_scale = scalar,
                 "stretch" => c.stretch = scalar,
+                // M44. Animating a burst's window is a strange thing to want,
+                // but the alternative is a schema field nothing can set, and
+                // this crate's rule is that there are none of those.
+                // `despawn_when_done` is absent for `blend`'s reason: it is
+                // not a number.
+                "duration" => c.duration = Some(scalar),
                 _ => return false,
             }
         }
@@ -537,6 +543,25 @@ pub fn set_field(
                 // nothing. It does switch pipelines the step it leaves 1.0,
                 // which is a pipeline lookup and not a rebuild.
                 "ior" => c.ior = scalar,
+                // The one field here nothing renders (M41). Animatable anyway,
+                // and for the same reason `ior` is: it is read fresh every step
+                // by whatever floats on this water, so a clip on it regenerates
+                // nothing. A tide going from fresh to salt is a clip on this.
+                "density" => c.density = scalar,
+                _ => return false,
+            }
+        }
+        // Buoyancy (M41). `water` is a name and `samples` an integer — the
+        // usual two exclusions. What is left is the drag pair, and a clip on it
+        // is how a hull that fills with water gets heavier to move without
+        // anything spawning or changing shape.
+        "Buoyancy" => {
+            let Ok(mut c) = world.get::<&mut Buoyancy>(entity) else {
+                return false;
+            };
+            match field {
+                "drag" => c.drag = scalar,
+                "angular_drag" => c.angular_drag = scalar,
                 _ => return false,
             }
         }
@@ -573,10 +598,28 @@ pub fn set_field(
                 // Appearance only. The shape fields are listed in
                 // `NOT_ANIMATABLE` and never reach here — regenerating the
                 // surface every frame is not something a clip should be able to
-                // ask for by accident.
+                // ask for by accident. `basins` (M42) needs no entry there for
+                // `Water.waves`' reason: an array of objects is not a shape a
+                // numeric clip can express, so it never arrives at all.
                 "texture_scale" => c.texture_scale = scalar,
                 "color_variation" => c.color_variation = scalar,
                 "bump" => c.bump = scalar,
+                _ => return false,
+            }
+        }
+        "LightProbeVolume" => {
+            let Ok(mut c) = world.get::<&mut crate::components::LightProbeVolume>(entity) else {
+                return false;
+            };
+            match field {
+                // The two fields that scale an existing field rather than
+                // change which field was baked. `intensity` is the one a scene
+                // fades GI in with; `blend` widens the volume's edge fade.
+                // `spacing` and `bounces` are in `NOT_ANIMATABLE` — they are
+                // inputs to the bake, and driving one would invalidate the file
+                // on disk every frame it changed.
+                "intensity" => c.intensity = scalar,
+                "blend" => c.blend = scalar,
                 _ => return false,
             }
         }
@@ -613,6 +656,9 @@ pub fn set_field(
                 "color" => c.color = v3,
                 "shoulder_color" => c.shoulder_color = v3,
                 "bank_color" => c.bank_color = v3,
+                // Grain is read per pixel too (M40), so it repaints for free —
+                // a road that dries out over a scene is a clip on `grain`.
+                "grain" => c.grain = scalar,
                 _ => return false,
             }
         }
@@ -650,6 +696,31 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     ("Road", "skirt"),
     ("Road", "segment_length"),
     ("Road", "segment_angle"),
+    // M40's shape fields, in here for the same reason: all four are in the
+    // road's cache key, so a clip on one regenerates and re-uploads the whole
+    // ribbon every frame it changes. `grain_scale` joins them not because it
+    // moves a vertex — it does not — but because a road's grain cell size
+    // changing per frame is a shimmer, not an animation.
+    ("Road", "auto_bank"),
+    ("Road", "auto_bank_radius"),
+    ("Road", "follow_smoothing"),
+    ("Road", "follow_blend"),
+    ("Road", "grain_scale"),
+    // A junction's patch is generated from the roads that reach it and cached
+    // the same way, and its colours are the only fields a clip could touch
+    // without rebuilding it — but a `Junction` is not reachable by name from a
+    // clip's `component` field yet, so the whole component is listed rather
+    // than half of it.
+    ("Junction", "flare"),
+    ("Junction", "corner_segments"),
+    ("Junction", "shoulder"),
+    ("Junction", "skirt"),
+    ("Junction", "roughness"),
+    ("Junction", "grain"),
+    ("Junction", "grain_scale"),
+    ("Junction", "color"),
+    ("Junction", "shoulder_color"),
+    ("Junction", "bank_color"),
     // A meadow's placement and its plant template are generated and
     // `Arc`-cached the same way, and these are exactly the fields its cache key
     // covers — animating one would rebuild the template and re-scatter every
@@ -664,6 +735,14 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     ("Meadow", "size_jitter"),
     ("Meadow", "stagger"),
     ("Meadow", "max_slope"),
+    // A fourth reason, and the strongest: these two are inputs to a file on
+    // disk. `spacing` decides the probe grid and `bounces` decides what was
+    // gathered into it, so a clip driving either would put the component and
+    // its bake into disagreement on the first frame — which `gi_bake_stale`
+    // is built to catch at `validate` and could not catch mid-run. GI fades in
+    // through `intensity`, which is exactly what that field is for.
+    ("LightProbeVolume", "spacing"),
+    ("LightProbeVolume", "bounces"),
     // A different reason, and the only one of its kind: a clip's values are
     // scalars and 3-vectors, and these are 2-vectors, which the format cannot
     // spell. Scrolling UVs is the feature that would want them and it is
@@ -693,6 +772,17 @@ const NOT_ANIMATABLE: &[(&str, &str)] = &[
     // `parts`, which the format cannot address at all.
     ("SkinnedCollider", "friction"),
     ("SkinnedCollider", "restitution"),
+    // M33's reason again, one milestone on (M39): every one of these is read
+    // exactly once, at the handoff, and written into rapier bodies and joints
+    // that never consult the component again. A clip driving `limit` would
+    // animate a number nothing reads — the silent no-op this table exists to
+    // turn into an error. `density` is the sharpest case: it sets each part's
+    // mass when the ragdoll fires, and a corpse whose mass changed every frame
+    // would be a solver bug rather than an effect.
+    ("Ragdoll", "density"),
+    ("Ragdoll", "limit"),
+    ("Ragdoll", "linear_damping"),
+    ("Ragdoll", "angular_damping"),
 ];
 
 /// Whether a field is vector-shaped in the published schema (3-element
@@ -1195,7 +1285,9 @@ mod tests {
                 {"type":"Terrain"},
                 {"type":"Road"},
                 {"type":"Meadow"},
-                {"type":"FootPlant","feet":[{"ankle":"Foot.L"}],"ground":"Ground"}
+                {"type":"FootPlant","feet":[{"ankle":"Foot.L"}],"ground":"Ground"},
+                {"type":"Buoyancy","water":"Lake"},
+                {"type":"LightProbeVolume"}
             ]}
         ]}"#;
         // Not a *valid* scene (missing collider transform rules etc. are

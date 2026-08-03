@@ -32,11 +32,26 @@ What this one adds, and why:
     python3 examples/meshes/make_rigged_soldier.py
 """
 
-import base64
 import json
 import math
 import pathlib
-import struct
+
+from gltf_build import (
+    ARRAY_BUFFER,
+    BOX_FACES,
+    ELEMENT_ARRAY_BUFFER,
+    FLOAT,
+    UNSIGNED_SHORT,
+    Buffer,
+    bounds,
+    flat,
+    floats,
+    lerp,
+    quat_x,
+    quat_y,
+    quat_z,
+    shorts,
+)
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -130,10 +145,6 @@ indices = []
 # The four corners of a cross-section, counter-clockwise seen from the bone's
 # own +axis.
 CORNERS = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
-
-
-def lerp(a, b, t):
-    return tuple(x + (y - x) * t for x, y in zip(a, b))
 
 
 def basis(direction):
@@ -254,15 +265,7 @@ for bone in BONES:
 def block(centre, half, joint):
     """An axis-aligned box rigid to one joint."""
     influence = ([INDEX[joint], 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
-    faces = [
-        ((0, 1, 0), [(-1, 1, -1), (1, 1, -1), (1, 1, 1), (-1, 1, 1)]),
-        ((0, -1, 0), [(-1, -1, 1), (1, -1, 1), (1, -1, -1), (-1, -1, -1)]),
-        ((0, 0, 1), [(-1, -1, 1), (-1, 1, 1), (1, 1, 1), (1, -1, 1)]),
-        ((0, 0, -1), [(1, -1, -1), (1, 1, -1), (-1, 1, -1), (-1, -1, -1)]),
-        ((1, 0, 0), [(1, -1, 1), (1, 1, 1), (1, 1, -1), (1, -1, -1)]),
-        ((-1, 0, 0), [(-1, -1, -1), (-1, 1, -1), (-1, 1, 1), (-1, -1, 1)]),
-    ]
-    for normal, corners in faces:
+    for normal, corners in BOX_FACES:
         quad = [
             tuple(centre[axis] + corners[i][axis] * half[axis] for axis in range(3))
             for i in range(4)
@@ -290,21 +293,6 @@ IDLE_PERIOD = 3.6
 # result rather than trusting the arithmetic — see the module docstring of
 # `make_arena.py` for where that number is used.
 THIGH_SWING = 46.0
-
-
-def quat_x(degrees):
-    half = math.radians(degrees) / 2
-    return (math.sin(half), 0.0, 0.0, math.cos(half))
-
-
-def quat_y(degrees):
-    half = math.radians(degrees) / 2
-    return (0.0, math.sin(half), 0.0, math.cos(half))
-
-
-def quat_z(degrees):
-    half = math.radians(degrees) / 2
-    return (0.0, 0.0, math.sin(half), math.cos(half))
 
 
 def run_curves():
@@ -408,45 +396,8 @@ def idle_curves():
 
 # ── Buffer assembly ───────────────────────────────────────────────────────
 
-blob = bytearray()
-views = []
-
-
-def view(data, target=None):
-    """Append bytes as a bufferView, padded so the next one starts aligned."""
-    while len(blob) % 4:
-        blob.append(0)
-    entry = {"buffer": 0, "byteOffset": len(blob), "byteLength": len(data)}
-    if target is not None:
-        entry["target"] = target
-    blob.extend(data)
-    views.append(entry)
-    return len(views) - 1
-
-
-def floats(values):
-    return struct.pack(f"<{len(values)}f", *values)
-
-
-def flat(rows):
-    return [component for row in rows for component in row]
-
-
-ARRAY_BUFFER, ELEMENT_ARRAY_BUFFER = 34962, 34963
-FLOAT, UNSIGNED_SHORT = 5126, 5123
-
-accessors = []
-
-
-def accessor(entry):
-    accessors.append(entry)
-    return len(accessors) - 1
-
-
-def bounds(rows):
-    columns = list(zip(*rows))
-    return [min(c) for c in columns], [max(c) for c in columns]
-
+buffer = Buffer()
+view, accessor = buffer.view, buffer.accessor
 
 position_min, position_max = bounds(positions)
 POSITION_A = accessor(
@@ -477,9 +428,7 @@ UV_A = accessor(
 )
 JOINTS_A = accessor(
     {
-        "bufferView": view(
-            struct.pack(f"<{len(joints) * 4}H", *flat(joints)), ARRAY_BUFFER
-        ),
+        "bufferView": view(shorts(flat(joints)), ARRAY_BUFFER),
         "componentType": UNSIGNED_SHORT,
         "count": len(joints),
         "type": "VEC4",
@@ -495,9 +444,7 @@ WEIGHTS_A = accessor(
 )
 INDEX_A = accessor(
     {
-        "bufferView": view(
-            struct.pack(f"<{len(indices)}H", *indices), ELEMENT_ARRAY_BUFFER
-        ),
+        "bufferView": view(shorts(indices), ELEMENT_ARRAY_BUFFER),
         "componentType": UNSIGNED_SHORT,
         "count": len(indices),
         "type": "SCALAR",
@@ -606,15 +553,9 @@ document = {
         }
     ],
     "animations": [clip("Idle", idle_curves()), clip("Run", run_curves())],
-    "accessors": accessors,
-    "bufferViews": views,
-    "buffers": [
-        {
-            "byteLength": len(blob),
-            "uri": "data:application/octet-stream;base64,"
-            + base64.b64encode(bytes(blob)).decode("ascii"),
-        }
-    ],
+    "accessors": buffer.accessors,
+    "bufferViews": buffer.views,
+    "buffers": buffer.buffers(),
 }
 
 out = HERE / "rigged_soldier.gltf"

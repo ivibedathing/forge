@@ -1141,18 +1141,34 @@ pub struct HudInteract {
     pub disabled: bool,
 }
 
-/// One piece a `Breakable` entity shatters into (M14).
+/// One piece a `Breakable` entity shatters into (M14, shards since M43).
 ///
-/// `mesh` follows `Mesh.asset` rules (builtin or relative glTF path).
+/// A fragment is **either** a mesh reference or a shard, and exactly one of the
+/// two (`fragment_geometry`):
+///
+/// - `mesh` follows `Mesh.asset` rules (builtin or relative glTF path), and
+///   `half_extents` is its cuboid collider in fragment-local units — M14's
+///   shape, where shards are boxes to the solver.
+/// - `points` is a convex point set (M43) that becomes a [`Shard`]: the
+///   fragment's collider *is* its geometry, so `half_extents` alongside it is
+///   an error rather than a number physics quietly ignores.
+///
 /// `offset`/`rotation`/`scale` place the fragment relative to the parent
-/// entity, so the assembled fragments overlay the unbroken model.
-/// `half_extents` is the fragment's cuboid collider in fragment-local units —
-/// `scale` scales it, exactly as `Transform.scale` scales a `Collider`.
-/// Cuboid-only fragment colliders are deliberate v1 scope.
+/// entity, so the assembled fragments overlay the unbroken model. `scale`
+/// scales the collider, exactly as `Transform.scale` does.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Fragment {
-    pub mesh: String,
+    /// The piece's geometry as a mesh reference. Exclusive with `points`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<String>,
+
+    /// The piece's geometry as a convex point set in parent-local metres
+    /// (M43) — what `engine fracture` writes. Exclusive with `mesh`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 4, max = 32))]
+    #[schemars(with = "Option<Vec<[f32; 3]>>")]
+    pub points: Option<Vec<Vec3>>,
 
     /// Position relative to the parent entity's origin, in parent-local
     /// units (the parent's `Transform.scale` applies).
@@ -1170,11 +1186,17 @@ pub struct Fragment {
     #[schemars(with = "[f32; 3]")]
     pub scale: Vec3,
 
-    /// Cuboid collider half-extents. The default matches `builtin:cube`, so
-    /// a fragment that is a scaled builtin cube needs no collider authoring.
-    #[serde(default = "half_cube")]
-    #[schemars(with = "[f32; 3]")]
-    pub half_extents: Vec3,
+    /// Cuboid collider half-extents, for a `mesh` fragment. The default is
+    /// `[0.5, 0.5, 0.5]`, matching `builtin:cube`, so a fragment that is a
+    /// scaled builtin cube needs no collider authoring.
+    ///
+    /// Optional rather than defaulted-in-place since M43: a shard's collider
+    /// is its own hull, so the difference between "absent" and "written at the
+    /// default" is the difference between a valid fragment and a claim about a
+    /// collider physics never builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<[f32; 3]>")]
+    pub half_extents: Option<Vec3>,
 
     /// Fragment mass comes from `density` x collider volume. `> 0`.
     #[serde(default = "one")]
@@ -1186,9 +1208,9 @@ fn ones() -> Vec3 {
     Vec3::ONE
 }
 
-fn half_cube() -> Vec3 {
-    Vec3::splat(0.5)
-}
+/// A `Fragment.half_extents` left unwritten: the unit cube's, so a fragment
+/// that is a scaled `builtin:cube` needs no collider authoring.
+pub const HALF_CUBE: Vec3 = Vec3::splat(0.5);
 
 /// Breaks into pre-authored fragments (M14) — on a hard enough collision,
 /// inside an explosion, or when a script calls `world.break_entity`.
@@ -1212,6 +1234,281 @@ pub struct Breakable {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("exclusiveMinimum" = 0.0))]
     pub impulse_threshold: Option<f32>,
+
+    /// What this is made of (M43), which decides how the pieces behave once
+    /// they are pieces: how hard they scatter away from the impact, how much
+    /// they tumble, and what their surfaces are like.
+    ///
+    /// **Absent is M14 unchanged** — fragments take the parent's motion and
+    /// nothing else, on `friction: 0.5, restitution: 0.0`. A material is also
+    /// what `engine fracture` generates shard geometry for, but the two halves
+    /// are independent: a wooden crate that breaks into authored boxes still
+    /// scatters like wood.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<FractureMaterial>,
+
+    /// Throw the material's burst of dust, sawdust, glitter or sparks at the
+    /// break (M44). Default **on**, and **does nothing without a `material`**
+    /// — there is no generic dust, only stone's and wood's and glass's and
+    /// metal's.
+    ///
+    /// The burst is a `ParticleEmitter` entity named `Parent.dust`, spawned at
+    /// the impact point and sized to the object, which despawns itself once
+    /// its last particle dies. It is an ordinary entity while it lives: it
+    /// traces, it bakes, and a script can find it by name.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub dust: bool,
+}
+
+/// `dust` is on by default, so only `false` is worth writing — a bake of an
+/// untouched `Breakable` then comes back byte-identical to what it was.
+fn is_yes(on: &bool) -> bool {
+    *on
+}
+
+/// What a `Breakable` is made of (M43).
+///
+/// `glass` shatters into radial slivers that fly far and fast; `wood` splits
+/// into splinters along the grain and tumbles about its long axis; `stone`
+/// breaks into chunky blocks that barely scatter, so a granite block comes
+/// apart and its pieces *drop*; `metal` tears into a few large plates that
+/// move together and slide.
+///
+/// Four, because four is what the fracture generator has distinct algorithms
+/// for and what the runtime has distinct behaviour for. A fifth would need
+/// both, and "generic" is spelled by leaving the field out.
+///
+/// NOTE: leave these variants undocumented, for [`ParticleBlend`]'s reason —
+/// a doc comment on an enum *variant* makes schemars emit oneOf/const instead
+/// of a flat `"enum": [...]`, which blinds the validation walk's
+/// closed-vocabulary check. Measured here: `"material": "wud"` reported
+/// nothing at all until these four comments moved up into this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FractureMaterial {
+    Glass,
+    Wood,
+    Stone,
+    Metal,
+}
+
+/// How one material's pieces behave once they are pieces (M43).
+///
+/// Plain data hanging off the enum rather than a `match` at every use, so the
+/// four materials are legible side by side — and so adding a fifth is one row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FractureBehaviour {
+    /// Metres per second a fragment is thrown away from the impact, at a hit
+    /// exactly on the threshold. A harder hit scales this up.
+    pub burst_speed: f32,
+    /// Degrees per second of tumble per metre per second of scatter.
+    pub spin: f32,
+    /// Fragment collider friction — M14 spawned every fragment at 0.5.
+    pub friction: f32,
+    /// Fragment collider restitution — M14 spawned every fragment at 0.0.
+    pub restitution: f32,
+    /// Density in kg/m³ the generator writes into the fragments it emits.
+    /// Nothing reads it at runtime: a fragment's mass is the `density` in the
+    /// file, so a hand-edited one can disagree.
+    pub density: f32,
+}
+
+impl FractureMaterial {
+    /// The burst this material throws off at the moment it breaks (M44),
+    /// sized for an object whose radius is `size` metres.
+    ///
+    /// Four different things, not one puff recoloured: stone makes hanging
+    /// grey dust, wood a short spray of sawdust that falls, glass a fine
+    /// bright glitter, and metal a shower of sparks that are lit rather than
+    /// lit-on. The burst is over in a fraction of a second — `duration` is the
+    /// *emission* window, and each particle then lives out its own lifetime —
+    /// and the emitter despawns itself once the last one dies.
+    ///
+    /// Everything that scales with the object scales with `size`: a puff on a
+    /// 3 m boulder cannot be the puff on a teacup, and speeds have to grow
+    /// with it too or a big break looks like it is happening in treacle.
+    pub fn dust(self, size: f32) -> ParticleEmitter {
+        let size = size.max(0.05);
+        let common = ParticleEmitter {
+            // A sphere: a break throws in every direction, and there is no
+            // aim to author.
+            spread: 180.0,
+            // A disc as wide as the thing that broke, so the burst comes off
+            // the whole face rather than out of one point in the middle of
+            // it — and so the cloud is wider than the object's silhouette
+            // from the first frame, which is what makes it visible at all.
+            radius: size,
+            despawn_when_done: true,
+            size_jitter: 0.4,
+            lifetime_jitter: 0.4,
+            speed_jitter: 0.5,
+            ..ParticleEmitter::default()
+        };
+        match self {
+            // Rock dust hangs: nearly no gravity, heavy drag, and it grows as
+            // it disperses. The one of the four that lingers.
+            Self::Stone => ParticleEmitter {
+                rate: 340.0,
+                duration: Some(0.18),
+                lifetime: 1.3,
+                speed: size * 2.6,
+                acceleration: Vec3::new(0.0, 0.25, 0.0),
+                drag: 2.6,
+                start_size: size * 0.42,
+                end_size: size * 1.5,
+                start_color: Vec3::new(0.78, 0.76, 0.71),
+                end_color: Vec3::new(0.7, 0.69, 0.66),
+                start_alpha: 0.75,
+                end_alpha: 0.0,
+                max_particles: 96,
+                ..common
+            },
+            // Sawdust and splinter chaff: browner, smaller, and it falls
+            // rather than hangs.
+            Self::Wood => ParticleEmitter {
+                rate: 200.0,
+                duration: Some(0.16),
+                lifetime: 0.7,
+                speed: size * 2.0,
+                acceleration: Vec3::new(0.0, -4.5, 0.0),
+                drag: 1.4,
+                start_size: size * 0.24,
+                end_size: size * 0.16,
+                start_color: Vec3::new(0.62, 0.44, 0.22),
+                end_color: Vec3::new(0.44, 0.3, 0.14),
+                start_alpha: 0.8,
+                end_alpha: 0.0,
+                max_particles: 48,
+                ..common
+            },
+            // Glass does not make dust, it makes glitter: fine, fast, lit
+            // additively so it reads as a catch of light rather than a smear.
+            Self::Glass => ParticleEmitter {
+                rate: 260.0,
+                duration: Some(0.1),
+                lifetime: 0.55,
+                speed: size * 3.4,
+                acceleration: Vec3::new(0.0, -9.0, 0.0),
+                drag: 0.3,
+                start_size: size * 0.13,
+                end_size: size * 0.05,
+                start_color: Vec3::new(0.82, 0.92, 0.97),
+                end_color: Vec3::new(0.55, 0.72, 0.8),
+                start_alpha: 0.95,
+                end_alpha: 0.0,
+                max_particles: 40,
+                blend: ParticleBlend::Additive,
+                stretch: 0.02,
+                ..common
+            },
+            // Sparks: the fewest, the fastest, stretched along their travel,
+            // and the only ones that cool as they go.
+            Self::Metal => ParticleEmitter {
+                rate: 340.0,
+                duration: Some(0.09),
+                lifetime: 0.5,
+                speed: size * 7.0,
+                acceleration: Vec3::new(0.0, -9.81, 0.0),
+                drag: 0.2,
+                start_size: size * 0.16,
+                end_size: size * 0.05,
+                start_color: Vec3::new(1.0, 0.78, 0.34),
+                end_color: Vec3::new(0.75, 0.2, 0.04),
+                start_alpha: 1.0,
+                end_alpha: 0.0,
+                max_particles: 36,
+                blend: ParticleBlend::Additive,
+                stretch: 0.14,
+                ..common
+            },
+        }
+    }
+
+    /// This material's behaviour. The numbers are the milestone's model, and
+    /// the ratios between them are what a render reads as "that is glass":
+    /// glass throws its slivers roughly six times as far as stone drops its
+    /// chunks, and metal barely parts at all.
+    pub fn behaviour(self) -> FractureBehaviour {
+        match self {
+            Self::Glass => FractureBehaviour {
+                burst_speed: 3.0,
+                spin: 220.0,
+                friction: 0.2,
+                restitution: 0.1,
+                density: 2500.0,
+            },
+            Self::Wood => FractureBehaviour {
+                burst_speed: 1.6,
+                spin: 160.0,
+                friction: 0.6,
+                restitution: 0.05,
+                density: 700.0,
+            },
+            Self::Stone => FractureBehaviour {
+                burst_speed: 0.5,
+                spin: 60.0,
+                friction: 0.8,
+                restitution: 0.0,
+                density: 2400.0,
+            },
+            Self::Metal => FractureBehaviour {
+                burst_speed: 0.8,
+                spin: 40.0,
+                friction: 0.4,
+                restitution: 0.02,
+                density: 7800.0,
+            },
+        }
+    }
+
+    /// The `"material"` value that names this one, for reports and errors.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Glass => "glass",
+            Self::Wood => "wood",
+            Self::Stone => "stone",
+            Self::Metal => "metal",
+        }
+    }
+
+    /// Every material's name, for `did_you_mean` and the CLI's `--material`.
+    pub const NAMES: &'static [&'static str] = &["glass", "wood", "stone", "metal"];
+
+    /// Parse a `--material` flag or a scene string.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "glass" => Some(Self::Glass),
+            "wood" => Some(Self::Wood),
+            "stone" => Some(Self::Stone),
+            "metal" => Some(Self::Metal),
+            _ => None,
+        }
+    }
+}
+
+/// A convex piece of a broken thing (M43), as a point set that **owns its
+/// geometry** — so an entity with one carries no `Mesh`, the rule `Water`,
+/// `Terrain`, `Cloud`, `Road`, `Junction` and `Meadow` already follow.
+///
+/// It is `Tree`'s exception on materials: the entity's own `Material` is the
+/// shard's surface, because a shard of a painted crate is painted.
+///
+/// The drawn solid is the convex hull of `points`, flat-shaded, and a
+/// `convex_hull` `Collider` on the same entity collides with that same hull —
+/// the file carries points rather than faces precisely so the two cannot be
+/// different shapes.
+///
+/// Ordinary authored data, not a runtime-only artifact: rubble on the ground is
+/// a pile of these. `engine fracture` is what usually writes them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Shard {
+    /// The convex point set, in entity-local metres, scaled by
+    /// `Transform.scale` like every other length. At least 4, at most 32, and
+    /// they must bound a volume (`shard_degenerate`).
+    #[schemars(length(min = 4, max = 32))]
+    #[schemars(with = "Vec<[f32; 3]>")]
+    pub points: Vec<Vec3>,
 }
 
 /// Gameplay logic as data (M10): a Rhai script run once per fixed step.
@@ -1547,6 +1844,35 @@ pub struct ParticleEmitter {
     /// a lot (~0.2).
     #[schemars(range(min = 0.0))]
     pub stretch: f32,
+
+    /// Seconds of **emission** after this emitter's first step (M44). `> 0`.
+    ///
+    /// **Absent is M13: it emits forever.** Present, it is a burst — the puff
+    /// of dust a break throws, the spark shower off an impact — and when the
+    /// time is up emission stops exactly as `rate: 0` does: no new particles,
+    /// and the live ones finish their own `lifetime`.
+    ///
+    /// It is measured from when the *system* first sees the emitter, not from
+    /// scene time, so an emitter that arrives mid-run (a break's dust) burns
+    /// its burst from the moment it exists rather than being born already
+    /// spent. That start is derived state, like particle positions: it is not
+    /// baked, so a scene baked mid-puff reloads and puffs again — the same
+    /// thing the tour's fire already does, for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub duration: Option<f32>,
+
+    /// Despawn this emitter's entity once its `duration` is up **and** its
+    /// last particle has died (M44). Default `false`.
+    ///
+    /// This is what keeps a scene that breaks twenty crates from accumulating
+    /// twenty spent emitters. Requires `duration` — without one the emitter
+    /// never finishes and the flag could never fire, which is
+    /// `emitter_never_finishes` rather than a field that quietly does nothing.
+    ///
+    /// The despawn is an ordinary one: it traces as `despawned` like any
+    /// other, and the entity is simply gone from a bake taken afterwards.
+    pub despawn_when_done: bool,
 }
 
 impl Default for ParticleEmitter {
@@ -1576,6 +1902,8 @@ impl Default for ParticleEmitter {
             turbulence: 0.0,
             turbulence_scale: 1.0,
             stretch: 0.0,
+            duration: None,
+            despawn_when_done: false,
         }
     }
 }
@@ -1994,6 +2322,93 @@ pub struct Water {
     /// be turned on in a tuned scene without re-tuning it.
     #[schemars(range(min = 1.0, max = 3.0))]
     pub ior: f32,
+
+    /// Density of the fluid in kg/m³, `> 0`. Fresh water is 1000 (the default),
+    /// sea water about 1025.
+    ///
+    /// The **only** field here that nothing renders. It is what a [`Buoyancy`]
+    /// body weighs the water it displaces against, and it lives on the lake
+    /// rather than on the boat because it is a property of the fluid: two hulls
+    /// in one pond disagreeing about how dense the water is would not be a knob,
+    /// it would be a bug. The authoring knob for "this floats higher" already
+    /// exists and is [`Collider::density`], in the same unit.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub density: f32,
+}
+
+/// Makes a dynamic body float on a named [`Water`] surface (M41).
+///
+/// Archimedes, sampled: the body's collider is divided into columns, each column
+/// is asked how deep it sits under the wave above it, and each pushes up with
+/// the weight of the water it displaces. Because the pushes land at their own
+/// columns rather than at the centre of mass, a hull that rolls has more of
+/// itself submerged on the low side and rights itself — the pitch and roll come
+/// out of the same sum as the lift, with nothing modelling them separately.
+///
+/// **Absent, nothing floats**, which is the pre-M41 engine exactly. The
+/// component needs a `RigidBody` that is dynamic and a `Collider` to have a
+/// shape at all, and validation says so rather than letting a scene author a
+/// component that silently does nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Buoyancy {
+    /// The [`Water`] entity this body floats on, by name. Required.
+    ///
+    /// Named rather than found by overlap, for [`Meadow::terrain`]'s reason: one
+    /// implementation of "where is the surface", pointed at explicitly. A scene
+    /// with two ponds has to say which one, and a scene with one still says it,
+    /// so the file records what the physics did.
+    pub water: String,
+
+    /// Columns per axis across the body's footprint, `[1, 4]`. Default 2, so a
+    /// hull is sampled at four points.
+    ///
+    /// The fidelity knob, and it decides whether the body can **turn**: at 1
+    /// there is a single upward push through the middle and a raft cannot right
+    /// itself or ride a slope, because a force through the centre of mass makes
+    /// no torque. At 2 each quarter of the hull feels its own wave, which is
+    /// what makes a boat pitch into a swell instead of hovering over it. Past
+    /// that the returns fall off quickly — 3 and 4 are for a long hull spanning
+    /// several wavelengths.
+    #[schemars(range(min = 1, max = 4))]
+    pub samples: u32,
+
+    /// Linear damping in 1/s applied **in proportion to how submerged the body
+    /// is**, `>= 0`.
+    ///
+    /// Added on top of [`RigidBody::linear_damping`], not replacing it: that
+    /// field is the body's drag in air, and this is the water's. Water drag is
+    /// not a property of the boat, which is exactly why it cannot be authored on
+    /// the `RigidBody` — a hull thrown clear of the pond has to stop being
+    /// damped the moment it leaves, and a half-submerged one is dragged half as
+    /// hard.
+    #[schemars(range(min = 0.0))]
+    pub drag: f32,
+
+    /// Angular damping in 1/s, scaled by submersion exactly as [`drag`] is.
+    /// `>= 0`.
+    ///
+    /// Usually wants to be the larger of the two: water stops a hull from
+    /// spinning far more effectively than it stops it from drifting, and a boat
+    /// that rolls for twenty seconds after a wave reads as weightless.
+    ///
+    /// [`drag`]: Buoyancy::drag
+    #[schemars(range(min = 0.0))]
+    pub angular_drag: f32,
+}
+
+impl Default for Buoyancy {
+    fn default() -> Self {
+        Self {
+            // No sensible default: which water a boat floats on is not
+            // guessable, and validation requires it. Empty is what an author
+            // omitting it gets, and what the error message is about.
+            water: String::new(),
+            samples: 2,
+            drag: 1.0,
+            angular_drag: 2.0,
+        }
+    }
 }
 
 impl Water {
@@ -2026,6 +2441,9 @@ impl Default for Water {
             shore_foam: 0.0,
             foam_color: Vec3::new(0.86, 0.90, 0.92),
             ior: 1.0,
+            // Fresh water. Nothing reads this unless something floats, so it
+            // costs a pre-M41 scene nothing to have gained it.
+            density: 1000.0,
         }
     }
 }
@@ -2316,6 +2734,19 @@ pub struct Terrain {
     /// water's detail ripples already paid for).
     #[schemars(range(min = 0.0, max = 1.0))]
     pub bump: f32,
+
+    /// Circular depressions cut into the height field, in **world** XZ (M42).
+    ///
+    /// Empty (the default) is M22's landscape exactly — the noise is the whole
+    /// answer. This is the only way to say "the ground dips *here*": everything
+    /// else about a patch describes a texture of relief rather than a place, and
+    /// a body of water needs a place.
+    ///
+    /// Cut inside [`height_at`](crate::terrain::height_at), so the drawn
+    /// surface, its normals, the `trimesh` collider standing on it,
+    /// `world.terrain_height`, a `Road` that follows this patch and a `Meadow`
+    /// growing on it all follow from the one implementation.
+    pub basins: Vec<TerrainBasin>,
 }
 
 impl Default for Terrain {
@@ -2332,6 +2763,76 @@ impl Default for Terrain {
             texture_scale: 4.0,
             color_variation: 0.25,
             bump: 0.3,
+            basins: Vec::new(),
+        }
+    }
+}
+
+/// One circular depression a [`Terrain`] cuts into its height field (M42): a
+/// flat floor, a smoothstepped wall, and how far down the floor sits.
+///
+/// The shape is `radius` metres of floor surrounded by `falloff` metres of wall,
+/// so the whole footprint is `radius + falloff` and the shoreline of any water
+/// put here lands somewhere on the wall. **Two numbers rather than one**: a
+/// single radius with a falloff to nothing gives a dish, and a dish deep enough
+/// to hold water has walls gentle enough that the waterline creeps far past
+/// where it was authored.
+///
+/// **Overlapping basins take the deepest, not the sum.** Overlapping circles are
+/// how anything that is not a circle gets authored — a lake is three of them, a
+/// channel a line of them — and under a sum every overlap digs to twice the
+/// depth, turning a lake into a ring of pits. The cost is a faint crease where
+/// two basins are equally deep, which is under the water in every use this was
+/// built for.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerrainBasin {
+    /// Where the basin is centred, in **world** XZ metres — the same space
+    /// everything else about a terrain is sampled in, and the same numbers the
+    /// `Water` entity's `Transform.position` is written in.
+    ///
+    /// World rather than the patch's local space for M22's reason: heights are
+    /// a function of world position, which is what lets two patches sharing one
+    /// description meet seamlessly. A basin in local space would be dragged
+    /// around by its patch and would break that.
+    #[schemars(with = "[f32; 2]")]
+    pub center: [f32; 2],
+
+    /// Metres of flat floor at the centre, `>= 0`. 0 is legitimate and makes
+    /// the basin a smooth conical hollow of `falloff` metres.
+    #[schemars(range(min = 0.0))]
+    pub radius: f32,
+
+    /// Metres the floor drops below the surrounding field, `>= 0`.
+    ///
+    /// In the same space as [`Terrain::height`] — metres of relief at
+    /// `Transform.scale.y` 1, so the patch's vertical scale multiplies a basin
+    /// exactly as it multiplies the hills. A second convention here would make
+    /// a patch at `scale.y: 2` disagree with itself about which of its numbers
+    /// are metres.
+    #[schemars(range(min = 0.0))]
+    pub depth: f32,
+
+    /// Metres of wall between the floor's edge and the untouched field, `>= 0`.
+    ///
+    /// Smoothstepped, with the interpolant the value noise already uses, so the
+    /// wall meets the surrounding ground with a zero derivative and the rim has
+    /// no crease. 0 is a vertical wall, which reads as a quarry rather than a
+    /// pond and is occasionally what is wanted.
+    #[schemars(range(min = 0.0))]
+    pub falloff: f32,
+}
+
+impl Default for TerrainBasin {
+    fn default() -> Self {
+        Self {
+            center: [0.0, 0.0],
+            radius: 0.0,
+            depth: 0.0,
+            // A bare `{}` cuts nothing whatever this is, and validation says so
+            // (`terrain_basin_no_effect`); a plausible wall is still the more
+            // useful default the moment a depth is filled in.
+            falloff: 4.0,
         }
     }
 }
@@ -2440,6 +2941,11 @@ pub struct RoadPoint {
     /// road *surface* height there; the profile between points is a monotone
     /// cubic through these, so the grade turns over smoothly and never
     /// overshoots an authored height.
+    ///
+    /// With [`Road::follow_terrain`] set, `y` means something different: it is
+    /// the **clearance above the sampled ground**, so `0` sits the road on the
+    /// terrain. [`pin_height`](Self::pin_height) turns it back into an absolute
+    /// height for one point.
     #[schemars(with = "[f32; 3]")]
     pub position: Vec3,
 
@@ -2455,6 +2961,44 @@ pub struct RoadPoint {
     /// thing a polygon cannot guarantee (`road_corner_does_not_fit`).
     #[schemars(range(min = 0.0))]
     pub radius: f32,
+
+    /// Width of the asphalt here, in metres, overriding the road's `width`
+    /// (M40). Absent — the default — is the road's own width, so a file that
+    /// never mentions this is the M23 road exactly. `> 0`.
+    ///
+    /// Interpolated along the centerline by the same monotone cubic the heights
+    /// use, so a road never bulges wider than the widest width authored on it.
+    /// **The whole cross-section scales, shoulder included**: `u` — signed
+    /// metres across the road — has to mean one thing at every `v` for the
+    /// shader to find the asphalt edge, so the widening is one factor on the
+    /// section rather than a metre value added to the asphalt alone. Paint
+    /// scales with it: a section at 1.5× width wears a 1.5× wider edge line.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub width: Option<f32>,
+
+    /// Roll of the cross-section here, in degrees, positive raising the
+    /// driver's **right** edge (M40).
+    ///
+    /// Absent falls through to [`Road::auto_bank`], which is the way to author
+    /// a circuit: auto-banking knows which way the road turns and so raises the
+    /// outside of every corner without the file carrying a sign that has to
+    /// agree with the winding of a polygon being edited beside it. Reach for an
+    /// explicit value for the cases auto-banking cannot know — a banked
+    /// straight, a corner deliberately flat.
+    pub bank: Option<f32>,
+
+    /// Read `position.y` as an absolute height even though the road follows a
+    /// terrain (M40) — a bridge deck, a level a junction has to meet.
+    ///
+    /// The pin is a *local* correction to the followed profile, faded out over
+    /// [`Road::follow_blend`] metres either side, so the road reaches this
+    /// height exactly and goes back to hugging the ground. Two pins closer
+    /// together than that blend pull on each other and neither is reached
+    /// exactly; validation warns (`road_pins_overlap`).
+    ///
+    /// Without `follow_terrain` every height is already absolute and this does
+    /// nothing.
+    pub pin_height: bool,
 }
 
 impl Default for RoadPoint {
@@ -2462,6 +3006,9 @@ impl Default for RoadPoint {
         Self {
             position: Vec3::ZERO,
             radius: 0.0,
+            width: None,
+            bank: None,
+            pin_height: false,
         }
     }
 }
@@ -2667,6 +3214,70 @@ pub struct Road {
     #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
     pub bank_color: Vec3,
 
+    /// Bank every corner by this many degrees at a radius of
+    /// [`auto_bank_radius`](Self::auto_bank_radius), scaling as `1 / radius`
+    /// for anything wider and capped here for anything tighter (M40). `0` —
+    /// the default — leaves the road flat. `>= 0`.
+    ///
+    /// **The engine picks the sign**, raising the outside of each turn, and
+    /// that is the whole reason this field exists next to
+    /// [`RoadPoint::bank`]. Which way a corner banks is a fact about the
+    /// winding of the polygon it belongs to; deriving it per corner by hand is
+    /// how a circuit ends up with one corner that throws the car off.
+    ///
+    /// It is a shape knob, not a physical one. Banking a corner for a *speed*
+    /// is `atan(v² / gR)` and wants a velocity a road cannot know — the answer
+    /// for a kart and an F1 car differ by 20°.
+    #[schemars(range(min = 0.0))]
+    pub auto_bank: f32,
+
+    /// The corner radius [`auto_bank`](Self::auto_bank) is quoted at, in
+    /// metres. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub auto_bank_radius: f32,
+
+    /// Name of a `Terrain` entity this road rides on (M40). Absent — the
+    /// default — is a road whose heights are absolute, which is every road
+    /// before M40.
+    ///
+    /// With it set, each point's `y` becomes a **clearance above the ground**
+    /// and the terrain is sampled at every centerline sample rather than only
+    /// at the authored points, then smoothed over
+    /// [`follow_smoothing`](Self::follow_smoothing) metres — terrain is noise,
+    /// and a road that reproduces it is undrivable.
+    ///
+    /// The road does **not** carve the terrain: a height field stays the one
+    /// source of truth for where the ground is. Where the smoothed road passes
+    /// below the real ground the ground pokes through it, and the answers are
+    /// more clearance, a [`pinned`](RoadPoint::pin_height) point, or more
+    /// smoothing.
+    pub follow_terrain: Option<String>,
+
+    /// How far along the road the sampled ground is averaged, in metres.
+    /// `>= 0`, and `0` reproduces the terrain exactly, bumps and all.
+    #[schemars(range(min = 0.0))]
+    pub follow_smoothing: f32,
+
+    /// How far either side of a [`pinned`](RoadPoint::pin_height) point its
+    /// height correction fades out, in metres. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub follow_blend: f32,
+
+    /// How strongly the asphalt is grained, `[0, 1]`. `0` — the default — is
+    /// the flat colour M23 shipped (M40).
+    ///
+    /// A value-noise field in the road's own `(u, v)`, so it follows every
+    /// curve and grade the way the markings do, perturbing albedo and
+    /// roughness. Deliberately not a normal perturbation: grain that tilts the
+    /// shading normal sparkles under a moving camera at exactly the frequencies
+    /// a deterministic renderer should not be producing.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub grain: f32,
+
+    /// Size of one grain cell, in metres. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub grain_scale: f32,
+
     /// What is painted on it.
     pub markings: RoadMarkings,
 }
@@ -2682,11 +3293,11 @@ impl Default for Road {
             points: vec![
                 RoadPoint {
                     position: Vec3::ZERO,
-                    radius: 0.0,
+                    ..RoadPoint::default()
                 },
                 RoadPoint {
                     position: Vec3::new(0.0, 0.0, -20.0),
-                    radius: 0.0,
+                    ..RoadPoint::default()
                 },
             ],
             closed: false,
@@ -2699,7 +3310,148 @@ impl Default for Road {
             roughness: 0.92,
             shoulder_color: Vec3::new(0.17, 0.20, 0.14),
             bank_color: Vec3::new(0.20, 0.17, 0.13),
+            // Every M40 field is off or neutral here, which is what makes a
+            // pre-M40 scene generate pre-M40 vertices.
+            auto_bank: 0.0,
+            auto_bank_radius: 20.0,
+            follow_terrain: None,
+            follow_smoothing: 12.0,
+            follow_blend: 30.0,
+            grain: 0.0,
+            grain_scale: 0.35,
             markings: RoadMarkings::default(),
+        }
+    }
+}
+
+/// Which end of a road arrives at a [`Junction`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum JunctionEnd {
+    /// The road's first point.
+    Start,
+    /// The road's last point. A closed road has no free end, so an arm onto one
+    /// is a validation error.
+    End,
+}
+
+/// One road arriving at a [`Junction`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct JunctionArm {
+    /// Name of the entity carrying the `Road` that arrives here (invariant 4).
+    pub road: String,
+    /// Which end of it arrives.
+    pub end: JunctionEnd,
+}
+
+impl Default for JunctionArm {
+    fn default() -> Self {
+        Self {
+            road: String::new(),
+            end: JunctionEnd::End,
+        }
+    }
+}
+
+/// Where roads meet: the patch of asphalt a ribbon cannot be (M40).
+///
+/// A [`Road`] is swept along a curve, which is the wrong primitive for a
+/// crossroads — two ribbons crossing leave a hole. A junction is instead the
+/// area **bounded by the mouths of the roads that reach it**: each arm names a
+/// road and which end of it arrives, and the patch stretches to whatever those
+/// mouths turn out to be.
+///
+/// The mouths are read off each road's finished surface — the same
+/// [`RoadSurface`](crate::road::RoadSurface) the renderer draws and physics
+/// builds its trimesh from — so a junction cannot disagree with the road it
+/// joins about where that road ended, how wide it was there, what height it
+/// reached, or how far it was banked. That is the `engine road-centerline` rule
+/// applied inside the engine: nothing re-derives a curve someone else built.
+///
+/// **The junction does not trim its roads.** It would be the tidier result and
+/// it inverts the ownership every recipe here follows: a road's geometry would
+/// become a function of which junctions happen to name it, and `engine inspect`
+/// on the road would stop predicting the road. The author ends each road at the
+/// junction's mouth, and because the patch stretches, "roughly there" is enough
+/// — an arm stopping 2 m short simply makes the patch 2 m longer on that side.
+///
+/// Like every other recipe, the entity owns its geometry and so carries **no**
+/// `Mesh` and no `Material` (`junction_with_mesh`), and a `Collider` with
+/// `"shape": "trimesh"` on it takes the patch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Junction {
+    /// The roads that meet here, in any order — the patch is built in
+    /// rotational order about the mouths whatever order they are listed in. At
+    /// least two.
+    #[schemars(length(max = 16))]
+    pub arms: Vec<JunctionArm>,
+
+    /// How far the corner between two arms reaches out toward where their edges
+    /// would have crossed, `[0, 1]`.
+    ///
+    /// `1` — the default — is the full flare, a quadratic Bézier through that
+    /// intersection, which is the shape a real corner has. `0` is the straight
+    /// chord from one mouth's corner to the next.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub flare: f32,
+
+    /// How finely each of those corners is cut. `>= 1`.
+    #[schemars(range(min = 1, max = 64))]
+    pub corner_segments: u32,
+
+    /// Shoulder around the patch, in metres — the same surface, for the same
+    /// reason a road's is. `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub shoulder: f32,
+
+    /// How far the embankment drops below the shoulder's outer edge, in metres.
+    /// `>= 0`.
+    #[schemars(range(min = 0.0))]
+    pub skirt: f32,
+
+    /// Linear RGB of the asphalt. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub color: Vec3,
+
+    /// Surface roughness, `[0, 1]`.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub roughness: f32,
+
+    /// Linear RGB of the shoulder. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub shoulder_color: Vec3,
+
+    /// Linear RGB of the embankment. Each component `[0, 1]`.
+    #[schemars(with = "[f32; 3]", inner(range(min = 0.0, max = 1.0)))]
+    pub bank_color: Vec3,
+
+    /// How strongly the asphalt is grained, `[0, 1]` — [`Road::grain`] on a
+    /// patch, so a junction and the roads reaching it can wear the same
+    /// surface.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub grain: f32,
+
+    /// Size of one grain cell, in metres. `> 0`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub grain_scale: f32,
+}
+
+impl Default for Junction {
+    fn default() -> Self {
+        Self {
+            arms: Vec::new(),
+            flare: 1.0,
+            corner_segments: 6,
+            shoulder: 1.5,
+            skirt: 0.6,
+            color: Vec3::new(0.09, 0.09, 0.10),
+            roughness: 0.92,
+            shoulder_color: Vec3::new(0.17, 0.20, 0.14),
+            bank_color: Vec3::new(0.20, 0.17, 0.13),
+            grain: 0.0,
+            grain_scale: 0.35,
         }
     }
 }
@@ -3163,6 +3915,28 @@ pub struct ColliderPart {
     /// sword's blade and its guard want opposite answers.
     #[serde(default)]
     pub sensor: bool,
+
+    /// Solve this part's length from the posed bone instead of holding the
+    /// authored one (M39). Absent — the default, and every pre-M39 part — is
+    /// M33's rule exactly: only the placement follows the rig, never the size.
+    ///
+    /// `"bone"` takes a `capsule`'s `half_height`, or a `cuboid`'s Y
+    /// half-extent, from the posed distance between this part's joint and that
+    /// joint's first child, so a proxy set fitted to a rest pose keeps fitting
+    /// a skeleton the solver is moving. A joint with no child keeps the
+    /// authored value, which is what a hand or a head has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit: Option<ColliderFit>,
+}
+
+/// How a proxy's size is decided (M39). See [`ColliderPart::fit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ColliderFit {
+    // NOTE: undocumented for `ColliderShapeKind`'s reason — a schemars doc
+    // comment on a variant turns a flat "enum" into oneOf/const and blinds the
+    // walk's closed-vocabulary check.
+    Bone,
 }
 
 impl ColliderPart {
@@ -3218,10 +3992,274 @@ pub struct SkinnedCollider {
     pub restitution: f32,
 }
 
+/// One joint's local placement while a [`Ragdoll`] owns the skeleton (M39).
+///
+/// **`rotation` is a quaternion, `w` last — the one rotation in this format
+/// that is not XYZ Euler degrees.** `CLAUDE.md` names the reason under Traps:
+/// XYZ Euler clamps the middle angle to ±90°, so an orientation the solver
+/// integrated past that comes back as the `(±180, θ, ±180)` twin, and a
+/// ragdoll's joints go past it in the first second. M30 drew the same line for
+/// skeletal clips, and the distinction is *who wrote the numbers*: these are
+/// the engine's, like a DCC tool's, not an agent's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JointPose {
+    /// The joint this places. Every joint of the rig appears exactly once.
+    pub joint: String,
+
+    /// Metres, in the parent joint's frame.
+    #[serde(default)]
+    #[schemars(with = "[f32; 3]")]
+    pub translation: Vec3,
+
+    /// `[x, y, z, w]`, glTF's order and rapier's.
+    #[serde(default = "identity_quat")]
+    pub rotation: [f32; 4],
+
+    /// Carried only when it is not 1: a ragdoll does not scale bones, so this
+    /// is whatever the clip had at the moment of handoff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<[f32; 3]>")]
+    pub scale: Option<Vec3>,
+}
+
+fn identity_quat() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+/// A per-joint override of [`Ragdoll`]'s default cone (M39).
+///
+/// A ragdoll whose every joint is a 45° cone reads as a bag. A knee that only
+/// bends one way, and only backwards, is what makes it read as a body — and
+/// both numbers being in the file is what makes it tunable without touching
+/// Rust.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RagdollJoint {
+    /// The joint to override. Some part of the `SkinnedCollider` must ride it,
+    /// and it must not be the root — a root part has no joint to constrain.
+    pub joint: String,
+
+    /// Half-angle of the cone, in degrees. Ignored when `hinge` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 180.0))]
+    pub limit: Option<f32>,
+
+    /// Turn this joint into a hinge about this axis in the **child** part's
+    /// local frame, instead of a cone. An elbow or a knee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<[f32; 3]>")]
+    pub hinge: Option<Vec3>,
+
+    /// The hinge's travel in degrees, `[min, max]`. `hinge` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<[f32; 2]>,
+}
+
+/// Physics driving a skinned character's skeleton (M39).
+///
+/// M33 said the pose drives the proxies and nothing reads them back, and called
+/// that its whole design. **This reverses that sentence for one entity, once,
+/// permanently.** When `active` turns true the entity's `SkinnedCollider`
+/// proxies stop being kinematic followers and become dynamic bodies wired
+/// together with rapier joints; from that step on the skeleton is a report of
+/// where they ended up.
+///
+/// **The pose stays in the file, which is why invariant 2 survives the
+/// reversal.** `pose` is written back after every step, exactly as M32 writes
+/// `AnimationPlayer.phase` back, and `locomotion::posed_globals_at` reads it
+/// before it looks at a clip — so the render, `engine list-joints`,
+/// `engine list-colliders` and `world.joint_position` all see the ragdolled
+/// skeleton through the seam they already shared. M32's rule is what settled
+/// it: a ragdoll halfway to the floor, baked and reloaded, has to land in the
+/// same heap, and a pose living in the physics world would reload standing up.
+///
+/// The bodies **are** the proxies, so the hitbox that was shot is the body that
+/// falls, and the collider set does not change on handoff — which matters
+/// because that set is an input to rapier's broad phase.
+///
+/// See `designs/ragdoll-design.md`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Ragdoll {
+    /// Whether physics owns the skeleton. A scene may ship this true and its
+    /// character is a corpse from step 0; `world.ragdoll(name)` sets it, and
+    /// nothing clears it — the handoff is one-way (design §3).
+    #[serde(default)]
+    pub active: bool,
+
+    /// kg/m³, `Collider.density`'s unit. Each part's mass is its shape's
+    /// volume times this. Defaults to a shade under water, which is roughly
+    /// what a person is.
+    #[serde(default = "default_ragdoll_density")]
+    #[schemars(range(min = 0.0))]
+    pub density: f32,
+
+    /// Half-angle in degrees of the cone every joint gets unless `joints`
+    /// overrides it.
+    #[serde(default = "default_ragdoll_limit")]
+    #[schemars(range(min = 0.0, max = 180.0))]
+    pub limit: f32,
+
+    /// Velocity damping on every part. Deliberately above a physically honest
+    /// value: a real body tumbles for longer than a game wants to watch, and
+    /// this is the dial that fixes it.
+    #[serde(default = "default_ragdoll_linear_damping")]
+    #[schemars(range(min = 0.0))]
+    pub linear_damping: f32,
+
+    /// The same, for spin — and the one that stops a corpse pinwheeling.
+    #[serde(default = "default_ragdoll_angular_damping")]
+    #[schemars(range(min = 0.0))]
+    pub angular_damping: f32,
+
+    /// Joints that want something other than the default cone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joints: Vec<RagdollJoint>,
+
+    /// The skeleton, once physics owns it: one entry per joint of the rig,
+    /// written by the engine after every step. Absent until the handoff.
+    ///
+    /// It is in the file rather than in the physics world because that is what
+    /// makes a baked ragdoll reload into the same heap — see the type's docs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pose: Option<Vec<JointPose>>,
+}
+
+fn default_ragdoll_density() -> f32 {
+    985.0
+}
+
+fn default_ragdoll_limit() -> f32 {
+    45.0
+}
+
+fn default_ragdoll_linear_damping() -> f32 {
+    0.05
+}
+
+fn default_ragdoll_angular_damping() -> f32 {
+    0.6
+}
+
 /// Defines the serialized component union alongside everything that must stay
 /// in step with it.
 ///
 /// The name list feeds `did_you_mean` suggestions and the spawn arm feeds
+/// A region of space holding a grid of baked light probes (M35).
+///
+/// The fill light every other surface gets is a lie: `sky_ambient` hands the
+/// whole sky hemisphere to the inside of a forest, the underside of a truck and
+/// a bare patch of open ground alike, because nothing in the engine knows that
+/// geometry stands between a surface and the sky. A `LightProbeVolume` replaces
+/// that constant with a function of *where you are standing and which way you
+/// are facing* — which is what puts contact darkening under an object and lets
+/// colour travel off a coloured wall.
+///
+/// Like [`Water`], [`Terrain`], [`Road`], [`Cloud`] and [`Meadow`], the entity
+/// carries a `Transform` and this component and **no `Mesh` and no `Material`**
+/// (`light_probe_volume_with_mesh`). Unlike those, it grows no geometry at all:
+/// the `Transform` is read purely as *bounds* — a unit box scaled and
+/// positioned, non-uniform scale being the normal case.
+///
+/// ```json
+/// { "type": "LightProbeVolume", "spacing": 4.0, "bake": "gi/showcase.gi.json" }
+/// ```
+///
+/// **A scene may hold at most one** (`multiple_light_probe_volumes`), following
+/// `DirectionalLight` and `AmbientLight` and for the same reason: the renderer
+/// holds one field, so a second volume would bake, validate, and light nothing.
+/// A point outside the volume falls back to `sky_ambient`, which is exactly the
+/// pre-M35 path — so [`blend`](LightProbeVolume::blend) exists to make that
+/// boundary a fade rather than a step.
+///
+/// The bake is a file rather than a load-time computation because the loop is
+/// the product: a BVH build plus a few hundred thousand rays is seconds, and it
+/// would otherwise be paid by every `screenshot`, every `diff-render` and every
+/// editor reload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct LightProbeVolume {
+    /// Metres between probes, `> 0`.
+    ///
+    /// A spacing, not a resolution: resizing a volume keeps its GI detail
+    /// instead of stretching it, and two volumes at the same spacing agree
+    /// where they meet. Probe counts are derived from this and the `Transform`
+    /// scale, reported by `bake-gi`, and bounded by `too_many_gi_probes`.
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    pub spacing: f32,
+
+    /// Path to the baked transfer file, relative to the **scene file**
+    /// (invariant 3), conventionally `gi/<name>.gi.json`.
+    ///
+    /// Written by `engine bake-gi`. A path that is not there is
+    /// `gi_bake_missing`; one taken from a different version of the scene is
+    /// `gi_bake_stale`. Neither is a warning, because a bake that disagrees
+    /// with its geometry renders light that is quietly wrong — the one failure
+    /// mode this system is built to make impossible.
+    pub bake: String,
+
+    /// Light bounces the bake gathers, `[1, 2]`.
+    ///
+    /// Bounce one holds nearly all of the visible difference; bounce two costs
+    /// another pass over the volume and mostly lifts the black out of deep
+    /// occlusion.
+    #[schemars(range(min = 1, max = 2))]
+    pub bounces: u32,
+
+    /// Scales the whole effect, `>= 0`.
+    ///
+    /// Exists so an authoring pass can dial GI back without re-baking, and so
+    /// `0.0` is a one-field A/B against the pre-M35 look. Animatable, which is
+    /// how a scene fades GI in.
+    #[schemars(range(min = 0.0))]
+    pub intensity: f32,
+
+    /// Metres of fade at the volume's edge, `>= 0`.
+    ///
+    /// Over this distance the volume's irradiance crosses to whatever lies
+    /// outside it — another volume, or the `sky_ambient` fallback. Without it
+    /// the boundary is a visible step, since the two models disagree by exactly
+    /// the occlusion the volume measured.
+    #[schemars(range(min = 0.0))]
+    pub blend: f32,
+
+    /// Sun directions the bake gathers **bounced sunlight** for, `[0, 16]`
+    /// (M45).
+    ///
+    /// `0` is M35: the sun is a direct light with a shadow map and throws no
+    /// colour onto anything. Above zero, the bake samples the scene's own
+    /// daylight arc at this many points and stores what bounces off the
+    /// geometry for each — which is what makes a red wall redden the white one
+    /// beside it under a *sun* rather than only under the sky.
+    ///
+    /// **A scene whose sun does not move needs 1.** An authored
+    /// `DirectionalLight` with no `daylight` block has exactly one sun
+    /// direction, so the bake collapses to a single vector per probe whatever
+    /// this says, and anything above 1 buys nothing.
+    ///
+    /// It defaults to 0 because the file is the cost: a daylight scene at 8
+    /// stores 96 numbers per probe against the sky basis's 24. Bounced
+    /// moonlight is not gathered at any setting — see the design's §4.
+    #[schemars(range(min = 0, max = 16))]
+    pub sun_samples: u32,
+}
+
+impl Default for LightProbeVolume {
+    fn default() -> Self {
+        Self {
+            spacing: 4.0,
+            bake: String::new(),
+            bounces: 1,
+            intensity: 1.0,
+            blend: 1.0,
+            // M35 exactly: the sun is a direct light and bounces nothing. The
+            // design's §5 argues why the effect is opt-in rather than free.
+            sun_samples: 0,
+        }
+    }
+}
+
 /// hecs; generating all three from one list is what stops a new component from
 /// being loadable but unsuggestable, or schema'd but never spawned.
 macro_rules! components {
@@ -3296,9 +4334,14 @@ components!(
     Cloud,
     Terrain,
     Road,
+    Junction,
     Meadow,
     FootPlant,
     SkinnedCollider,
+    Ragdoll,
+    Buoyancy,
+    Shard,
+    LightProbeVolume,
 );
 
 #[cfg(test)]
@@ -3399,9 +4442,14 @@ mod tests {
                 "Cloud",
                 "Terrain",
                 "Road",
+                "Junction",
                 "Meadow",
                 "FootPlant",
-                "SkinnedCollider"
+                "SkinnedCollider",
+                "Ragdoll",
+                "Buoyancy",
+                "Shard",
+                "LightProbeVolume"
             ]
         );
     }

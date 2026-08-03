@@ -79,13 +79,16 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         Some(_) => {}
     }
 
+    const TOP_LEVEL: [&str; 6] = [
+        "name",
+        "entities",
+        "templates",
+        "physics",
+        "environment",
+        "daylight",
+    ];
     for key in object.keys() {
-        if key != "name"
-            && key != "entities"
-            && key != "physics"
-            && key != "environment"
-            && key != "daylight"
-        {
+        if !TOP_LEVEL.contains(&key.as_str()) {
             errors.push(
                 cx.err(
                     codes::UNKNOWN_FIELD,
@@ -93,10 +96,7 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
                     &format!("/{key}"),
                 )
                 .field(key)
-                .suggest_from(
-                    key,
-                    ["name", "entities", "physics", "environment", "daylight"],
-                ),
+                .suggest_from(key, TOP_LEVEL),
             );
         }
     }
@@ -125,7 +125,86 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
         }
     };
 
-    let facts = entity::walk(&cx, &schemas, entities, &mut errors);
+    // Whether the sun's direction is a set rather than one direction, which is
+    // what decides how many sun-basis vectors a GI bake should hold (M45).
+    // Read from the raw JSON because `validate` never builds a `Scene`;
+    // `gi::sun_direction_count` is the one place the rule itself lives.
+    let moving_sun = object
+        .get("daylight")
+        .and_then(Value::as_object)
+        .is_some_and(|day| {
+            day.get("drives_sun")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+        });
+
+    let mut facts = entity::walk(
+        &cx,
+        &schemas,
+        entities,
+        entity::Kind::ENTITY,
+        moving_sun,
+        &mut errors,
+    );
+
+    // Templates (M37) take the same per-entry walk — same schema, same ranges,
+    // same per-entity cross-component rules — under their own codes and their
+    // own JSON pointer. What they do *not* take are the scene-level budget
+    // passes below, because `Kind::TEMPLATE`'s forbidden set guarantees a
+    // template contributes to none of them.
+    let template_facts = match object.get("templates") {
+        None => None,
+        Some(Value::Array(templates)) => Some(entity::walk(
+            &cx,
+            &schemas,
+            templates,
+            entity::Kind::TEMPLATE,
+            moving_sun,
+            &mut errors,
+        )),
+        Some(other) => {
+            errors.push(cx.wrong_type("templates", "array", other, "/templates"));
+            None
+        }
+    };
+
+    if let Some(template_facts) = &template_facts {
+        // One address space: `world.spawn_entity("Drone")` and
+        // `world.set_position("Drone", …)` must never be able to mean two
+        // different things, so a template may not take an entity's name.
+        for name in &template_facts.seen_names {
+            if facts.seen_names.contains(name) {
+                let at = template_facts
+                    .seen_names
+                    .iter()
+                    .position(|n| n == name)
+                    .unwrap_or(0);
+                errors.push(
+                    cx.err(
+                        codes::DUPLICATE_TEMPLATE_NAME,
+                        format!(
+                            "template {name:?} has the same name as an entity; templates \
+                             and entities share one name space, because a script addresses \
+                             both by name"
+                        ),
+                        &format!("/templates/{at}/name"),
+                    )
+                    .entity(*name),
+                );
+            }
+        }
+        // Collision layers are a scene-wide 32-bit budget, so a layer a
+        // template declares counts against it like any other.
+        facts
+            .layer_memberships
+            .extend(template_facts.layer_memberships.iter().cloned());
+        facts
+            .distinct_layers
+            .extend(template_facts.distinct_layers.iter().cloned());
+        facts
+            .layer_refs
+            .extend(template_facts.layer_refs.iter().cloned());
+    }
 
     passes::camera(&cx, &facts, &mut errors);
     passes::lights(&cx, &facts, &mut errors);
@@ -134,9 +213,35 @@ pub fn validate_source(source: &str, path: &str) -> Vec<EngineError> {
     passes::collision_layers(&cx, &facts, &mut errors);
     passes::wheel(&cx, &facts, &mut errors);
     passes::meadow(&cx, &facts, &mut errors);
+    passes::road_ground(&cx, &facts, &mut errors);
+    passes::junction(&cx, &facts, &mut errors);
     passes::foot_planting(&cx, &facts, &mut errors);
+    passes::buoyancy(&cx, &facts, &mut errors);
     passes::hud_parent(&cx, &facts, &mut errors);
     passes::animation(&cx, &facts, &mut errors);
+
+    // A template spawns into the *scene*, so every name it references — a
+    // `Wheel`'s chassis, a `Meadow`'s or a `FootPlant`'s terrain, a HUD
+    // element's parent — has to resolve against the scene's entities and never
+    // against another template. Giving the template facts the scene's name
+    // sets and re-running the reference passes is what says that: the
+    // reference vectors are the templates', the name sets are the scene's.
+    if let Some(mut template_facts) = template_facts {
+        template_facts.seen_names = facts.seen_names.clone();
+        template_facts.terrain_names = facts.terrain_names.clone();
+        template_facts.hud_panel_names = facts.hud_panel_names.clone();
+        // A template's own bodies stay in, so a template with an
+        // `AnimationPlayer` on a dynamic body is still the M8×M9 error it is
+        // on an entity. Names cannot collide — the check above refused that.
+        for (name, kind) in &facts.body_kinds {
+            template_facts.body_kinds.insert(name.clone(), *kind);
+        }
+        passes::wheel(&cx, &template_facts, &mut errors);
+        passes::meadow(&cx, &template_facts, &mut errors);
+        passes::foot_planting(&cx, &template_facts, &mut errors);
+        passes::hud_parent(&cx, &template_facts, &mut errors);
+        passes::animation(&cx, &template_facts, &mut errors);
+    }
 
     errors
 }

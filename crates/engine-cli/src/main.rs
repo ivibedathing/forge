@@ -263,6 +263,22 @@ enum Command {
         entity: Option<String>,
     },
 
+    /// Print where a Junction's arms actually met it (M40).
+    ///
+    /// A junction is bounded by the *mouths* of the roads that reach it, and
+    /// the author's job is to end each road near the crossing — so the question
+    /// that matters is where those mouths turned out to be. A screenshot cannot
+    /// tell a road that stopped 8 m short from one that arrived at the wrong
+    /// angle, and both produce a patch that looks wrong in the same way.
+    ///
+    /// `road-centerline`'s reason, one primitive over.
+    JunctionPlan {
+        scene: PathBuf,
+        /// Which junction, when the scene has more than one.
+        #[arg(long)]
+        entity: Option<String>,
+    },
+
     /// Print every collider the physics world holds: shape, size, and where
     /// it actually is (M33).
     ///
@@ -287,6 +303,88 @@ enum Command {
         /// Replay an input timeline while stepping.
         #[arg(long)]
         input: Option<PathBuf>,
+    },
+
+    /// Solve a `SkinnedCollider` from a skinned mesh's vertex weights (M39).
+    ///
+    /// M33 refused generating a proxy set at runtime — "a derived artifact with
+    /// no text form, which is invariant 1 read backwards" — and this is the
+    /// answer to that rather than an overruling of it. The generator runs when
+    /// an author asks it to, its output is JSON they read and edit, and
+    /// `--write` splices it into the scene file so the file still says
+    /// everything. Nothing at load time or step time consults a vertex weight.
+    ///
+    /// Deliberately not folded into `engine import`: a proxy set is a *choice*
+    /// about a character, and every imported rig arriving with hitboxes nobody
+    /// asked for is a scene file that got bigger for no reason.
+    FitColliders {
+        scene: PathBuf,
+        /// Narrow to one entity. Absent, every skinned entity in the scene.
+        #[arg(long)]
+        entity: Option<String>,
+        /// The shape to fit. `cuboid` is the bucket's bounding box exactly,
+        /// with no axis to guess, which is why it is the default. `capsule`
+        /// suits a rig whose bones are long — on a stubby one the dominant
+        /// axis is a near-tie and the result is a capsule that is nearly a
+        /// sphere, correct and useless.
+        #[arg(long, default_value = "cuboid")]
+        shape: String,
+        /// Splice the result into the scene file, replacing any
+        /// `SkinnedCollider` already on the entity. Without it, the component
+        /// is printed and the file is untouched.
+        #[arg(long)]
+        write: bool,
+    },
+
+    /// Break an entity's volume into material-shaped shards (M43).
+    ///
+    /// M14 settled that a `Breakable`'s fragments exist in the text file before
+    /// the run, and its design doc named this as the way out: "a future
+    /// `engine fracture` CLI could *generate* this JSON offline without
+    /// changing the runtime". Nothing at load time or break time fractures
+    /// anything — this writes fragments, and the runtime spawns what it reads.
+    ///
+    /// The volume is the entity's cuboid `Collider` if it has one, else its
+    /// mesh's bounding box. A source shape that is not a box fractures its box,
+    /// which is stated rather than hidden: a fractured sphere would otherwise
+    /// silently gain corners.
+    Fracture {
+        scene: PathBuf,
+        /// The entity to break up.
+        #[arg(long)]
+        entity: String,
+        /// What it is made of: `glass`, `wood`, `stone` or `metal`. Absent, the
+        /// entity's existing `Breakable.material`, and failing that `stone`.
+        #[arg(long)]
+        material: Option<String>,
+        /// How many pieces. Absent, what the material breaks into by default —
+        /// glass the most, metal the fewest.
+        #[arg(long)]
+        pieces: Option<u32>,
+        /// The fracture's random seed. The same seed reproduces the same
+        /// shards byte for byte.
+        #[arg(long, default_value_t = 1)]
+        seed: u32,
+        /// Where it was struck as x,y,z, in entity-local metres — materials
+        /// break finer here. Absent, the middle of the face it would most
+        /// likely be hit on.
+        #[arg(long, allow_hyphen_values = true)]
+        impact: Option<String>,
+        /// Wood's grain direction as x,y,z, in entity-local space. Ignored by
+        /// the other three materials; absent, the volume's longest axis.
+        #[arg(long, allow_hyphen_values = true)]
+        grain: Option<String>,
+        /// The contact impulse that breaks it, in kg·m/s. Absent, the entity
+        /// keeps the `impulse_threshold` it already had — and an entity with
+        /// no `Breakable` yet gets none, which means script-and-explosion-only
+        /// by M14's rule.
+        #[arg(long)]
+        threshold: Option<f32>,
+        /// Splice the result into the scene file, replacing any `Breakable`
+        /// already on the entity and keeping its `impulse_threshold`. Without
+        /// it, the component is printed and the file is untouched.
+        #[arg(long)]
+        write: bool,
     },
 
     /// Print where every HUD element ends up on screen (M31).
@@ -327,6 +425,64 @@ enum Command {
         input: Option<PathBuf>,
     },
 
+    /// Bake a `LightProbeVolume`'s transfer to a file beside the scene (M35).
+    ///
+    /// The only command besides `import` that *writes* into the project, and
+    /// like `import` it writes a file rather than mutating the scene. Rays are
+    /// cast against render geometry, not colliders — the tour's trees carry no
+    /// `Collider`, so asking physics what stood in the way would find a
+    /// landscape with no trees on it.
+    ///
+    /// CPU-only and deterministic: the same scene bakes to the same bytes on
+    /// any machine, which is a stronger promise than any render here makes.
+    BakeGi {
+        scene: PathBuf,
+        /// Which volume. A scene may have only one, so this is the usual
+        /// spelling-check argument rather than a choice.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Where to write it. Defaults to the `bake` path the component names,
+        /// resolved relative to the scene file — which is the only path that
+        /// makes the scene load afterwards.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Rays per probe. More is less noise and a slower bake; the value is
+        /// recorded in the file, because two sample counts are two artifacts.
+        #[arg(long)]
+        samples: Option<u32>,
+        /// Recompute the bake's `inputs_hash` and compare it against the
+        /// committed file, without writing anything. Exits non-zero when the
+        /// scene has moved since the bake.
+        ///
+        /// This is the geometry-level staleness check `validate` cannot afford:
+        /// it needs the scene's whole triangle set — 504,970 of them for the
+        /// showcase tour, 0.86s against `validate`'s 0.17s, and growing with
+        /// the geometry while `validate` does not — so it is an explicit
+        /// command rather than part of the fast gate.
+        #[arg(long)]
+        check: bool,
+    },
+
+    /// Ask what irradiance the renderer would use at a point and normal (M35).
+    ///
+    /// `terrain-height`'s argument applied to light: anything asking "why is
+    /// this dark" needs the number, not a PNG. Reports which volume answered
+    /// and how occluded the probes around the point are.
+    GiProbe {
+        scene: PathBuf,
+        /// World position as x,y,z — all three, unlike `terrain-height`.
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+        /// Surface normal to evaluate along. Defaults to straight up.
+        #[arg(long, allow_hyphen_values = true)]
+        normal: Option<String>,
+        /// Scene time in hours, for a scene with a `daylight` block. GI is
+        /// baked as *transfer*, so the answer moves with the sky — which is
+        /// the whole point, and is only checkable if this flag exists.
+        #[arg(long)]
+        time: Option<f32>,
+    },
+
     /// Ask a terrain patch how high the ground is at a world XZ position.
     ///
     /// The same sampler `world.terrain_height` answers with, so a prop placed
@@ -342,6 +498,31 @@ enum Command {
         /// one; with several, naming one is required.
         #[arg(long)]
         entity: Option<String>,
+    },
+
+    /// Ask a water surface how high it is at a world XZ position, and which way
+    /// it faces.
+    ///
+    /// The same evaluator `world.water_height` and buoyancy answer with, so a
+    /// prop placed from the shell floats at the height the physics agrees with.
+    /// Unlike `terrain-height` this takes a clock — water moves — and it can
+    /// report *no water here*, because a patch has edges.
+    WaterHeight {
+        scene: PathBuf,
+        /// World position as x,z — the height is what is being asked for.
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+        /// Which surface, when the scene has more than one. Defaults to the
+        /// only one; with several, naming one is required.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Seconds of scene time. Overrides `--steps` when given, exactly as on
+        /// `screenshot`.
+        #[arg(long, default_value_t = 0.0)]
+        time: f32,
+        /// Fixed steps to convert into scene time, when `--time` is absent.
+        #[arg(long, default_value_t = 0)]
+        steps: u32,
     },
 
     /// Print entities with every component field resolved — defaults filled
@@ -551,12 +732,40 @@ fn main() {
         } => simulate::raycast_command(scene, from, dir, steps, input),
         Command::Validate { scenes, strict } => validate(&scenes, strict),
         Command::RoadCenterline { scene, entity } => road_centerline(scene, entity),
+        Command::JunctionPlan { scene, entity } => junction_plan(scene, entity),
         Command::ListColliders {
             scene,
             entity,
             steps,
             input,
         } => list_colliders(scene, entity, steps, input),
+        Command::FitColliders {
+            scene,
+            entity,
+            shape,
+            write,
+        } => fit_colliders(scene, entity, shape, write),
+        Command::Fracture {
+            scene,
+            entity,
+            material,
+            pieces,
+            seed,
+            impact,
+            grain,
+            threshold,
+            write,
+        } => fracture(FractureArgs {
+            scene,
+            entity,
+            material,
+            pieces,
+            seed,
+            impact,
+            grain,
+            threshold,
+            write,
+        }),
         Command::UiLayout {
             scene,
             width,
@@ -565,7 +774,27 @@ fn main() {
             steps,
             input,
         } => ui_layout(scene, width, height, entity, steps, input),
+        Command::BakeGi {
+            scene,
+            entity,
+            out,
+            samples,
+            check,
+        } => bake_gi(scene, entity, out, samples, check),
+        Command::GiProbe {
+            scene,
+            at,
+            normal,
+            time,
+        } => gi_probe(scene, at, normal, time),
         Command::TerrainHeight { scene, at, entity } => terrain_height(scene, at, entity),
+        Command::WaterHeight {
+            scene,
+            at,
+            entity,
+            time,
+            steps,
+        } => water_height(scene, at, entity, time, steps),
         Command::Inspect { scene, entity } => inspect(scene, entity),
         Command::Import {
             model,
@@ -867,6 +1096,71 @@ fn load_scene(path: &PathBuf) -> Result<Scene> {
     })
 }
 
+/// Load a scene for `bake-gi`, tolerating the three errors the bake exists to
+/// clear.
+///
+/// `report_scene_diagnostics`' contract is that which command you ran never
+/// changes what you learn about a broken scene, and this is the one deliberate
+/// exception: a scene whose bake is missing, stale or malformed is *exactly*
+/// the scene `bake-gi` is for, so refusing it would make the command unable to
+/// fix the only problem it addresses. Nothing else is tolerated — a scene with
+/// a bad mesh reference still fails here, because the bake would ray-trace
+/// geometry it could not load.
+///
+/// Found the hard way: the first end-to-end run refused to bake a brand-new
+/// volume because that volume had no bake yet.
+fn load_scene_for_bake(path: &PathBuf) -> Result<Scene> {
+    const TOLERATED: &[&str] = &[
+        codes::GI_BAKE_MISSING,
+        codes::GI_BAKE_STALE,
+        codes::GI_BAKE_MALFORMED,
+    ];
+
+    let display = path.display().to_string();
+    let source = std::fs::read_to_string(path).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_UNREADABLE,
+            format!("could not read scene: {e}"),
+        )
+        .file(&display)
+    })?;
+
+    let mut diagnostics = engine_core::validate::validate_source(&source, &display);
+    diagnostics.retain(|d| !TOLERATED.contains(&d.error));
+    if diagnostics.iter().all(EngineError::is_warning) {
+        diagnostics.extend(engine_assets::validate_scene_assets(&source, &display));
+    }
+
+    let mut errors = 0;
+    for diagnostic in &diagnostics {
+        if !diagnostic.is_warning() {
+            errors += 1;
+        }
+        diagnostic.emit();
+    }
+    if errors > 0 {
+        return Err(EngineError::new(
+            codes::VALIDATION_FAILED,
+            format!("{errors} error(s) in {display}"),
+        )
+        .file(&display));
+    }
+
+    Scene::from_source_ignoring(&source, &display, TOLERATED).map_err(|mut errors| {
+        let last = errors.pop().unwrap_or_else(|| {
+            EngineError::new(
+                codes::SCENE_PARSE_DESYNC,
+                "scene failed to load after clean validation",
+            )
+            .file(&display)
+        });
+        for error in errors {
+            error.emit();
+        }
+        last
+    })
+}
+
 /// `engine list-colliders` — every collider the physics world holds (M33).
 ///
 /// Read out of the built world rather than out of the components: a skinned
@@ -938,6 +1232,508 @@ fn list_colliders(
     Ok(())
 }
 
+/// `engine fracture`'s arguments — a named struct rather than eight
+/// positional ones, for `Presence`'s reason: three of them are
+/// `Option<String>` and a swapped pair would type-check and fracture the wrong
+/// thing.
+struct FractureArgs {
+    scene: PathBuf,
+    entity: String,
+    material: Option<String>,
+    pieces: Option<u32>,
+    seed: u32,
+    impact: Option<String>,
+    grain: Option<String>,
+    threshold: Option<f32>,
+    write: bool,
+}
+
+/// `engine fracture` — break an entity's volume into material-shaped shards
+/// (M43).
+///
+/// The generator is a command and never a runtime behaviour, which is M14's
+/// decision kept rather than overruled: what reaches the engine is a list of
+/// fragments in the scene file, validated against the schema, identical from
+/// run to run. `engine fit-colliders` (M39) is the same shape — a solver an
+/// author runs, whose output is ordinary authored data.
+fn fracture(args: FractureArgs) -> Result<()> {
+    let FractureArgs {
+        scene: scene_path,
+        entity,
+        material,
+        pieces,
+        seed,
+        impact,
+        grain,
+        threshold,
+        write,
+    } = args;
+    let display = scene_path.display().to_string();
+
+    // The *file*, not the instantiated world: this reads and writes component
+    // definitions, and `Scene` has already spent them into hecs.
+    let source = std::fs::read_to_string(&scene_path).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_UNREADABLE,
+            format!("cannot read {display}: {e}"),
+        )
+        .file(&display)
+    })?;
+    load_scene(&scene_path)?;
+    let scene: engine_core::SceneFile = serde_json::from_str(&source).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_PARSE_DESYNC,
+            format!("{display} passed validation but failed to parse: {e}"),
+        )
+        .file(&display)
+    })?;
+
+    let target = scene
+        .entities
+        .iter()
+        .find(|e| e.name == entity)
+        .ok_or_else(|| {
+            EngineError::new(
+                codes::UNKNOWN_ENTITY,
+                format!("no entity named {entity:?} in {display}"),
+            )
+            .file(&display)
+            .suggest_from(&entity, scene.entities.iter().map(|e| e.name.as_str()))
+        })?;
+
+    let existing = target.components.iter().find_map(|c| match c {
+        engine_core::components::ComponentData::Breakable(b) => Some(b),
+        _ => None,
+    });
+
+    // The material is the flag, else what the entity already says it is made
+    // of, else stone — the one of the four that reads as "a solid object".
+    let material = match &material {
+        Some(name) => engine_core::components::FractureMaterial::parse(name).ok_or_else(|| {
+            EngineError::new(
+                codes::UNKNOWN_FIELD,
+                format!("{name:?} is not a material this fractures"),
+            )
+            .file(&display)
+            .suggest_from(
+                name,
+                engine_core::components::FractureMaterial::NAMES
+                    .iter()
+                    .copied(),
+            )
+        })?,
+        None => existing
+            .and_then(|b| b.material)
+            .unwrap_or(engine_core::components::FractureMaterial::Stone),
+    };
+
+    // The fracture runs in **world** metres and the shards come back in local
+    // ones. The entity's own scale is what separates the two, and it has to be
+    // in this arithmetic rather than left out: a plank authored as a
+    // `builtin:cube` scaled to [0.6, 0.18, 2.6] has a *cube* for its local box,
+    // and a generator that only saw the local box would find no grain axis to
+    // splinter along and no thin axis to shatter through.
+    let (half_extents, scale) = source_volume(target, &scene_path, &display, &entity)?;
+    let world_half = half_extents * scale.abs();
+    let recipe = engine_core::fracture::Recipe {
+        half_extents: world_half,
+        material,
+        pieces: pieces.unwrap_or_else(|| engine_core::fracture::Recipe::default_pieces(material)),
+        seed,
+        impact: match &impact {
+            Some(text) => simulate::parse_vec3(text)? * scale.abs(),
+            None => engine_core::fracture::Recipe::default_impact(world_half, material),
+        },
+        grain: match &grain {
+            Some(text) => Some(simulate::parse_vec3(text)?),
+            None => None,
+        },
+    };
+    let mut fragments =
+        engine_core::fracture::fracture(&recipe).map_err(|e| e.file(&display).entity(&entity))?;
+
+    // Measured before the unscale, so the report is in metres — "how big are
+    // the pieces" is a question about the world, not about local units.
+    let volumes: Vec<f32> = fragments
+        .iter()
+        .map(|f| engine_core::shard::volume(f.points.as_deref().unwrap_or_default()))
+        .collect();
+
+    // Back into the entity's units, where a fragment's points and offset both
+    // live — `Transform.scale` multiplies them again at spawn.
+    let unscale = glam::Vec3::ONE / scale.abs();
+    for fragment in &mut fragments {
+        fragment.offset *= unscale;
+        if let Some(points) = &mut fragment.points {
+            for point in points {
+                *point *= unscale;
+            }
+        }
+    }
+
+    // The threshold is a decision about the object rather than about its
+    // shards, so a refracture keeps it — `fit-colliders` keeps a character's
+    // layers for the same reason. `--threshold` is how a first fracture gives
+    // one to an entity that had no `Breakable` at all.
+    let component = engine_core::components::Breakable {
+        fragments,
+        impulse_threshold: threshold.or(existing.and_then(|b| b.impulse_threshold)),
+        material: Some(material),
+        // A refracture keeps whether the object puffs, for the threshold's
+        // reason: it is a decision about the object, not about its shards.
+        dust: existing.is_none_or(|b| b.dust),
+    };
+
+    if write {
+        let mut edited = source.clone();
+        if existing.is_some() {
+            edited = engine_core::formatter::apply_remove_component(
+                &edited,
+                &engine_core::formatter::RemoveComponent {
+                    entity: entity.clone(),
+                    component: "Breakable".into(),
+                },
+            )?;
+        }
+        let mut encoded = serde_json::to_value(&component.fragments).map_err(|e| {
+            EngineError::new(
+                codes::SCENE_PARSE_DESYNC,
+                format!("a generated fragment did not encode: {e}"),
+            )
+        })?;
+        // Seven digits, not seventeen: these came from f32s, and a scene file
+        // full of `0.12767969071865082` is precision nobody wrote.
+        engine_core::formatter::shorten_floats(&mut encoded);
+        let mut fields = vec![
+            ("fragments".to_string(), encoded),
+            ("material".to_string(), serde_json::json!(material.as_str())),
+        ];
+        if let Some(threshold) = component.impulse_threshold {
+            fields.push((
+                "impulse_threshold".to_string(),
+                serde_json::json!(threshold),
+            ));
+        }
+        let edited = engine_core::formatter::apply_add_component(
+            &edited,
+            &engine_core::formatter::AddComponent {
+                entity: entity.clone(),
+                component: "Breakable".into(),
+                fields,
+            },
+        )?;
+        engine_core::formatter::write_atomic(&scene_path, &edited)?;
+    }
+
+    // The report answers "what did it do" without reading the shards: how big
+    // the pieces are, in metres.
+    let total: f32 = volumes.iter().sum();
+    println!(
+        "{}",
+        serde_json::json!({
+            "scene": display,
+            "entity": entity,
+            "material": material.as_str(),
+            "seed": seed,
+            "source_half_extents": half_extents.to_array(),
+            "world_half_extents": world_half.to_array(),
+            "impact": recipe.impact.to_array(),
+            "pieces": component.fragments.len(),
+            "volume": total,
+            "smallest": volumes.iter().copied().fold(f32::MAX, f32::min),
+            "largest": volumes.iter().copied().fold(0.0, f32::max),
+            "written": write,
+            "component": serde_json::to_value(&component).unwrap_or_default(),
+        })
+    );
+    Ok(())
+}
+
+/// The box `engine fracture` breaks up: the entity's cuboid `Collider` if it
+/// has one, else its mesh's bounding box.
+///
+/// The collider comes first deliberately. It is what physics already believes
+/// the object is, so the shards replace exactly the volume that was being hit
+/// — a mesh AABB that disagreed with the collider would fracture into a solid
+/// a different size from the one that broke.
+fn source_volume(
+    entity: &engine_core::scene::EntityDef,
+    scene_path: &Path,
+    display: &str,
+    name: &str,
+) -> Result<(glam::Vec3, glam::Vec3)> {
+    use engine_core::components::{ColliderShapeKind, ComponentData};
+
+    let mut scale = glam::Vec3::ONE;
+    let mut collider = None;
+    let mut mesh = None;
+    for component in &entity.components {
+        match component {
+            ComponentData::Transform(t) => scale = t.scale,
+            ComponentData::Collider(c) => collider = Some(c),
+            ComponentData::Mesh(m) => mesh = Some(m.asset.clone()),
+            _ => {}
+        }
+    }
+
+    if let Some(collider) = collider {
+        if collider.shape == ColliderShapeKind::Cuboid {
+            if let Some(half) = collider.half_extents {
+                return Ok((half, scale));
+            }
+        }
+    }
+
+    let Some(asset) = mesh else {
+        return Err(EngineError::new(
+            codes::COLLIDER_MISSING_MESH,
+            format!(
+                "entity {name:?} has neither a cuboid Collider nor a Mesh, so there is \
+                 no volume to fracture"
+            ),
+        )
+        .file(display)
+        .entity(name));
+    };
+
+    let base_dir = scene_path.parent().unwrap_or(Path::new("."));
+    let data = match engine_core::mesh::MeshAsset::resolve(&asset, base_dir)? {
+        engine_core::mesh::MeshAsset::Builtin(builtin) => builtin.data(),
+        engine_core::mesh::MeshAsset::File(path) => engine_assets::load_gltf(&path)?,
+    };
+    let mut low = glam::Vec3::splat(f32::MAX);
+    let mut high = glam::Vec3::splat(f32::MIN);
+    for position in &data.positions {
+        let point = glam::Vec3::from_array(*position);
+        low = low.min(point);
+        high = high.max(point);
+    }
+    if !(high.cmpgt(low).all()) {
+        return Err(EngineError::new(
+            codes::INVALID_SHAPE_DIMENSION,
+            format!("the mesh on entity {name:?} has no volume to fracture"),
+        )
+        .file(display)
+        .entity(name));
+    }
+    // The AABB's half-extents, centred: a mesh whose origin is not its middle
+    // still fractures into a box around its own geometry.
+    Ok(((high - low) * 0.5, scale))
+}
+
+/// `engine fit-colliders` — solve a proxy set from a skin's vertex weights
+/// (M39 §8).
+///
+/// M33 refused runtime generation, correctly: a hitbox set the engine invented
+/// each load would be a derived artifact with no text form, which is invariant
+/// 1 read backwards. This is the same computation with the invariant intact —
+/// it runs when an author asks, it prints JSON they can edit, and `--write`
+/// splices it through `formatter`, the editor's own commit path, so every other
+/// byte of the scene file is untouched.
+///
+/// An existing `SkinnedCollider` keeps its `layers`, `collides_with`, `friction`
+/// and `restitution`: those are decisions about the character, and only the
+/// shapes are what this solves.
+fn fit_colliders(
+    scene_path: PathBuf,
+    entity: Option<String>,
+    shape: String,
+    write: bool,
+) -> Result<()> {
+    let display = scene_path.display().to_string();
+    let shape_kind: engine_core::components::ColliderShapeKind =
+        serde_json::from_value(serde_json::Value::String(shape.clone())).map_err(|_| {
+            EngineError::new(
+                codes::UNKNOWN_SHAPE,
+                format!("{shape:?} is not a shape a proxy may be"),
+            )
+            .file(&display)
+            .suggest_from(&shape, ["capsule", "cuboid", "sphere"])
+        })?;
+    if matches!(
+        shape_kind,
+        engine_core::components::ColliderShapeKind::Trimesh
+            | engine_core::components::ColliderShapeKind::ConvexHull
+    ) {
+        return Err(EngineError::new(
+            codes::COLLIDER_PART_SHAPE_UNSUPPORTED,
+            format!(
+                "{shape:?} describes one specific mesh, and a proxy exists precisely \
+                 because the skinned mesh is on the GPU; fit \"capsule\", \"cuboid\" \
+                 or \"sphere\""
+            ),
+        )
+        .file(&display));
+    }
+
+    // The *file*, not the instantiated world: this reads and writes component
+    // definitions, and `Scene` has already spent them into hecs.
+    let source = std::fs::read_to_string(&scene_path).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_UNREADABLE,
+            format!("cannot read {display}: {e}"),
+        )
+        .file(&display)
+    })?;
+    load_scene(&scene_path)?;
+    let scene: engine_core::SceneFile = serde_json::from_str(&source).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_PARSE_DESYNC,
+            format!("{display} passed validation but failed to parse: {e}"),
+        )
+        .file(&display)
+    })?;
+    let base_dir = scene_path.parent().unwrap_or(Path::new("."));
+
+    // Entity order is the file's, which is what makes a regenerated set diff
+    // cleanly against the committed one.
+    let mut fitted: Vec<(String, Vec<engine_core::components::ColliderPart>)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for entry in &scene.entities {
+        if entity.as_ref().is_some_and(|wanted| &entry.name != wanted) {
+            continue;
+        }
+        let asset = entry.components.iter().find_map(|c| match c {
+            engine_core::components::ComponentData::Mesh(mesh) => Some(mesh.asset.clone()),
+            _ => None,
+        });
+        let Some(asset) = asset else { continue };
+        let Ok(engine_core::mesh::MeshAsset::File(path)) =
+            engine_core::mesh::MeshAsset::resolve(&asset, base_dir)
+        else {
+            continue;
+        };
+        let rig = engine_assets::load_rig(&path)?;
+        let Some(skin) = rig.skin.as_ref() else {
+            skipped.push(entry.name.clone());
+            continue;
+        };
+        let mesh = engine_assets::load_gltf(&path)?;
+        if mesh.joint_weights.is_empty() {
+            skipped.push(entry.name.clone());
+            continue;
+        }
+        fitted.push((
+            entry.name.clone(),
+            engine_core::ragdoll::fit_parts(skin, &mesh, shape_kind),
+        ));
+    }
+
+    if fitted.is_empty() {
+        let wanted = entity.as_deref().unwrap_or("any entity");
+        return Err(EngineError::new(
+            codes::MESH_HAS_NO_SKIN,
+            format!(
+                "no skinned mesh to fit in {display} for {wanted}; \
+                 `engine list-joints` says which entities carry a rig"
+            ),
+        )
+        .file(&display));
+    }
+
+    if write {
+        for (name, parts) in &fitted {
+            // Re-read per entity: each splice is committed before the next
+            // one is rebased onto it, the editor's own commit shape.
+            let mut source = std::fs::read_to_string(&scene_path).map_err(|e| {
+                EngineError::new(
+                    codes::SCENE_UNREADABLE,
+                    format!("cannot read {display} to edit it: {e}"),
+                )
+                .file(&display)
+            })?;
+            // Layers, friction and restitution are statements about the
+            // character rather than about its shapes, so a refit keeps them.
+            let kept: Vec<(String, serde_json::Value)> = scene
+                .entities
+                .iter()
+                .find(|e| &e.name == name)
+                .and_then(|e| {
+                    e.components.iter().find_map(|c| match c {
+                        engine_core::components::ComponentData::SkinnedCollider(s) => Some(s),
+                        _ => None,
+                    })
+                })
+                .map(|existing| {
+                    let mut kept = Vec::new();
+                    if let Some(layers) = &existing.layers {
+                        kept.push(("layers".into(), serde_json::json!(layers)));
+                    }
+                    if let Some(with) = &existing.collides_with {
+                        kept.push(("collides_with".into(), serde_json::json!(with)));
+                    }
+                    kept.push(("friction".into(), serde_json::json!(existing.friction)));
+                    kept.push((
+                        "restitution".into(),
+                        serde_json::json!(existing.restitution),
+                    ));
+                    kept
+                })
+                .unwrap_or_default();
+
+            // Remove-then-add rather than a field edit: `parts` is an array of
+            // objects, and `SetComponentField` is for scalars. A removal that
+            // finds nothing is not an error here — most entities have none yet.
+            if !kept.is_empty() {
+                if let Ok(edited) = engine_core::formatter::apply_remove_component(
+                    &source,
+                    &engine_core::formatter::RemoveComponent {
+                        entity: name.clone(),
+                        component: "SkinnedCollider".into(),
+                    },
+                ) {
+                    source = edited;
+                }
+            }
+            let mut encoded = serde_json::to_value(parts).map_err(|e| {
+                EngineError::new(
+                    codes::SCENE_PARSE_DESYNC,
+                    format!("a fitted part did not encode: {e}"),
+                )
+            })?;
+            // Seven digits, not seventeen: these came from f32s, and a scene
+            // file full of `0.12767969071865082` is precision nobody wrote —
+            // the fracture `--write` path does the same.
+            engine_core::formatter::shorten_floats(&mut encoded);
+            let mut fields = vec![("parts".to_string(), encoded)];
+            fields.extend(kept);
+            let edited = engine_core::formatter::apply_add_component(
+                &source,
+                &engine_core::formatter::AddComponent {
+                    entity: name.clone(),
+                    component: "SkinnedCollider".into(),
+                    fields,
+                },
+            )?;
+            engine_core::formatter::write_atomic(&scene_path, &edited)?;
+        }
+    }
+
+    let entities: Vec<serde_json::Value> = fitted
+        .iter()
+        .map(|(name, parts)| {
+            serde_json::json!({
+                "entity": name,
+                "component": { "type": "SkinnedCollider", "parts": parts },
+            })
+        })
+        .collect();
+    println!(
+        "{}",
+        serde_json::json!({
+            "scene": display,
+            "shape": shape,
+            "written": write,
+            // A rig whose vertices carry no weights is reported rather than
+            // silently absent: "it fitted nothing" and "there was nothing to
+            // fit" are different answers and an agent needs to tell them apart.
+            "skipped": skipped,
+            "entities": entities,
+        })
+    );
+    Ok(())
+}
+
 /// `engine road-centerline` — publish a road's sampled centerline (M23).
 ///
 /// The road's geometry is generated from its polygon of corners, and anything
@@ -949,7 +1745,14 @@ fn list_colliders(
 /// The transform is applied, so the positions are world space.
 fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
     let scene = load_scene(&scene_path)?;
-    let roads = scene.road_items();
+    // Junction patches ride in the same draw list (M40) and are not roads:
+    // a patch has no centerline to publish, and counting them here would make
+    // "the scene has 3 roads" wrong.
+    let roads: Vec<_> = scene
+        .road_items()
+        .into_iter()
+        .filter(|item| item.junction.is_none())
+        .collect();
 
     let road = match (&entity, roads.len()) {
         (Some(name), _) => roads
@@ -999,6 +1802,10 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
                 "position": [world.x, world.y, world.z],
                 "forward": [point.direction.x, point.direction.y],
                 "v": point.v,
+                // M40: the cross-section, so a car placed on a banked corner
+                // does not have to re-derive the roll from the polygon.
+                "width": point.width,
+                "bank": point.bank.to_degrees(),
             })
         })
         .collect();
@@ -1012,6 +1819,85 @@ fn road_centerline(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
             "shoulder": road.road.shoulder,
             "closed": road.road.closed,
             "points": points,
+        })
+    );
+    Ok(())
+}
+
+/// `engine junction-plan <scene> [--entity N]` — where a junction's arms met it
+/// (M40).
+///
+/// The transform is applied, so the positions are world space, matching
+/// `road-centerline`. `reach` is how far each mouth sits from the patch's
+/// centre: a set of similar reaches is a tidy junction, and one much larger
+/// than the rest is the road that stopped short.
+fn junction_plan(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
+    let scene = load_scene(&scene_path)?;
+    let junctions = scene.junction_items();
+
+    let junction = match (&entity, junctions.len()) {
+        (Some(name), _) => junctions
+            .iter()
+            .find(|item| item.entity == *name)
+            .ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {name:?} with a Junction component"),
+                )
+                .entity(name)
+                .file(scene_path.display().to_string())
+                .suggest_from(name, junctions.iter().map(|item| item.entity.as_str()))
+            })?,
+        (None, 1) => &junctions[0],
+        (None, 0) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                "scene has no entity with a Junction component",
+            )
+            .file(scene_path.display().to_string()))
+        }
+        (None, _) => {
+            return Err(EngineError::new(
+                codes::MISSING_COMPONENT,
+                format!(
+                    "scene has {} junctions ({}); name one with --entity",
+                    junctions.len(),
+                    junctions
+                        .iter()
+                        .map(|item| item.entity.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .file(scene_path.display().to_string()))
+        }
+    };
+
+    let arms: Vec<serde_json::Value> = junction
+        .surface
+        .mouths
+        .iter()
+        .map(|mouth| {
+            let world = junction.model.transform_point3(mouth.center);
+            serde_json::json!({
+                "road": mouth.road,
+                "position": [world.x, world.y, world.z],
+                "into": [mouth.into.x, mouth.into.y],
+                "width": mouth.half_asphalt * 2.0,
+                "half_total": mouth.half_total,
+                "reach": mouth.reach,
+            })
+        })
+        .collect();
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "entity": junction.entity,
+            "width": junction.surface.half_asphalt * 2.0,
+            "shoulder": junction.surface.shoulder,
+            "triangles": junction.surface.mesh.triangle_count(),
+            "arms": arms,
         })
     );
     Ok(())
@@ -1046,11 +1932,10 @@ fn ui_layout(
     // have produced would be worse than not reporting one.
     if steps > 0 {
         let input = simulate::load_input(input_path.as_deref())?;
-        let stepping = engine_core::input::Viewport {
-            width,
-            height,
-            camera: view.camera.clone(),
-        };
+        // No camera: `ui-layout` has no `--camera`, and a HUD is screen-space
+        // anyway — what the viewport is carrying here is the frame the script's
+        // clicks resolve against.
+        let stepping = engine_core::input::Viewport::new(width, height, None);
         simulate::run(
             &mut scene,
             &scene_path,
@@ -1189,59 +2074,13 @@ fn terrain_height(scene_path: PathBuf, at: String, entity: Option<String>) -> Re
     let (x, z) = parse_xz(&at)?;
     let scene = load_scene(&scene_path)?;
 
-    let patches: Vec<String> = {
-        let mut names: Vec<String> = scene
-            .names()
-            .filter(|name| {
-                scene.entity(name).is_some_and(|entity| {
-                    scene
-                        .world
-                        .get::<&engine_core::components::Terrain>(entity)
-                        .is_ok()
-                })
-            })
-            .map(str::to_string)
-            .collect();
-        names.sort();
-        names
-    };
-
-    // The `road-centerline` convention exactly: name one when there are
-    // several, default to the only one, and fail rather than guess.
-    let name = match (&entity, patches.len()) {
-        (Some(requested), _) => patches
-            .iter()
-            .find(|patch| *patch == requested)
-            .cloned()
-            .ok_or_else(|| {
-                EngineError::new(
-                    codes::ENTITY_NOT_FOUND,
-                    format!("no entity named {requested:?} with a Terrain component"),
-                )
-                .entity(requested)
-                .file(scene_path.display().to_string())
-                .suggest_from(requested, patches.iter().map(String::as_str))
-            })?,
-        (None, 1) => patches[0].clone(),
-        (None, 0) => {
-            return Err(EngineError::new(
-                codes::MISSING_COMPONENT,
-                "scene has no entity with a Terrain component",
-            )
-            .file(scene_path.display().to_string()))
-        }
-        (None, _) => {
-            return Err(EngineError::new(
-                codes::MISSING_COMPONENT,
-                format!(
-                    "scene has {} terrain patches ({}); name one with --entity",
-                    patches.len(),
-                    patches.join(", ")
-                ),
-            )
-            .file(scene_path.display().to_string()))
-        }
-    };
+    let name = sole_entity_with::<engine_core::components::Terrain>(
+        &scene,
+        &scene_path,
+        &entity,
+        "Terrain",
+        "terrain patches",
+    )?;
 
     let height = scene
         .terrain_height(&name, x, z)
@@ -1257,6 +2096,549 @@ fn terrain_height(scene_path: PathBuf, at: String, entity: Option<String>) -> Re
         })
     );
     Ok(())
+}
+
+/// Which entity a "where is the surface" query is about: the one the caller
+/// named, or the only candidate, and an error rather than a guess.
+///
+/// The `road-centerline` convention, factored out when `water-height` became
+/// the third command to want it. Naming the candidates in the ambiguous case is
+/// the part worth keeping — an agent that has to re-read the scene file to find
+/// out what it could have written has been sent back to the picture.
+fn sole_entity_with<C: engine_core::hecs::Component>(
+    scene: &engine_core::Scene,
+    scene_path: &Path,
+    requested: &Option<String>,
+    component: &str,
+    plural: &str,
+) -> Result<String> {
+    let mut candidates: Vec<String> = scene
+        .names()
+        .filter(|name| {
+            scene
+                .entity(name)
+                .is_some_and(|entity| scene.world.get::<&C>(entity).is_ok())
+        })
+        .map(str::to_string)
+        .collect();
+    candidates.sort();
+
+    match (requested, candidates.len()) {
+        (Some(requested), _) => candidates
+            .iter()
+            .find(|candidate| *candidate == requested)
+            .cloned()
+            .ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("no entity named {requested:?} with a {component} component"),
+                )
+                .entity(requested)
+                .file(scene_path.display().to_string())
+                .suggest_from(requested, candidates.iter().map(String::as_str))
+            }),
+        (None, 1) => Ok(candidates.remove(0)),
+        (None, 0) => Err(EngineError::new(
+            codes::MISSING_COMPONENT,
+            format!("scene has no entity with a {component} component"),
+        )
+        .file(scene_path.display().to_string())),
+        (None, count) => Err(EngineError::new(
+            codes::MISSING_COMPONENT,
+            format!(
+                "scene has {count} {plural} ({}); name one with --entity",
+                candidates.join(", ")
+            ),
+        )
+        .file(scene_path.display().to_string())),
+    }
+}
+
+/// Ask a water surface where it is at a world XZ position (M41).
+///
+/// `terrain-height`'s twin, and different from it in exactly the two ways water
+/// is different from ground. It takes a **clock**, because the surface moves —
+/// resolved by `scene_time`, so the number printed is the number the render at
+/// that frame drew and the number a buoyant body felt. And it can answer *no
+/// water here*, because a patch is a bounded body: a column past the edge
+/// reports `"water": false` with no height rather than a confident 0.0.
+///
+/// The normal rides along because it costs nothing — it falls out of the same
+/// derivatives — and because a script sitting a boat *on* a wave needs it, so
+/// asking for it later would mean a second command.
+fn water_height(
+    scene_path: PathBuf,
+    at: String,
+    entity: Option<String>,
+    time: f32,
+    steps: u32,
+) -> Result<()> {
+    let (x, z) = parse_xz(&at)?;
+    let scene = load_scene(&scene_path)?;
+    let name = sole_entity_with::<engine_core::components::Water>(
+        &scene,
+        &scene_path,
+        &entity,
+        "Water",
+        "water surfaces",
+    )?;
+    let seconds = scene_time(time, steps, &scene);
+
+    let report = match scene.water_sample(&name, x, z, seconds) {
+        Some(sample) => serde_json::json!({
+            "entity": name,
+            "x": x,
+            "z": z,
+            "time": seconds,
+            "water": true,
+            "height": sample.height,
+            "normal": [sample.normal.x, sample.normal.y, sample.normal.z],
+        }),
+        None => serde_json::json!({
+            "entity": name,
+            "x": x,
+            "z": z,
+            "time": seconds,
+            "water": false,
+        }),
+    };
+    println!("{report}");
+    Ok(())
+}
+
+/// An entity's `Transform`, or the default when it has none.
+///
+/// Inlined here rather than reaching for `Scene`'s private accessor: a volume
+/// with no `Transform` is already a validation error, so the default is only
+/// ever reached on a scene that was told it is broken.
+fn transform_of(
+    scene: &Scene,
+    entity: engine_core::hecs::Entity,
+) -> engine_core::components::Transform {
+    scene
+        .world
+        .get::<&engine_core::components::Transform>(entity)
+        .map(|t| *t)
+        .unwrap_or_default()
+}
+
+/// The scene's irradiance field for one frame, or `None` when it has no volume.
+///
+/// A one-line wrapper so that every render path in this file resolves GI the
+/// same way. Three of them do — `screenshot`, `diff-render` and `filmstrip` —
+/// and a fourth that folded the field differently is exactly how a baseline and
+/// the picture it pins start to disagree.
+fn gi_field(
+    scene: &Scene,
+    scene_path: &Path,
+    lights: &engine_core::scene::ResolvedLights,
+    environment: &engine_core::scene::EnvironmentSettings,
+) -> Option<engine_core::gi::IrradianceField> {
+    let base = scene_path.parent().unwrap_or(Path::new(""));
+    engine_core::gi::evaluate::field_for_scene(scene, base, lights, environment)
+}
+
+/// The scene's `LightProbeVolume`, or `None` when it has none.
+///
+/// A scene may hold at most one — `multiple_light_probe_volumes` since the M35
+/// decisions — so this is a lookup rather than a resolution rule. `None` is not
+/// an error here: `gi-probe` answers "outside every volume" for a scene without
+/// one, which is a truthful answer and more useful than a refusal.
+fn probe_volume(scene: &Scene) -> Option<String> {
+    scene
+        .names()
+        .find(|name| {
+            scene.entity(name).is_some_and(|entity| {
+                scene
+                    .world
+                    .get::<&engine_core::components::LightProbeVolume>(entity)
+                    .is_ok()
+            })
+        })
+        .map(str::to_string)
+}
+
+/// `engine bake-gi <scene> [--entity NAME] [--out PATH] [--samples N] [--check]`
+/// (M35).
+///
+/// Writes beside the scene by default, because asset paths resolve relative to
+/// the scene file and a bake written to `/tmp` is a bake the scene cannot load
+/// — the trap CLAUDE.md records for `simulate --bake`.
+///
+/// `--check` is the same command with the writing taken out: it collects the
+/// occluders, recomputes the digest, and compares. That is the whole
+/// geometry-level staleness check, and it lives here rather than in `validate`
+/// because it needs the scene's entire triangle set — 0.86s for the showcase
+/// tour against `validate`'s 0.17s, five times the fast gate on the largest
+/// scene in the repo and rising with every triangle added to it.
+fn bake_gi(
+    scene_path: PathBuf,
+    entity: Option<String>,
+    out: Option<PathBuf>,
+    samples: Option<u32>,
+    check: bool,
+) -> Result<()> {
+    if check && out.is_some() {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            "--check writes nothing, so --out has nothing to name",
+        )
+        .file(scene_path.display().to_string()));
+    }
+
+    let scene = load_scene_for_bake(&scene_path)?;
+    let base_dir = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let name = sole_entity_with::<engine_core::components::LightProbeVolume>(
+        &scene,
+        &scene_path,
+        &entity,
+        "LightProbeVolume",
+        "light probe volumes",
+    )?;
+
+    let handle = scene.entity(&name).expect("named above");
+    let volume = scene
+        .world
+        .get::<&engine_core::components::LightProbeVolume>(handle)
+        .expect("filtered above")
+        .clone();
+    let transform = transform_of(&scene, handle);
+    let target = match &out {
+        Some(path) => path.clone(),
+        None => base_dir.join(&volume.bake),
+    };
+
+    let assets = engine_assets::AssetServer::for_scene(&scene_path);
+    let tris = engine_core::gi::bake::collect_occluders(&scene, &assets)?;
+    // Which suns this bake covers (M45) — the scene's arc, or its one static
+    // direction, or none at all. Resolved from the scene rather than from the
+    // component, because a `daylight` block is what turns one direction into a
+    // set.
+    let sun = engine_core::gi::sun_directions(&scene, &volume);
+
+    if check {
+        return check_bake(
+            &scene_path,
+            &name,
+            &volume,
+            &transform,
+            &target,
+            &tris,
+            &sun,
+            samples,
+        );
+    }
+
+    let params = engine_core::gi::bake::BakeParams {
+        samples: samples.unwrap_or(engine_core::gi::bake::DEFAULT_SAMPLES),
+        bounces: volume.bounces,
+        sun,
+    };
+
+    let (baked, stats) = engine_core::gi::bake::bake(
+        &scene_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        &name,
+        tris,
+        transform.position,
+        transform.scale,
+        &volume,
+        &params,
+    );
+
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            EngineError::new(
+                codes::SCENE_WRITE_FAILED,
+                format!("could not create {}: {e}", parent.display()),
+            )
+        })?;
+    }
+    std::fs::write(&target, baked.to_text()).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_WRITE_FAILED,
+            format!("could not write {}: {e}", target.display()),
+        )
+    })?;
+
+    let report = serde_json::json!({
+        "entity": name,
+        "out": target.display().to_string(),
+        "grid": baked.header.grid,
+        "probes": stats.probes,
+        "rays": stats.rays,
+        "triangles": stats.triangles,
+        "relocated": stats.relocated,
+        "samples": params.samples,
+        "bounces": params.bounces,
+        "sun_directions": params.sun.len(),
+        "inputs_hash": baked.header.inputs_hash,
+    });
+    println!("{}", serde_json::json!({ "baked": [report] }));
+    Ok(())
+}
+
+/// `bake-gi --check`: recompute the digest and compare, writing nothing.
+///
+/// The samples count comes from the **file** unless the caller names one,
+/// because rays per probe is a bake-time choice and a bake taken at 512 is not
+/// stale merely for having been taken at 512. Everything else is read from the
+/// scene as it stands now — spacing, bounces, the grid the transform implies,
+/// and the triangles — so every edit that would change the light is caught.
+///
+/// Eight arguments because a staleness check is a comparison against eight
+/// independent inputs; bundling them into a struct that exists for one call
+/// site would hide which ones the digest actually reads.
+#[allow(clippy::too_many_arguments)]
+fn check_bake(
+    scene_path: &Path,
+    name: &str,
+    volume: &engine_core::components::LightProbeVolume,
+    transform: &engine_core::components::Transform,
+    target: &Path,
+    tris: &[engine_core::gi::bake::Triangle],
+    sun: &[engine_core::math::Vec3],
+    samples: Option<u32>,
+) -> Result<()> {
+    let text = std::fs::read_to_string(target).map_err(|e| {
+        EngineError::new(
+            codes::GI_BAKE_MISSING,
+            format!(
+                "could not read {}: {e}; run `engine bake-gi`",
+                target.display()
+            ),
+        )
+        .entity(name)
+        .file(scene_path.display().to_string())
+    })?;
+    let baked = engine_core::gi::BakedGi::parse(&text).map_err(|bad| {
+        EngineError::new(
+            codes::GI_BAKE_MALFORMED,
+            format!("{}: {bad}", target.display()),
+        )
+        .entity(name)
+        .file(scene_path.display().to_string())
+    })?;
+
+    let params = engine_core::gi::bake::BakeParams {
+        samples: samples.unwrap_or(baked.header.samples),
+        bounces: volume.bounces,
+        sun: sun.to_vec(),
+    };
+    let grid = engine_core::gi::grid_counts(transform.scale, volume.spacing);
+    let current = engine_core::gi::bake::hash_inputs(tris, &params, volume.spacing, grid);
+
+    if current != baked.header.inputs_hash {
+        return Err(EngineError::new(
+            codes::GI_BAKE_STALE,
+            format!(
+                "{} was baked from different inputs (file {}, scene now {}); \
+                 re-run `engine bake-gi`",
+                target.display(),
+                baked.header.inputs_hash,
+                current
+            ),
+        )
+        .entity(name)
+        .file(scene_path.display().to_string()));
+    }
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "entity": name,
+            "bake": target.display().to_string(),
+            "current": true,
+            "triangles": tris.len(),
+            "inputs_hash": current,
+        })
+    );
+    Ok(())
+}
+
+/// `engine gi-probe <scene> --at x,y,z [--normal x,y,z]` (M35).
+fn gi_probe(
+    scene_path: PathBuf,
+    at: String,
+    normal: Option<String>,
+    time: Option<f32>,
+) -> Result<()> {
+    let point = parse_vec3_arg(&at, "at")?;
+    let normal = match &normal {
+        Some(text) => parse_vec3_arg(text, "normal")?.normalize_or_zero(),
+        None => engine_core::math::Vec3::Y,
+    };
+
+    let scene = load_scene(&scene_path)?;
+    let base_dir = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
+
+    // The scene's one volume, and only if the point is inside it. The bounds
+    // test is what stays interesting now that there is nothing to resolve
+    // between: "outside" is the case an agent hits when a probe reads like the
+    // fallback and it wants to know why.
+    let best = probe_volume(&scene).and_then(|name| {
+        let handle = scene.entity(&name).expect("listed above");
+        let volume = (*scene
+            .world
+            .get::<&engine_core::components::LightProbeVolume>(handle)
+            .expect("filtered above"))
+        .clone();
+        let transform = transform_of(&scene, handle);
+        let half = transform.scale * 0.5;
+        let min = transform.position - half;
+        let max = transform.position + half;
+        if point.cmplt(min).any() || point.cmpgt(max).any() {
+            return None;
+        }
+        Some((name, volume, transform))
+    });
+
+    let Some((name, volume, transform)) = best else {
+        // Outside every volume is not an error: it is the documented fallback,
+        // and saying so is more useful than refusing to answer.
+        println!(
+            "{}",
+            serde_json::json!({
+                "at": point.to_array(),
+                "normal": normal.to_array(),
+                "volume": serde_json::Value::Null,
+                "note": "outside every LightProbeVolume; the renderer falls back to sky_ambient",
+            })
+        );
+        return Ok(());
+    };
+
+    let file = base_dir.join(&volume.bake);
+    let text = std::fs::read_to_string(&file).map_err(|e| {
+        EngineError::new(
+            codes::GI_BAKE_MISSING,
+            format!(
+                "could not read {}: {e}; run `engine bake-gi`",
+                file.display()
+            ),
+        )
+        .entity(&name)
+        .file(scene_path.display().to_string())
+    })?;
+    let baked = engine_core::gi::BakedGi::parse(&text).map_err(|bad| {
+        EngineError::new(
+            codes::GI_BAKE_MALFORMED,
+            format!("{}: {bad}", file.display()),
+        )
+        .entity(&name)
+        .file(scene_path.display().to_string())
+    })?;
+
+    let origin = transform.position - transform.scale * 0.5;
+    let cell = ((point - origin) / volume.spacing).max(engine_core::math::Vec3::ZERO);
+
+    // The same fold the renderer runs, against the same clock — this is the
+    // number the shader would read, not a second model of it. `--time` picks the
+    // sky, because under `daylight` the answer moves with it: that is what
+    // baking transfer rather than radiance buys.
+    let (lights, environment) = scene.resolved_at(time.unwrap_or(0.0));
+    let field = engine_core::gi::evaluate(&baked, &volume, &lights, &environment);
+    let irradiance = field.sample(point, normal);
+    let fallback = fallback_fill(normal, &lights, &environment);
+    let weight = field.weight(point);
+
+    // How much of that came off a sunlit surface (M45), by folding the same
+    // bake a second time with the sun basis struck out and subtracting. A
+    // difference rather than a separate evaluation path, so the number reported
+    // is provably the one in `irradiance` and cannot drift from it — the
+    // question an author asks here is "is this pink because of the red wall",
+    // and a second model of the fold could answer it wrongly while agreeing
+    // everywhere else.
+    let sun_bounce = if baked.header.sun_dirs.is_empty() {
+        engine_core::math::Vec3::ZERO
+    } else {
+        let mut without = baked.clone();
+        without.header.sun_dirs.clear();
+        for probe in &mut without.probes {
+            probe.sun.clear();
+        }
+        irradiance
+            - engine_core::gi::evaluate(&without, &volume, &lights, &environment)
+                .sample(point, normal)
+    };
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "at": point.to_array(),
+            "normal": normal.to_array(),
+            "volume": name,
+            "bake": volume.bake,
+            "grid": baked.header.grid,
+            "origin": baked.header.origin,
+            "spacing": volume.spacing,
+            "intensity": volume.intensity,
+            "cell": cell.to_array(),
+            "relocated_probes": baked.header.relocated,
+            "samples": baked.header.samples,
+            // What the renderer uses here, and what it would have used
+            // without GI. Two numbers rather than one, because "is this
+            // dark" is only answerable against what it is being compared to.
+            "irradiance": irradiance.to_array(),
+            "fallback": fallback.to_array(),
+            // The share of `irradiance` that bounced off a sunlit surface, and
+            // how many sun directions the bake covers. Zero on a bake with no
+            // sun basis, and zero at night whatever the bake holds.
+            "sun_bounce": sun_bounce.to_array(),
+            "sun_directions": baked.header.sun_dirs.len(),
+            // `intensity` faded at the volume's edge; the renderer mixes the
+            // two above by exactly this.
+            "weight": weight,
+            "openness": field.openness(point),
+        })
+    );
+    Ok(())
+}
+
+/// The fill a fragment would receive with no GI — `sky_ambient(n)` when the
+/// scene draws a sky, the flat `AmbientLight` when it does not.
+///
+/// Transcribed from `mesh.wgsl` rather than shared with it, which is the same
+/// bargain `list-colliders` and `terrain-height` make: the shader's copy is the
+/// one that draws and this one is what a report can print. The equality between
+/// them is what `an_unoccluded_probe_reproduces_sky_ambient` pins.
+fn fallback_fill(
+    normal: engine_core::math::Vec3,
+    lights: &engine_core::scene::ResolvedLights,
+    environment: &engine_core::scene::EnvironmentSettings,
+) -> engine_core::math::Vec3 {
+    if !environment.sky {
+        return lights.ambient;
+    }
+    let up = normal.y * 0.5 + 0.5;
+    let env = environment.sky_ground + (environment.sky_zenith - environment.sky_ground) * up;
+    let mean = ((environment.sky_ground + environment.sky_zenith) * 0.5)
+        .max(engine_core::math::Vec3::splat(1.0e-4));
+    lights.ambient * (env / mean)
+}
+
+/// `--at x,y,z` / `--normal x,y,z`: three numbers, unlike `terrain-height`'s
+/// two — a light field is a function of position *and* direction.
+fn parse_vec3_arg(text: &str, flag: &str) -> Result<engine_core::math::Vec3> {
+    let parts: Vec<f32> = text
+        .split(',')
+        .map(|part| part.trim().parse::<f32>())
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| {
+            EngineError::new(
+                codes::INVALID_INVOCATION,
+                format!("--{flag} expected x,y,z numbers, got {text:?} ({e})"),
+            )
+        })?;
+    if parts.len() != 3 {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!("--{flag} expected exactly three comma-separated numbers, got {text:?}"),
+        ));
+    }
+    Ok(engine_core::math::Vec3::new(parts[0], parts[1], parts[2]))
 }
 
 /// `--at x,z`: two numbers, unlike `raycast`'s three. The height is what is
@@ -1515,16 +2897,40 @@ fn inspect(scene_path: PathBuf, entity: Option<String>) -> Result<()> {
         })
         .collect();
 
+    // What the scene can spawn (M37), resolved the same way: absent fields are
+    // the documented defaults, and the point of `inspect` is that you see them
+    // rather than infer them. Reported only when the scene has templates, and
+    // suppressed entirely under `--entity`, which asks about one *entity* —
+    // a template is not one, and answering with both would make the report's
+    // shape depend on something the question did not mention.
+    let templates: Vec<serde_json::Value> = if entity.is_some() {
+        Vec::new()
+    } else {
+        let mut templates: Vec<&engine_core::scene::TemplateDef> = scene.templates.iter().collect();
+        templates.sort_by(|a, b| a.name.cmp(&b.name));
+        templates
+            .into_iter()
+            .map(|template| {
+                serde_json::json!({
+                    "name": template.name,
+                    "limit": template.limit,
+                    "components": template.components,
+                })
+            })
+            .collect()
+    };
+
     // Compact, like every other report — `raycast`, `road-centerline`,
     // `simulate`. Only the schema commands pretty-print, because a schema is
     // read and a report is piped through `jq`.
-    println!(
-        "{}",
-        serde_json::json!({
-            "scene": scene.name,
-            "entities": entities,
-        })
-    );
+    let mut report = serde_json::json!({
+        "scene": scene.name,
+        "entities": entities,
+    });
+    if !templates.is_empty() {
+        report["templates"] = serde_json::Value::Array(templates);
+    }
+    println!("{report}");
     Ok(())
 }
 
@@ -1577,6 +2983,7 @@ fn diff_render(
     let render_time = scene_time(time, steps, &scene);
     let items = scene.render_items_at(&assets, Some(render_time))?;
     let (lights, environment) = scene.resolved_at(render_time);
+    let gi = gi_field(&scene, &scene_path, &lights, &environment);
 
     let (actual, adapter) = engine_render::offscreen::render_with_adapter(
         &items,
@@ -1594,6 +3001,7 @@ fn diff_render(
         baseline.height,
         &tinted_hud(&scene, &assets, &interaction),
         &hud,
+        gi.as_ref(),
     )?;
 
     let (stats, diff_image) = engine_render::diff::diff(&actual, &baseline, threshold)?;
@@ -1789,7 +3197,8 @@ fn filmstrip(
         // across the strip — a filmstrip of a lake is a filmstrip of its waves.
         // Daylight is a pure function of time for the same reason, which is
         // what makes `--start 0 --end 24` a whole day on one sheet.
-        let rendered = engine_render::offscreen::render(
+        let gi = gi_field(&scene, &scene_path, &lights, &environment);
+        let rendered = engine_render::offscreen::render_with_adapter(
             &items,
             &scene.water_items(),
             &scene.cloud_items(),
@@ -1805,7 +3214,9 @@ fn filmstrip(
             tile_height,
             &scene.hud_tree(&assets),
             &[],
-        )?;
+            gi.as_ref(),
+        )
+        .map(|(image, _)| image)?;
         let tile = image::RgbaImage::from_raw(rendered.width, rendered.height, rendered.pixels)
             .expect("offscreen render returns exactly width*height*4 bytes");
         let x = (frame % columns) * tile_width;
@@ -2268,8 +3679,9 @@ fn screenshot(
     let items = scene.render_items_at(&assets, Some(render_time))?;
     let drawn = items.len();
     let (lights, environment) = scene.resolved_at(render_time);
+    let gi = gi_field(&scene, &scene_path, &lights, &environment);
 
-    let image = engine_render::offscreen::render(
+    let image = engine_render::offscreen::render_with_adapter(
         &items,
         &scene.water_items(),
         &scene.cloud_items(),
@@ -2285,7 +3697,9 @@ fn screenshot(
         height,
         &tinted_hud(&scene, &assets, &interaction),
         &hud,
-    )?;
+        gi.as_ref(),
+    )
+    .map(|(image, _)| image)?;
 
     // Between rendering and encoding, while the frame is resident: one pass
     // over a buffer that is already there (M25). Nothing about the render
@@ -2336,6 +3750,12 @@ fn run_scene(
     let environment = scene.environment;
     let daylight = scene.daylight.clone();
     let hud_items = scene.hud_tree(&assets);
+    // Read once, folded per frame: the file is a build artifact, the fold is
+    // what the clock moves.
+    let gi = engine_core::gi::evaluate::load_for_scene(
+        &scene,
+        scene_path.parent().unwrap_or(Path::new("")),
+    );
     let title = format!("engine — {}", scene.name);
 
     // Physics and animated scenes come alive in the viewer; static scenes
@@ -2349,8 +3769,10 @@ fn run_scene(
         scene.daylight.clone(),
         scene.environment,
         &assets,
+        &scene.templates,
     )?;
-    let has_physics = engine_physics::PhysicsWorld::scene_has_physics(&scene.world);
+    let has_physics =
+        engine_physics::PhysicsWorld::scene_has_physics(&scene.world, &scene.templates);
     let has_emitters = engine_core::particles::ParticleSystem::scene_has_emitters(&scene.world);
     let simulation = if has_physics
         || has_emitters
@@ -2363,6 +3785,7 @@ fn run_scene(
                 &scene.world,
                 &scene.physics,
                 &assets,
+                &scene.templates,
             )?)
         } else {
             None
@@ -2410,6 +3833,7 @@ fn run_scene(
             environment,
             daylight,
             hud_items,
+            gi,
             simulation,
         })),
     ))

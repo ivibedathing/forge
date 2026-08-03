@@ -68,7 +68,31 @@ struct EmitterState {
     /// Fractional spawns carried between steps, so `rate * dt < 1` still
     /// emits at the authored long-run rate.
     credit: f32,
+    /// Seconds this emitter has been stepped for, which is what
+    /// `ParticleEmitter.duration` is measured against (M44).
+    ///
+    /// From when the *system* first saw it, not from scene time: an emitter
+    /// that arrives mid-run — a break's dust — has to burn its burst from the
+    /// moment it exists rather than being born already spent.
+    age: f32,
     particles: Vec<Particle>,
+}
+
+impl EmitterState {
+    /// This state's component, or `None` if the entity lost it.
+    fn emitter_of(&self, world: &World) -> Option<ParticleEmitter> {
+        world.get::<&ParticleEmitter>(self.entity).ok().map(|e| *e)
+    }
+
+    fn new(entity: Entity, emitter: &ParticleEmitter) -> Self {
+        Self {
+            entity,
+            rng: seed_state(emitter.seed),
+            credit: 0.0,
+            age: 0.0,
+            particles: Vec::new(),
+        }
+    }
 }
 
 /// All emitters of one scene, stepped together on the fixed clock.
@@ -84,22 +108,77 @@ impl ParticleSystem {
         let mut named: Vec<(String, EmitterState)> = world
             .query::<(Entity, &Name, &ParticleEmitter)>()
             .iter()
-            .map(|(entity, name, emitter)| {
-                (
-                    name.0.clone(),
-                    EmitterState {
-                        entity,
-                        rng: seed_state(emitter.seed),
-                        credit: 0.0,
-                        particles: Vec::new(),
-                    },
-                )
-            })
+            .map(|(entity, name, emitter)| (name.0.clone(), EmitterState::new(entity, emitter)))
             .collect();
         named.sort_by(|a, b| a.0.cmp(&b.0));
         Self {
             emitters: named.into_iter().map(|(_, state)| state).collect(),
         }
+    }
+
+    /// Pick up emitters the world has gained and drop the ones it has lost
+    /// (M44) — a break's dust, or an emitter on a spawned template (M37).
+    ///
+    /// Before this, `build` ran once and an emitter that arrived later never
+    /// emitted at all: the system tracked a fixed list, and nothing rebuilt
+    /// it. A template carrying a `ParticleEmitter` has been spawnable since
+    /// M37 and has been silently inert ever since.
+    ///
+    /// New states are appended and the whole list is re-sorted by name, so
+    /// draw order stays a function of the names rather than of arrival order.
+    /// Each emitter's RNG is its own, so the sort cannot change what any
+    /// existing emitter emits.
+    pub fn sync(&mut self, world: &World) {
+        self.emitters
+            .retain(|state| world.contains(state.entity) && state.emitter_of(world).is_some());
+
+        let tracked: std::collections::HashSet<Entity> =
+            self.emitters.iter().map(|s| s.entity).collect();
+        let mut added: Vec<(String, EmitterState)> = world
+            .query::<(Entity, &Name, &ParticleEmitter)>()
+            .iter()
+            .filter(|(entity, _, _)| !tracked.contains(entity))
+            .map(|(entity, name, emitter)| (name.0.clone(), EmitterState::new(entity, emitter)))
+            .collect();
+        if added.is_empty() {
+            return;
+        }
+        added.sort_by(|a, b| a.0.cmp(&b.0));
+        self.emitters.extend(added.into_iter().map(|(_, s)| s));
+
+        let mut named: Vec<(String, EmitterState)> = std::mem::take(&mut self.emitters)
+            .into_iter()
+            .map(|state| {
+                let name = world
+                    .get::<&Name>(state.entity)
+                    .map(|n| n.0.clone())
+                    .unwrap_or_default();
+                (name, state)
+            })
+            .collect();
+        named.sort_by(|a, b| a.0.cmp(&b.0));
+        self.emitters = named.into_iter().map(|(_, state)| state).collect();
+    }
+
+    /// Entities whose emitter has finished — its `duration` is up and its last
+    /// particle has died — and which asked to be despawned when it did (M44).
+    ///
+    /// The despawn itself is the caller's: the world is theirs to mutate, and
+    /// a name table and a physics presence may have to come out with it. This
+    /// only answers *which*.
+    pub fn finished(&self, world: &World) -> Vec<Entity> {
+        self.emitters
+            .iter()
+            .filter(|state| {
+                let Some(emitter) = state.emitter_of(world) else {
+                    return false;
+                };
+                emitter.despawn_when_done
+                    && state.particles.is_empty()
+                    && emitter.duration.is_some_and(|d| state.age >= d)
+            })
+            .map(|state| state.entity)
+            .collect()
     }
 
     /// Whether the world has any emitter at all — the viewer uses this to
@@ -160,6 +239,18 @@ impl ParticleSystem {
                     particle.velocity = (particle.velocity + emitter.acceleration * dt) * damping;
                     particle.position += particle.velocity * dt;
                 }
+            }
+
+            // A burst's clock (M44). Advanced before the emission test, so an
+            // emitter with `duration` exactly one step long emits on that one
+            // step and no other.
+            state.age += dt;
+            // Past its duration an emitter is `rate: 0` — no new particles,
+            // and the live ones finish their own lifetime. An emitter with no
+            // duration never enters this branch, so its credit arithmetic is
+            // the expression it has had since M13.
+            if emitter.duration.is_some_and(|d| state.age > d) {
+                continue;
             }
 
             state.credit += emitter.rate * dt;
@@ -428,6 +519,138 @@ mod tests {
         assert!(
             (4..=6).contains(&plateau),
             "expected ~5 live particles at equilibrium, got {plateau}"
+        );
+    }
+
+    // ── The emitter lifetime (M44) ─────────────────────────────────────
+
+    #[test]
+    fn a_duration_makes_a_burst_rather_than_a_fountain() {
+        // Emission stops at the duration; the particles already born live out
+        // their own lifetime, exactly as `rate: 0` has always meant.
+        let scene = scene(
+            r#"{"type":"ParticleEmitter","rate":60.0,"lifetime":0.5,"duration":0.1}"#,
+        );
+        let mut system = ParticleSystem::build(&scene.world);
+        for _ in 0..6 {
+            system.step(&scene.world, 1.0 / 60.0);
+        }
+        let born = system.live_particles();
+        assert!(born > 0, "the burst emitted nothing");
+
+        // Well past the duration, before anything has died: no more arrive.
+        for _ in 0..12 {
+            system.step(&scene.world, 1.0 / 60.0);
+        }
+        assert_eq!(system.live_particles(), born, "emission did not stop");
+
+        // And past their lifetime they are gone.
+        for _ in 0..40 {
+            system.step(&scene.world, 1.0 / 60.0);
+        }
+        assert_eq!(system.live_particles(), 0);
+    }
+
+    #[test]
+    fn an_emitter_with_no_duration_is_m13_unchanged() {
+        let forever = scene(r#"{"type":"ParticleEmitter","rate":60.0,"lifetime":100.0}"#);
+        let mut system = ParticleSystem::build(&forever.world);
+        for _ in 0..120 {
+            system.step(&forever.world, 1.0 / 60.0);
+        }
+        assert_eq!(system.live_particles(), 120, "two seconds at 60 a second");
+        assert!(
+            system.finished(&forever.world).is_empty(),
+            "an emitter with no duration is never done"
+        );
+    }
+
+    #[test]
+    fn only_a_spent_emitter_that_asked_for_it_is_reaped() {
+        let asked = scene(
+            r#"{"type":"ParticleEmitter","rate":60.0,"lifetime":0.2,"duration":0.05,
+                "despawn_when_done":true}"#,
+        );
+        let mut system = ParticleSystem::build(&asked.world);
+        // While it still has particles it is not done, however long its
+        // emission window has been over.
+        for _ in 0..6 {
+            system.step(&asked.world, 1.0 / 60.0);
+        }
+        assert!(system.live_particles() > 0);
+        assert!(system.finished(&asked.world).is_empty(), "not while it lives");
+
+        for _ in 0..30 {
+            system.step(&asked.world, 1.0 / 60.0);
+        }
+        assert_eq!(system.finished(&asked.world).len(), 1, "spent, and asked");
+
+        // The same emitter without the flag is spent and stays.
+        let kept = scene(
+            r#"{"type":"ParticleEmitter","rate":60.0,"lifetime":0.2,"duration":0.05}"#,
+        );
+        let mut system = ParticleSystem::build(&kept.world);
+        for _ in 0..36 {
+            system.step(&kept.world, 1.0 / 60.0);
+        }
+        assert_eq!(system.live_particles(), 0);
+        assert!(
+            system.finished(&kept.world).is_empty(),
+            "it did not ask to be reaped"
+        );
+    }
+
+    #[test]
+    fn sync_picks_up_an_emitter_the_world_gained() {
+        // Before M44 the system tracked the list it built at load, so an
+        // emitter that arrived later — a break's dust, or one on a spawned
+        // template (M37) — never emitted at all.
+        let scene = scene(r#"{"type":"ParticleEmitter","rate":60.0,"lifetime":10.0}"#);
+        let mut system = ParticleSystem::build(&scene.world);
+        let mut world = scene.world;
+
+        let mut builder = hecs::EntityBuilder::new();
+        builder.add(Name("Late".to_string()));
+        builder.add(Transform::default());
+        builder.add(ParticleEmitter {
+            rate: 60.0,
+            lifetime: 10.0,
+            seed: 9,
+            ..ParticleEmitter::default()
+        });
+        let late = world.spawn(builder.build());
+
+        for _ in 0..30 {
+            system.step(&world, 1.0 / 60.0);
+        }
+        let without = system.live_particles();
+
+        system.sync(&world);
+        for _ in 0..30 {
+            system.step(&world, 1.0 / 60.0);
+        }
+        assert!(
+            system.live_particles() > without + 30,
+            "the late emitter contributed nothing: {} then {}",
+            without,
+            system.live_particles()
+        );
+
+        // And a despawned emitter's state goes with it rather than leaking:
+        // its live particles vanish with the entity, and it emits no more.
+        let before = system.live_particles();
+        let _ = world.despawn(late);
+        system.sync(&world);
+        let after = system.live_particles();
+        assert!(
+            after < before,
+            "the dead emitter's particles outlived it: {before} then {after}"
+        );
+        system.step(&world, 1.0 / 60.0);
+        assert_eq!(
+            system.live_particles(),
+            after + 1,
+            "only the surviving emitter should still be emitting"
         );
     }
 

@@ -2,11 +2,15 @@
 """Emit `arena_shooter.json` — the top-down shooter's arena.
 
 The scene is generated for the same reason `make_car_track.py` is: most of it
-is repetition the engine has no way to express. A bullet pool is fourteen
-identical entities differing only in a name, a drone is nine lines of JSON
+is repetition the engine has no way to express: a drone is nine lines of JSON
 repeated ten times, and the arena's cover is a table of positions. Hand-writing
 those is how a scene file stops being editable — one number moves and forty
 lines have to follow.
+
+The bullet pool used to be the worst of it — two dozen entities differing only
+in a name, parked under the floor. Since M37 it is one `templates` entry and the
+script spawns from it, which is the first thing this generator has been able to
+*delete* rather than emit.
 
 Everything a human would actually want to tune lives at the top of this file as
 a table. Run it and re-render:
@@ -59,11 +63,17 @@ BARRIERS = [
     (22.0, -12.0, 1.3, 1.5, 8.0),
 ]
 
-# How many levels the campaign runs. The engine cannot spawn entities, so a
-# level's drones and barrels have to exist in the file from the start — which is
-# what makes this a number rather than "endless". They are parked at PARK_Y and
-# fly (drones) or drop (barrels) in when their level begins, which is the same
-# trick the dormant waves have always used: "it is already there, 46 m up".
+# How many levels the campaign runs. Every level's drones and barrels exist in
+# the file from the start, parked at PARK_Y, and fly (drones) or drop (barrels)
+# in when their level begins — the same trick the dormant waves have always
+# used: "it is already there, 46 m up".
+#
+# That shape is a leftover, not a limit, since M37: the engine can spawn now,
+# and the bullets already do. Turning the campaign endless means giving drones
+# and barrels the same treatment — a `Drone` template and a wave that spawns
+# from it — plus an answer for what a mid-level save then restores. It is a
+# real piece of work rather than a flag, and it is listed as such in
+# `designs/structural-holes.md`.
 LEVELS = 4
 PARK_Y = 46.0
 # Each level parks four metres above the one before it, and that is not tidiness
@@ -110,10 +120,11 @@ DRONES = [
     (0.0, 25.0, 3),
 ]
 
-# The bullet pool the script recycles; see scripts/topdown_shooter.rhai.
-# It grew from 14 to 24 in M36: a shotgun puts five bolts in the air on one
-# click and a rifle sustains twelve, so a pool sized for a pistol runs dry
-# mid-burst and the shot silently does not happen.
+# How many bullets may be in the air at once — the `Bullet` template's `limit`
+# *and* the number of state slots the script scans, which must match (see
+# `bullet_template`). It grew from 14 to 24 in M36: a shotgun puts five bolts in
+# the air on one click and a rifle sustains twelve, so a pool sized for a pistol
+# runs dry mid-burst and the shot silently does not happen.
 BULLETS = 24
 
 # The player rig (M36). `rigged_soldier.gltf` stands 1.79 m; the physics proxy
@@ -780,23 +791,11 @@ def entities():
             }
         )
 
-    # --- the bullet pool ----------------------------------------------------
-    # Bullets carry no RigidBody and no Collider: the script flies them and
-    # tests them against drone centres itself, as a swept segment rather than a
-    # point, so a 46 m/s round cannot step over a drone between two frames.
-    # Physics has no opinion about them, which is also why they never disturb
-    # the arena they fly through.
-    for i in range(BULLETS):
-        out.append(
-            {
-                "name": f"Bullet{i:02d}",
-                "components": [
-                    t(position=(0.0, -30.0, 0.0), scale=(0.11, 0.11, 0.11)),
-                    {"type": "Mesh", "asset": "builtin:sphere"},
-                    mat([0.9, 0.75, 0.25], 0.3, 0.0, [1.0, 0.72, 0.18]),
-                ],
-            }
-        )
+    # The bullet pool used to be twenty-four entities right here, parked at
+    # y = -30 and recycled — the shape every pre-M37 scene had to take, because
+    # a script could not create an entity and so a run could only shrink. They
+    # are a `templates` entry now (see `bullet_template`), spawned when fired
+    # and despawned when spent, which is the milestone's whole point.
 
     # --- effects ------------------------------------------------------------
     out.append(
@@ -1367,6 +1366,32 @@ def scene():
             "samples": 4,
         },
         "entities": entities(),
+        "templates": [bullet_template()],
+    }
+
+
+def bullet_template():
+    """What a round *is* (M37), declared and not instantiated.
+
+    Bullets carry no RigidBody and no Collider, and that is deliberate rather
+    than a limitation: the script flies them and tests them against drone
+    centres itself, as a swept segment rather than a point, so a 46 m/s round
+    cannot step over a drone between two frames. Physics has no opinion about
+    them, which is also why a hail of fire cannot disturb the arena it flies
+    through.
+
+    `limit` matches the script's `BULLET_COUNT`, because the script keeps a
+    fixed pool of state slots and one bullet per slot; the two must agree or a
+    slot could be free while the spawn is refused.
+    """
+    return {
+        "name": "Bullet",
+        "limit": BULLETS,
+        "components": [
+            t(scale=(0.11, 0.11, 0.11)),
+            {"type": "Mesh", "asset": "builtin:sphere"},
+            mat([0.9, 0.75, 0.25], 0.3, 0.0, [1.0, 0.72, 0.18]),
+        ],
     }
 
 
@@ -1381,7 +1406,7 @@ def main():
         for c in e["components"]:
             counts[c["type"]] = counts.get(c["type"], 0) + 1
     print(f"wrote {path}")
-    print(f"  {len(scene()['entities'])} entities, {len(DRONES)} drones, {BULLETS} bullets")
+    print(f"  {len(scene()['entities'])} entities, {len(DRONES)} drones, {BULLETS} bullets (a template now)")
     print("  components:", ", ".join(f"{k}x{v}" for k, v in sorted(counts.items())))
     print("\nthe script's constants must match this file:")
     print(f"  LEVELS       = {LEVELS}")

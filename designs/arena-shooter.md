@@ -131,8 +131,18 @@ kills the same drone every replay. Damage rides on the *bolt* rather than on
 the weapon, so switching guns does not retroactively re-arm rounds in flight.
 The bullet pool grew from 14 to 24 for the shotgun's five-at-once.
 
-**Bullets are not physics.** Fourteen mesh-only entities (no `RigidBody`, no
-`Collider`) are recycled by the script and flown at 46 m/s. Hit detection is a
+**Bullets are spawned** (M37), from a `Bullet` entry in the scene's `templates`
+block, and despawned when spent. They used to be twenty-four entities parked at
+y = -30 and recycled, because a script could not create one — the
+pre-authored-and-hidden shape this whole scene was built out of. Deleting them
+took 864 lines out of the generated file. The *pool of state slots* survives:
+`world.state` holds numbers and not lists, so a fixed set of slots is still how
+the script tracks several bolts at once, and `limit` on the template is the same
+number as `BULLET_COUNT` so a free slot always has a spawn behind it.
+
+**Bullets are still not physics**, and that part is a decision rather than a
+limitation M37 lifted. They carry no `RigidBody` and no `Collider`; the script
+flies them at 46 m/s and tests them itself. Hit detection is a
 swept **segment**-to-centre test, not a point test: a bolt covers 0.77 m per
 fixed step, so a point test would put it on one side of a drone in one frame and
 the far side in the next. Keeping them out of rapier is also what makes a
@@ -157,6 +167,11 @@ move a dynamic body by writing its `Transform`, so "spawn it later" was never
 available — "it is already there, 46 m up" is. [The campaign](#the-campaign)
 is that same sentence applied one level up, which is why it is four levels
 rather than endless.
+
+**Since M37 that is a leftover rather than a limit**, and the bullets already
+prove it. Making waves spawn means a `Drone` template, a wave that spawns from
+it, and an answer for what a mid-level save then restores — real work with a
+known shape, not a wall. It has not been done here.
 
 **The arena is a plateau in a valley.** The `Terrain` patch is scenery only: it
 carries no collider, and it sits low enough (`position.y = -7`, `height: 6`)
@@ -211,17 +226,23 @@ nested. It reads like an over-cautious style rule and is not one.
 
 ## The campaign
 
-Four levels, and the shape of them is decided by one engine rule: **a scene
-cannot spawn entities, and a script cannot move a dynamic body by writing its
-Transform.** So a level's enemies cannot be created when it starts, and a dead
-one cannot be picked up and put back. What is left is the trick the dormant
-waves have used since the beginning — *it is already there, 46 m up* — applied
-one level higher.
+Four levels, and the shape of them was decided by one engine rule: **a scene
+could not spawn entities, and a script cannot move a dynamic body by writing its
+Transform.** So a level's enemies could not be created when it started, and a
+dead one could not be picked up and put back. What was left is the trick the
+dormant waves have used since the beginning — *it is already there, 46 m up* —
+applied one level higher.
 
 Every level's ten drones and its barrels are in the file from the start, parked
-above the arena, and fly or drop in when their level begins. That is why the
-campaign is four levels rather than endless: the number is in the scene, and
-`make_arena.py` writes it.
+above the arena, and fly or drop in when their level begins. The number is in
+the scene, and `make_arena.py` writes it.
+
+**Half of that rule is gone as of M37**: entities can be spawned now, and the
+bullets are. The campaign is still four levels because nobody has rewritten it
+— an endless one wants a `Drone` template, a spawning wave, and a decision about
+what a save mid-level means. The other half stands: a script still cannot move
+a dynamic body by writing its `Transform`, so a spawned drone would fly in on
+the same steering code rather than appear where it is wanted.
 
 **Levels are contiguous runs of a flat numbering.** Level *n* owns
 `Drone{(n-1)*10+1}`..`Drone{n*10}`, and its barrels are the next run of a list
@@ -332,9 +353,11 @@ says what the first frame is; the script shows it when the run starts. Hiding a
 panel hides its subtree, which is what makes closing the menu two calls.
 
 **The end card has no button, and the card closes up around it.** A restart
-would have to put ten broken drones and four broken barrels back, and the engine
-cannot spawn entities — so a cleared arena stays cleared, and offering `RETRY`
-would be offering something that cannot work. An empty label hides the button
+would have to put ten broken drones and four broken barrels back, which the
+engine could not do when this was written — so a cleared arena stayed cleared,
+and offering `RETRY` would have been offering something that cannot work. M37
+makes it possible and does not make it free: the drones and barrels would have
+to become templates, and the level's alive-flags reset with them. An empty label hides the button
 panel, a hidden element leaves the flow entirely, and the card is shorter by
 exactly the gap.
 
@@ -407,10 +430,10 @@ synthesized by its `daylight` block and M21 deliberately has no clock setter (a
 script-settable time of day is hidden state). Nothing here reverses that.
 
 **A save is the campaign, not the arena.** It restores level, score, health and
-the settings; it does not restore which drones were broken, because the engine
-cannot spawn an entity and a broken drone cannot be put back — the arena
-shooter's oldest constraint, and the reason its campaign is four levels rather
-than endless. So **LOAD GAME is offered on the title card only**, where every
+the settings; it does not restore which drones were broken. That was the arena
+shooter's oldest constraint, and M37 downgraded it from impossible to unbuilt: a
+save would now have to record which drones were broken and re-spawn them, which
+is a decision about what a save *is* rather than a missing engine feature. So **LOAD GAME is offered on the title card only**, where every
 drone is still intact and "level 3" means level 3's ten flying down from park
 altitude. Loading mid-run is refused by the game rather than by the engine.
 

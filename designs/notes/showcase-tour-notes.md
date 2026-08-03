@@ -87,16 +87,17 @@ and the breaking pad at four `uv_scale`s. Four authoring rules came out of it:
 Those edits are why the six showcase baselines were re-blessed — the sweep confirmed the other 25
 held bit-exactly, since no engine code was touched.
 
-**M30 adds the `Walker`** to station 01: thirteen joints out of `examples/meshes/rigged_walker.gltf`
+**M30 adds the `Walker`** to station 01: sixteen joints out of `examples/meshes/rigged_walker.gltf`
 playing a one-second `Walk`, carried around a circuit by `tour_wildlife.rhai` while the clip does the
 legs — the milestone's division of labour, since no script ever touches a joint. It is the repo's
-only **skinned × textured** draw (`plate_normal` + `plate_orm`, the truck's maps), which is the
-composition the vertex-stage seam was rebuilt for. It stands *between* the station-01 camera and the
+first **skinned × textured** draw (`plate_normal` + `plate_orm`, the truck's maps), which is the
+composition the vertex-stage seam was rebuilt for. (The station-02 `Soldier` is the second — see
+below.) It stands *between* the station-01 camera and the
 trees deliberately: a two-metre figure thirty metres back behind a canopy is a pale smudge. Five of
 the six showcase baselines were re-blessed for it and `showcase_450` was **byte-identical** — station
 03's camera is aimed the other way, which is the cheap confirmation that one added entity changed
 only the frames it is in. **M32 unfaked two of the three the tour doc names**: the stride is
-now driven by the ground the walker covers (`stride: 1.6408`, the number `list-joints` measures off
+now driven by the ground the walker covers (`stride`, the number `list-joints` measures off
 the clip) and its feet are planted on the terrain by a `FootPlant`. **M33 gave it five collision
 proxies**, which is the tour's use of `SkinnedCollider` — and re-blessed all six baselines for a
 reason worth reading in that section: the walker touches nothing, and adding bodies to a rapier
@@ -123,3 +124,39 @@ events, and rapier's `NarrowPhase::register_pairs` is private — so every colli
 contact at load** silently lost its contacts and fell through the world forever. Bodies *dropped*
 from a height were unaffected, which is why every earlier fixture missed it. The first-step BVH now
 goes on a scratch clone (`bvh_cold`).
+
+**The crates became wood (M43/M44).** Station 04's five crates carried M14's four cube fragments
+until now; they are `material: "wood"` with ten generated `Shard` fragments each, so the boulder
+splinters them along the grain and each break throws M44's sawdust. Three things the change taught,
+none of them about shards:
+
+- **The three-trigger story does not survive a material.** Wood's scatter carries Crate1's shards
+  into Crate2 hard enough to break it, and the row goes down in four steps — leaving the blast at
+  636 with nothing standing inside its radius. There is no threshold-and-force pair that fixes it:
+  the window where debris does not chain-break is above the window where the blast still can.
+  `Crate6` is the answer, off the boulder's line and inside the blast — see `designs/showcase-tour.md`.
+- **Fragment mass is a scene-tuning input, not a physical constant.** `engine fracture` writes the
+  material's real density (wood 700 kg/m³) and the crates' own collider is 60 kg/m³, because a crate
+  is mostly air. Conserving the crate's 60 kg across shards that tile its full volume is the
+  physically honest choice and it is *unplayable* here: the smallest of ten Voronoi cells is ~2 kg,
+  the tour's `explode` divides a 210 impulse by that mass, and the splinter leaves at 60 m/s and
+  clears the terrain. The generator's density is what the scene keeps — which is also what M43 did
+  to the ice pillar in this same file, giving a 40 kg/m³ pillar 2500 kg/m³ glass.
+- **A thrown fragment wants CCD, and could not have it.** `breaking.rs` hard-coded `ccd: false` on
+  every fragment. A shard sailing at 8 m/s went *through* the terrain on the way down — descending
+  0.17 m a step against a `trimesh`, resting height −0.39 m, and the body at −0.67 m and falling
+  forever in silence. Fragments now inherit the parent's `ccd`, which is off for every scene that
+  does not say otherwise, so both golden traces and all 41 pinned baselines stayed byte-identical.
+
+**The campfire soldier.** Station 02 carries the arena shooter's seventeen-joint
+`rigged_soldier.gltf` at the fire pit's rim — 2.4 m from the fire's centre, facing it, playing its
+upper-body `Idle` — so the tour's second skinned × textured draw is also its one *point-lit* one.
+It is deliberately the minimal rigged entity: `Transform`, `Mesh`, `Material`, `AnimationPlayer`,
+and nothing physics can see. A `SkinnedCollider` would have re-blessed every physics artifact in
+the file (adding any collider perturbs every rapier body — the M33 cost, and this entity has
+nothing to touch), and a `FootPlant` would plant feet that `Idle` never moves; standing at the
+height `engine terrain-height` reports is the whole grounding story. The change re-blessed the
+five tour frames the figure is visible in (at the fire in 270, a distant sliver in 450, 585, 646
+and 810 — 585's sliver alone was over the 0.02% allowance) plus the GI bake for its triangles,
+and left `showcase_90`, both golden traces and all 41 bit-exact baselines untouched — which is
+the collider-free claim, measured.

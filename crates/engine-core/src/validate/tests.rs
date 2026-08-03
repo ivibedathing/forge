@@ -1358,14 +1358,127 @@ fn rejects_unknown_fragment_fields_with_a_suggestion() {
 }
 
 #[test]
-fn rejects_a_fragment_missing_its_mesh() {
+fn an_emitter_that_can_never_finish_may_not_ask_to_be_reaped() {
+    // `despawn_when_done` with no `duration` is a flag that could never fire,
+    // which is `breakable_without_collider`'s shape: dead configuration is an
+    // error, not a silent no-op.
+    let source = r#"{"name":"s","entities":[
+        {"name":"Puff","components":[
+            {"type":"Transform"},
+            {"type":"ParticleEmitter","rate":60.0,"despawn_when_done":true}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["emitter_never_finishes"]);
+
+    // With one, it is fine.
+    let bounded = source.replace(
+        r#""despawn_when_done":true"#,
+        r#""duration":0.2,"despawn_when_done":true"#,
+    );
+    assert!(codes_of(&bounded).is_empty(), "{:?}", codes_of(&bounded));
+}
+
+#[test]
+fn rejects_a_fragment_with_no_geometry() {
+    // Before M43 this was `missing_field` on a required `mesh`. A fragment is
+    // now a mesh reference *or* a shard, so the rule moved rather than went
+    // away: neither of the two is still a rejection, with a message that names
+    // both ways out.
     let source = r#"{"name":"s","entities":[
         {"name":"Crate","components":[
             {"type":"Transform"},
             {"type":"Breakable","fragments":[{"offset":[0.1,0.0,0.0]}]}
         ]}
     ]}"#;
-    assert_eq!(codes_of(source), ["missing_field"]);
+    assert_eq!(codes_of(source), ["fragment_geometry"]);
+}
+
+#[test]
+fn rejects_a_fragment_that_is_both_a_mesh_and_a_shard() {
+    let source = r#"{"name":"s","entities":[
+        {"name":"Crate","components":[
+            {"type":"Transform"},
+            {"type":"Breakable","fragments":[{"mesh":"builtin:cube",
+             "points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]}]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["fragment_geometry"]);
+}
+
+#[test]
+fn rejects_half_extents_on_a_shard_fragment() {
+    // The half-extents would describe a collider physics never builds: a
+    // shard's collider is its own hull.
+    let source = r#"{"name":"s","entities":[
+        {"name":"Crate","components":[
+            {"type":"Transform"},
+            {"type":"Breakable","fragments":[
+             {"points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]],
+              "half_extents":[0.5,0.5,0.5]}]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["fragment_geometry"]);
+}
+
+#[test]
+fn rejects_a_shard_that_bounds_no_volume() {
+    // Four coplanar points. A flat shard draws nothing and collides with
+    // nothing, which is the hardest failure there is to read off a picture.
+    let flat = r#"{"name":"s","entities":[
+        {"name":"Rubble","components":[
+            {"type":"Transform"},
+            {"type":"Shard","points":[[0,0,0],[1,0,0],[1,0,1],[0,0,1]]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(flat), ["shard_degenerate"]);
+
+    // And the same points inside a fragment, which is the other place they
+    // can appear.
+    let fragment = r#"{"name":"s","entities":[
+        {"name":"Crate","components":[
+            {"type":"Transform"},
+            {"type":"Breakable","fragments":[
+             {"points":[[0,0,0],[1,0,0],[1,0,1],[0,0,1]]}]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(fragment), ["shard_degenerate"]);
+}
+
+#[test]
+fn a_shard_owns_its_geometry() {
+    let source = r#"{"name":"s","entities":[
+        {"name":"Rubble","components":[
+            {"type":"Transform"},
+            {"type":"Mesh","asset":"builtin:cube"},
+            {"type":"Shard","points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["shard_with_mesh"]);
+
+    // Its Material is fine, though — that is the shard's surface, the same
+    // exception a Tree's bark is.
+    let painted = r#"{"name":"s","entities":[
+        {"name":"Rubble","components":[
+            {"type":"Transform"},
+            {"type":"Material","albedo":[0.5,0.5,0.5]},
+            {"type":"Shard","points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]}
+        ]}
+    ]}"#;
+    assert!(codes_of(painted).is_empty(), "{:?}", codes_of(painted));
+}
+
+#[test]
+fn a_shard_is_geometry_a_convex_hull_collider_can_borrow() {
+    // No asset, no Mesh — and no error, because the shard's own hull is what
+    // the collider is built from (M43).
+    let source = r#"{"name":"s","entities":[
+        {"name":"Rubble","components":[
+            {"type":"Transform"},
+            {"type":"Shard","points":[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]},
+            {"type":"Collider","shape":"convex_hull"}
+        ]}
+    ]}"#;
+    assert!(codes_of(source).is_empty(), "{:?}", codes_of(source));
 }
 
 #[test]
@@ -1848,6 +1961,76 @@ fn rejects_a_terrain_layer_whose_band_runs_backwards() {
 }
 
 #[test]
+fn warns_about_a_basin_that_cuts_nothing() {
+    // Both halves are silent failures with the same symptom — the ground is
+    // exactly the noise and nothing says why (M42).
+    let no_depth = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform","scale":[100.0,1.0,100.0]},
+            {"type":"Terrain","basins":[{"center":[5.0,5.0],"radius":4.0}]}
+        ]}
+    ]}"#;
+    let errors = validate_source(no_depth, "test.json");
+    assert_eq!(codes_of(no_depth), ["terrain_basin_no_effect"]);
+    assert!(errors[0].is_warning());
+    assert_eq!(
+        errors[0].context().unwrap().path.as_deref(),
+        Some("/entities/0/components/1/basins/0/depth")
+    );
+
+    // A depth with nowhere to apply it is the same failure from the other end.
+    let no_footprint = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform","scale":[100.0,1.0,100.0]},
+            {"type":"Terrain","basins":[
+                {"center":[5.0,5.0],"depth":2.0,"radius":0.0,"falloff":0.0}
+            ]}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(no_footprint), ["terrain_basin_no_effect"]);
+
+    // A real basin is quiet.
+    let dug = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform","scale":[100.0,1.0,100.0]},
+            {"type":"Terrain","basins":[
+                {"center":[5.0,5.0],"radius":4.0,"depth":1.5,"falloff":3.0}
+            ]}
+        ]}
+    ]}"#;
+    assert!(codes_of(dug).is_empty());
+}
+
+#[test]
+fn warns_about_a_basin_that_misses_its_patch() {
+    // The mistake this catches is a `center` written in the patch's local
+    // space, which is the natural guess and does nothing at all.
+    let source = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform","position":[200.0,0.0,0.0],
+             "scale":[100.0,1.0,100.0]},
+            {"type":"Terrain","basins":[
+                {"center":[0.0,0.0],"radius":4.0,"depth":1.5,"falloff":3.0}
+            ]}
+        ]}
+    ]}"#;
+    let errors = validate_source(source, "test.json");
+    assert_eq!(codes_of(source), ["terrain_basin_outside_patch"]);
+    assert!(errors[0].is_warning());
+    assert_eq!(
+        errors[0].context().unwrap().path.as_deref(),
+        Some("/entities/0/components/1/basins/0/center")
+    );
+
+    // The same basin under the patch that does contain it is quiet, and so is
+    // one that only reaches the patch with its wall.
+    let inside = source.replace(r#""position":[200.0,0.0,0.0],"#, "");
+    assert!(codes_of(&inside).is_empty());
+    let grazing = source.replace("[200.0,0.0,0.0]", "[56.0,0.0,0.0]");
+    assert!(codes_of(&grazing).is_empty());
+}
+
+#[test]
 fn rejects_more_terrain_layers_than_the_shader_can_hold() {
     // The layer table is fixed-size, so a fifth layer would be dropped
     // silently — the schema's `maxItems` catches it before it can be.
@@ -2239,4 +2422,262 @@ fn matching_layers_validate_clean() {
         "{:?}",
         validate_source(source, "t")
     );
+}
+
+// ── Entity spawning: the `templates` block (M37) ──────────────
+
+/// The shape the design intends: a template is an entity definition plus a
+/// `limit`, and takes the same per-component checks without any of the
+/// scene-level budget passes.
+#[test]
+fn accepts_a_template() {
+    let source = r#"{"name":"s","entities":[
+        {"name":"Gun","components":[{"type":"Transform"}]}
+    ],"templates":[
+        {"name":"Bullet","limit":48,"components":[
+            {"type":"Transform","scale":[0.1,0.1,0.1]},
+            {"type":"Mesh","asset":"builtin:sphere"},
+            {"type":"RigidBody","body":"dynamic","gravity_scale":0.0},
+            {"type":"Collider","shape":"sphere","radius":0.5,
+             "layers":["bullet"]}
+        ]}
+    ]}"#;
+    assert!(
+        codes_of(source).is_empty(),
+        "{:?}",
+        validate_source(source, "t")
+    );
+}
+
+/// `limit` defaults, so a template that says nothing about it is fine — and
+/// zero is refused, because a template that can never spawn has no reading
+/// under which it was meant.
+#[test]
+fn a_limit_is_optional_but_never_zero() {
+    let with = |limit: &str| {
+        format!(
+            r#"{{"name":"s","entities":[{{"name":"A","components":[]}}],
+            "templates":[{{"name":"B"{limit},"components":[]}}]}}"#
+        )
+    };
+    assert!(codes_of(&with("")).is_empty());
+    assert!(codes_of(&with(r#","limit":1"#)).is_empty());
+    assert_eq!(codes_of(&with(r#","limit":0"#)), ["value_out_of_range"]);
+    assert_eq!(codes_of(&with(r#","limit":-3"#)), ["invalid_field_type"]);
+    assert_eq!(
+        codes_of(&with(r#","limit":"lots""#)),
+        ["invalid_field_type"]
+    );
+}
+
+/// Templates and entities share one name space, because a script addresses
+/// both by name.
+#[test]
+fn a_template_may_not_take_a_name_that_is_taken() {
+    let twice = r#"{"name":"s","entities":[{"name":"Drone","components":[]}],
+        "templates":[{"name":"Drone","components":[]}]}"#;
+    assert_eq!(codes_of(twice), ["duplicate_template_name"]);
+
+    let two_templates = r#"{"name":"s","entities":[],
+        "templates":[{"name":"B","components":[]},{"name":"B","components":[]}]}"#;
+    assert_eq!(codes_of(two_templates), ["duplicate_template_name"]);
+}
+
+/// The forbidden set, and the reason it exists: each of these would let a
+/// spawn make a valid scene invalid at step 40.
+#[test]
+fn a_template_may_not_carry_a_budgeted_component() {
+    for component in [
+        r#"{"type":"Script","source":"a.rhai"}"#,
+        r#"{"type":"Camera","active":true}"#,
+        r#"{"type":"DirectionalLight"}"#,
+        r#"{"type":"AmbientLight"}"#,
+        r#"{"type":"PointLight","range":4.0}"#,
+    ] {
+        let source = format!(
+            r#"{{"name":"s","entities":[{{"name":"A","components":[]}}],
+            "templates":[{{"name":"B","components":[{component}]}}]}}"#
+        );
+        // `Script` also trips `asset_not_found` on a file that is not there,
+        // which is the point: the forbidden check does not replace the
+        // ordinary ones, it joins them.
+        assert!(
+            codes_of(&source).contains(&"template_forbidden_component"),
+            "{component} gave {:?}",
+            codes_of(&source)
+        );
+    }
+}
+
+/// The same components are still fine on an *entity* — the rule is about
+/// where they sit, not about what they are.
+#[test]
+fn the_forbidden_set_does_not_leak_onto_entities() {
+    let source = r#"{"name":"s","entities":[
+        {"name":"Sun","components":[{"type":"DirectionalLight"}]},
+        {"name":"Eye","components":[{"type":"Camera","active":true}]}
+    ],"templates":[{"name":"B","components":[{"type":"Transform"}]}]}"#;
+    assert!(
+        codes_of(source).is_empty(),
+        "{:?}",
+        validate_source(source, "t")
+    );
+}
+
+/// Per-entity cross-component rules apply inside a template unchanged: a
+/// recipe owns its geometry there too.
+#[test]
+fn per_entity_rules_still_apply_inside_a_template() {
+    let source = r#"{"name":"s","entities":[],"templates":[
+        {"name":"Puddle","components":[
+            {"type":"Transform"},
+            {"type":"Water"},
+            {"type":"Mesh","asset":"builtin:plane"}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(source), ["water_with_mesh"]);
+}
+
+/// A template spawns into the *scene*, so its cross-entity references resolve
+/// against entities and never against other templates.
+#[test]
+fn a_templates_references_resolve_against_the_scene() {
+    let good = r#"{"name":"s","entities":[
+        {"name":"Ground","components":[
+            {"type":"Transform"},
+            {"type":"Terrain"}
+        ]}
+    ],"templates":[
+        {"name":"Patch","components":[
+            {"type":"Transform"},
+            {"type":"Meadow","terrain":"Ground"}
+        ]}
+    ]}"#;
+    assert!(
+        codes_of(good).is_empty(),
+        "{:?}",
+        validate_source(good, "t")
+    );
+
+    // The same reference to another *template* does not resolve: a spawned
+    // meadow cannot stand on terrain that does not exist yet.
+    let bad = r#"{"name":"s","entities":[],"templates":[
+        {"name":"Ground","components":[
+            {"type":"Transform"},
+            {"type":"Terrain"}
+        ]},
+        {"name":"Patch","components":[
+            {"type":"Transform"},
+            {"type":"Meadow","terrain":"Ground"}
+        ]}
+    ]}"#;
+    assert_eq!(codes_of(bad), ["meadow_terrain_not_found"]);
+}
+
+/// Structural problems in the block get their own codes rather than the
+/// entity ones, so a machine branching on `missing_entity_name` never has to
+/// re-read `path` to learn it was a template.
+#[test]
+fn a_broken_template_reports_as_a_template() {
+    let cases = [
+        (r#""templates":[42]"#, "template_not_object"),
+        (
+            r#""templates":[{"components":[]}]"#,
+            "missing_template_name",
+        ),
+        (
+            r#""templates":[{"name":"","components":[]}]"#,
+            "empty_template_name",
+        ),
+        (r#""templates":[{"name":"B","limt":2}]"#, "unknown_field"),
+    ];
+    for (block, code) in cases {
+        let source = format!(r#"{{"name":"s","entities":[],{block}}}"#);
+        assert_eq!(codes_of(&source), [code], "{block}");
+    }
+
+    let not_an_array = r#"{"name":"s","entities":[],"templates":{}}"#;
+    assert_eq!(codes_of(not_an_array), ["invalid_field_type"]);
+}
+
+/// Collision layers are a scene-wide budget, so a layer only a template
+/// mentions still counts against the 32 available bits.
+#[test]
+fn template_layers_count_against_the_scene_budget() {
+    let names: Vec<String> = (0..32).map(|i| format!("\"layer{i}\"")).collect();
+    let source = format!(
+        r#"{{"name":"s","entities":[
+            {{"name":"Ground","components":[
+                {{"type":"Transform"}},
+                {{"type":"Collider","shape":"cuboid","half_extents":[5.0,0.1,5.0],
+                 "layers":[{}]}}
+            ]}}
+        ],"templates":[
+            {{"name":"B","components":[
+                {{"type":"Transform"}},
+                {{"type":"Collider","shape":"sphere","radius":0.5,"layers":["one_too_many"]}}
+            ]}}
+        ]}}"#,
+        names.join(",")
+    );
+    assert_eq!(codes_of(&source), ["too_many_collision_layers"]);
+}
+
+// ── Global illumination (M35) ─────────────────────────────────
+
+/// One volume reaches the GPU, so a second one is refused.
+///
+/// An *error*, on `DirectionalLight`'s and `AmbientLight`'s precedent: those are
+/// "at most one per scene" for the same reason and have always been errors. GI
+/// has one more reason on top. A surplus light is *arbitrary* — some light
+/// applies. A surplus volume is **invisible**: it bakes, it validates, it
+/// answers `gi-probe`, and it lights nothing, which an author cannot tell apart
+/// from a bad bake by looking.
+#[test]
+fn a_second_probe_volume_is_refused() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Landscape", "components": [
+            { "type": "Transform", "scale": [100.0, 20.0, 100.0] },
+            { "type": "LightProbeVolume", "spacing": 8.0, "bake": "gi/a.gi.json" } ] },
+        { "name": "Interior", "components": [
+            { "type": "Transform", "scale": [8.0, 4.0, 8.0] },
+            { "type": "LightProbeVolume", "spacing": 1.0, "bake": "gi/b.gi.json" } ] }
+      ]
+    }"#;
+    let errors: Vec<_> = validate_source(source, "test.json")
+        .into_iter()
+        .filter(|e| e.error == codes::MULTIPLE_LIGHT_PROBE_VOLUMES)
+        .collect();
+
+    assert_eq!(
+        errors.len(),
+        1,
+        "one error for the scene, not one per volume"
+    );
+    assert!(
+        !errors[0].is_warning(),
+        "at-most-one is an error, not a warning"
+    );
+    // Both names, so the fix does not need a second look at the file.
+    assert!(
+        errors[0].message.contains("Landscape") && errors[0].message.contains("Interior"),
+        "the message must name both: {}",
+        errors[0].message
+    );
+}
+
+/// And one volume is silent, which is the case nearly every scene is in.
+#[test]
+fn a_single_probe_volume_is_fine() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Lighting", "components": [
+            { "type": "Transform", "scale": [8.0, 4.0, 8.0] },
+            { "type": "LightProbeVolume", "spacing": 1.0, "bake": "gi/a.gi.json" } ] }
+      ]
+    }"#;
+    assert!(!codes_of(source).contains(&codes::MULTIPLE_LIGHT_PROBE_VOLUMES));
 }

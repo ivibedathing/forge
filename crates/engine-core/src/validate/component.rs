@@ -360,6 +360,95 @@ pub(super) fn check_component(
                     .field("markings"),
                 );
             }
+
+            // Pins closer together than the blend they fade over pull on each
+            // other, and neither height is reached exactly (M40). Silent, and
+            // visible only as a bridge deck that came out 30 cm low — so it is
+            // said out loud instead.
+            if road.follow_terrain.is_some() && road.follow_blend > 0.0 {
+                let pinned: Vec<usize> = road
+                    .points
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.pin_height)
+                    .map(|(i, _)| i)
+                    .collect();
+                for pair in pinned.windows(2) {
+                    let (a, b) = (&road.points[pair[0]], &road.points[pair[1]]);
+                    let gap = glam::Vec2::new(a.position.x, a.position.z)
+                        .distance(glam::Vec2::new(b.position.x, b.position.z));
+                    // Straight-line distance under-reads the arc between them,
+                    // so this only fires when they are genuinely close — the
+                    // direction a warning should err in.
+                    if gap < road.follow_blend {
+                        errors.push(
+                            cx.err(
+                                codes::ROAD_PINS_OVERLAP,
+                                format!(
+                                    "points {} and {} are both pinned and {gap:.1} m apart, \
+                                     inside this road's follow_blend of {:.1} m; each pin is \
+                                     a correction faded out over that distance, so two \
+                                     inside one blend pull on each other and neither height \
+                                     is reached exactly — move them apart or shorten \
+                                     follow_blend",
+                                    pair[0], pair[1], road.follow_blend,
+                                ),
+                                &format!("{component_path}/points/{}", pair[1]),
+                            )
+                            .entity(entity)
+                            .component("Road")
+                            .field("points")
+                            .warning(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // A junction's arms are checked against the scene in the junction pass,
+        // which is where the other entities are in view. What is checkable from
+        // the component alone is how many there are and whether two of them are
+        // the same end of the same road — which builds a patch with a zero-width
+        // wedge in it.
+        ComponentData::Junction(ref junction) => {
+            if junction.arms.len() < 2 {
+                errors.push(
+                    cx.err(
+                        codes::JUNCTION_TOO_FEW_ARMS,
+                        format!(
+                            "Junction has {} arm(s); a patch is bounded by the mouths of \
+                             the roads reaching it, so it needs at least 2",
+                            junction.arms.len()
+                        ),
+                        &format!("{component_path}/arms"),
+                    )
+                    .entity(entity)
+                    .component("Junction")
+                    .field("arms"),
+                );
+            }
+            for (index, arm) in junction.arms.iter().enumerate() {
+                if let Some(first) = junction.arms[..index]
+                    .iter()
+                    .position(|other| other.road == arm.road && other.end == arm.end)
+                {
+                    errors.push(
+                        cx.err(
+                            codes::JUNCTION_DUPLICATE_ARM,
+                            format!(
+                                "arms {first} and {index} both name the {:?} end of road \
+                                 {:?}; two arms at one mouth leave a zero-width wedge in \
+                                 the patch",
+                                arm.end, arm.road
+                            ),
+                            &format!("{component_path}/arms/{index}"),
+                        )
+                        .entity(entity)
+                        .component("Junction")
+                        .field("arms"),
+                    );
+                }
+            }
         }
 
         // The flat Collider struct keeps the file walkable; which fields each
@@ -562,7 +651,26 @@ pub(super) fn check_component(
 
         // Every emitter constraint is a schema range; the simulation reads
         // whatever validated, so there is nothing semantic left to check.
-        ComponentData::ParticleEmitter(_) => {}
+        // `despawn_when_done` needs a `duration` to be done *of* (M44): with
+        // none, the emitter never finishes and the flag could never fire —
+        // the `breakable_without_collider` shape, where a field that cannot
+        // do anything is an error rather than a silent no-op.
+        ComponentData::ParticleEmitter(ref emitter) => {
+            if emitter.despawn_when_done && emitter.duration.is_none() {
+                errors.push(
+                    cx.err(
+                        codes::EMITTER_NEVER_FINISHES,
+                        "this ParticleEmitter sets despawn_when_done but no duration, so it \
+                         emits forever and is never done; give it a duration or drop the flag"
+                            .to_string(),
+                        &format!("{component_path}/despawn_when_done"),
+                    )
+                    .entity(entity)
+                    .component("ParticleEmitter")
+                    .field("despawn_when_done"),
+                );
+            }
+        }
 
         // Every individual tree field is in range by the time we get here, and
         // the combination can still be absurd: branching is exponential, so
@@ -628,6 +736,29 @@ pub(super) fn check_component(
         // entity pass and engine-assets carry those, and there is nothing to
         // check with the component alone.
         ComponentData::FootPlant(_) => {}
+
+        // Buoyancy (M41). Only one thing is answerable without the rest of the
+        // scene: that the surface was named at all. An empty `water` is what an
+        // author who omitted the field gets, and it has to be an error rather
+        // than a default — there is no water a boat can be assumed to float on.
+        // Whether that name resolves, and whether this entity is even a body
+        // that can be pushed, is the cross-entity pass's.
+        ComponentData::Buoyancy(ref buoyancy) => {
+            if buoyancy.water.trim().is_empty() {
+                errors.push(
+                    cx.err(
+                        codes::BUOYANCY_WATER_MISSING,
+                        "this Buoyancy names no water; \"water\" must be the name of a \
+                         Water entity for the body to have a surface to float on"
+                            .to_string(),
+                        &format!("{component_path}/water"),
+                    )
+                    .entity(entity)
+                    .component("Buoyancy")
+                    .field("water"),
+                );
+            }
+        }
 
         // A proxy set (M33). Everything here is answerable from the component
         // alone: which shapes a proxy may be, that each part carries the
@@ -705,6 +836,26 @@ pub(super) fn check_component(
                         .field(format!("parts/{i}/shape")),
                     );
                     continue;
+                }
+
+                // A sphere has one dimension and it is not a length along the
+                // bone, so there is nothing for `fit` to solve (M39 §7).
+                if part.fit.is_some() && part.shape == Sphere {
+                    errors.push(
+                        cx.err(
+                            codes::COLLIDER_PART_FIT_UNSUPPORTED,
+                            format!(
+                                "part {label:?} is a sphere asking to fit its bone, but a \
+                                 sphere has no length to solve; \"fit\" applies to \
+                                 \"capsule\" (its half_height) and \"cuboid\" (its Y \
+                                 half-extent)"
+                            ),
+                            &format!("{part_path}/fit"),
+                        )
+                        .entity(entity)
+                        .component("SkinnedCollider")
+                        .field(format!("parts/{i}/fit")),
+                    );
                 }
 
                 // `Collider`'s per-shape rule, applied per part.
@@ -823,6 +974,92 @@ pub(super) fn check_component(
             }
         }
 
+        // A ragdoll (M39). Answerable from the component alone: that no two
+        // overrides claim one joint, and that a hinge describes a real axis and
+        // a range that runs forwards. Whether the joints are ones some part
+        // rides, and whether the parts form one tree, need the
+        // `SkinnedCollider` beside it and live in `entity.rs`.
+        ComponentData::Ragdoll(ref ragdoll) => {
+            let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for (i, joint) in ragdoll.joints.iter().enumerate() {
+                let joint_path = format!("{component_path}/joints/{i}");
+                let name = joint.joint.as_str();
+
+                if !seen.insert(name) {
+                    errors.push(
+                        cx.err(
+                            codes::RAGDOLL_DUPLICATE_JOINT,
+                            format!(
+                                "two Ragdoll joint overrides name {name:?}; which one wins \
+                                 would be an ordering accident, so neither does"
+                            ),
+                            &joint_path,
+                        )
+                        .entity(entity)
+                        .component("Ragdoll")
+                        .field(format!("joints/{i}/joint")),
+                    );
+                }
+
+                match (joint.hinge, joint.range) {
+                    (Some(axis), _) if axis.length_squared() <= 0.0 => {
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_BAD_HINGE,
+                                format!(
+                                    "the hinge axis on {name:?} is {:?}, which names no \
+                                     direction; a hinge turns about an axis in the child \
+                                     part's frame, so [1, 0, 0] is a knee that bends about \
+                                     local X",
+                                    axis.to_array()
+                                ),
+                                &format!("{joint_path}/hinge"),
+                            )
+                            .entity(entity)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/hinge")),
+                        );
+                    }
+                    // Negated so a NaN fails — the repo's rule, and the reason
+                    // is written out at `Collider`'s dimension check.
+                    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                    (Some(_), Some(range)) if !(range[0] <= range[1]) => {
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_BAD_HINGE,
+                                format!(
+                                    "the hinge range on {name:?} is [{}, {}]; it is \
+                                     [min, max] in degrees and must run forwards",
+                                    range[0], range[1]
+                                ),
+                                &format!("{joint_path}/range"),
+                            )
+                            .entity(entity)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/range")),
+                        );
+                    }
+                    (None, Some(_)) => {
+                        errors.push(
+                            cx.err(
+                                codes::RAGDOLL_BAD_HINGE,
+                                format!(
+                                    "the override on {name:?} sets \"range\" without \
+                                     \"hinge\"; a range is a hinge's travel, and a cone's \
+                                     extent is \"limit\""
+                                ),
+                                &format!("{joint_path}/range"),
+                            )
+                            .entity(entity)
+                            .component("Ragdoll")
+                            .field(format!("joints/{i}/range")),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         ComponentData::Meadow(ref meadow) => {
             if meadow.stages.len() < 2 {
                 errors.push(
@@ -884,46 +1121,141 @@ pub(super) fn check_component(
 
         // Fragment mesh references resolve like `Mesh.asset` (existence,
         // extension, relative path); fragment collider dimensions are
-        // strictly positive like a Collider's.
+        // strictly positive like a Collider's. Since M43 a fragment may be a
+        // shard instead, and then its points are what has to be well formed.
         ComponentData::Breakable(ref breakable) => {
             let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+            // The authored keys per fragment, for the same reason M26's
+            // material exclusivity reads them: `half_extents` has a default, so
+            // the parsed fragment cannot say whether one was written.
+            let authored = object.get("fragments").and_then(|f| f.as_array());
+
             for (i, fragment) in breakable.fragments.iter().enumerate() {
                 let fragment_path = format!("{component_path}/fragments/{i}");
-                if let Err(resolve) = MeshAsset::resolve(&fragment.mesh, base_dir) {
-                    let mut error = cx
-                        .err(
-                            resolve.error,
-                            resolve.message.clone(),
-                            &format!("{fragment_path}/mesh"),
+                let wrote = |key: &str| {
+                    authored
+                        .and_then(|list| list.get(i))
+                        .and_then(|f| f.as_object())
+                        .is_some_and(|f| f.contains_key(key))
+                };
+
+                match (&fragment.mesh, &fragment.points) {
+                    (Some(mesh), None) => {
+                        if let Err(resolve) = MeshAsset::resolve(mesh, base_dir) {
+                            let mut error = cx
+                                .err(
+                                    resolve.error,
+                                    resolve.message.clone(),
+                                    &format!("{fragment_path}/mesh"),
+                                )
+                                .entity(entity)
+                                .component("Breakable")
+                                .field("mesh");
+                            if let Some(suggestion) =
+                                resolve.context().and_then(|c| c.did_you_mean.clone())
+                            {
+                                error = error.did_you_mean(suggestion);
+                            }
+                            errors.push(error);
+                        }
+                        let authored_extents = fragment
+                            .half_extents
+                            .unwrap_or(crate::components::HALF_CUBE)
+                            .to_array();
+                        // `!(v > 0.0)` rather than `v <= 0.0`, so NaN fails too.
+                        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                        for (axis, v) in authored_extents.into_iter().enumerate() {
+                            if !(v > 0.0) {
+                                errors.push(
+                                    cx.err(
+                                        codes::INVALID_SHAPE_DIMENSION,
+                                        format!(
+                                            "Breakable.fragments[{i}].half_extents[{axis}] is \
+                                             {v}; it must be greater than 0"
+                                        ),
+                                        &format!("{fragment_path}/half_extents/{axis}"),
+                                    )
+                                    .entity(entity)
+                                    .component("Breakable")
+                                    .field("half_extents"),
+                                );
+                            }
+                        }
+                    }
+                    (None, Some(points)) => {
+                        if crate::shard::hull(points).is_none() {
+                            errors.push(degenerate_shard(
+                                cx,
+                                entity,
+                                "Breakable",
+                                &format!("Breakable.fragments[{i}]"),
+                                points.len(),
+                                &format!("{fragment_path}/points"),
+                            ));
+                        }
+                        // A half-extent beside points is a claim about the
+                        // collider that the hull is going to contradict.
+                        if wrote("half_extents") {
+                            errors.push(
+                                cx.err(
+                                    codes::FRAGMENT_GEOMETRY,
+                                    format!(
+                                        "Breakable.fragments[{i}] is a shard and also sets \
+                                         half_extents; a shard's collider is its own hull, so \
+                                         the half-extents would describe a shape physics never \
+                                         builds"
+                                    ),
+                                    &format!("{fragment_path}/half_extents"),
+                                )
+                                .entity(entity)
+                                .component("Breakable")
+                                .field("half_extents"),
+                            );
+                        }
+                    }
+                    (Some(_), Some(_)) => errors.push(
+                        cx.err(
+                            codes::FRAGMENT_GEOMETRY,
+                            format!(
+                                "Breakable.fragments[{i}] sets both mesh and points; a fragment \
+                                 is a mesh reference or a shard, never both"
+                            ),
+                            &fragment_path,
                         )
                         .entity(entity)
                         .component("Breakable")
-                        .field("mesh");
-                    if let Some(suggestion) = resolve.context().and_then(|c| c.did_you_mean.clone())
-                    {
-                        error = error.did_you_mean(suggestion);
-                    }
-                    errors.push(error);
+                        .field("points"),
+                    ),
+                    (None, None) => errors.push(
+                        cx.err(
+                            codes::FRAGMENT_GEOMETRY,
+                            format!(
+                                "Breakable.fragments[{i}] has no geometry; give it a mesh \
+                                 reference or a shard's points (engine fracture generates them)"
+                            ),
+                            &fragment_path,
+                        )
+                        .entity(entity)
+                        .component("Breakable")
+                        .field("mesh"),
+                    ),
                 }
-                // `!(v > 0.0)` rather than `v <= 0.0`, so NaN fails too.
-                #[allow(clippy::neg_cmp_op_on_partial_ord)]
-                for (axis, v) in fragment.half_extents.to_array().into_iter().enumerate() {
-                    if !(v > 0.0) {
-                        errors.push(
-                            cx.err(
-                                codes::INVALID_SHAPE_DIMENSION,
-                                format!(
-                                    "Breakable.fragments[{i}].half_extents[{axis}] is {v}; \
-                                     it must be greater than 0"
-                                ),
-                                &format!("{fragment_path}/half_extents/{axis}"),
-                            )
-                            .entity(entity)
-                            .component("Breakable")
-                            .field("half_extents"),
-                        );
-                    }
-                }
+            }
+        }
+
+        // A shard owns its geometry, and its points have to bound a volume —
+        // a degenerate one draws nothing and collides with nothing, which is
+        // the hardest failure there is to read off a picture (M43).
+        ComponentData::Shard(ref shard) => {
+            if crate::shard::hull(&shard.points).is_none() {
+                errors.push(degenerate_shard(
+                    cx,
+                    entity,
+                    "Shard",
+                    "This Shard",
+                    shard.points.len(),
+                    &format!("{component_path}/points"),
+                ));
             }
         }
 
@@ -1045,7 +1377,96 @@ pub(super) fn check_component(
                 }
             }
         }
+
+        // ── GI bake file (M35) ────────────────────────────────────────────
+        //
+        // A bake that disagrees with its scene renders light that is quietly
+        // wrong, which is the one failure mode this system is built to make
+        // impossible — so the file is checked at `validate`, the cheapest gate
+        // there is, and never at the upload.
+        //
+        // Two of the three checks live here, because they need only the file:
+        // that it is there, and that it is the shape the format promises.
+        // `gi_bake_stale` needs the whole scene's geometry to recompute the
+        // digest against, so it belongs to a scene-level pass, not this one.
+        ComponentData::LightProbeVolume(ref volume) => {
+            let bake_path = &format!("{component_path}/bake");
+            let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+            let file = base_dir.join(&volume.bake);
+
+            if volume.bake.is_empty() || !file.is_file() {
+                let named = if volume.bake.is_empty() {
+                    "names no bake file".to_string()
+                } else {
+                    format!("names no bake file at {:?}", volume.bake)
+                };
+                errors.push(
+                    cx.err(
+                        codes::GI_BAKE_MISSING,
+                        format!(
+                            "entity {entity:?} {named} (bake paths resolve relative to \
+                             the scene file); run `engine bake-gi` to write one"
+                        ),
+                        bake_path,
+                    )
+                    .entity(entity)
+                    .component("LightProbeVolume")
+                    .field("bake"),
+                );
+            } else if let Ok(text) = std::fs::read_to_string(&file) {
+                if let Err(bad) = crate::gi::BakedGi::parse(&text) {
+                    errors.push(
+                        cx.err(
+                            codes::GI_BAKE_MALFORMED,
+                            format!(
+                                "the GI bake at {:?} is not readable: {bad}; \
+                                 re-run `engine bake-gi`",
+                                volume.bake
+                            ),
+                            bake_path,
+                        )
+                        .entity(entity)
+                        .component("LightProbeVolume")
+                        .field("bake"),
+                    );
+                }
+            }
+        }
     }
 
     checked
+}
+
+/// The `shard_degenerate` error, shared by the two places points can appear:
+/// a `Shard` component and a `Breakable` fragment (M43).
+///
+/// One message rather than two, because the diagnosis is the same in both
+/// places and the fix is the same: the points have to bound a volume.
+fn degenerate_shard(
+    cx: &Cx,
+    entity: &str,
+    component: &str,
+    subject: &str,
+    count: usize,
+    json_path: &str,
+) -> EngineError {
+    let why = if count < 4 {
+        format!("only {count} points, and it takes 4 to bound a volume")
+    } else {
+        format!(
+            "{count} points that do not bound a volume — they are coplanar, \\
+             collinear or coincident"
+        )
+    };
+    cx.err(
+        codes::SHARD_DEGENERATE,
+        format!(
+            "{subject} has {why}. A shard draws as its convex hull, so a flat one \\
+             draws nothing and collides with nothing."
+        ),
+        json_path,
+    )
+    .entity(entity)
+    .component(component)
+    .field("points")
 }

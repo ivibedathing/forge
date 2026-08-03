@@ -15,6 +15,8 @@ note before changing the system it covers.** See `notes/README.md`.
   **still open**.
 - `milestone-verification-scenes.md` — the fixture registry, M4 through M32. The
   standard check's "look at the PNGs" step is defined here.
+- `structural-holes.md` — the four pre-M35 gaps that block a *capability* rather
+  than polish one, pulled out of `CLAUDE.md`'s much longer deferred list.
 - `showcase-tour.md` and `arena-shooter.md` — the two demo scenes, both live.
 - `distribution-design.md` — release workflow, `install.sh`, `engine init`.
 

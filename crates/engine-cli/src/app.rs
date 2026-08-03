@@ -70,6 +70,18 @@ pub struct SceneContent {
     /// The scene's HUD components; refreshed per frame when a simulation
     /// runs (clips and scripts can drive them), static otherwise.
     pub hud_items: engine_core::ui::HudTree,
+    /// The scene's probe volume and its parsed bake (M35), read once at load.
+    /// `None` for a scene with no volume — nearly all of them — which then
+    /// renders through exactly the pipelines it did before GI existed.
+    ///
+    /// Held here rather than on [`Simulation`] because a scene can have GI and
+    /// no simulation at all, and because the *fold* is what moves per frame:
+    /// `daylight` rewrites the sky bands, and folding them is a pass over the
+    /// probes rather than a re-read of the file.
+    pub gi: Option<(
+        engine_core::components::LightProbeVolume,
+        engine_core::gi::BakedGi,
+    )>,
     /// Present when the scene has physics components: the viewer drives
     /// the same fixed step through a wall-clock accumulator (the
     /// headless path stays canonical; frame pacing may vary here).
@@ -232,6 +244,30 @@ enum Paint {
     },
 }
 
+/// The attachments a scene pass draws into besides the swapchain image: the
+/// depth buffer, and — only when the scene asks for MSAA — the multisampled
+/// color target the frame resolves out of.
+///
+/// One function rather than a copy per occasion, because the sample-count
+/// gate, the size and the format have to agree across all three times the pair
+/// gets built: the window appearing, the window resizing, and a script moving
+/// `environment.samples` (M36). The two are always made together and always
+/// from the same numbers; splitting them is how one ends up a resize behind
+/// the other, which renders wrong on exactly one of the three paths.
+fn frame_attachments(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    samples: u32,
+) -> (wgpu::TextureView, Option<wgpu::TextureView>) {
+    (
+        scene_renderer::depth_texture_multisampled(device, width, height, samples),
+        (samples > 1)
+            .then(|| scene_renderer::msaa_color_texture(device, format, width, height, samples)),
+    )
+}
+
 /// Frames actually presented per second, averaged over a short window.
 ///
 /// Wall-clock, and therefore viewer-only: it measures how fast this machine is
@@ -380,6 +416,7 @@ impl ViewerApp {
                     environment,
                     daylight,
                     hud_items,
+                    gi,
                     simulation,
                 } = &mut **scene;
                 if let Some(sim) = simulation {
@@ -475,7 +512,54 @@ impl ViewerApp {
                                             impulse: blast.impulse,
                                         });
                                     }
+                                    for kick in scripts.take_kicks() {
+                                        physics.queue_ragdoll_impulse(
+                                            &kick.entity,
+                                            &kick.part,
+                                            kick.impulse.into(),
+                                        );
+                                    }
                                 }
+                            }
+                            // Spawned entities enter physics between the
+                            // script step and the physics step (M37), exactly
+                            // where the headless loop puts them — the two
+                            // paths must not diverge or a recorded input stops
+                            // reproducing what the window did.
+                            let spawned = sim
+                                .scripts
+                                .as_ref()
+                                .map(engine_script::ScriptHost::take_spawns)
+                                .unwrap_or_default();
+                            if !spawned.is_empty() {
+                                let mut failed = None;
+                                if let Some(physics) = &mut sim.physics {
+                                    for (name, entity) in &spawned {
+                                        if let Err(e) = crate::simulate::insert_spawned(
+                                            physics,
+                                            &sim.scene.world,
+                                            *entity,
+                                            name,
+                                            &sim.assets,
+                                        ) {
+                                            failed = Some(e);
+                                            break;
+                                        }
+                                    }
+                                }
+                                if let Some(e) = failed {
+                                    self.error = Some(e);
+                                    break;
+                                }
+                                sim.scene.refresh_names();
+                                if let Some(scripts) = &mut sim.scripts {
+                                    scripts.sync_names(&sim.scene.world);
+                                }
+                                // A spawned template may carry a
+                                // `ParticleEmitter` — sync here, exactly
+                                // where the headless loop does, or the
+                                // emitter never emits (M44).
+                                sim.particles.sync(&sim.scene.world);
                             }
                             if let Some(physics) = &mut sim.physics {
                                 // `step_index` is 0-based and incremented
@@ -485,6 +569,35 @@ impl ViewerApp {
                                 let events = physics
                                     .step(&mut sim.scene.world, (sim.step_index + 1) as f32 * dt);
                                 sim.contacts.apply(&events);
+                            }
+                            // Particles step between physics and the despawns,
+                            // matching the headless loop step for step: a dust
+                            // emitter a break spawns below is stepped from the
+                            // *next* step in both loops, or a recorded input
+                            // stops reproducing what the window did.
+                            sim.particles.step(&sim.scene.world, dt);
+                            if let Some(physics) = &mut sim.physics {
+                                // Despawns (M37) apply here, beside the
+                                // breaks and before them, matching the
+                                // headless loop step for step.
+                                let despawned = sim
+                                    .scripts
+                                    .as_ref()
+                                    .map(engine_script::ScriptHost::take_despawns)
+                                    .unwrap_or_default();
+                                if !despawned.is_empty() {
+                                    for name in &despawned {
+                                        let Some(entity) = sim.scene.entity(name) else {
+                                            continue;
+                                        };
+                                        let _ = sim.scene.world.despawn(entity);
+                                        physics.remove_entity(entity);
+                                    }
+                                    sim.scene.refresh_names();
+                                    if let Some(scripts) = &mut sim.scripts {
+                                        scripts.sync_names(&sim.scene.world);
+                                    }
+                                }
                                 // Breaks apply after physics, exactly as in
                                 // the headless loop — played and simulated
                                 // runs must not diverge.
@@ -503,6 +616,12 @@ impl ViewerApp {
                                         if let Some(scripts) = &mut sim.scripts {
                                             scripts.sync_names(&sim.scene.world);
                                         }
+                                        // A break's dust is a new emitter
+                                        // (M44), and the system tracks a list
+                                        // it built at load.
+                                        if broke.iter().any(|event| event.dust.is_some()) {
+                                            sim.particles.sync(&sim.scene.world);
+                                        }
                                     }
                                     Ok(_) => {}
                                     Err(e) => {
@@ -511,7 +630,28 @@ impl ViewerApp {
                                     }
                                 }
                             }
-                            sim.particles.step(&sim.scene.world, dt);
+                            // A spent burst reaps itself (M44), exactly as in
+                            // the headless loop — a played run and a simulated
+                            // one must not diverge, and a session left running
+                            // must not accumulate dead emitters.
+                            let spent = sim.particles.finished(&sim.scene.world);
+                            if !spent.is_empty() {
+                                for entity in spent {
+                                    let _ = sim.scene.world.despawn(entity);
+                                    // An authored emitter may also carry a
+                                    // body; a despawn that skips physics
+                                    // leaves a ghost collider, so this path
+                                    // removes both, like every other despawn.
+                                    if let Some(physics) = &mut sim.physics {
+                                        physics.remove_entity(entity);
+                                    }
+                                }
+                                sim.particles.sync(&sim.scene.world);
+                                sim.scene.refresh_names();
+                                if let Some(scripts) = &mut sim.scripts {
+                                    scripts.sync_names(&sim.scene.world);
+                                }
+                            }
                             sim.step_index += 1;
                             sim.accumulator -= dt;
                         }
@@ -554,29 +694,34 @@ impl ViewerApp {
                 // cost of the rebuild is what makes a settings screen's
                 // QUALITY row a deliberate action rather than a slider.
                 let wanted_samples = environment.samples.max(1);
-                if renderer.samples() != wanted_samples {
+                // Cascades are the second such field (M38): the count decides
+                // whether the shadow map binds as a 2D texture or an array, so
+                // it is pipeline state exactly as `samples` is. GI is the third
+                // (M35), for the same reason — it is spliced into the source.
+                let wanted_cascades = environment.shadow_cascades.clamp(1, 4);
+                if renderer.samples() != wanted_samples
+                    || renderer.cascades() != wanted_cascades
+                    || renderer.gi_enabled() != gi.is_some()
+                {
                     let (width, height) = target.size();
                     let format = renderer.format();
                     // Into the existing box rather than a fresh one: the
                     // allocation is already there and a `SceneRenderer` holds
                     // every pipeline the engine has.
-                    **renderer =
-                        SceneRenderer::with_samples(&target.gpu.device, format, wanted_samples);
-                    *depth = scene_renderer::depth_texture_multisampled(
+                    **renderer = SceneRenderer::configured(
                         &target.gpu.device,
+                        format,
+                        wanted_samples,
+                        wanted_cascades,
+                        gi.is_some(),
+                    );
+                    (*depth, *msaa) = frame_attachments(
+                        &target.gpu.device,
+                        format,
                         width,
                         height,
                         wanted_samples,
                     );
-                    *msaa = (wanted_samples > 1).then(|| {
-                        scene_renderer::msaa_color_texture(
-                            &target.gpu.device,
-                            format,
-                            width,
-                            height,
-                            wanted_samples,
-                        )
-                    });
                 }
 
                 let particles = simulation
@@ -600,6 +745,15 @@ impl ViewerApp {
                     *lights,
                     *environment,
                 );
+                // One fold per frame, against the sky this frame is drawing —
+                // the *resolved* daylight above, not the load-time block, so
+                // a cycling day moves the bounce light with it exactly as a
+                // screenshot at this step would. That is the whole point of
+                // baking transfer rather than radiance: nothing was re-baked
+                // to make it happen.
+                let gi_field = gi.as_ref().map(|(volume, baked)| {
+                    engine_core::gi::evaluate(baked, volume, &lights, &environment)
+                });
                 let (width, height) = target.size();
                 let view_projection = scene_renderer::view_projection(
                     camera,
@@ -648,6 +802,7 @@ impl ViewerApp {
                             time: simulated_time,
                             clear: scene_renderer::DEFAULT_CLEAR,
                             hud: canvas.as_ref(),
+                            gi: gi_field.as_ref(),
                         },
                     );
                 })
@@ -695,27 +850,22 @@ impl ApplicationHandler for ViewerApp {
             Content::Scene(ref scene) => {
                 let (width, height) = target.size();
                 let samples = scene.environment.samples.max(1);
+                let (depth, msaa) =
+                    frame_attachments(&target.gpu.device, target.format(), width, height, samples);
                 Paint::Scene {
-                    renderer: Box::new(SceneRenderer::with_samples(
+                    renderer: Box::new(SceneRenderer::configured(
                         &target.gpu.device,
                         target.format(),
                         samples,
+                        scene.environment.shadow_cascades,
+                        // Not yet: whether a field is resident is a question
+                        // about a *loaded bake*, not about the scene file, and
+                        // the per-frame check below rebuilds on the first frame
+                        // if the answer turns out to be yes.
+                        false,
                     )),
-                    depth: scene_renderer::depth_texture_multisampled(
-                        &target.gpu.device,
-                        width,
-                        height,
-                        samples,
-                    ),
-                    msaa: (samples > 1).then(|| {
-                        scene_renderer::msaa_color_texture(
-                            &target.gpu.device,
-                            target.format(),
-                            width,
-                            height,
-                            samples,
-                        )
-                    }),
+                    depth,
+                    msaa,
                 }
             }
         };
@@ -806,22 +956,13 @@ impl ApplicationHandler for ViewerApp {
                         renderer,
                     }) = self.paint.as_mut()
                     {
-                        let samples = renderer.samples();
-                        *depth = scene_renderer::depth_texture_multisampled(
+                        (*depth, *msaa) = frame_attachments(
                             &target.gpu.device,
+                            renderer.format(),
                             size.width,
                             size.height,
-                            samples,
+                            renderer.samples(),
                         );
-                        *msaa = (samples > 1).then(|| {
-                            scene_renderer::msaa_color_texture(
-                                &target.gpu.device,
-                                renderer.format(),
-                                size.width,
-                                size.height,
-                                samples,
-                            )
-                        });
                     }
                 }
             }

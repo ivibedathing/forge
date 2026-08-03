@@ -150,10 +150,44 @@ impl Region {
     /// pixel lies outside. Every element's own pixels lie inside the union
     /// region by construction, so this rejects exactly what the target-bounds
     /// check used to.
+    #[inline(always)]
     fn index(&self, x: i64, y: i64) -> Option<usize> {
         let (lx, ly) = (x - self.x, y - self.y);
         (lx >= 0 && ly >= 0 && lx < self.width as i64 && ly < self.height as i64)
             .then(|| ly as usize * self.width as usize + lx as usize)
+    }
+
+    /// The pixels of `x0..x1 × y0..y1` that land on both the target and this
+    /// region, as `(rows, columns)`.
+    ///
+    /// Exactly the pixels — in exactly the order — that testing every pixel of
+    /// the box against [`index`](Self::index) accepted, found with one
+    /// intersection instead of one `Option` per pixel. Everything the result
+    /// covers is inside the region by construction, so a caller addresses it
+    /// from [`row_base`](Self::row_base) and never re-derives the bound.
+    #[inline(always)]
+    fn spans(
+        &self,
+        x0: i64,
+        y0: i64,
+        x1: i64,
+        y1: i64,
+        width: u32,
+        height: u32,
+    ) -> Option<(std::ops::Range<i64>, std::ops::Range<i64>)> {
+        let x0 = x0.max(0).max(self.x);
+        let y0 = y0.max(0).max(self.y);
+        let x1 = x1.min(width as i64).min(self.x + self.width as i64);
+        let y1 = y1.min(height as i64).min(self.y + self.height as i64);
+        (x1 > x0 && y1 > y0).then_some((y0..y1, x0..x1))
+    }
+
+    /// Index of the first pixel of target row `y` in a region-sized buffer.
+    /// Meaningful only for a row this region covers — which is what
+    /// [`spans`](Self::spans) returns.
+    #[inline(always)]
+    fn row_base(&self, y: i64) -> usize {
+        (y - self.y) as usize * self.width as usize
     }
 }
 
@@ -332,17 +366,39 @@ fn draw_cluster(
         }
     }
 
-    let pixels = canvas
-        .iter()
-        .flat_map(|&[r, g, b, a]| {
-            [
-                encode_srgb(r),
-                encode_srgb(g),
-                encode_srgb(b),
-                (a.clamp(0.0, 1.0) * 255.0).round() as u8,
-            ]
-        })
-        .collect();
+    // Runs of one value are what a HUD canvas is made of — a flat panel band,
+    // the inside of a glyph, the transparent margin no element reached — and
+    // the encode is three `powf`s a pixel. Carrying the last pixel's bytes and
+    // reusing them when this pixel is *bit*-identical is exact by construction
+    // (the encode is a pure function of the four floats) and is most of what
+    // this loop used to cost.
+    // Sized once and written by index rather than grown four bytes at a time:
+    // the output length is known exactly, and a per-pixel `extend_from_slice`
+    // spends more on its capacity check than the encode it is storing.
+    let mut pixels = vec![0u8; canvas.len() * 4];
+    let mut carried: Option<([u32; 4], [u8; 4])> = None;
+    for (pixel, out) in canvas.iter().zip(pixels.chunks_exact_mut(4)) {
+        let bits = [
+            pixel[0].to_bits(),
+            pixel[1].to_bits(),
+            pixel[2].to_bits(),
+            pixel[3].to_bits(),
+        ];
+        let encoded = match carried {
+            Some((seen, bytes)) if seen == bits => bytes,
+            _ => {
+                let bytes = [
+                    encode_srgb(pixel[0]),
+                    encode_srgb(pixel[1]),
+                    encode_srgb(pixel[2]),
+                    (pixel[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+                ];
+                carried = Some((bits, bytes));
+                bytes
+            }
+        };
+        out.copy_from_slice(&encoded);
+    }
 
     HudCanvas {
         origin_x: region.x as u32,
@@ -407,11 +463,13 @@ fn fill(
     let color = [color.x, color.y, color.z];
     let alpha = opacity.clamp(0.0, 1.0);
     let (x1, y1) = (rect.x + rect.width as i64, rect.y + rect.height as i64);
-    for y in rect.y.max(0)..y1.min(height as i64) {
-        for x in rect.x.max(0)..x1.min(width as i64) {
-            if let Some(i) = region.index(x, y) {
-                blend(&mut canvas[i], color, alpha);
-            }
+    let Some((rows, columns)) = region.spans(rect.x, rect.y, x1, y1, width, height) else {
+        return;
+    };
+    for y in rows {
+        let base = region.row_base(y);
+        for x in columns.clone() {
+            blend(&mut canvas[base + (x - region.x) as usize], color, alpha);
         }
     }
 }
@@ -464,6 +522,7 @@ fn draw_panel(
 /// When the destination is too small to hold both corners they are shrunk in
 /// proportion (integer arithmetic, left rounding down) rather than overlapping
 /// — a 12-pixel frame drawn into an 8-pixel box still reads as a frame.
+#[inline(always)]
 fn slice_source(destination: i64, dest_size: u32, source_size: u32, start: u32, end: u32) -> u32 {
     if source_size == 0 {
         return 0;
@@ -526,13 +585,22 @@ fn draw_image(
     let opacity = image.opacity.clamp(0.0, 1.0);
 
     let (x1, y1) = (rect.x + rect.width as i64, rect.y + rect.height as i64);
-    for y in rect.y.max(0)..y1.min(height as i64) {
+    let Some((rows, columns)) = region.spans(rect.x, rect.y, x1, y1, width, height) else {
+        return;
+    };
+    // The source column a destination column reads from does not depend on the
+    // row, so it is resolved once per column rather than once per pixel — the
+    // nine-slice band arithmetic was running for every texel of a card frame
+    // that has the same few hundred columns all the way down.
+    let sources: Vec<u32> = columns
+        .clone()
+        .map(|x| slice_source(x - rect.x, rect.width, texture.width, left, right))
+        .collect();
+
+    for y in rows {
         let sy = slice_source(y - rect.y, rect.height, texture.height, top, bottom);
-        for x in rect.x.max(0)..x1.min(width as i64) {
-            let Some(i) = region.index(x, y) else {
-                continue;
-            };
-            let sx = slice_source(x - rect.x, rect.width, texture.width, left, right);
+        let base = region.row_base(y);
+        for (x, &sx) in columns.clone().zip(&sources) {
             let texel = ((sy * texture.width + sx) * 4) as usize;
             let alpha = pixels[texel + 3] as f32 / 255.0 * opacity;
             if alpha <= 0.0 {
@@ -545,7 +613,7 @@ fn draw_image(
                 decode_srgb(pixels[texel + 1]) * tint[1],
                 decode_srgb(pixels[texel + 2]) * tint[2],
             ];
-            blend(&mut canvas[i], color, alpha);
+            blend(&mut canvas[base + (x - region.x) as usize], color, alpha);
         }
     }
 }
@@ -706,6 +774,7 @@ fn draw_lines(canvas: &mut [[f32; 4]], region: Region, width: u32, height: u32, 
 }
 
 /// Straight-alpha "over" in linear space.
+#[inline(always)]
 fn blend(dst: &mut [f32; 4], src: [f32; 3], src_alpha: f32) {
     let keep = 1.0 - src_alpha;
     dst[0] = src[0] * src_alpha + dst[0] * dst[3] * keep;
@@ -724,6 +793,7 @@ fn blend(dst: &mut [f32; 4], src: [f32; 3], src_alpha: f32) {
 /// Linear [0, 1] → sRGB-encoded byte, the standard piecewise transfer
 /// function — the same math the render-target hardware applies on write, so
 /// an opaque canvas pixel blitted with alpha 1 lands byte-identical.
+#[inline(always)]
 fn encode_srgb(linear: f32) -> u8 {
     let linear = linear.clamp(0.0, 1.0);
     let encoded = if linear <= 0.003_130_8 {
@@ -736,14 +806,27 @@ fn encode_srgb(linear: f32) -> u8 {
 
 /// sRGB-encoded byte → linear, the inverse of [`encode_srgb`]. Round-trips
 /// every byte value, which is what keeps the authored panel bytes exact.
+///
+/// Its whole domain is a byte, so [`DECODED`] *is* the function rather than an
+/// approximation of it: 256 entries, each the expression below evaluated on
+/// the same input. `draw_image` calls this three times per texel it samples,
+/// which on a nine-sliced card is the second `powf` per pixel in the frame.
+#[inline(always)]
 fn decode_srgb(byte: u8) -> f32 {
-    let encoded = byte as f32 / 255.0;
-    if encoded <= 0.040_45 {
-        encoded / 12.92
-    } else {
-        ((encoded + 0.055) / 1.055).powf(2.4)
-    }
+    DECODED[byte as usize]
 }
+
+/// [`decode_srgb`] evaluated on all 256 of its possible inputs.
+static DECODED: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
+    std::array::from_fn(|byte| {
+        let encoded = byte as f32 / 255.0;
+        if encoded <= 0.040_45 {
+            encoded / 12.92
+        } else {
+            ((encoded + 0.055) / 1.055).powf(2.4)
+        }
+    })
+});
 
 #[cfg(test)]
 mod tests {
@@ -1156,5 +1239,71 @@ mod tests {
         let a = lines_only(&["SPEED 42 KM/H"], 320, 200);
         let b = lines_only(&["SPEED 42 KM/H"], 320, 200);
         assert_eq!(a.canvases[0].pixels, b.canvases[0].pixels);
+    }
+
+    /// The decode table *is* the transfer function, not an approximation of
+    /// it: same expression, same 256 inputs, and therefore the same bits. A
+    /// table that merely rounded to the same byte would still shift a blend,
+    /// because the value is multiplied by a tint before it is quantized.
+    #[test]
+    fn the_decode_table_is_the_transfer_function() {
+        for byte in 0..=u8::MAX {
+            let encoded = byte as f32 / 255.0;
+            let expected = if encoded <= 0.040_45 {
+                encoded / 12.92
+            } else {
+                ((encoded + 0.055) / 1.055).powf(2.4)
+            };
+            assert_eq!(
+                decode_srgb(byte).to_bits(),
+                expected.to_bits(),
+                "decode table disagrees at {byte}"
+            );
+        }
+    }
+
+    /// The encode carries the previous pixel's bytes across a run of identical
+    /// pixels. A run is only ever entered on a *bit*-identical pixel, so this
+    /// has to hold for a canvas that alternates — the case where the carry is
+    /// wrong would show as a colour bleeding one pixel to its right.
+    #[test]
+    fn carrying_the_encode_across_a_run_matches_encoding_every_pixel() {
+        let mut nodes = Vec::new();
+        for (index, x) in (0..24).step_by(2).enumerate() {
+            let mut bar = rect(HudAnchor::TopLeft, [x as f32, 0.0], [2.0, 6.0]);
+            // Alternating colours, so no two neighbouring columns are equal,
+            // and one repeated colour so runs happen too.
+            bar.color = if index % 2 == 0 {
+                Vec3::new(0.2, 0.6, 0.9)
+            } else {
+                Vec3::new(0.9, 0.1, 0.4)
+            };
+            nodes.push(bar);
+        }
+        let overlay = rasterize(&only_rects(nodes), &[], 64, 16);
+        let canvas = &overlay.canvases[0];
+
+        for y in 0..canvas.height {
+            for x in 0..canvas.width {
+                let i = ((y * canvas.width + x) * 4) as usize;
+                let opaque = canvas.pixels[i + 3] == 255;
+                // Every drawn pixel is one of the two authored colours, so a
+                // carry that leaked would show up as a third.
+                if opaque {
+                    let rgb = [canvas.pixels[i], canvas.pixels[i + 1], canvas.pixels[i + 2]];
+                    let a = [
+                        encode_srgb(0.2),
+                        encode_srgb(0.6),
+                        encode_srgb(0.9),
+                    ];
+                    let b = [
+                        encode_srgb(0.9),
+                        encode_srgb(0.1),
+                        encode_srgb(0.4),
+                    ];
+                    assert!(rgb == a || rgb == b, "unexpected colour at ({x}, {y}): {rgb:?}");
+                }
+            }
+        }
     }
 }

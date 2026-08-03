@@ -181,9 +181,37 @@ registry! {
     COLLIDER_PART_SHAPE_UNSUPPORTED = "collider_part_shape_unsupported", Input,
         "a SkinnedCollider part names a mesh shape, which a proxy cannot be";
 
+    // ── Ragdolls (M39) ─────────────────────────────────────────────────
+    RAGDOLL_WITHOUT_PROXIES = "ragdoll_without_proxies", Input,
+        "a Ragdoll is on an entity with no SkinnedCollider; the bodies are the proxies";
+    RAGDOLL_DISCONNECTED_PARTS = "ragdoll_disconnected_parts", Input,
+        "a Ragdoll's parts form more than one tree, which is a ragdoll in pieces";
+    RAGDOLL_UNKNOWN_JOINT = "ragdoll_unknown_joint", Input,
+        "a Ragdoll joint override names a joint no part of the SkinnedCollider rides";
+    RAGDOLL_DUPLICATE_JOINT = "ragdoll_duplicate_joint", Input,
+        "two Ragdoll joint overrides name the same joint";
+    RAGDOLL_BAD_HINGE = "ragdoll_bad_hinge", Input,
+        "a Ragdoll hinge axis is zero-length, or its range runs backwards";
+    COLLIDER_PART_FIT_UNSUPPORTED = "collider_part_fit_unsupported", Input,
+        "a sphere part asks to fit the bone, and a sphere has no length to solve";
+
     // ── Breaking (M14) ─────────────────────────────────────────────────
     BREAKABLE_WITHOUT_COLLIDER = "breakable_without_collider", Input,
         "a Breakable sets impulse_threshold but the entity has no Collider to be hit on";
+
+    // ── Fracture (M43) ─────────────────────────────────────────────────
+    FRAGMENT_GEOMETRY = "fragment_geometry", Input,
+        "a fragment is a mesh reference or a shard's points, never both and never neither";
+    SHARD_DEGENERATE = "shard_degenerate", Input,
+        "a shard's points do not bound a volume: fewer than four, or all coplanar";
+    SHARD_WITH_MESH = "shard_with_mesh", Input,
+        "a Shard owns its geometry, so the entity may not also carry a Mesh";
+    FRACTURE_FAILED = "fracture_failed", Input,
+        "engine fracture could not break the volume into the pieces asked for";
+
+    // ── Emitter lifetime (M44) ─────────────────────────────────────────
+    EMITTER_NEVER_FINISHES = "emitter_never_finishes", Input,
+        "a ParticleEmitter sets despawn_when_done but has no duration to finish";
 
     // ── Environment (M16) ──────────────────────────────────────────────
     INVALID_ENVIRONMENT_VALUE = "invalid_environment_value", Input,
@@ -208,6 +236,12 @@ registry! {
         "a Terrain entity owns its own surface; it may not also have a Mesh or a Material";
     TERRAIN_LAYER_RANGE_INVERTED = "terrain_layer_range_inverted", Input,
         "a Terrain layer's height or slope range runs backwards, so it covers nothing";
+    // ── Terrain basins (M42) ───────────────────────────────────────────
+    TERRAIN_BASIN_NO_EFFECT = "terrain_basin_no_effect", Input,
+        "a Terrain basin has no depth or no footprint, so it cuts nothing (warning)";
+    TERRAIN_BASIN_OUTSIDE_PATCH = "terrain_basin_outside_patch", Input,
+        "a Terrain basin's footprint misses the patch entirely, usually a center \
+         written in local rather than world XZ (warning)";
     // ── Roads (M23) ────────────────────────────────────────────────────
     ROAD_WITH_MESH = "road_with_mesh", Input,
         "a Road entity owns its own surface; it may not also have a Mesh or a Material";
@@ -219,6 +253,24 @@ registry! {
         "a sharp corner turns too far to mitre; give it a radius";
     TOO_MANY_ROAD_KERBS = "too_many_road_kerbs", Input,
         "a Road kerbs more corners than the shader's span array holds";
+    ROAD_TERRAIN_NOT_FOUND = "road_terrain_not_found", Input,
+        "a Road's \"follow_terrain\" names no entity in the scene";
+    ROAD_TERRAIN_INVALID = "road_terrain_invalid", Input,
+        "a Road's \"follow_terrain\" must name an entity that has a Terrain component";
+
+    // ── Junctions (M40) ────────────────────────────────────────────────
+    JUNCTION_WITH_MESH = "junction_with_mesh", Input,
+        "a Junction entity owns its own surface; it may not also have a Mesh or a Material";
+    JUNCTION_TOO_FEW_ARMS = "junction_too_few_arms", Input,
+        "a Junction needs at least two arms to bound a patch";
+    JUNCTION_ROAD_NOT_FOUND = "junction_road_not_found", Input,
+        "a Junction arm's \"road\" names no entity in the scene";
+    JUNCTION_ROAD_INVALID = "junction_road_invalid", Input,
+        "a Junction arm's \"road\" must name an entity that has a Road component";
+    JUNCTION_ARM_CLOSED = "junction_arm_closed", Input,
+        "a Junction arm names a closed road, which has no free end to meet";
+    JUNCTION_DUPLICATE_ARM = "junction_duplicate_arm", Input,
+        "two Junction arms name the same end of the same road";
 
     // ── Scripting (M10) ────────────────────────────────────────────────
     SCRIPT_PARSE_ERROR = "script_parse_error", Input,
@@ -227,6 +279,18 @@ registry! {
         "a script defines no `fn step(world, step)`";
     SCRIPT_RUNTIME_ERROR = "script_runtime_error", Input,
         "a script failed while running";
+
+    // ── Entity spawning (M37) ──────────────────────────────────────────
+    TEMPLATE_NOT_OBJECT = "template_not_object", Input,
+        "an entry in \"templates\" is not a JSON object";
+    MISSING_TEMPLATE_NAME = "missing_template_name", Input,
+        "a template has no \"name\" field";
+    EMPTY_TEMPLATE_NAME = "empty_template_name", Input,
+        "a template's \"name\" is the empty string";
+    DUPLICATE_TEMPLATE_NAME = "duplicate_template_name", Input,
+        "a template's name is shared with another template or with an entity";
+    TEMPLATE_FORBIDDEN_COMPONENT = "template_forbidden_component", Input,
+        "a component whose scene-level budget a spawn could violate may not appear in a template";
 
     // ── Vehicles (M12) ─────────────────────────────────────────────────
     WHEEL_VEHICLE_NOT_FOUND = "wheel_vehicle_not_found", Input,
@@ -261,6 +325,32 @@ registry! {
         "a Meadow needs at least two life-cycle stages with strictly increasing \"at\"";
     TOO_MANY_GROWTH_STAGES = "too_many_growth_stages", Input,
         "a Meadow has more life-cycle stages than the shader's table holds";
+
+    // ── Buoyancy (M41) ─────────────────────────────────────────────────
+    BUOYANCY_WATER_MISSING = "buoyancy_water_missing", Input,
+        "a Buoyancy must name the Water entity it floats on";
+    BUOYANCY_WATER_NOT_FOUND = "buoyancy_water_not_found", Input,
+        "a Buoyancy's \"water\" names no entity in the scene";
+    BUOYANCY_WATER_INVALID = "buoyancy_water_invalid", Input,
+        "a Buoyancy's \"water\" must name an entity that has a Water component";
+    BUOYANCY_WITHOUT_BODY = "buoyancy_without_body", Input,
+        "a Buoyancy needs a dynamic RigidBody and a Collider on the same entity";
+
+    // ── Global illumination (M35) ──────────────────────────────────────
+    LIGHT_PROBE_VOLUME_WITH_MESH = "light_probe_volume_with_mesh", Input,
+        "a LightProbeVolume entity is a region of space, not geometry; it may not also have a Mesh or a Material";
+    LIGHT_PROBE_VOLUME_WITHOUT_TRANSFORM = "light_probe_volume_without_transform", Input,
+        "a LightProbeVolume takes its bounds from its Transform, so it needs one";
+    GI_BAKE_MISSING = "gi_bake_missing", Input,
+        "a LightProbeVolume's \"bake\" names a file that is not there; run `engine bake-gi`";
+    GI_BAKE_STALE = "gi_bake_stale", Input,
+        "a GI bake was taken from a different scene than the one loading it; re-run `engine bake-gi`";
+    GI_BAKE_MALFORMED = "gi_bake_malformed", Input,
+        "a GI bake file parses but its version, grid or basis disagrees with the component";
+    TOO_MANY_GI_PROBES = "too_many_gi_probes", Input,
+        "a LightProbeVolume's bounds and spacing would place more probes than the engine will bake";
+    MULTIPLE_LIGHT_PROBE_VOLUMES = "multiple_light_probe_volumes", Input,
+        "a scene may have at most one LightProbeVolume; the renderer holds one field";
 
     // ── UI system (M31) ────────────────────────────────────────────────
     HUD_PARENT_NOT_FOUND = "hud_parent_not_found", Input,
@@ -298,6 +388,12 @@ registry! {
         "warning: daylight computes the sky and ambient, so the authored ones are never read";
     COLLIDER_MESH_SIZE_MISMATCH = "collider_mesh_size_mismatch", Input,
         "warning: a Collider is a very different size from the builtin mesh it sits on";
+    GI_SUN_SAMPLES_UNUSED = "gi_sun_samples_unused", Input,
+        "warning: LightProbeVolume.sun_samples asks for an arc, but this scene's sun does not move";
+    ROAD_PINS_OVERLAP = "road_pins_overlap", Input,
+        "warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly";
+    ROAD_FOLLOW_ROTATED = "road_follow_rotated", Input,
+        "warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed";
 
     // ── Scene semantics at command time ───────────────────────────────
     SCENE_UNREADABLE = "scene_unreadable", Input,

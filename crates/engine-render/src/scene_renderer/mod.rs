@@ -161,6 +161,15 @@ pub struct ScenePass<'a> {
     /// rasterized at the target's dimensions. `None` skips the overlay pass
     /// entirely, so HUD-less scenes render byte-identically to pre-M12.
     pub hud: Option<&'a crate::hud::HudOverlay>,
+    /// The scene's baked irradiance field, folded against this frame's lighting
+    /// (M35). `None` for a scene with no `LightProbeVolume`, which is then lit
+    /// by exactly the expressions that lit it before GI existed.
+    ///
+    /// Folded by the *caller* rather than here, because the fold is a pure CPU
+    /// function of (bake file, sky, ambient) and `engine gi-probe` has to be
+    /// able to run it without a GPU. M21's arrangement: the model is CPU, and
+    /// the GPU only ever reads its output.
+    pub gi: Option<&'a engine_core::gi::IrradianceField>,
 }
 
 pub struct SceneRenderer {
@@ -234,6 +243,10 @@ pub struct SceneRenderer {
     scene_sampler: wgpu::Sampler,
     format: wgpu::TextureFormat,
     samples: u32,
+    /// Whether the mesh pipelines were compiled with the GI producer (M35).
+    /// Baked into the shaders, so it belongs to the renderer rather than to a
+    /// frame — `samples`' rule, for the same reason.
+    gi: bool,
 
     // Everything below persists across frames; see the module doc.
     /// Bound whenever shadows are off. See [`ShadowMap`].
@@ -246,6 +259,14 @@ pub struct SceneRenderer {
     /// The real map, allocated the first time a scene casts shadows so that
     /// scenes which never do pay nothing for it.
     shadow_map: Option<ShadowMap>,
+    /// How many nested cascades the sun renders (M38). Baked in at
+    /// construction, because it decides the shadow map's binding type and
+    /// therefore every pipeline; changing it means a new `SceneRenderer`.
+    cascades: u32,
+    /// The cascade matrices as the receivers read them, and the frame uniform
+    /// once per cascade as the *casters* do. Both absent at one cascade, where
+    /// the caster binds the frame uniform itself exactly as M16 left it.
+    cascade_resources: Option<CascadeResources>,
     meshes: HashMap<usize, CachedMesh>,
     /// Uploaded meadows, keyed on the `Arc<MeadowPatch>` identity — the mesh
     /// cache's rule, for the same reason.
@@ -258,6 +279,11 @@ pub struct SceneRenderer {
     /// The 1×1 white bound in a slot with no map, made on the first textured
     /// frame — a scene with no maps never allocates it.
     white_texture: Option<wgpu::TextureView>,
+    /// The uploaded irradiance field (M35), allocated the first frame a volume
+    /// arrives. `None` in every scene without one, which is nearly all of them.
+    gi_field: Option<GiTextures>,
+    /// Bound at the four GI slots whenever `gi_field` is `None`.
+    gi_placeholder: wgpu::TextureView,
     frame_uniform: Uniforms,
     /// Object uniforms for the whole draw list, one per `object_stride` bytes.
     objects: Option<Uniforms>,
@@ -360,6 +386,21 @@ impl SceneRenderer {
         self.samples
     }
 
+    /// The shadow cascade count baked into this renderer's pipelines (M38), on
+    /// the same terms as [`Self::samples`] and for a stronger reason: it decides
+    /// the shadow map's *binding type*, so a scene that changes it needs a new
+    /// renderer rather than a new uniform.
+    pub fn cascades(&self) -> u32 {
+        self.cascades
+    }
+
+    /// Whether this renderer's mesh pipelines carry the GI producer (M35).
+    /// `samples()`'s twin, and a caller whose scene has gained or lost a
+    /// `LightProbeVolume` has to build a new renderer for the same reason.
+    pub fn gi_enabled(&self) -> bool {
+        self.gi
+    }
+
     /// Upload a draw list and render it.
     ///
     /// Geometry uploads once and is reused: `items` carry shared
@@ -422,24 +463,52 @@ impl SceneRenderer {
             environment,
             time,
             hud,
+            gi,
             ..
         } = *pass;
 
+        // Allocate the field's planes if this volume's grid is new, and write
+        // this frame's fold into them. The textures are reallocated only when
+        // the grid changes; the contents are rewritten every frame, because
+        // under `daylight` the sky moves every frame and the fold is what
+        // carries that into GI.
+        if let Some(field) = gi {
+            if GiTextures::ensure(&mut self.gi_field, device, field.grid) {
+                // New planes mean new view identities, so group 2 no longer
+                // names the right textures. Dropping it is what makes
+                // `ensure_frame_textures` rebuild.
+                self.frame_textures = None;
+            }
+            self.gi_field
+                .as_ref()
+                .expect("just ensured")
+                .upload(queue, field);
+        }
+
         // Shadows need a real map; allocate it the first time any scene asks.
         if environment.shadows && self.shadow_map.is_none() {
-            self.shadow_map = Some(ShadowMap::new(device, SHADOW_MAP_SIZE));
+            self.shadow_map = Some(ShadowMap::new(device, SHADOW_MAP_SIZE, self.cascades));
         }
-        let light_view_proj = if environment.shadows {
-            light_view_projection(
-                lights.sun_direction,
-                camera_position,
-                view_projection,
-                environment.shadow_distance,
-                SHADOW_MAP_SIZE,
-            )
+        // One fit per cascade, over nested slabs of the view (M38). The last
+        // entry is fitted to `shadow_distance` itself, so at one cascade this is
+        // the single call M16 made — same function, same arguments, same matrix.
+        let cascade_view_proj: Vec<Mat4> = if environment.shadows {
+            cascade_distances(self.cascades, environment.shadow_distance)
+                .into_iter()
+                .map(|distance| {
+                    light_view_projection(
+                        lights.sun_direction,
+                        camera_position,
+                        view_projection,
+                        distance,
+                        SHADOW_MAP_SIZE,
+                    )
+                })
+                .collect()
         } else {
-            Mat4::IDENTITY
+            vec![Mat4::IDENTITY; self.cascades as usize]
         };
+        let light_view_proj = *cascade_view_proj.last().expect("at least one cascade");
 
         // Point lights pack into the fixed-size array in the order
         // `ResolvedLights` produced (entity-name order). Validation caps the
@@ -473,8 +542,57 @@ impl SceneRenderer {
             params2: [point_light_count as f32, 0.0, 0.0, 0.0],
             point_lights,
             view_proj: view_projection.to_cols_array_2d(),
+            gi_origin: match gi {
+                Some(field) => field.origin.extend(field.spacing).to_array(),
+                None => [0.0; 4],
+            },
+            gi_grid: match gi {
+                Some(field) => [
+                    field.grid[0] as f32,
+                    field.grid[1] as f32,
+                    field.grid[2] as f32,
+                    field.intensity,
+                ],
+                None => [0.0; 4],
+            },
+            // The `1.0` is the only thing that turns GI on in a shader that was
+            // compiled with it: a scene whose pipelines carry the producer but
+            // whose field failed to arrive renders the fallback, rather than
+            // sampling a placeholder and going black.
+            gi_params: [
+                gi.map_or(0.0, |f| f.blend),
+                f32::from(gi.is_some()),
+                0.0,
+                0.0,
+            ],
         };
         queue.write_buffer(&self.frame_uniform.buffer, 0, bytemuck::bytes_of(&frame));
+
+        // The cascaded halves (M38): the matrices the receivers sample through,
+        // and one copy of the frame uniform per cascade for the casters — each
+        // the same frame with its own cascade's matrix in `light_view_proj`, so
+        // the four caster shaders keep reading the field they always read.
+        if let Some(cascades) = &self.cascade_resources {
+            let mut matrices = CascadeUniform {
+                view_proj: [Mat4::IDENTITY.to_cols_array_2d(); MAX_SHADOW_CASCADES as usize],
+            };
+            for (slot, matrix) in matrices.view_proj.iter_mut().zip(&cascade_view_proj) {
+                *slot = matrix.to_cols_array_2d();
+            }
+            queue.write_buffer(&cascades.matrices, 0, bytemuck::bytes_of(&matrices));
+
+            for (index, matrix) in cascade_view_proj.iter().enumerate() {
+                let per_cascade = FrameUniform {
+                    light_view_proj: matrix.to_cols_array_2d(),
+                    ..frame
+                };
+                queue.write_buffer(
+                    &cascades.caster_frames,
+                    cascades.caster_stride * index as u64,
+                    bytemuck::bytes_of(&per_cascade),
+                );
+            }
+        }
 
         // Geometry first: anything new joins the cache, anything already there
         // is just touched. `keys` then addresses the cache during the pass
@@ -959,137 +1077,158 @@ impl SceneRenderer {
         // not shadow at all.
         if environment.shadows {
             let shadow_map = self.shadow_map.as_ref().expect("allocated above");
-            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("shadow-pass"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &shadow_map.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+            // One pass per cascade (M38), each into its own layer. Every opaque
+            // caster is drawn into every cascade: the engine has no spatial
+            // structure to cull the inner ones against, so a scene at four
+            // cascades pays four times M16's caster cost. At one cascade this
+            // loop runs once, over the map M16 allocated.
+            for cascade in 0..shadow_map.cascades.len() {
+                // Cascade `i`'s frame uniform is this frame's with `i`'s matrix in
+                // `light_view_proj` — which is how four caster shaders that know
+                // nothing about cascades each draw into the right one.
+                let frame_group = self
+                    .cascade_resources
+                    .as_ref()
+                    .map_or(&self.frame_uniform.bind_group, |held| {
+                        &held.caster_groups[cascade]
+                    });
+                let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("shadow-pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &shadow_map.cascades[cascade],
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
                     }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
 
-            if let Some(objects) = &self.objects {
-                shadow_pass.set_pipeline(&self.shadow_pipeline);
-                shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-                let cast = |pass: &mut wgpu::RenderPass<'_>, object: usize, mesh: &CachedMesh| {
-                    pass.set_bind_group(
-                        0,
-                        &objects.bind_group,
-                        &[(object as u64 * self.object_stride) as u32],
-                    );
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-                };
-                for &index in opaque {
-                    if cutout[index] || skin_slots[index].is_some() {
-                        continue;
-                    }
-                    cast(&mut shadow_pass, index, &self.meshes[&keys[index]]);
-                }
-                // Cut-out casters after the solid ones, in one run: the switch
-                // costs one pipeline change a frame, and a scene with no
-                // `alpha_cutoff` never enters this loop.
-                let mut switched = false;
-                for &index in opaque {
-                    if !cutout[index] || skin_slots[index].is_some() {
-                        continue;
-                    }
-                    let Some(key) = material_keys[index] else {
-                        continue;
-                    };
-                    if !switched {
-                        shadow_pass.set_pipeline(&self.shadow_cutout_pipeline);
-                        shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-                        switched = true;
-                    }
-                    let mesh = &self.meshes[&keys[index]];
-                    shadow_pass.set_bind_group(
-                        0,
-                        &objects.bind_group,
-                        &[(index as u64 * self.object_stride) as u32],
-                    );
-                    shadow_pass.set_bind_group(2, &self.materials[&key].bind_group, &[]);
-                    shadow_pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    shadow_pass.set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
-                    shadow_pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
-                    shadow_pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-                }
-                // Skinned casters (M27), in their own two runs. Without them a
-                // walking character casts its **rest pose** — a wrongness that
-                // reads as a renderer bug and is actually a missing pipeline.
-                if let (Some(skinned), Some(skin_objects)) = (&self.skinned, &self.skinned_objects)
-                {
-                    let mut solid = false;
-                    for &index in opaque {
-                        let Some(slot) = skin_slots[index] else {
-                            continue;
-                        };
-                        if cutout[index] {
-                            continue;
-                        }
-                        if !solid {
-                            shadow_pass.set_pipeline(&skinned.shadow);
-                            shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-                            solid = true;
-                        }
-                        self.draw_skinned(
-                            &mut shadow_pass,
-                            skin_objects,
-                            keys[index],
-                            index,
-                            slot,
-                            SkinnedInputs::CASTER,
+                if let Some(objects) = &self.objects {
+                    shadow_pass.set_pipeline(&self.shadow_pipeline);
+                    shadow_pass.set_bind_group(1, frame_group, &[]);
+                    let cast = |pass: &mut wgpu::RenderPass<'_>,
+                                object: usize,
+                                mesh: &CachedMesh| {
+                        pass.set_bind_group(
+                            0,
+                            &objects.bind_group,
+                            &[(object as u64 * self.object_stride) as u32],
                         );
-                    }
-                    let mut cut = false;
+                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    };
                     for &index in opaque {
-                        let Some(slot) = skin_slots[index] else {
+                        if cutout[index] || skin_slots[index].is_some() {
                             continue;
-                        };
-                        if !cutout[index] {
+                        }
+                        cast(&mut shadow_pass, index, &self.meshes[&keys[index]]);
+                    }
+                    // Cut-out casters after the solid ones, in one run: the switch
+                    // costs one pipeline change a frame, and a scene with no
+                    // `alpha_cutoff` never enters this loop.
+                    let mut switched = false;
+                    for &index in opaque {
+                        if !cutout[index] || skin_slots[index].is_some() {
                             continue;
                         }
                         let Some(key) = material_keys[index] else {
                             continue;
                         };
-                        if !cut {
-                            shadow_pass.set_pipeline(&skinned.shadow_cutout);
-                            shadow_pass.set_bind_group(1, &self.frame_uniform.bind_group, &[]);
-                            cut = true;
+                        if !switched {
+                            shadow_pass.set_pipeline(&self.shadow_cutout_pipeline);
+                            shadow_pass.set_bind_group(1, frame_group, &[]);
+                            switched = true;
                         }
-                        self.draw_skinned(
+                        let mesh = &self.meshes[&keys[index]];
+                        shadow_pass.set_bind_group(
+                            0,
+                            &objects.bind_group,
+                            &[(index as u64 * self.object_stride) as u32],
+                        );
+                        shadow_pass.set_bind_group(2, &self.materials[&key].bind_group, &[]);
+                        shadow_pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        shadow_pass
+                            .set_vertex_buffer(1, mesh.vertices.slice(mesh.normals_offset..));
+                        shadow_pass.set_vertex_buffer(2, mesh.vertices.slice(mesh.uvs_offset..));
+                        shadow_pass
+                            .set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    }
+                    // Skinned casters (M27), in their own two runs. Without them a
+                    // walking character casts its **rest pose** — a wrongness that
+                    // reads as a renderer bug and is actually a missing pipeline.
+                    if let (Some(skinned), Some(skin_objects)) =
+                        (&self.skinned, &self.skinned_objects)
+                    {
+                        let mut solid = false;
+                        for &index in opaque {
+                            let Some(slot) = skin_slots[index] else {
+                                continue;
+                            };
+                            if cutout[index] {
+                                continue;
+                            }
+                            if !solid {
+                                shadow_pass.set_pipeline(&skinned.shadow);
+                                shadow_pass.set_bind_group(1, frame_group, &[]);
+                                solid = true;
+                            }
+                            self.draw_skinned(
+                                &mut shadow_pass,
+                                skin_objects,
+                                keys[index],
+                                index,
+                                slot,
+                                SkinnedInputs::CASTER,
+                            );
+                        }
+                        let mut cut = false;
+                        for &index in opaque {
+                            let Some(slot) = skin_slots[index] else {
+                                continue;
+                            };
+                            if !cutout[index] {
+                                continue;
+                            }
+                            let Some(key) = material_keys[index] else {
+                                continue;
+                            };
+                            if !cut {
+                                shadow_pass.set_pipeline(&skinned.shadow_cutout);
+                                shadow_pass.set_bind_group(1, frame_group, &[]);
+                                cut = true;
+                            }
+                            self.draw_skinned(
+                                &mut shadow_pass,
+                                skin_objects,
+                                keys[index],
+                                index,
+                                slot,
+                                SkinnedInputs::cutout_caster(key),
+                            );
+                        }
+                        switched |= solid || cut;
+                    }
+                    if switched {
+                        shadow_pass.set_pipeline(&self.shadow_pipeline);
+                    }
+                    // Roads cast too — an embankment's shadow across the valley
+                    // below it is most of what makes an elevated road read as
+                    // elevated. The pipeline is unchanged: it reads only the model
+                    // matrix, which is why roads share the object uniform array.
+                    for (index, road_key) in road_keys.iter().enumerate().take(roads.len()) {
+                        cast(
                             &mut shadow_pass,
-                            skin_objects,
-                            keys[index],
-                            index,
-                            slot,
-                            SkinnedInputs::cutout_caster(key),
+                            items.len() + index,
+                            &self.meshes[road_key],
                         );
                     }
-                    switched |= solid || cut;
-                }
-                if switched {
-                    shadow_pass.set_pipeline(&self.shadow_pipeline);
-                }
-                // Roads cast too — an embankment's shadow across the valley
-                // below it is most of what makes an elevated road read as
-                // elevated. The pipeline is unchanged: it reads only the model
-                // matrix, which is why roads share the object uniform array.
-                for (index, road_key) in road_keys.iter().enumerate().take(roads.len()) {
-                    cast(
-                        &mut shadow_pass,
-                        items.len() + index,
-                        &self.meshes[road_key],
-                    );
                 }
             }
         }
@@ -1677,6 +1816,7 @@ impl SceneRenderer {
             shadows,
             depth: self.scene_depth.as_ref().map(|d| (d.width, d.height)),
             color: self.scene_color.as_ref().map(|c| (c.width, c.height)),
+            gi: self.gi_field.as_ref().map(|f| f.grid),
         };
         if self
             .frame_textures
@@ -1698,33 +1838,71 @@ impl SceneRenderer {
             .scene_color
             .as_ref()
             .map_or(&self.color_placeholder, |copy| &copy.view);
+        // Four views either way: the field's planes when a volume is resident,
+        // the 1x1x1 stand-in otherwise. WGSL binds unconditionally, and a
+        // variant that never reads these still needs them present.
+        let gi_views: [&wgpu::TextureView; engine_core::gi::SH_L1_COEFFS] =
+            match self.gi_field.as_ref() {
+                Some(field) => std::array::from_fn(|i| &field.views[i]),
+                None => std::array::from_fn(|_| &self.gi_placeholder),
+            };
 
         let group = |label, colour: &wgpu::TextureView| {
+            let mut entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(colour),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
+                },
+            ];
+            // The cascade matrices (M38), present in the layout only beyond one
+            // cascade — so at one this list is the one M26 left, entry for
+            // entry.
+            if let Some(cascades) = &self.cascade_resources {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: cascades.matrices.as_entire_binding(),
+                });
+            }
+            // The field's four planes and the sampler that reads them (M35),
+            // at 6-10 because M38 holds 5. Bound on every frame, placeholder
+            // included, to match the layout above.
+            entries.extend(
+                gi_views
+                    .iter()
+                    .enumerate()
+                    .map(|(i, view)| wgpu::BindGroupEntry {
+                        binding: 6 + i as u32,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    }),
+            );
+            entries.push(wgpu::BindGroupEntry {
+                binding: 10,
+                // The same sampler object as binding 4 under a second name:
+                // linear and clamped on every axis is what both a refraction
+                // offset and a probe fetch want. See `gi.wgsl` for why it
+                // cannot simply share the binding.
+                resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
+            });
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &self.frame_textures_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(shadow_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(depth_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(colour),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
-                    },
-                ],
+                entries: &entries,
             })
         };
         self.frame_textures = Some(FrameTextures {
