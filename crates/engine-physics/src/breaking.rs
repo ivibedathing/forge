@@ -319,12 +319,23 @@ pub fn apply_breaks(
                 // How big the thing that broke was, from the fragments it
                 // became: the furthest one's offset is the object's radius,
                 // and it needs no `Collider` to be there and no second
-                // opinion about a size the file already states.
-                let radius = breakable
+                // opinion about a size the file already states. When every
+                // fragment sits at the parent's centre — one fragment, or
+                // hand-authored zero offsets — the fold is 0, which would
+                // put the burst *at* the contact point and depth-reject
+                // every particle of it (the failure this placement exists
+                // to prevent). The entity's scale is the honest fallback:
+                // for a `builtin:cube` it is exactly the corner radius.
+                let offset_radius = breakable
                     .fragments
                     .iter()
                     .map(|fragment| (fragment.offset * transform.scale).length())
                     .fold(0.0f32, f32::max);
+                let radius = if offset_radius > 0.0 {
+                    offset_radius
+                } else {
+                    transform.scale.length()
+                };
 
                 let mut emitter = material.dust(radius);
                 // Seeded from the entity's own name, so two crates of the same

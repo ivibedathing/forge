@@ -168,6 +168,11 @@ pub fn run(
             if let Some(scripts) = &mut scripts {
                 scripts.sync_names(&scene.world);
             }
+            // A spawned template may carry a `ParticleEmitter`, and the
+            // particle system tracks a list it built at load — so it has to
+            // be told here, before this step's `particles.step`, or the
+            // emitter never emits at all (M44).
+            particles.sync(&scene.world);
             if let Some(trace) = trace.as_deref_mut() {
                 for (name, _) in &spawned {
                     write_line(trace, &json!({ "step": step, "spawned": name }))?;
@@ -281,9 +286,8 @@ pub fn run(
                 scripts.sync_names(&scene.world);
             }
             // A break's dust is a new emitter (M44), and the particle system
-            // tracks a list it built at load — so it has to be told. `sync`
-            // also picks up an emitter on a spawned template, which has been
-            // spawnable since M37 and inert ever since.
+            // tracks a list it built at load — so it has to be told. (An
+            // emitter on a spawned template is the spawn block's job, above.)
             if broke.iter().any(|event| event.dust.is_some()) {
                 particles.sync(&scene.world);
             }
@@ -319,6 +323,11 @@ pub fn run(
                     names.push(name);
                 }
                 let _ = scene.world.despawn(entity);
+                // An authored emitter may also carry a body — nothing forbids
+                // the combination — and a despawn that skips physics leaves a
+                // ghost collider other bodies still bounce off. The script-
+                // despawn path above does both; so does this one.
+                physics.remove_entity(entity);
             }
             particles.sync(&scene.world);
             scene.refresh_names();

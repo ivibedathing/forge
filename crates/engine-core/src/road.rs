@@ -208,6 +208,19 @@ fn cache_key(road: &Road, model: Mat4, ground: Option<Ground<'_>>) -> RoadKey {
             ground.transform.scale.y.to_bits(),
             ground.transform.scale.z.to_bits(),
         ]);
+        // Basins are part of the ground the road samples (M42): `height_at`
+        // subtracts them, so two terrain states differing only in a basin
+        // are different roads. Terrain's own surface cache learned the same
+        // lesson — see `basins_are_in_the_surface_cache_key`.
+        for basin in &ground.terrain.basins {
+            key.extend([
+                basin.center[0].to_bits(),
+                basin.center[1].to_bits(),
+                basin.radius.to_bits(),
+                basin.depth.to_bits(),
+                basin.falloff.to_bits(),
+            ]);
+        }
     }
     RoadKey(key)
 }
@@ -1384,6 +1397,44 @@ mod tests {
             shoulder: 1.5,
             ..Road::default()
         }
+    }
+
+    #[test]
+    fn basins_are_in_the_road_cache_key() {
+        // Two terrain states differing only in a basin are different ground
+        // for a road that follows one (M42): `height_at` subtracts the basin,
+        // and a key that missed it handed back the ribbon built for the old
+        // ground — a road floating over a freshly dug hollow, with no rebuild
+        // until some unrelated field changed. Terrain's own cache pins the
+        // same lesson in `basins_are_in_the_surface_cache_key`.
+        let mut road = straight();
+        road.follow_terrain = Some("Ground".into());
+        let flat = crate::components::Terrain::default();
+        let mut dug = flat.clone();
+        dug.basins = vec![crate::components::TerrainBasin {
+            center: [0.0, -10.0],
+            radius: 4.0,
+            depth: 2.0,
+            falloff: 3.0,
+        }];
+        let transform = crate::components::Transform::default();
+        let before = cache_key(
+            &road,
+            Mat4::IDENTITY,
+            Some(Ground {
+                terrain: &flat,
+                transform: &transform,
+            }),
+        );
+        let after = cache_key(
+            &road,
+            Mat4::IDENTITY,
+            Some(Ground {
+                terrain: &dug,
+                transform: &transform,
+            }),
+        );
+        assert_ne!(before.0, after.0);
     }
 
     #[test]

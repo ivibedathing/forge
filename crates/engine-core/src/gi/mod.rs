@@ -126,8 +126,14 @@ pub fn grid_counts(extent: Vec3, spacing: f32) -> [u32; 3] {
         if !(e > 0.0) || !(spacing > 0.0) {
             return 2;
         }
+        // `ceil`, not `floor`: the cells must *cover* the extent. Flooring
+        // left up to one `spacing` of the volume's +X/+Y/+Z faces outside the
+        // last probe — a slab the author placed inside the volume that
+        // rendered with the pre-M35 fallback fill, and only on the max-corner
+        // sides. The last probe may now overshoot the face by under one
+        // spacing instead, which errs the way a coverage rule should.
         // +1 because n cells need n+1 probes on their corners.
-        ((e / spacing).floor() as u32).saturating_add(1).max(2)
+        ((e / spacing).ceil() as u32).saturating_add(1).max(2)
     };
     [axis(extent.x), axis(extent.y), axis(extent.z)]
 }
@@ -560,7 +566,20 @@ mod tests {
     fn a_grid_has_at_least_two_probes_per_axis() {
         // One probe cannot be interpolated, and the shader's trilinear fetch
         // assumes a cell exists. A flat volume is a legitimate thing to author.
-        assert_eq!(grid_counts(Vec3::new(10.0, 0.0, 10.0), 4.0), [3, 2, 3]);
+        assert_eq!(grid_counts(Vec3::new(10.0, 0.0, 10.0), 4.0), [4, 2, 4]);
+    }
+
+    #[test]
+    fn the_grid_covers_the_whole_extent() {
+        // The last probe must sit on or past every face. Flooring left up to
+        // one spacing of the +X/+Y/+Z faces outside the last probe, so a wall
+        // standing in that slab bounced nothing.
+        let spacing = 4.0;
+        let extent = Vec3::new(10.0, 4.0, 54.0);
+        let grid = grid_counts(extent, spacing);
+        for (probes, extent) in grid.iter().zip(extent.to_array()) {
+            assert!((probes - 1) as f32 * spacing >= extent);
+        }
     }
 
     #[test]
