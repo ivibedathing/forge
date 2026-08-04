@@ -354,6 +354,27 @@ impl Cx<'_> {
     }
 }
 
+/// The keys legal beside an `asset` reference — and, mirrored, the keys the
+/// referenced file may not contain itself. One list for both halves of M26's
+/// exclusivity rule, extracted because the deferred prefab design commits to
+/// repeating exactly this shape (`templates` gaining an `asset` field, per
+/// `designs/entity-spawning-design.md`): a third and fourth copy of the rule
+/// should start from this list, not re-invent it.
+pub(super) const ASSET_RESERVED_KEYS: [&str; 2] = ["type", "asset"];
+
+/// The authored keys that violate an `asset` reference's exclusivity: every
+/// raw JSON key beside the reserved ones. Checked against the **raw JSON**,
+/// never the parsed value, because every field is `#[serde(default)]` — the
+/// parsed value cannot say whether `"roughness": 0.9` was an override or
+/// someone spelling out the default. The keys present in the file can.
+pub(super) fn keys_beside_asset(object: &serde_json::Map<String, Value>) -> Vec<&str> {
+    object
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !ASSET_RESERVED_KEYS.contains(key))
+        .collect()
+}
+
 /// Validate a standalone `materials/*.json` file (M26).
 ///
 /// A material file is the `Material` component's fields minus the `"type"`, so
@@ -400,7 +421,8 @@ pub fn validate_material_source(source: &str, path: &str) -> Vec<EngineError> {
 
     // A material file has no `"type"` — it is not a component, it is what a
     // component points at — and it may not name another material file either.
-    for reserved in ["type", "asset"] {
+    // The same list the component-side exclusivity check filters by.
+    for reserved in ASSET_RESERVED_KEYS {
         if object.contains_key(reserved) {
             errors.push(
                 cx.err(

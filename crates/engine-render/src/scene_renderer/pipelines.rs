@@ -1,5 +1,70 @@
 use super::*;
 
+/// The facts one recipe pass's pipeline actually differs in. Everything else
+/// about a recipe's `RenderPipelineDescriptor` — triangle list, `vs_main` /
+/// `fs_main`, full colour writes, `DEPTH_FORMAT`, no multiview, no cache —
+/// was repeated verbatim by five constructors (~35 lines each) before
+/// [`recipe_pipeline`] absorbed it. `build_skinned`'s `mesh_pipeline` closure
+/// proved the shape; this is the same move for the unskinned passes.
+///
+/// A descriptor is plain data — identical fields build an identical pipeline —
+/// so this is pure code motion with no bearing on any ULP-sensitive path,
+/// which live in shader *text*, not in pipeline state.
+struct RecipePipeline<'a> {
+    label: &'static str,
+    shader: &'a wgpu::ShaderModule,
+    layout: &'a wgpu::PipelineLayout,
+    buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
+    blend: wgpu::BlendState,
+    cull_mode: Option<wgpu::Face>,
+    depth_write: bool,
+    depth_compare: wgpu::CompareFunction,
+}
+
+/// Build one recipe pass from its [`RecipePipeline`] facts.
+fn recipe_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    multisample: wgpu::MultisampleState,
+    recipe: RecipePipeline<'_>,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(recipe.label),
+        layout: Some(recipe.layout),
+        vertex: wgpu::VertexState {
+            module: recipe.shader,
+            entry_point: Some("vs_main"),
+            buffers: recipe.buffers,
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: recipe.shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(recipe.blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: recipe.cull_mode,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(recipe.depth_write),
+            depth_compare: Some(recipe.depth_compare),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample,
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 /// Everything a skinned draw needs, built the **first time a frame has one**
 /// (M30) and kept for the life of the renderer.
 ///
@@ -1518,41 +1583,23 @@ impl super::SceneRenderer {
             immediate_size: 0,
         });
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("sky-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+        recipe_pipeline(
+            device,
+            format,
             multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+            RecipePipeline {
+                label: "sky-pipeline",
+                shader: &shader,
+                layout: &layout,
+                buffers: &[],
+                blend: wgpu::BlendState::REPLACE,
+                cull_mode: None,
+                depth_write: false,
+                // The sky pass draws behind everything by construction — it
+                // runs first and never tests what it cannot occlude.
+                depth_compare: wgpu::CompareFunction::Always,
+            },
+        )
     }
 
     /// The water pass (M18): the blended twin of the mesh pipeline in how it
@@ -1593,41 +1640,21 @@ impl super::SceneRenderer {
             immediate_size: 0,
         });
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("water-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: vertex_layouts,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+        recipe_pipeline(
+            device,
+            format,
             multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+            RecipePipeline {
+                label: "water-pipeline",
+                shader: &shader,
+                layout: &layout,
+                buffers: vertex_layouts,
+                blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                cull_mode: None,
+                depth_write: false,
+                depth_compare: wgpu::CompareFunction::Less,
+            },
+        )
     }
 
     /// The cloud pass (M20): blended like the water pass, and culled like
@@ -1662,41 +1689,21 @@ impl super::SceneRenderer {
             immediate_size: 0,
         });
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cloud-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: vertex_layouts,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+        recipe_pipeline(
+            device,
+            format,
             multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+            RecipePipeline {
+                label: "cloud-pipeline",
+                shader: &shader,
+                layout: &layout,
+                buffers: vertex_layouts,
+                blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                cull_mode: None,
+                depth_write: false,
+                depth_compare: wgpu::CompareFunction::Less,
+            },
+        )
     }
 
     /// The road pass (M23): the mesh pipeline's opaque twin, with a fourth
@@ -1737,41 +1744,21 @@ impl super::SceneRenderer {
             immediate_size: 0,
         });
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("road-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: vertex_layouts,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+        recipe_pipeline(
+            device,
+            format,
             multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+            RecipePipeline {
+                label: "road-pipeline",
+                shader: &shader,
+                layout: &layout,
+                buffers: vertex_layouts,
+                blend: wgpu::BlendState::REPLACE,
+                cull_mode: Some(wgpu::Face::Back),
+                depth_write: true,
+                depth_compare: wgpu::CompareFunction::Less,
+            },
+        )
     }
 
     /// The meadow pass (M29): opaque, depth-writing, and **instanced**.
@@ -1835,12 +1822,14 @@ impl super::SceneRenderer {
             8 => Uint32,
         ];
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("meadow-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
+        recipe_pipeline(
+            device,
+            format,
+            multisample,
+            RecipePipeline {
+                label: "meadow-pipeline",
+                shader: &shader,
+                layout: &layout,
                 buffers: &[
                     Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<MeadowVertexRaw>() as u64,
@@ -1853,34 +1842,12 @@ impl super::SceneRenderer {
                         attributes: &INSTANCE_ATTRIBUTES,
                     }),
                 ],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
+                blend: wgpu::BlendState::REPLACE,
                 cull_mode: None,
-                ..Default::default()
+                depth_write: true,
+                depth_compare: wgpu::CompareFunction::Less,
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+        )
     }
 
     /// The depth copy pass (M18): one fullscreen triangle turning the opaque

@@ -206,11 +206,7 @@ pub(super) fn check_component(
             let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
 
             if material.asset.is_some() {
-                let inline: Vec<&str> = object
-                    .keys()
-                    .map(String::as_str)
-                    .filter(|k| *k != "type" && *k != "asset")
-                    .collect();
+                let inline = super::keys_beside_asset(object);
                 if !inline.is_empty() {
                     errors.push(
                         cx.err(
