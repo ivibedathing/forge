@@ -1850,23 +1850,23 @@ impl SceneRenderer {
         let group = |label, colour: &wgpu::TextureView| {
             let mut entries = vec![
                 wgpu::BindGroupEntry {
-                    binding: 0,
+                    binding: frame_binding::SHADOW_MAP,
                     resource: wgpu::BindingResource::TextureView(shadow_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 1,
+                    binding: frame_binding::SHADOW_SAMPLER,
                     resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 2,
+                    binding: frame_binding::SCENE_DEPTH,
                     resource: wgpu::BindingResource::TextureView(depth_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 3,
+                    binding: frame_binding::SCENE_COLOR,
                     resource: wgpu::BindingResource::TextureView(colour),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 4,
+                    binding: frame_binding::SCENE_SAMPLER,
                     resource: wgpu::BindingResource::Sampler(&self.scene_sampler),
                 },
             ];
@@ -1875,7 +1875,7 @@ impl SceneRenderer {
             // entry.
             if let Some(cascades) = &self.cascade_resources {
                 entries.push(wgpu::BindGroupEntry {
-                    binding: 5,
+                    binding: frame_binding::CASCADES,
                     resource: cascades.matrices.as_entire_binding(),
                 });
             }
@@ -1887,12 +1887,12 @@ impl SceneRenderer {
                     .iter()
                     .enumerate()
                     .map(|(i, view)| wgpu::BindGroupEntry {
-                        binding: 6 + i as u32,
+                        binding: frame_binding::GI_SH_FIRST + i as u32,
                         resource: wgpu::BindingResource::TextureView(view),
                     }),
             );
             entries.push(wgpu::BindGroupEntry {
-                binding: 10,
+                binding: frame_binding::GI_SAMPLER,
                 // The same sampler object as binding 4 under a second name:
                 // linear and clamped on every axis is what both a refraction
                 // offset and a probe fetch want. See `gi.wgsl` for why it

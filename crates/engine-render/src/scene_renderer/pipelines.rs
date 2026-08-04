@@ -198,7 +198,7 @@ impl super::SceneRenderer {
         // spent on frame-scoped textures left nowhere for a material.
         let mut frame_texture_entries = vec![
             wgpu::BindGroupLayoutEntry {
-                binding: 0,
+                binding: frame_binding::SHADOW_MAP,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Depth,
@@ -215,13 +215,13 @@ impl super::SceneRenderer {
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 1,
+                binding: frame_binding::SHADOW_SAMPLER,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 2,
+                binding: frame_binding::SCENE_DEPTH,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     // Read with `textureLoad`: no sampler, so nothing
@@ -233,7 +233,7 @@ impl super::SceneRenderer {
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 3,
+                binding: frame_binding::SCENE_COLOR,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -243,7 +243,7 @@ impl super::SceneRenderer {
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 4,
+                binding: frame_binding::SCENE_SAMPLER,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
@@ -254,7 +254,7 @@ impl super::SceneRenderer {
         // entry for entry, and the four receivers declare what they always did.
         if cascades > 1 {
             frame_texture_entries.push(wgpu::BindGroupLayoutEntry {
-                binding: 5,
+                binding: frame_binding::CASCADES,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
@@ -276,18 +276,22 @@ impl super::SceneRenderer {
         // `Rgba16Float` is filterable in core WebGPU, which is the entire reason
         // the field is a 3D texture rather than a buffer — probe interpolation
         // comes free and continuous from the sampler.
-        frame_texture_entries.extend([6u32, 7, 8, 9].map(|binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D3,
-                multisampled: false,
-            },
-            count: None,
-        }));
+        frame_texture_entries.extend(
+            (frame_binding::GI_SH_FIRST..frame_binding::GI_SH_FIRST + 4).map(|binding| {
+                wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                }
+            }),
+        );
         frame_texture_entries.push(wgpu::BindGroupLayoutEntry {
-            binding: 10,
+            binding: frame_binding::GI_SAMPLER,
             visibility: wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             count: None,

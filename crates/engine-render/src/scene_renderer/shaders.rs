@@ -34,6 +34,39 @@ pub(crate) fn with_sky_common(source: &str) -> std::borrow::Cow<'static, str> {
 // `mesh.wgsl` and this fails loudly at startup rather than silently rendering
 // terrain as flat grey or a texture as untextured.
 
+/// Group 2 — the frame-texture group — as one registry, because **a binding
+/// number is not a position in a list** (CLAUDE.md). M38 and M35 both wanted
+/// binding 5, the cascade entry is *conditional* on top of that, and the
+/// collision was resolved by prose comments in three files. The numbers live
+/// here once; `pipelines.rs` builds the layout from them, `mod.rs` builds the
+/// bind groups from them, and a seam test pins the WGSL literals — which stay
+/// literals, because the on-disk shaders are `include_str!`ed verbatim.
+///
+/// A new group-2 resource claims [`frame_binding::NEXT_FREE`] and bumps it.
+/// Never reuse [`frame_binding::CASCADES`]' slot while `cascades == 1`: it
+/// would work in every default scene and fail at pipeline creation only under
+/// `shadow_cascades > 1`.
+pub(crate) mod frame_binding {
+    pub const SHADOW_MAP: u32 = 0;
+    pub const SHADOW_SAMPLER: u32 = 1;
+    pub const SCENE_DEPTH: u32 = 2;
+    pub const SCENE_COLOR: u32 = 3;
+    pub const SCENE_SAMPLER: u32 = 4;
+    /// The cascade matrices (M38). **Conditional**: in the layout only beyond
+    /// one cascade, but the number is held either way.
+    pub const CASCADES: u32 = 5;
+    /// First of the four SH-L1 irradiance planes (M35), `..=GI_SH_FIRST + 3`.
+    pub const GI_SH_FIRST: u32 = 6;
+    pub const GI_SAMPLER: u32 = 10;
+    /// Where the next feature starts. Referenced only by the seam test that
+    /// checks the registry's arithmetic (hence the allow: it exists to be
+    /// read by the next feature's author, not by the frame), so bumping a
+    /// neighbour without bumping this fails there rather than at a pipeline
+    /// creation nobody runs.
+    #[allow(dead_code)]
+    pub const NEXT_FREE: u32 = 11;
+}
+
 /// The anchors a producer may replace, as they appear in `mesh.wgsl`.
 pub(crate) mod anchor {
     /// The object uniform's last field, where a variant appends its own.
@@ -194,12 +227,33 @@ pub(crate) fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, 
         &(anchor::VERTEX_STAGE, ""),
         &(anchor::AMBIENT, ""),
         &(anchor::FILL, ""),
+        // The prelude injection point below is a `str::replace` like the
+        // others, and was the one splice in this function without a seat in
+        // this loop.
+        &("struct ObjectUniform {", ""),
     ]) {
         assert_eq!(
             source.matches(anchor).count(),
             1,
             "mesh.wgsl no longer contains this anchor exactly once, so a spliced \
              pipeline variant would compile as if its feature were absent:\n{anchor}"
+        );
+    }
+
+    // An anchor with one claimant is a substitution; one that could ever have
+    // two is an assembly (CLAUDE.md, Traps). `str::replace` runs producer by
+    // producer, so a second claimant finds its anchor already gone and is a
+    // silent no-op — the feature renders as if absent, which is how M27 and
+    // M35 each shipped a bug. Terrain and texturing both claim the three
+    // surface anchors today; no variant composes them, and this assert is
+    // what turns that latent collision into a build-time panic instead of a
+    // plausible wrong picture.
+    let mut claimed = std::collections::HashSet::new();
+    for (anchor, _) in substitutions() {
+        assert!(
+            claimed.insert(*anchor),
+            "two producers claim one anchor, and the second would be a silent \
+             no-op rather than a merge — make it an assembly:\n{anchor}"
         );
     }
 
@@ -661,14 +715,25 @@ pub(crate) fn skinned_shadow() -> String {
 }
 
 pub(crate) fn skinned_shadow_cutout() -> String {
-    with_skinned_caster(
+    let composed = with_skinned_caster(
         include_str!("../shaders/shadow_cutout.wgsl"),
         "    out.clip = frame.light_view_proj * object.model * vec4<f32>(position, 1.0);\n",
         "    let skinned = skin_vertex(position, normal, joint_indices, joint_weights);\n\
          \x20   out.clip = frame.light_view_proj * object.model * vec4<f32>(skinned.position, 1.0);\n",
-    )
-    .replace(
-        "    @location(2) uv: vec2<f32>,\n) -> VertexOut {",
+    );
+    // Asserted like every other splice: this second replacement chained
+    // *after* `with_skinned_caster` returned, so its assertion did not cover
+    // it — a reworded `shadow_cutout.wgsl` signature would have yielded a
+    // skinned cut-out caster that compiles without joint attributes.
+    let signature = "    @location(2) uv: vec2<f32>,\n) -> VertexOut {";
+    assert_eq!(
+        composed.matches(signature).count(),
+        1,
+        "shadow_cutout.wgsl's vertex signature no longer matches exactly once, \
+         so the skinned cut-out caster would compile without joint attributes:\n{signature}"
+    );
+    composed.replace(
+        signature,
         "    @location(2) uv: vec2<f32>,\n\
          \x20   @location(3) joint_indices: vec4<u32>,\n\
          \x20   @location(4) joint_weights: vec4<f32>,\n\
@@ -1122,6 +1187,189 @@ pub(crate) fn with_cascades(source: &str, cascades: u32) -> std::borrow::Cow<'_,
 
 #[cfg(test)]
 mod seam_tests {
+    /// Every `MAX_*` constant exists twice by construction — a Rust `const`
+    /// that sizes the `#[repr(C)]` uniform struct and a WGSL literal in an
+    /// `include_str!`ed shader — and only `MAX_SHADOW_CASCADES` is
+    /// interpolated at splice time. The rest are hand-kept copies with
+    /// nothing holding each pair together until this test; a divergence is a
+    /// wire-format mismatch that renders a plausible wrong picture rather
+    /// than failing. The two worst are not even *named* in the WGSL:
+    /// `water.wgsl` sizes its wave array as `MAX_WAVES * 2` vec4 lanes, and
+    /// `shadow_cutout.wgsl` carries a bare element count.
+    #[test]
+    fn every_max_constant_reaches_its_shader_unchanged() {
+        use engine_core::components::MAX_POINT_LIGHTS;
+        use engine_core::meadow::MAX_GROWTH_STAGES;
+        use engine_core::road::MAX_ROAD_KERBS;
+        use engine_core::skeleton::MAX_JOINTS;
+        use engine_core::terrain::MAX_TERRAIN_LAYERS;
+        use engine_core::water::MAX_WAVES;
+
+        let named: &[(&str, &str, String)] = &[
+            (
+                "mesh.wgsl",
+                include_str!("../shaders/mesh.wgsl"),
+                format!("const MAX_POINT_LIGHTS: u32 = {MAX_POINT_LIGHTS}u;"),
+            ),
+            (
+                "road.wgsl",
+                include_str!("../shaders/road.wgsl"),
+                format!("const MAX_POINT_LIGHTS: u32 = {MAX_POINT_LIGHTS}u;"),
+            ),
+            (
+                "road.wgsl",
+                include_str!("../shaders/road.wgsl"),
+                format!("const MAX_ROAD_KERBS: u32 = {MAX_ROAD_KERBS}u;"),
+            ),
+            (
+                "meadow.wgsl",
+                include_str!("../shaders/meadow.wgsl"),
+                format!("const MAX_POINT_LIGHTS: u32 = {MAX_POINT_LIGHTS}u;"),
+            ),
+            (
+                "meadow.wgsl",
+                include_str!("../shaders/meadow.wgsl"),
+                format!("const MAX_GROWTH_STAGES: u32 = {MAX_GROWTH_STAGES}u;"),
+            ),
+            (
+                "skin.wgsl",
+                include_str!("../shaders/skin.wgsl"),
+                format!("const MAX_JOINTS: u32 = {MAX_JOINTS}u;"),
+            ),
+        ];
+        for (name, source, expected) in named {
+            assert!(
+                source.contains(expected),
+                "{name} no longer declares {expected:?} — the Rust constant \
+                 and the shader have diverged"
+            );
+        }
+
+        // The unnamed literals. Water packs each wave as two vec4 lanes, so
+        // its array length is the doubled constant with no name attached.
+        assert!(
+            include_str!("../shaders/water.wgsl")
+                .contains(&format!("waves: array<vec4<f32>, {}>,", MAX_WAVES * 2)),
+            "water.wgsl's wave array is no longer MAX_WAVES * 2 vec4 lanes"
+        );
+        assert!(
+            include_str!("../shaders/shadow_cutout.wgsl").contains(&format!(
+                "terrain_layers: array<TerrainLayer, {MAX_TERRAIN_LAYERS}>,"
+            )),
+            "shadow_cutout.wgsl's terrain layer array no longer matches \
+             MAX_TERRAIN_LAYERS"
+        );
+        // And the splice string that declares the layers for mesh variants.
+        assert!(
+            super::EXTENDED_UNIFORM_TYPES.contains(&format!(
+                "const MAX_TERRAIN_LAYERS: u32 = {MAX_TERRAIN_LAYERS}u;"
+            )),
+            "EXTENDED_UNIFORM_TYPES no longer matches MAX_TERRAIN_LAYERS"
+        );
+    }
+
+    /// The binding registry and the WGSL agree, file by file. The shaders are
+    /// `include_str!`ed verbatim, so their `@binding(N)` literals cannot read
+    /// the constants — this test is what makes the registry authoritative
+    /// over them anyway. `shadow_cutout.wgsl` is deliberately absent: its
+    /// group 2 is the *material* group (bound at index 2 for that pipeline),
+    /// a different meaning for the same group index.
+    #[test]
+    fn the_binding_registry_matches_the_shader_text() {
+        use super::frame_binding as b;
+
+        // The registry's own arithmetic: the GI block sits directly after the
+        // cascade slot, and NEXT_FREE is directly after the GI sampler.
+        assert_eq!(b::GI_SH_FIRST, b::CASCADES + 1);
+        assert_eq!(b::GI_SAMPLER, b::GI_SH_FIRST + 4);
+        assert_eq!(b::NEXT_FREE, b::GI_SAMPLER + 1);
+
+        fn group2_bindings(source: &str) -> Vec<u32> {
+            let mut found: Vec<u32> = source
+                .match_indices("@group(2) @binding(")
+                .filter_map(|(at, pat)| {
+                    let rest = &source[at + pat.len()..];
+                    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                    digits.parse().ok()
+                })
+                .collect();
+            found.sort_unstable();
+            found
+        }
+
+        let files: &[(&str, &str, Vec<u32>)] = &[
+            (
+                "mesh.wgsl",
+                include_str!("../shaders/mesh.wgsl"),
+                vec![b::SHADOW_MAP, b::SHADOW_SAMPLER],
+            ),
+            (
+                "water.wgsl",
+                include_str!("../shaders/water.wgsl"),
+                vec![b::SHADOW_MAP, b::SHADOW_SAMPLER, b::SCENE_DEPTH],
+            ),
+            (
+                "road.wgsl",
+                include_str!("../shaders/road.wgsl"),
+                vec![b::SHADOW_MAP, b::SHADOW_SAMPLER],
+            ),
+            (
+                "meadow.wgsl",
+                include_str!("../shaders/meadow.wgsl"),
+                vec![b::SHADOW_MAP, b::SHADOW_SAMPLER],
+            ),
+            (
+                "refraction.wgsl",
+                include_str!("../shaders/refraction.wgsl"),
+                vec![b::SCENE_COLOR, b::SCENE_SAMPLER],
+            ),
+            (
+                "water_refraction.wgsl",
+                include_str!("../shaders/water_refraction.wgsl"),
+                vec![b::SCENE_COLOR, b::SCENE_SAMPLER],
+            ),
+            (
+                "gi.wgsl",
+                include_str!("../shaders/gi.wgsl"),
+                vec![
+                    b::GI_SH_FIRST,
+                    b::GI_SH_FIRST + 1,
+                    b::GI_SH_FIRST + 2,
+                    b::GI_SH_FIRST + 3,
+                    b::GI_SAMPLER,
+                ],
+            ),
+        ];
+        for (name, source, expected) in files {
+            assert_eq!(
+                &group2_bindings(source),
+                expected,
+                "{name}'s group-2 bindings no longer match the registry"
+            );
+        }
+
+        // The cascade splice is generated text, so it can be asserted the
+        // same way — the conditional binding 5 is the one M35 had to step
+        // over, and the collision the registry exists to prevent.
+        assert!(super::cascade_bindings(3).contains(&format!(
+            "@group(2) @binding({}) var<uniform> cascade",
+            b::CASCADES
+        )));
+    }
+
+    /// Two producers claiming one substitution anchor are refused at
+    /// assembly: `str::replace` runs producer by producer, so the second
+    /// claimant would be a silent no-op, not a merge (CLAUDE.md's splice
+    /// trap — it shipped as a bug in M27 and twice in M35). Terrain and
+    /// texturing both claim the three surface anchors, so composing them is
+    /// exactly the staged case; if a `with_terrain_and_textures` is ever
+    /// wanted, the surface anchors must become an assembly first.
+    #[test]
+    #[should_panic(expected = "two producers claim one anchor")]
+    fn two_claimants_on_one_anchor_are_refused() {
+        let _ = super::with_surface(&[super::terrain_producer(), super::texture_producer()]);
+    }
+
     /// The anchors are asserted at pipeline build, but only for *presence*.
     /// This pins that each producer's substitution actually landed — a splice
     /// that silently did nothing renders the feature as if it were absent,

@@ -1385,16 +1385,6 @@ fn fracture(args: FractureArgs) -> Result<()> {
     };
 
     if write {
-        let mut edited = source.clone();
-        if existing.is_some() {
-            edited = engine_core::formatter::apply_remove_component(
-                &edited,
-                &engine_core::formatter::RemoveComponent {
-                    entity: entity.clone(),
-                    component: "Breakable".into(),
-                },
-            )?;
-        }
         let mut encoded = serde_json::to_value(&component.fragments).map_err(|e| {
             EngineError::new(
                 codes::SCENE_PARSE_DESYNC,
@@ -1414,9 +1404,9 @@ fn fracture(args: FractureArgs) -> Result<()> {
                 serde_json::json!(threshold),
             ));
         }
-        let edited = engine_core::formatter::apply_add_component(
-            &edited,
-            &engine_core::formatter::AddComponent {
+        let edited = engine_core::formatter::apply_replace_component(
+            &source,
+            &engine_core::formatter::ReplaceComponent {
                 entity: entity.clone(),
                 component: "Breakable".into(),
                 fields,
@@ -1635,7 +1625,7 @@ fn fit_colliders(
         for (name, parts) in &fitted {
             // Re-read per entity: each splice is committed before the next
             // one is rebased onto it, the editor's own commit shape.
-            let mut source = std::fs::read_to_string(&scene_path).map_err(|e| {
+            let source = std::fs::read_to_string(&scene_path).map_err(|e| {
                 EngineError::new(
                     codes::SCENE_UNREADABLE,
                     format!("cannot read {display} to edit it: {e}"),
@@ -1671,20 +1661,6 @@ fn fit_colliders(
                 })
                 .unwrap_or_default();
 
-            // Remove-then-add rather than a field edit: `parts` is an array of
-            // objects, and `SetComponentField` is for scalars. A removal that
-            // finds nothing is not an error here — most entities have none yet.
-            if !kept.is_empty() {
-                if let Ok(edited) = engine_core::formatter::apply_remove_component(
-                    &source,
-                    &engine_core::formatter::RemoveComponent {
-                        entity: name.clone(),
-                        component: "SkinnedCollider".into(),
-                    },
-                ) {
-                    source = edited;
-                }
-            }
             let mut encoded = serde_json::to_value(parts).map_err(|e| {
                 EngineError::new(
                     codes::SCENE_PARSE_DESYNC,
@@ -1697,9 +1673,9 @@ fn fit_colliders(
             engine_core::formatter::shorten_floats(&mut encoded);
             let mut fields = vec![("parts".to_string(), encoded)];
             fields.extend(kept);
-            let edited = engine_core::formatter::apply_add_component(
+            let edited = engine_core::formatter::apply_replace_component(
                 &source,
-                &engine_core::formatter::AddComponent {
+                &engine_core::formatter::ReplaceComponent {
                     entity: name.clone(),
                     component: "SkinnedCollider".into(),
                     fields,
@@ -2798,13 +2774,9 @@ fn import(
                 components,
             };
             let updated = engine_core::formatter::apply_add_entity(&source, &edit)?;
-            std::fs::write(scene, &updated).map_err(|e| {
-                EngineError::new(
-                    codes::SCENE_WRITE_FAILED,
-                    format!("could not write {}: {e}", scene.display()),
-                )
-                .file(scene.display().to_string())
-            })?;
+            // Atomic like every other scene write: the editor may be watching
+            // this file, and a rename never shows it a half-written scene.
+            engine_core::formatter::write_atomic(scene, &updated)?;
             entity = Some(entity_name);
         }
     }
