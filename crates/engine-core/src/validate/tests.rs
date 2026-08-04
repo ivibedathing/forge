@@ -2751,3 +2751,33 @@ fn a_fit_typo_gets_did_you_mean_not_a_desync() {
     assert_eq!(bad.context().unwrap().did_you_mean.as_deref(), Some("bone"));
     assert!(!errors.iter().any(|e| e.error == codes::SCENE_PARSE_DESYNC));
 }
+
+// ── The recipe table (integration audit) ─────────────────────────────
+
+/// Every row of `RECIPE_RULES` trips its own code. Iterates the real table,
+/// so a new recipe's row gets this coverage by existing — the countability
+/// the seven hand-copied blocks never had. Extra errors (a Junction with no
+/// roads, a volume with no bake) are fine; the row's code must be among them.
+#[test]
+fn every_recipe_rule_row_fires_on_a_mesh_and_a_material() {
+    for rule in super::entity::RECIPE_RULES {
+        let source = format!(
+            r#"{{"name":"s","entities":[
+                {{"name":"Thing","components":[
+                    {{"type":"Transform"}},
+                    {{"type":"{}"}},
+                    {{"type":"Mesh","asset":"builtin:cube"}},
+                    {{"type":"Material","albedo":[0.5,0.5,0.5]}}
+                ]}}
+            ]}}"#,
+            rule.component
+        );
+        let codes = codes_of(&source);
+        assert!(
+            codes.contains(&rule.code),
+            "{} did not fire {}: {codes:?}",
+            rule.component,
+            rule.code
+        );
+    }
+}
