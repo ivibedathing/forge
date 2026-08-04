@@ -597,6 +597,12 @@ impl ViewerApp {
                                     if let Some(scripts) = &mut sim.scripts {
                                         scripts.sync_names(&sim.scene.world);
                                     }
+                                    // A despawned entity may be an emitter,
+                                    // and the particle system tracks a list
+                                    // it built at load — told here exactly as
+                                    // the headless loop tells it, or the
+                                    // state outlives its entity.
+                                    sim.particles.sync(&sim.scene.world);
                                 }
                                 // Breaks apply after physics, exactly as in
                                 // the headless loop — played and simulated

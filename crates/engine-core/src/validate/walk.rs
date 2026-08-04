@@ -350,8 +350,20 @@ pub(super) fn check_value(
             }
 
             let item_schema = schemas.resolve(&schema["items"]);
+            // An item may itself be an `Option<T>` of a named type — the same
+            // `anyOf: [{$ref}, null]` shape walk_component unwraps for
+            // top-level fields (M43). Unwrap it here too, or every such item
+            // falls to the `_ => true` arm below and a bad value reaches
+            // serde as scene_parse_desync.
+            let (item_schema, item_nullable) = match optional_variant(schemas, item_schema) {
+                Some(inner) => (inner, true),
+                None => (item_schema, false),
+            };
             let mut clean = true;
             for (i, item) in items.iter().enumerate() {
+                if item_nullable && item.is_null() {
+                    continue;
+                }
                 let item_path = format!("{json_path}/{i}");
                 if item_schema["type"].as_str() == Some("number") {
                     let Some(number) = item.as_number() else {
@@ -384,6 +396,25 @@ pub(super) fn check_value(
                     // Arrays of objects (Breakable.fragments): recurse, so a
                     // bad fragment is a located walk error rather than a
                     // serde rejection masquerading as scene_parse_desync.
+                    clean &= check_value(
+                        cx,
+                        schemas,
+                        item_schema,
+                        item,
+                        component,
+                        entity,
+                        field,
+                        &item_path,
+                        errors,
+                    );
+                } else {
+                    // Everything else — booleans (`locked_rotations`,
+                    // `stretch`), strings, enums, and nested arrays
+                    // (`Shard.points`) — goes through the same checker.
+                    // Before this arm existed, only numbers and objects were
+                    // checked: `[true, "yes", false]` had correct arity,
+                    // passed the walk, and serde's rejection surfaced as
+                    // scene_parse_desync, the code that means "engine bug".
                     clean &= check_value(
                         cx,
                         schemas,
@@ -454,6 +485,19 @@ pub(super) fn check_value(
                     continue; // already reported as unknown
                 };
                 let property = schemas.resolve(property);
+                // The same `Option<named type>` unwrap walk_component does
+                // for top-level fields. Without it, an optional enum one
+                // level down — `SkinnedCollider.parts[].fit` — reproduced
+                // the exact M43 failure the top-level fix closed: the anyOf
+                // wrapper has no "type", so the value fell through to the
+                // serde gate and came back as scene_parse_desync.
+                let (property, nullable) = match optional_variant(schemas, property) {
+                    Some(inner) => (inner, true),
+                    None => (property, false),
+                };
+                if nullable && item.is_null() {
+                    continue; // an explicit null is the absent case
+                }
                 clean &= check_value(
                     cx,
                     schemas,
