@@ -68,7 +68,7 @@ seconds](#past-the-fifteen-seconds).
 | steps | station | what is on screen | systems |
 |-------|---------|-------------------|---------|
 | 0–179 | 01 forest | nine procedural trees — two oaks, a birch, three spruces, a dead snag, two scrubs — under fissured bark, four critters running loops, a rigged figure walking a circuit in front of them, the granite monolith, its animated beacon | `Tree`, `Mesh` (builtin + glTF), **skeletal animation** (13 joints, textured), `Material` (`albedo_map`, `normal_map`, `orm_map`, `Material.asset`), `DirectionalLight`, `AmbientLight`, `AnimationPlayer`, `Script` |
-| 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, firelight pooling on the grass, and a rigged soldier standing at the pit's rim with the firelight on its arm | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color`, **skeletal animation** (17 joints, textured, point-lit) |
+| 180–359 | 02 campfire | layered additive flame, turbulent smoke, streaked embers, firelight pooling on the grass, a rigged soldier standing at the pit's rim with the firelight on its arm, and a second one lapping the camp at a run | `ParticleEmitter` ×5 (additive, disc emission, jitter, turbulence, stretch), `PointLight`, `Material.emissive`, script-driven `rate` + `intensity` + `color`, **skeletal animation** (17 joints, textured, point-lit), stride-driven locomotion + `FootPlant` |
 | 360–539 | 03 water and ice | a pond with real waves and a foam rim, a waterfall into a plunge pool, ice shelf, blocks, spire, frost | `Water` (Gerstner waves, depth absorption, foam), `Material.transmission`, `ParticleEmitter` ×3 |
 | 540–719 | 04 breaking | a granite boulder rolls into a stack of planked crates and splinters them into wood shards under a haze of sawdust, an ice pillar is broken by name, a blast finishes the crate standing clear of the pile | `RigidBody`, `Collider`, `Breakable` (`material: wood`, `Shard` fragments, M44 dust), `Shard`, `world.break_entity`, `world.explode` |
 | 720–899 | 05 the whole world | high wide arc over all of it, debris settled, truck still running | `Wheel` ×4 (tread `normal_map`), `Material.orm_map`, the `HudPanel` station card, the camera |
@@ -361,6 +361,15 @@ than no showcase:
   triangles. No `FootPlant` either: `Idle` animates only the upper body, the feet never leave the
   bind pose, and a flat stand at the height `engine terrain-height` reports is enough. The walker
   is the maximal rigged entity and the soldier the minimal one; the pair brackets the range.
+
+  The **`Runner`** joined it next: the same rig lapping the camp on a 6 m circle at 4.46 m/s —
+  the speed the `Run` clip itself covers ground at (stride 2.7664 m per 0.62 s cycle, measured by
+  `engine list-joints`), so carrying it at exactly that speed is what keeps a stride-driven gait
+  from either skating or moonwalking. It takes the middle of the range the other two bracket:
+  `FootPlant` and a stride like the walker, collider-free like the idle soldier, so it too left
+  every physics artifact byte-identical. `tour_wildlife.rhai` carries it with the same
+  set-position-and-look-at pattern as the walker; the circle's clearances (fire pit 4.1 m, idle
+  soldier 3.6 m, `RingRoad` 5.9 m) were checked with `road-centerline` and arithmetic, not by eye.
 - **The blast** still has no light — but as of M17 that is a wiring job rather
   than a missing feature. A `PointLight` at the crate pile, pulsed for a dozen
   steps from `tour_director.rhai` (which already fires the explosion), would do

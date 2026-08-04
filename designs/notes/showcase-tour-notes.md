@@ -160,3 +160,17 @@ five tour frames the figure is visible in (at the fire in 270, a distant sliver 
 and 810 — 585's sliver alone was over the 0.02% allowance) plus the GI bake for its triangles,
 and left `showcase_90`, both golden traces and all 41 bit-exact baselines untouched — which is
 the collider-free claim, measured.
+
+**The runner.** The same rig again, lapping the campfire on a 6 m circle carried by
+`tour_wildlife.rhai` in the walker's set-position-and-look-at pattern. The one number that
+matters: it is carried at **4.46 m/s because that is the speed the `Run` clip covers ground at**
+— stride 2.7664 m per 0.62 s cycle, measured with `engine list-joints --entity Runner`, and a
+stride-driven gait carried at any other speed plays the right footfalls at the wrong ground
+speed. It has `FootPlant` (sole 0.07, the soldier ankle height) and a stride like the walker but
+no colliders like the idle soldier — so it, too, moved no physics artifact. Its circle was
+cleared against the fire pit (4.1 m), the idle soldier (3.6 m), and the `RingRoad` (5.9 m) with
+`road-centerline` queries. This time all six tour frames re-blessed: the runner is visible in
+every one of them, `showcase_90` included, because station 01's camera catches the far side of
+its lap at the frame's left edge. Note for the next filmstrip user: `filmstrip`'s window is the
+pure render *clock* — scripts do not step — so a script-carried entity sits at its authored
+transform in every tile; use repeated `screenshot --steps N` instead.

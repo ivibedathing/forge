@@ -76,4 +76,25 @@ fn step(world, step) {
         world.terrain_height("Ground", wx, wz),
         -9.6 + wr * cos(wahead),
     );
+
+    // The runner: a second soldier lapping the campfire, on the same division
+    // of labour as the walker — the Run clip does the legs, and stride-driven
+    // playback means this carry speed *is* the cadence. 0.74 rad/s on a 6 m
+    // circle is 4.46 m/s, the speed the clip itself covers ground at
+    // (stride 2.7664 m per 0.62 s cycle, measured by `engine list-joints`),
+    // so the gait neither skates nor moonwalks. The circle clears the fire
+    // pit by 4 m, the idle Soldier by 3.6 m at the closest pass, and the
+    // RingRoad by 5.9 m — checked with road-centerline, not by eye.
+    let ra = 0.74 * t - 2.53;
+    let rr = 6.0;
+    let rx = 9.0 + rr * sin(ra);
+    let rz = -13.0 + rr * cos(ra);
+    world.set_position("Runner", rx, world.terrain_height("Ground", rx, rz), rz);
+    let rahead = ra + 0.10;
+    world.look_at(
+        "Runner",
+        9.0 + rr * sin(rahead),
+        world.terrain_height("Ground", rx, rz),
+        -13.0 + rr * cos(rahead),
+    );
 }
