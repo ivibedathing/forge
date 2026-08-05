@@ -7565,8 +7565,29 @@ fn bake_gi_check_catches_a_scene_whose_geometry_moved() {
 /// It is the M37–M43 merge's failure written as a test: the tour gained an
 /// entity's worth of geometry per milestone, all 1,050 probes moved on the
 /// re-bake, and every gate stayed green.
+///
+/// Checked only on the machine class bakes are blessed on, for the lap
+/// recording's reason: the digest hashes the scene's generated triangles, trees
+/// ride the mesh list, and the tree generator's `sin`/`cos` disagree in their
+/// last bits between Apple's libm and glibc's — so the tour's digest is
+/// per-platform the way tree baselines are. Measured, not supposed: the same
+/// tree hashes `0cdf029474f3adba` here and `20f853f325e55e0d` on x86-64 Linux,
+/// while `re_baking_the_fixture_reproduces_the_committed_file` passes there —
+/// the bake's own arithmetic reproduces byte-for-byte cross-platform, and the
+/// tree-free fixture stays covered everywhere. Only scenes with generated trig
+/// geometry lose this check off-platform, and they get it back on every
+/// macOS run.
 #[test]
 fn every_committed_gi_bake_matches_its_scene() {
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        eprintln!(
+            "skipping the staleness sweep: bakes are blessed on aarch64 macOS, and this is {} {}",
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        );
+        return;
+    }
+
     let mut checked = 0;
     for scene in scenes_with_probe_volumes() {
         let output = engine()
@@ -7691,12 +7712,24 @@ fn a_windless_tree_renders_the_same_at_every_moment() {
             .arg("Eye")
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
-        std::fs::read(&out).unwrap()
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "screenshot failed for a non-GPU reason: {stderr}"
+            );
+            return None;
+        }
+        Some(std::fs::read(&out).unwrap())
     };
 
     // The fixture as committed moves, so its two moments differ…
-    assert_ne!(render("0", "moving_a.png"), render("2.4", "moving_b.png"));
+    let Some(moving_a) = render("0", "moving_a.png") else {
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    };
+    let moving_b = render("2.4", "moving_b.png").expect("GPU worked a moment ago");
+    assert_ne!(moving_a, moving_b);
 
     // …and the same scene with every tree stilled does not.
     let mut still: serde_json::Value =
