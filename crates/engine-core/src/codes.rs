@@ -352,6 +352,38 @@ registry! {
     MULTIPLE_LIGHT_PROBE_VOLUMES = "multiple_light_probe_volumes", Input,
         "a scene may have at most one LightProbeVolume; the renderer holds one field";
 
+    // ── Tile synthesis (M47) ───────────────────────────────────────────
+    TILE_GRID_WITH_MESH = "tile_grid_with_mesh", Input,
+        "a TileGrid grows its own geometry from its tileset's palette; it may not also have a Mesh or a Material";
+    TILESET_NOT_FOUND = "tileset_not_found", Input,
+        "a TileGrid's \"tileset\" names a file that is not there";
+    TILESET_MALFORMED = "tileset_malformed", Input,
+        "a tileset file does not parse, or a tile in it is structurally invalid";
+    TILESET_TOO_COMPLEX = "tileset_too_complex", Input,
+        "a tileset expands to more tiles, or a tile carries more parts, than the engine indexes";
+    UNKNOWN_SOCKET_FORM = "unknown_socket_form", Input,
+        "a socket string is not \"0\", a plain name, or a name suffixed _l/_r/_i";
+    UNKNOWN_PALETTE_KEY = "unknown_palette_key", Input,
+        "a tile part names a material that is not in the tileset's palette";
+    UNKNOWN_TILE = "unknown_tile", Input,
+        "a tile name resolves to nothing in the tileset";
+    TILE_FILL_NOT_SELF_COMPATIBLE = "tile_fill_not_self_compatible", Input,
+        "a TileGrid's fill tiles cannot sit beside themselves, so the solver's fallback is itself illegal";
+    TILE_LAYOUT_MISSING = "tile_layout_missing", Input,
+        "a TileGrid's \"layout\" names a file that is not there; run `engine synthesize`";
+    TILE_LAYOUT_MALFORMED = "tile_layout_malformed", Input,
+        "a tile layout does not parse, or its rows are not the grid the header declares";
+    TILE_LAYOUT_MISMATCH = "tile_layout_mismatch", Input,
+        "a tile layout's size or tileset disagrees with the component that names it";
+    TILE_LAYOUT_STALE = "tile_layout_stale", Input,
+        "a tile layout was solved from different inputs than the scene now holds; re-run `engine synthesize`";
+    TILE_LAYOUT_ILLEGAL = "tile_layout_illegal", Input,
+        "an unlocked cell in a tile layout violates the tileset's adjacency rules";
+    TILE_GRID_TOO_COMPLEX = "tile_grid_too_complex", Input,
+        "a TileGrid's cells and tiles would grow more vertices than the engine builds";
+    TILE_GRID_GROUND_INVALID = "tile_grid_ground_invalid", Input,
+        "a TileGrid's \"ground\" must name an entity that has a Terrain component";
+
     // ── UI system (M31) ────────────────────────────────────────────────
     HUD_PARENT_NOT_FOUND = "hud_parent_not_found", Input,
         "a HUD element's \"parent\" names no entity in the scene";
@@ -396,6 +428,12 @@ registry! {
         "warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed";
     TREE_SWAY_NEEDS_OPAQUE_BARK = "tree_sway_needs_opaque_bark", Input,
         "warning: a Tree asks for wind but its Material is transparent, and only the opaque pipelines carry the wind";
+    TILE_SOCKET_ORPHANED = "tile_socket_orphaned", Input,
+        "warning: a tile face carries a socket no other tile mates, so the tile can never be placed there";
+    TILE_LAYOUT_FORCED = "tile_layout_forced", Input,
+        "warning: a locked cell in a tile layout violates adjacency; the author asserted it and the engine draws it";
+    TILE_GRID_SCALED = "tile_grid_scaled", Input,
+        "warning: a non-unit Transform.scale rescales the cell metres a TileGrid's tileset declared";
 
     // ── Scene semantics at command time ───────────────────────────────
     SCENE_UNREADABLE = "scene_unreadable", Input,

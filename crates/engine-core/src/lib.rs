@@ -32,6 +32,7 @@ pub mod skeleton;
 pub mod spawn;
 pub mod terrain;
 pub mod texture;
+pub mod tileset;
 pub mod tree;
 pub mod ui;
 pub mod validate;

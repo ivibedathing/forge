@@ -140,6 +140,21 @@ build fails.
 | `gi_bake_malformed` | 1 | a GI bake file parses but its version, grid or basis disagrees with the component |
 | `too_many_gi_probes` | 1 | a LightProbeVolume's bounds and spacing would place more probes than the engine will bake |
 | `multiple_light_probe_volumes` | 1 | a scene may have at most one LightProbeVolume; the renderer holds one field |
+| `tile_grid_with_mesh` | 1 | a TileGrid grows its own geometry from its tileset's palette; it may not also have a Mesh or a Material |
+| `tileset_not_found` | 1 | a TileGrid's "tileset" names a file that is not there |
+| `tileset_malformed` | 1 | a tileset file does not parse, or a tile in it is structurally invalid |
+| `tileset_too_complex` | 1 | a tileset expands to more tiles, or a tile carries more parts, than the engine indexes |
+| `unknown_socket_form` | 1 | a socket string is not "0", a plain name, or a name suffixed _l/_r/_i |
+| `unknown_palette_key` | 1 | a tile part names a material that is not in the tileset's palette |
+| `unknown_tile` | 1 | a tile name resolves to nothing in the tileset |
+| `tile_fill_not_self_compatible` | 1 | a TileGrid's fill tiles cannot sit beside themselves, so the solver's fallback is itself illegal |
+| `tile_layout_missing` | 1 | a TileGrid's "layout" names a file that is not there; run `engine synthesize` |
+| `tile_layout_malformed` | 1 | a tile layout does not parse, or its rows are not the grid the header declares |
+| `tile_layout_mismatch` | 1 | a tile layout's size or tileset disagrees with the component that names it |
+| `tile_layout_stale` | 1 | a tile layout was solved from different inputs than the scene now holds; re-run `engine synthesize` |
+| `tile_layout_illegal` | 1 | an unlocked cell in a tile layout violates the tileset's adjacency rules |
+| `tile_grid_too_complex` | 1 | a TileGrid's cells and tiles would grow more vertices than the engine builds |
+| `tile_grid_ground_invalid` | 1 | a TileGrid's "ground" must name an entity that has a Terrain component |
 | `hud_parent_not_found` | 1 | a HUD element's "parent" names no entity in the scene |
 | `hud_parent_not_panel` | 1 | a HUD element's "parent" must name an entity that has a HudPanel |
 | `hud_parent_cycle` | 1 | a chain of HUD "parent" references loops back on itself |
@@ -159,6 +174,9 @@ build fails.
 | `road_pins_overlap` | 1 | warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly |
 | `road_follow_rotated` | 1 | warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed |
 | `tree_sway_needs_opaque_bark` | 1 | warning: a Tree asks for wind but its Material is transparent, and only the opaque pipelines carry the wind |
+| `tile_socket_orphaned` | 1 | warning: a tile face carries a socket no other tile mates, so the tile can never be placed there |
+| `tile_layout_forced` | 1 | warning: a locked cell in a tile layout violates adjacency; the author asserted it and the engine draws it |
+| `tile_grid_scaled` | 1 | warning: a non-unit Transform.scale rescales the cell metres a TileGrid's tileset declared |
 | `scene_unreadable` | 1 | the scene file could not be read |
 | `scene_parse_desync` | 2 | internal bug: the scene passed validation but failed to parse |
 | `entity_not_found` | 1 | no entity has the requested name |

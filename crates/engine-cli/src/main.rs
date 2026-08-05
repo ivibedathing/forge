@@ -585,6 +585,18 @@ enum Command {
     /// like `--help` does — see docs/cli-contract.md.
     AgentGuide,
 
+    /// Print a tileset's tiles: every rotation, its six sockets, how many
+    /// tiles may sit across each face, and what it grows (M47).
+    ///
+    /// A socket graph is a constraint problem rather than a description, so it
+    /// is the half of a tileset that is hard to author blind. `partners: 0` is
+    /// a tile that can never be placed that side, and `engine validate` reports
+    /// the same thing as `tile_socket_orphaned`.
+    ListTiles {
+        /// The tileset file.
+        tileset: PathBuf,
+    },
+
     /// Print the component and scene JSON Schemas.
     ListComponents {
         /// One component's schema instead of the whole vocabulary — the
@@ -807,6 +819,7 @@ fn main() {
             print!("{}", scaffold::AGENT_GUIDE);
             Ok(())
         }
+        Command::ListTiles { tileset } => list_tiles(tileset),
         Command::ListComponents {
             component,
             markdown,
@@ -1019,18 +1032,29 @@ fn validate(scenes: &[PathBuf], strict: bool) -> Result<()> {
                 && v.as_object()
                     .is_some_and(|o| o.keys().any(|k| material_fields().iter().any(|f| f == k)))
         });
-        if is_clip || is_material {
+        // A tileset file (M47) is recognised the same way, by shape: a
+        // top-level "tiles" and neither of the other two kinds' keys.
+        let is_tileset = parsed
+            .as_ref()
+            .is_some_and(engine_core::tileset::Tileset::looks_like);
+        if is_clip || is_material || is_tileset {
             let display = path.display().to_string();
             let source = std::fs::read_to_string(path).unwrap_or_default();
             let diagnostics = if is_clip {
                 engine_core::animation::validate_clip_source(&source, &display)
+            } else if is_tileset {
+                engine_core::validate::validate_tileset_source(&source, &display)
             } else {
                 engine_core::validate::validate_material_source(&source, &display)
             };
             for diagnostic in &diagnostics {
                 diagnostic.emit();
             }
-            errors += diagnostics.len();
+            // A tileset is the first non-scene kind that reports warnings, so
+            // it is the first that has to split the count — `--strict` is what
+            // decides whether an orphaned socket ends the process.
+            errors += diagnostics.iter().filter(|d| !d.is_warning()).count();
+            warnings += diagnostics.iter().filter(|d| d.is_warning()).count();
             continue;
         }
         let report = report_scene_diagnostics(path);
@@ -1985,6 +2009,68 @@ fn ui_layout(
         serde_json::json!({
             "viewport": [width, height],
             "elements": elements,
+        })
+    );
+    Ok(())
+}
+
+/// `engine list-tiles <tileset.json>` — what a tileset actually contains
+/// (M47).
+///
+/// The `list-*` family's job on a file kind whose most important property is
+/// invisible: which tiles may sit against which. A tileset is written from a
+/// prompt, and the socket graph is the part that comes out wrong — so this
+/// prints the expansion (one entry per tile per rotation, in the order the
+/// solver indexes them), the six resolved sockets, and **how many tiles may sit
+/// across each face**. A `0` there is a tile that can never be placed that
+/// side, and it is the difference between "the village came out empty" and a
+/// one-character fix.
+fn list_tiles(path: PathBuf) -> Result<()> {
+    let tileset = engine_core::tileset::load_tileset(&path)?;
+    let expanded = engine_core::tileset::expand(&tileset)?;
+    let compat = engine_core::tileset::Compat::build(&expanded);
+
+    let tiles: Vec<serde_json::Value> = expanded
+        .iter()
+        .enumerate()
+        .map(|(index, tile)| {
+            use engine_core::tileset::Face;
+            let faces: serde_json::Map<String, serde_json::Value> = Face::ALL
+                .into_iter()
+                .map(|face| {
+                    let socket = &tile.faces[face.index()];
+                    (
+                        Face::KEYS[face.index()].to_string(),
+                        serde_json::json!({
+                            "socket": socket.socket.name(),
+                            "turn": socket.turn,
+                            "partners": compat.partners(face.index(), index),
+                        }),
+                    )
+                })
+                .collect();
+            serde_json::json!({
+                "index": index,
+                "token": tile.token,
+                "name": tileset.tiles[tile.tile].name,
+                "rotation": tile.rotation,
+                "weight": tile.weight,
+                "parts": tileset.tiles[tile.tile].parts.len(),
+                "vertices": engine_core::tileset::tile_vertex_count(&tileset, tile),
+                "faces": faces,
+            })
+        })
+        .collect();
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "tileset": path.display().to_string(),
+            "cell": tileset.cell.to_array(),
+            "palette": tileset.palette.keys().collect::<Vec<_>>(),
+            "authored": tileset.tiles.len(),
+            "expanded": expanded.len(),
+            "tiles": tiles,
         })
     );
     Ok(())

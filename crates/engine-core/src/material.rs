@@ -63,7 +63,9 @@ pub fn resolve_material(asset: &str, base_dir: &Path) -> Result<PathBuf> {
 /// resolves against the scene, so the join happens once, here, lexically —
 /// `..` is popped rather than followed, because the path may not exist yet
 /// (`engine import` writes one before anything reads it).
-fn rebase(material_asset: &str, reference: &str) -> String {
+/// `pub(crate)` since M47: a tileset's palette is materials living in *its*
+/// directory, so the same join has a second caller (`tileset::rebase_tileset`).
+pub(crate) fn rebase(material_asset: &str, reference: &str) -> String {
     let Some(dir) = Path::new(material_asset).parent() else {
         return reference.to_string();
     };
@@ -86,6 +88,25 @@ fn rebase(material_asset: &str, reference: &str) -> String {
         .map(|p| p.to_string_lossy())
         .collect::<Vec<_>>()
         .join(std::path::MAIN_SEPARATOR_STR)
+}
+
+/// Rebase every texture reference a material carries, in place.
+///
+/// The four-map loop factored out of [`resolve_scene_materials`] when M47's
+/// tilesets became its second caller — a palette entry's maps are relative to
+/// whichever file spelled them, exactly as a scene's are.
+pub(crate) fn rebase_maps(material: &mut Material, asset: &str) {
+    for reference in [
+        &mut material.albedo_map,
+        &mut material.orm_map,
+        &mut material.normal_map,
+        &mut material.emissive_map,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        *reference = rebase(asset, reference);
+    }
 }
 
 /// Read and parse a material file.
@@ -147,17 +168,7 @@ pub fn resolve_scene_materials(file: &mut crate::SceneFile, base_dir: &Path) -> 
             }
             match resolve_material(&asset, base_dir).and_then(|path| load_material(&path)) {
                 Ok(mut loaded) => {
-                    for reference in [
-                        &mut loaded.albedo_map,
-                        &mut loaded.orm_map,
-                        &mut loaded.normal_map,
-                        &mut loaded.emissive_map,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
-                        *reference = rebase(&asset, reference);
-                    }
+                    rebase_maps(&mut loaded, &asset);
                     cache.insert(asset.clone(), loaded.clone());
                     let mut resolved = loaded;
                     resolved.asset = Some(asset);

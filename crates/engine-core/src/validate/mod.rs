@@ -35,10 +35,12 @@ mod blocks;
 mod component;
 mod entity;
 mod passes;
+mod tileset;
 mod walk;
 
 use blocks::{check_daylight_block, check_environment_block, check_physics_block};
 use component::check_component;
+pub use tileset::validate_tileset_source;
 use walk::walk_component;
 
 /// Validate a scene file's contents. An empty result means the scene is valid
@@ -281,6 +283,19 @@ impl ComponentSchemas {
         Self {
             schema: crate::schema::component_schema(),
         }
+    }
+
+    /// The same driver over some other schemars document — M47's tileset file,
+    /// which has no `oneOf` to select a variant from and passes its root in
+    /// where a component variant would go. `$defs` resolution is what is
+    /// actually being borrowed, and it is identical either way.
+    fn from_schema(schema: Value) -> Self {
+        Self { schema }
+    }
+
+    /// The whole document, for a file kind whose root *is* the shape to walk.
+    fn root(&self) -> &Value {
+        &self.schema
     }
 
     /// Look through a `$ref` to the schema's `$defs` (schemars refs shared
