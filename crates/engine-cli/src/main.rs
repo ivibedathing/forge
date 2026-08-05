@@ -3767,11 +3767,16 @@ fn run_scene(
             .map(crate::app::InputRecorder::create)
             .transpose()?;
         let particles = engine_core::particles::ParticleSystem::build(&scene.world);
+        // Snapshots where every stride-driven entity starts, exactly as the
+        // headless loop does — step 1 measures real displacement rather than
+        // a jump from the origin (M32).
+        let locomotion = engine_core::locomotion::Locomotion::build(&scene.world);
         Some(crate::app::Simulation {
             scene,
             physics,
             particles,
             players,
+            locomotion,
             scripts,
             assets,
             camera_name: camera_name.map(String::from),
