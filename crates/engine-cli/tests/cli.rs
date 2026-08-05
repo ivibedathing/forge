@@ -5081,11 +5081,15 @@ fn the_m32_locomotion_fixture_pins_planted_feet() {
 /// The milestone's claim, proved without a pixel — M30's half of the story,
 /// which is the half this engine cares about most.
 ///
-/// A planted ankle's world Y is the terrain height under it plus the foot's
-/// `sole`, at any moment of the clip; the unplanted twin's is whatever the
-/// animator left it at, which on a slope is inside the hill. Both facts come
-/// out of `engine list-joints` and `engine terrain-height`, neither of which
-/// renders anything.
+/// A planted foot keeps its authored clearance over the terrain under it,
+/// with `sole` as the closest the ankle may come — so at contact moments the
+/// planted ankle's world Y is the terrain height plus `sole` exactly, while
+/// the unplanted twin's is whatever the animator left it at, which on a slope
+/// is inside the hill. `--time` on a stride-driven player samples `phase`
+/// (0 in the file), and at phase 0 this clip has both feet at contact, which
+/// is why the exact form of the claim holds at every sample below. Both facts
+/// come out of `engine list-joints` and `engine terrain-height`, neither of
+/// which renders anything.
 #[test]
 fn a_planted_ankle_stands_on_the_ground_and_an_unplanted_one_does_not() {
     let scene = locomotion_scene();
@@ -5211,6 +5215,105 @@ fn a_stride_driven_walk_does_not_slide_its_feet() {
         slip < 0.012,
         "the planted foot slid {slip} m over two steps; a stance foot should stay put"
     );
+}
+
+/// The side-view fixture: one walker crossing flat ground that matches the
+/// clip's own authoring plane, camera square-on to the gait.
+fn walk_side_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m32_walk_side.json")
+}
+
+#[test]
+fn the_walk_side_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(walk_side_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// Planting on ground that matches the authoring plane is a near no-op: the
+/// swing foot stays on the animator's arc and the hips keep the clip's own
+/// bob. This is the regression test for the crouch-shuffle bug, where every
+/// foot within `max_drop` of the ground was snapped to it — the swing foot
+/// dragged along the floor for its whole arc (peak 2 cm instead of the
+/// authored 33 cm) and the hips-drop pass crouched the walker 18 cm so both
+/// legs could reach at once.
+///
+/// Step 52 is the left foot's swing peak: the clip holds it ~0.41 m up while
+/// the right bears weight flat, dipped to where `sole` clamps it.
+#[test]
+fn planting_on_flat_ground_leaves_the_swing_foot_to_the_animator() {
+    let output = engine()
+        .arg("list-joints")
+        .arg(walk_side_scene())
+        .arg("--entity")
+        .arg("Walker")
+        .arg("--steps")
+        .arg("52")
+        .output()
+        .unwrap();
+    let rig = json_stdout(&output)["rigs"][0].clone();
+    let world_y = |name: &str| -> f64 {
+        rig["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["name"] == name)
+            .unwrap_or_else(|| panic!("no joint {name} in {rig}"))["world"]["position"][1]
+            .as_f64()
+            .unwrap()
+    };
+
+    let swing = world_y("FootL");
+    assert!(
+        swing > 0.25,
+        "the swing ankle is at y={swing}; the clip authors ~0.40 — a low swing \
+         foot means planting is dragging it toward the ground again"
+    );
+    let stance = world_y("FootR");
+    assert!(
+        (stance - 0.073).abs() < 2e-3,
+        "the stance ankle is at y={stance}, wanted its sole height 0.073"
+    );
+    let hips = world_y("Hips");
+    assert!(
+        hips > 0.86,
+        "the hips are at y={hips} against the clip's ~0.885 — a low pelvis \
+         means the hips-drop pass is crouching to reach a dragged foot"
+    );
+}
+
+/// The fixture rendered mid-stride, pinned bit-exactly: swing foot up, stance
+/// foot on the ground, no crouch. Renders at `samples: 1` because terrain is
+/// in frame (M22's rule); measured at one image across five renders.
+#[test]
+fn the_m32_walk_side_fixture_pins_the_undistorted_walk() {
+    let scene = walk_side_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m32_walk_side.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("75")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
 }
 
 // ── The baselines the sweep used to be the only check on ──────────────────

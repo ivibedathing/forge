@@ -47,6 +47,24 @@ frames the `Walker`'s own edit re-blessed.
   --time` answer at all. So `ground` names an entity with a `Terrain`, checked
   (`foot_plant_ground_not_found` / `_not_terrain`), and sampling goes through M22's one
   implementation. **The stated cost: a character cannot stand on a crate.**
+- **Planting re-bases the clip's authored clearance onto the terrain; it does not snap feet to the
+  ground.** The target is `terrain_under_foot + max(clearance, sole)`, where clearance is the
+  ankle's height above the entity's own floor plane — so on ground that matches the authoring plane
+  the whole pass is a no-op, and `sole` is the closest the ankle may ever come to the surface. As
+  shipped, M32 instead snapped every foot within `max_drop` of the ground *to* the ground, and
+  `max_drop`'s default (0.5 m) is taller than any walk clip's swing arc: the swing foot shuffled
+  along the floor (peak 2 cm against the authored 33 cm), the hips-drop pass crouched the walker
+  18 cm so both extended legs could reach at once, and the result read as a bouncing crouch-shuffle
+  — the "jitter" was the solver fighting the animator every frame. Two intermediate fixes were
+  measured and rejected on the way to this one: a clearance-based plant *weight* band (full below
+  5% of reach, released by 25%) still pulled the half-planted trailing foot down at toe-off, where
+  the leg is near full extension and every centimetre comes out of the pelvis; narrowing the band
+  and scaling the deficit by the weight still left a ±5 mm hip wiggle, because heel-strike and
+  heel-off sit at the *same* clearance with opposite intent — height alone cannot tell them apart,
+  so any height-triggered snap oscillates. Re-basing sidesteps the classification entirely. The
+  flat-ground fixture `verify/m32_walk_side.json` is the oracle: its hips deviate 0.0 mm from the
+  clip's own curve, and `planting_on_flat_ground_leaves_the_swing_foot_to_the_animator` pins swing
+  height, stance height and hip height as numbers.
 - **The solve runs in skin space**, mapping the target back through `model⁻¹` rather than mapping
   every quaternion forward — one inverse per entity per frame, and it cannot get a scale subtly
   wrong (`foot_plant_non_uniform_scale` refuses one outright). Two lessons from writing it: the

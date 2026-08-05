@@ -130,10 +130,15 @@ FootPlant {
 
 Per foot, with `M` the entity's model matrix:
 
-1. **The target.** The animated ankle's world position `A`; the terrain height under its XZ, plus
-   `sole`; clamped into `[A.y - max_drop, A.y + max_lift]`. The clamps are what keep a foot in mid
-   swing from being dragged to the floor: planting is a *correction*, and a correction with no
-   ceiling is a different animation.
+1. **The target.** The animated ankle's world position `A`; its **authored clearance** `A.y`
+   minus the entity's own floor plane (local y = 0, carried into the world by the model matrix),
+   re-based onto the terrain under the foot's XZ, with `sole` as the closest the ankle may come to
+   that terrain: `terrain + max(clearance, sole)`, clamped into `[A.y - max_drop, A.y + max_lift]`.
+   On ground that matches the authoring plane this is a no-op, which is the property that keeps the
+   solver from fighting the animator: the original formulation — snap to `terrain + sole` whenever
+   within the clamps — dragged the swing foot along the floor for its whole arc and crouched the
+   hips 18 cm (against the clip's authored 4 cm) so both legs could reach at once. The clamps stay,
+   because planting is a *correction*, and a correction with no ceiling is a different animation.
 2. **Into skin space.** The target is mapped back through `M⁻¹` and the whole solve happens in the
    skin's own units. Solving in world space and mapping rotations back would have to undo the
    entity's scale on every quaternion; solving in skin space costs one inverse per entity per frame

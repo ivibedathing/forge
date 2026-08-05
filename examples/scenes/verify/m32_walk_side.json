@@ -1,0 +1,128 @@
+{
+  "name": "m32_walk_side",
+  "environment": {
+    "sky": true,
+    "shadows": true,
+    "shadow_distance": 18.0,
+    "samples": 1
+  },
+  "physics": {
+    "timestep_hz": 60
+  },
+  "entities": [
+    {
+      "name": "Cam",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [0.0, 1.05, 4.6]
+        },
+        {
+          "type": "Camera",
+          "fov": 42.0,
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        {
+          "type": "Transform",
+          "rotation": [-48.0, -35.0, 0.0]
+        },
+        {
+          "type": "DirectionalLight",
+          "color": [1.0, 0.97, 0.9],
+          "intensity": 3.0
+        }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [
+        {
+          "type": "AmbientLight",
+          "color": [0.55, 0.63, 0.78],
+          "intensity": 0.35
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        {
+          "type": "Transform",
+          "scale": [24.0, 1.0, 24.0]
+        },
+        {
+          "type": "Terrain",
+          "segments": 64,
+          "height": 0.0,
+          "texture_scale": 2.0,
+          "layers": [
+            {
+              "albedo": [0.14, 0.17, 0.1],
+              "roughness": 0.95
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Director",
+      "components": [
+        {
+          "type": "Script",
+          "source": "scripts/walk_side.rhai"
+        }
+      ]
+    },
+    {
+      "name": "Walker",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [-2.5, 0.0, 0.0],
+          "rotation": [0.0, -90.0, 0.0]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../../meshes/rigged_walker.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [0.8, 0.42, 0.25],
+          "roughness": 0.55
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../../meshes/rigged_walker.gltf#Walk",
+          "speed": 1.0,
+          "looping": true,
+          "stride": 1.5894
+        },
+        {
+          "type": "FootPlant",
+          "feet": [
+            {
+              "ankle": "FootL",
+              "chain": 2,
+              "sole": 0.073
+            },
+            {
+              "ankle": "FootR",
+              "chain": 2,
+              "sole": 0.073
+            }
+          ],
+          "ground": "Ground",
+          "hips": "Hips",
+          "max_drop": 0.5,
+          "max_lift": 0.4,
+          "align": 26.0
+        }
+      ]
+    }
+  ]
+}
