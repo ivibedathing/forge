@@ -220,14 +220,22 @@ unsolvable rabbit holes. So:
   `fill_background` above. This is the article's prescription and it removes every "the first block
   has no border" special case: block 0's border is the fill, exactly like block 40's.
 - A contradiction aborts **that block only** and retries with a fresh sub-stream, up to `attempts`
-  (10). After that the block takes the fill and `fallbacks` increments. The run always terminates
-  and always produces a legal grid.
+  (10). After that the block gives up and `fallbacks` increments. The run always terminates and
+  always produces a legal grid.
 
-**The fallback is a lie unless the fill is legal**, so it is checked once up front:
-`fill_ground` must mate with itself in X and Z, and `fill_background` with itself and with
-`fill_ground` beneath it. Without that check a failing block falls back into a contradiction and
-hands the next block an impossible border — a failure that looks like a solver bug and is a tileset
-bug.
+**The fill is checked legal once, up front:** `fill_ground` must mate with itself in X and Z,
+`fill_background` with itself and with `fill_ground` beneath it, and both must satisfy the closed
+ends. An unchecked fill is an initial state that is already a contradiction, which surfaces as a
+solver bug and is a tileset bug.
+
+**A block that gives up reverts rather than filling** — a correction to the article's prescription,
+found by building it. Filling a failed block with the known-good arrangement is right when every
+border is that same fill, which is true of the article's first pass and false of every block after
+it: a later block's border is an *already solved* neighbour, a wall's interior face say, and the
+fill is only known good against itself. Writing it in produced an illegal grid whose diff was
+nowhere near the block that failed. Reverting is legal by induction instead — the initial state is
+the checked fill, and every block that succeeds leaves the grid legal, so whatever stood in the
+block before the attempt is an arrangement the tileset allows.
 
 ### The RNG is per block
 
@@ -272,18 +280,29 @@ them, and no tileset can close it because a tile does not know what its neighbou
 Snapping to whole cells keeps every face flush and reads as a terraced hillside, which is what a
 village on a slope looks like anyway.
 
-The offsets are computed **before the solve** — they are a pure function of the `Terrain`, the
-`Transform` and `cell`, so both the solver and the validator can have them — and they **shear the
-neighbour function**:
+The offsets are computed **before the solve** — a pure function of the `Terrain`, the `Transform`
+and `cell`, so both the solver and the validator can have them — and they are written into the
+layout header, because a layout is only meaningful beside the offsets it was solved against.
+
+**A terrace step is a free edge, and this reverses the obvious design.** The first version sheared
+the neighbour relation by the difference in lift, so that grid layer 1 of a low column faced layer
+0 of the column one step above it:
 
 ```
 neighbour((x, y, z), +X) = (x+1, y + off[x][z] − off[x+1][z], z)
 ```
 
-Solving on the flat grid and offsetting afterwards is the version that renders wrong: a wall's
-`py` socket would agree with the cell above it in grid space while touching a different cell in
-world space. Vertical neighbours are unsheared, and a sheared neighbour that falls outside the grid
-is simply absent, which the border machinery already handles.
+That is *geometrically* right — those two cells really do touch in world space — and it does not
+survive contact with a tileset. What they touch across is a **cut face**: the raised column's ground
+layer against the lower column's open air. Constraining it obliges every tileset to carry a socket
+for the side of a hill, and the village tileset failed on the first sloped grid it saw, with
+`ground@0 refuses air@0 across NegX`. Every flat tileset would stop working the moment it followed
+ground.
+
+So columns at different lifts simply do not constrain each other, exactly as the patch's own edges
+do not. The lift still moves the geometry — that is what terracing *is* — it just stops being an
+adjacency relation. What it costs is a building spanning a step, which a terraced village does not
+want: buildings sit on one terrace.
 
 `ground` is optional and its absence means flat. That is the house rule — a scene that does not ask
 for the feature takes the code path that predates it.
