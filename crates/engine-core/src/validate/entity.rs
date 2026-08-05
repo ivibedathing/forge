@@ -432,6 +432,10 @@ pub(super) fn walk<'a>(
         // has needs the `SkinnedCollider` beside it.
         let mut ragdoll: Option<(crate::components::Ragdoll, String)> = None;
         let mut tree_path: Option<String> = None;
+        // Whether this entity's `Tree` asks for wind (M46), and whether its
+        // `Material` is one the foliage pipelines do not cover.
+        let mut tree_sways = false;
+        let mut transparent_material: Option<String> = None;
         let mut shard_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
@@ -524,6 +528,14 @@ pub(super) fn walk<'a>(
             }
             if type_name == "Tree" {
                 tree_path = Some(component_path.clone());
+            }
+            if let Some(ComponentData::Tree(tree)) = &checked.parsed {
+                tree_sways = tree.sways();
+            }
+            if let Some(ComponentData::Material(material)) = &checked.parsed {
+                if material.is_transparent() {
+                    transparent_material = Some(component_path.clone());
+                }
             }
             if type_name == "Shard" {
                 shard_path = Some(component_path.clone());
@@ -1109,6 +1121,34 @@ pub(super) fn walk<'a>(
                 )
                 .entity(name)
                 .component("Tree"),
+            );
+        }
+
+        // A tree's wind is a *vertex stage*, and the foliage pipelines cover
+        // the opaque colour passes and the two casters — not the blended one
+        // (M46 §7). Leaves are opaque by construction, so the only way to reach
+        // that pass with a tree is a transparent bark material, and a tree that
+        // then stands still while every other tree in the scene moves is the
+        // trap this repo keeps writing down: a feature that renders as if it
+        // were absent. A warning rather than an error, because the tree is
+        // still a correct tree.
+        if let (true, Some(path)) = (tree_sways && tree_path.is_some(), &transparent_material) {
+            errors.push(
+                cx.err(
+                    codes::TREE_SWAY_NEEDS_OPAQUE_BARK,
+                    format!(
+                        "the Tree on {name:?} asks for wind, but its Material is \
+                         transparent, and the wind is applied only on the opaque \
+                         pipelines — this tree will render still while the rest of \
+                         the scene moves; make the bark opaque, or set \"wind\" and \
+                         \"flutter\" to 0 to say the stillness is deliberate"
+                    ),
+                    path,
+                )
+                .entity(name)
+                .component("Tree")
+                .field("wind")
+                .warning(),
             );
         }
 

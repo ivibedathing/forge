@@ -2499,6 +2499,13 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "flutter": {
+            "default": 9.0,
+            "description": "How far one leaf beats about its own attachment, in degrees (M46).\n`>= 0`; `0` leaves the foliage rigid and the tree still bends.\n\nThis is the fast, per-leaf half of the motion: each leaf turns its face\nto the wind on its own phase, several times a second, which is what the\neye actually reads as \"leaves\" at any distance. Bark does not flutter —\na branch is not a leaf.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
           "height": {
             "default": 6.0,
             "description": "Trunk length in meters, before `Transform.scale`. `> 0`.",
@@ -2646,6 +2653,26 @@
             "maximum": 8,
             "minimum": 1,
             "type": "integer"
+          },
+          "wind": {
+            "default": 2.5,
+            "description": "How far the outermost twigs lean at full gust, in degrees (M46). `>= 0`;\n`0` holds the whole tree perfectly still, which is the pre-M46 tree.\n\nThe lean is a rotation about the tree's own foot, weighted so that the\ntrunk barely moves and each generation of branches gives back about half\nthe remaining distance to the full angle — so this is what the *twigs*\ndo, and the trunk does a fraction of it.\n\nThe default is a light breeze. A still day is around `1`, a gale that\nbends a crown visibly is `8`, and past `20` the canopy shears off its\nbranches: the sway is a rendering effect with no stiffness in it, and\nnothing stops a leaf overtaking the shoot it hangs on.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "wind_direction": {
+            "default": 0.0,
+            "description": "Which way the wind blows, in degrees — `0` toward −Z, the engine's\nforward axis, matching [`Meadow::wind_direction`], a camera, a light and\na particle cone.",
+            "format": "float",
+            "type": "number"
+          },
+          "wind_speed": {
+            "default": 3.0,
+            "description": "How fast gusts travel across the scene, in metres per second. `>= 0`.\n\nThe same field [`Meadow::wind_speed`] carries, at the same scale and\nagainst the same travelling noise — so a meadow under a stand of trees\ngusts *with* them rather than to its own rhythm. It also sets how fast\nindividual leaves beat: a stiffer breeze flutters them faster.",
+            "format": "float",
+            "minimum": 0.0,
+            "type": "number"
           }
         },
         "required": [
@@ -5803,6 +5830,13 @@
                 "minimum": 0.0,
                 "type": "number"
               },
+              "flutter": {
+                "default": 9.0,
+                "description": "How far one leaf beats about its own attachment, in degrees (M46).\n`>= 0`; `0` leaves the foliage rigid and the tree still bends.\n\nThis is the fast, per-leaf half of the motion: each leaf turns its face\nto the wind on its own phase, several times a second, which is what the\neye actually reads as \"leaves\" at any distance. Bark does not flutter —\na branch is not a leaf.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
               "height": {
                 "default": 6.0,
                 "description": "Trunk length in meters, before `Transform.scale`. `> 0`.",
@@ -5950,6 +5984,26 @@
                 "maximum": 8,
                 "minimum": 1,
                 "type": "integer"
+              },
+              "wind": {
+                "default": 2.5,
+                "description": "How far the outermost twigs lean at full gust, in degrees (M46). `>= 0`;\n`0` holds the whole tree perfectly still, which is the pre-M46 tree.\n\nThe lean is a rotation about the tree's own foot, weighted so that the\ntrunk barely moves and each generation of branches gives back about half\nthe remaining distance to the full angle — so this is what the *twigs*\ndo, and the trunk does a fraction of it.\n\nThe default is a light breeze. A still day is around `1`, a gale that\nbends a crown visibly is `8`, and past `20` the canopy shears off its\nbranches: the sway is a rendering effect with no stiffness in it, and\nnothing stops a leaf overtaking the shoot it hangs on.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "wind_direction": {
+                "default": 0.0,
+                "description": "Which way the wind blows, in degrees — `0` toward −Z, the engine's\nforward axis, matching [`Meadow::wind_direction`], a camera, a light and\na particle cone.",
+                "format": "float",
+                "type": "number"
+              },
+              "wind_speed": {
+                "default": 3.0,
+                "description": "How fast gusts travel across the scene, in metres per second. `>= 0`.\n\nThe same field [`Meadow::wind_speed`] carries, at the same scale and\nagainst the same travelling noise — so a meadow under a stand of trees\ngusts *with* them rather than to its own rhythm. It also sets how fast\nindividual leaves beat: a stiffer breeze flutters them faster.",
+                "format": "float",
+                "minimum": 0.0,
+                "type": "number"
               }
             },
             "required": [

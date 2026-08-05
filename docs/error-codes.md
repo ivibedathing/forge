@@ -158,6 +158,7 @@ build fails.
 | `gi_sun_samples_unused` | 1 | warning: LightProbeVolume.sun_samples asks for an arc, but this scene's sun does not move |
 | `road_pins_overlap` | 1 | warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly |
 | `road_follow_rotated` | 1 | warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed |
+| `tree_sway_needs_opaque_bark` | 1 | warning: a Tree asks for wind but its Material is transparent, and only the opaque pipelines carry the wind |
 | `scene_unreadable` | 1 | the scene file could not be read |
 | `scene_parse_desync` | 2 | internal bug: the scene passed validation but failed to parse |
 | `entity_not_found` | 1 | no entity has the requested name |

@@ -19,6 +19,10 @@ pub(crate) struct CachedMesh {
     /// skinned mesh. `None` for everything else — which is every mesh
     /// committed before M30 — so no existing vertex buffer grew by a byte.
     pub(crate) skin_offsets: Option<SkinOffsets>,
+    /// Where the wind weights start in the same buffer (M46), on
+    /// `skin_offsets`' terms: appended only for a tree that moves, so every
+    /// vertex buffer committed before it is byte for byte what it was.
+    pub(crate) sway_offset: Option<u64>,
     pub(crate) indices: wgpu::Buffer,
     pub(crate) index_count: u32,
     /// Frame counter at the last draw that used this mesh; entries idle for

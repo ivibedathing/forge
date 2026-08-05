@@ -7646,6 +7646,88 @@ fn m45_sun_bounce_diff_renders() {
     );
 }
 
+// ── Foliage sway (M46) ────────────────────────────────────────────────────
+
+/// Bit-reproducible for `m19_trees.png`'s reasons — CPU-generated geometry, a
+/// ground *plane* rather than a `Terrain`, and nothing fine against relief.
+/// Measured before blessing: five renders, one image.
+///
+/// Rendered at `--time 2.4` deliberately: at time 0 the gust is still a gust
+/// (the noise is sampled at a coordinate, not ramped up from nothing), but a
+/// fixture for a moving thing that pins the clock at zero invites the next
+/// person to assume the clock does not matter. It does — the same scene at
+/// `--time 0` is a different image, and this scene's `Still` tree is the one
+/// that is not.
+#[test]
+fn m46_foliage_sway_diff_renders() {
+    pin_baseline(
+        "examples/scenes/verify/m46_foliage_sway.json",
+        "examples/scenes/verify/baselines/m46_foliage_sway.png",
+        &["--time", "2.4"],
+    );
+}
+
+/// The whole default-on departure in one assertion (M46 §2): a tree that asks
+/// for no wind renders the *same bytes* at any clock, and one that does not ask
+/// does not.
+///
+/// This is what makes `wind: 0` a real opt-out rather than a very slow sway,
+/// and it is the property the A/B against `main` measures on the other side.
+#[test]
+fn a_windless_tree_renders_the_same_at_every_moment() {
+    let dir = std::env::temp_dir().join(format!("engine-m46-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = repo_path("examples/scenes/verify/m46_foliage_sway.json");
+    let render = |time: &str, name: &str| {
+        let out = dir.join(name);
+        let output = engine()
+            .arg("screenshot")
+            .arg(&scene)
+            .arg("--out")
+            .arg(&out)
+            .arg("--time")
+            .arg(time)
+            .arg("--camera")
+            .arg("Eye")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+        std::fs::read(&out).unwrap()
+    };
+
+    // The fixture as committed moves, so its two moments differ…
+    assert_ne!(render("0", "moving_a.png"), render("2.4", "moving_b.png"));
+
+    // …and the same scene with every tree stilled does not.
+    let mut still: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&scene).unwrap()).unwrap();
+    for entity in still["entities"].as_array_mut().unwrap() {
+        for component in entity["components"].as_array_mut().unwrap() {
+            if component["type"] == "Tree" {
+                component["wind"] = serde_json::json!(0.0);
+                component["flutter"] = serde_json::json!(0.0);
+            }
+        }
+    }
+    let stilled = dir.join("stilled.json");
+    std::fs::write(&stilled, serde_json::to_string_pretty(&still).unwrap()).unwrap();
+    let shot = |time: &str, name: &str| {
+        let out = dir.join(name);
+        let output = engine()
+            .arg("screenshot")
+            .arg(&stilled)
+            .arg("--out")
+            .arg(&out)
+            .arg("--time")
+            .arg(time)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+        std::fs::read(&out).unwrap()
+    };
+    assert_eq!(shot("0", "still_a.png"), shot("2.4", "still_b.png"));
+}
+
 /// **The postcard**: a surface facing a sunlit red wall gathers red light off
 /// it, and the same surface facing away does not.
 ///

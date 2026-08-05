@@ -394,6 +394,8 @@ registry! {
         "warning: two pinned Road heights are closer together than follow_blend, so neither is reached exactly";
     ROAD_FOLLOW_ROTATED = "road_follow_rotated", Input,
         "warning: a Road following a Terrain is rolled or pitched by its own Transform, so its heights are skewed";
+    TREE_SWAY_NEEDS_OPAQUE_BARK = "tree_sway_needs_opaque_bark", Input,
+        "warning: a Tree asks for wind but its Material is transparent, and only the opaque pipelines carry the wind";
 
     // ── Scene semantics at command time ───────────────────────────────
     SCENE_UNREADABLE = "scene_unreadable", Input,

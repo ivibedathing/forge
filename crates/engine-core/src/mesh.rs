@@ -42,6 +42,17 @@ pub struct MeshData {
     /// How much each of those four joints moves the vertex — glTF `WEIGHTS_0`,
     /// parallel to `joint_indices`.
     pub joint_weights: Vec<[f32; 4]>,
+
+    /// How much the wind moves each vertex, and on what phase (M46):
+    /// `x` = sway weight in `[0, 1]`, `0` pinned and `1` the loosest twig;
+    /// `y` = flutter phase in turns, per leaf.
+    ///
+    /// **Empty for every mesh that is not foliage** — the skinning channels'
+    /// rule, for their reason: the renderer appends this slot to a vertex
+    /// buffer only when it is non-empty, so no committed buffer and no
+    /// committed vertex layout changed when it arrived. Only `tree.rs` writes
+    /// it, and only for a tree that asks to move.
+    pub sway: Vec<[f32; 2]>,
 }
 
 impl MeshData {
@@ -60,6 +71,15 @@ impl MeshData {
     /// influences but no weights would skin every vertex to the origin.
     pub fn is_skinned(&self) -> bool {
         !self.joint_indices.is_empty() && self.joint_indices.len() == self.joint_weights.len()
+    }
+
+    /// Whether this geometry carries wind weights — the test that routes a draw
+    /// onto the foliage pipeline variants (M46).
+    ///
+    /// One weight per vertex or none: a partial channel would leave the tail of
+    /// the mesh reading whatever the buffer held past the end of it.
+    pub fn is_foliage(&self) -> bool {
+        !self.sway.is_empty() && self.sway.len() == self.positions.len()
     }
 }
 
