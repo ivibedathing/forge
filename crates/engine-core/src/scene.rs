@@ -875,7 +875,15 @@ impl Scene {
         // and both `physics::build` and `render_items_at` see only a `&World`.
         // So the geometry is grown once here, where the scene's directory is
         // still in hand, and hung on the entity as a runtime component.
-        let errors = resolve_scene_tile_grids(&mut scene, base_dir);
+        //
+        // Filtered by the same `ignored` list the validation above is, and for
+        // the same reason: `engine synthesize` opens a scene precisely to write
+        // the layout it has not got, so a missing one must not stop the load.
+        // A grid that grows nothing simply carries no `ResolvedTileGrid`.
+        let errors: Vec<EngineError> = resolve_scene_tile_grids(&mut scene, base_dir)
+            .into_iter()
+            .filter(|e| !ignored.contains(&e.error))
+            .collect();
         if !errors.is_empty() {
             return Err(errors.into_iter().map(|e| e.file(path)).collect());
         }
@@ -1224,6 +1232,20 @@ impl Scene {
     /// reads as a terrace. A pure function of the terrain, the transforms and
     /// the cell size, so `synthesize`, `validate` and the loader all reach the
     /// same numbers without passing them around.
+    ///
+    /// **Rounded up, not to nearest.** Splitting the difference is the obvious
+    /// rule and it buries half the village: a cell whose ground sits above its
+    /// own floor has the hillside coming through the flagstones, and a ball
+    /// dropped on the plaza lands on *terrain* and rolls away down a slope the
+    /// player cannot see. Clearing the ground instead leaves a gap under the
+    /// low cells, which is a gap a tile can fill — and the village tileset
+    /// fills it with a stone plinth, which is what a hillside village has
+    /// anyway. A plinth at least `cell.y` deep covers every gap this rule can
+    /// produce.
+    ///
+    /// The engine does not flatten the ground to meet the grid: `Terrain` owns
+    /// its height field, and a second recipe writing into it is M40's road
+    /// carving question, deferred with M40's answer.
     pub fn tile_grid_offsets(&self, entity_name: &str, grid: &crate::components::TileGrid, cell: glam::Vec3) -> Vec<i32> {
         if grid.ground.is_empty() || cell.y <= 0.0 {
             return Vec::new();
@@ -1247,7 +1269,7 @@ impl Scene {
                 let ground = self
                     .terrain_height(&grid.ground, world.x, world.z)
                     .unwrap_or(placement.position.y);
-                offsets.push(((ground - placement.position.y) / cell.y).round() as i32);
+                offsets.push(((ground - placement.position.y) / cell.y).ceil() as i32);
             }
         }
         offsets

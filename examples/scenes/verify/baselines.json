@@ -654,6 +654,15 @@
      "height": 360,
      "milestone": "M46",
      "pinned_by": "cli.rs::m46_foliage_sway_diff_renders"
+    },
+    {
+     "baseline": "examples/scenes/verify/baselines/m47_tiles.png",
+     "scene": "examples/scenes/verify/m47_tiles.json",
+     "args": ["--steps", "240"],
+     "width": 800,
+     "height": 450,
+     "milestone": "M47",
+     "pinned_by": "cli.rs::the_m47_tiles_fixture_matches_its_baseline"
     }
   ],
   "traces": [

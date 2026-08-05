@@ -1,0 +1,80 @@
+{
+  "name": "M47 tile synthesis",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.34, 0.48, 0.72],
+    "sky_horizon": [0.72, 0.76, 0.78],
+    "sky_ground": [0.24, 0.22, 0.2],
+    "shadows": true,
+    "shadow_distance": 60.0,
+    "samples": 1
+  },
+  "physics": { "gravity": [0.0, -9.81, 0.0] },
+  "entities": [
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-38.0, 208.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.96, 0.88], "intensity": 1.15 }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [{ "type": "AmbientLight", "color": [0.62, 0.68, 0.8], "intensity": 0.16 }]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0], "scale": [80.0, 1.0, 80.0] },
+        {
+          "type": "Terrain",
+          "seed": 11,
+          "segments": 96,
+          "height": 3.4,
+          "feature_scale": 22.0,
+          "octaves": 3,
+          "persistence": 0.45,
+          "layers": [
+            { "albedo": [0.28, 0.34, 0.18], "height_range": [-4.0, 1.2], "roughness": 0.95 },
+            { "albedo": [0.42, 0.4, 0.32], "height_range": [0.6, 6.0], "roughness": 0.9 }
+          ]
+        },
+        { "type": "Collider", "shape": "trimesh" }
+      ]
+    },
+    {
+      "name": "Village",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0] },
+        {
+          "type": "TileGrid",
+          "tileset": "../../tilesets/village.json",
+          "layout": "layouts/m47_village.tiles.json",
+          "size": [10, 2, 8],
+          "seed": 7,
+          "fill_ground": "cobble",
+          "fill_background": "air",
+          "ground": "Ground"
+        },
+        { "type": "Collider", "shape": "trimesh" }
+      ]
+    },
+    {
+      "name": "Ball",
+      "components": [
+        { "type": "Transform", "position": [0.0, 4.0, -5.0] },
+        { "type": "Mesh", "asset": "builtin:sphere" },
+        { "type": "Material", "albedo": [0.85, 0.35, 0.2], "roughness": 0.4 },
+        { "type": "RigidBody", "body": "dynamic" },
+        { "type": "Collider", "shape": "sphere", "radius": 0.5, "density": 900.0 }
+      ]
+    },
+    {
+      "name": "Eye",
+      "components": [
+        { "type": "Transform", "position": [1.0, 11.0, -19.0], "rotation": [24.0, 182.0, 0.0] },
+        { "type": "Camera", "active": true, "near": 0.1, "far": 200.0 }
+      ]
+    }
+  ]
+}

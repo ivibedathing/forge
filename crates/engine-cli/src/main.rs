@@ -585,6 +585,52 @@ enum Command {
     /// like `--help` does — see docs/cli-contract.md.
     AgentGuide,
 
+    /// Solve a TileGrid's layout by model synthesis, in overlapping blocks
+    /// (M47).
+    ///
+    /// Writes beside the scene by default, because asset paths resolve
+    /// relative to the scene file — the `bake-gi` rule, for its reason.
+    ///
+    /// `--region` re-solves only the blocks that overlap a rectangle of cells,
+    /// reading everything outside them as fixed border. That is how an area is
+    /// changed without re-rolling the world. A cell written `!name@rotation` is
+    /// locked and survives every solve, including a full one.
+    Synthesize {
+        /// The scene holding the grid.
+        scene: PathBuf,
+        /// Which `TileGrid` — required only when the scene has more than one.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Override the component's seed for this solve.
+        #[arg(long)]
+        seed: Option<u32>,
+        /// `x0,z0,x1,z1` inclusive, **in cells**: re-solve only the blocks
+        /// whose interior meets this rectangle. Metres would make the flag's
+        /// meaning depend on Transform.scale.
+        #[arg(long, allow_hyphen_values = true)]
+        region: Option<String>,
+        /// Block extent in cells, `x,z`. Y is always taken whole.
+        #[arg(long)]
+        block: Option<String>,
+        /// Cells two neighbouring blocks share, at least 1.
+        #[arg(long)]
+        overlap: Option<u32>,
+        /// Retries a block gets before it gives up and keeps what stood there.
+        #[arg(long)]
+        attempts: Option<u32>,
+        /// Write somewhere other than the component's `layout`.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Write the layout. Without it the report is printed and nothing on
+        /// disk changes.
+        #[arg(long)]
+        write: bool,
+        /// Recompute the digest and fail `tile_layout_stale` when the scene has
+        /// moved under the layout. Writes nothing.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Print a tileset's tiles: every rotation, its six sockets, how many
     /// tiles may sit across each face, and what it grows (M47).
     ///
@@ -819,6 +865,29 @@ fn main() {
             print!("{}", scaffold::AGENT_GUIDE);
             Ok(())
         }
+        Command::Synthesize {
+            scene,
+            entity,
+            seed,
+            region,
+            block,
+            overlap,
+            attempts,
+            out,
+            write,
+            check,
+        } => synthesize(SynthesizeArgs {
+            scene,
+            entity,
+            seed,
+            region,
+            block,
+            overlap,
+            attempts,
+            out,
+            write,
+            check,
+        }),
         Command::ListTiles { tileset } => list_tiles(tileset),
         Command::ListComponents {
             component,
@@ -2009,6 +2078,472 @@ fn ui_layout(
         serde_json::json!({
             "viewport": [width, height],
             "elements": elements,
+        })
+    );
+    Ok(())
+}
+
+/// `engine synthesize`'s flags, as a named struct for the reason
+/// [`FractureArgs`] is one: several are `Option<String>` and a swapped pair
+/// would type-check and solve the wrong thing.
+struct SynthesizeArgs {
+    scene: PathBuf,
+    entity: Option<String>,
+    seed: Option<u32>,
+    region: Option<String>,
+    block: Option<String>,
+    overlap: Option<u32>,
+    attempts: Option<u32>,
+    out: Option<PathBuf>,
+    write: bool,
+    check: bool,
+}
+
+/// Everything a solve needs, read off the scene once.
+struct GridInputs {
+    name: String,
+    component: engine_core::components::TileGrid,
+    tileset: engine_core::tileset::Tileset,
+    tiles: Vec<engine_core::tileset::ExpandedTile>,
+    compat: engine_core::tileset::Compat,
+    grid: engine_core::tilelayout::Grid,
+    target: PathBuf,
+}
+
+/// `engine synthesize <scene> [--entity NAME] [--region ...] [--write]
+/// [--check]` (M47).
+///
+/// The `bake-gi` shape, and for its reasons: a solve is expensive, its output
+/// is an artifact the scene names, and the artifact is what a later edit edits.
+/// `--check` is the same command with the writing taken out — it recomputes the
+/// digest and compares — and it lives here rather than in `validate` because
+/// the digest reads the whole tileset and the scene's terrain, which is a cost
+/// the fast gate should not pay on every file.
+fn synthesize(args: SynthesizeArgs) -> Result<()> {
+    if args.check && args.out.is_some() {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            "--check writes nothing, so --out has nothing to name",
+        )
+        .file(args.scene.display().to_string()));
+    }
+    if args.check && args.write {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            "--check writes nothing; drop --write to check, or --check to solve",
+        )
+        .file(args.scene.display().to_string()));
+    }
+
+    let inputs = read_grid(&args)?;
+    let params = solve_params(&args, &inputs)?;
+    let seed = args.seed.unwrap_or(inputs.component.seed);
+
+    // The prior layout, when there is one. Locked cells and `--region` both
+    // read from it, and both are meaningless without it.
+    let prior = std::fs::read_to_string(&inputs.target)
+        .ok()
+        .and_then(|text| engine_core::tilelayout::TileLayout::parse(&text).ok())
+        .filter(|layout| layout.header.size == inputs.component.size);
+
+    let digest = inputs_digest(&inputs, seed, params, prior.as_ref());
+    if args.check {
+        return check_layout(&args, &inputs, &digest);
+    }
+
+    let (prior_cells, locked) = match &prior {
+        Some(layout) => {
+            let cells = layout.resolve(&inputs.tiles).map_err(|unknown| {
+                EngineError::new(
+                    codes::UNKNOWN_TILE,
+                    format!(
+                        "the layout at {} places tiles the tileset no longer defines: {}; \
+                         delete it to solve from scratch",
+                        inputs.target.display(),
+                        unknown.join(", ")
+                    ),
+                )
+                .entity(&inputs.name)
+                .file(args.scene.display().to_string())
+            })?;
+            let locked: Vec<bool> = layout.cells.iter().map(|c| c.locked).collect();
+            (Some(cells), locked)
+        }
+        None => (None, vec![false; inputs.grid.cell_count()]),
+    };
+
+    if args.region.is_some() && prior_cells.is_none() {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!(
+                "--region re-solves part of an existing layout, and there is none at {}; \
+                 run `engine synthesize --write` once first",
+                inputs.target.display()
+            ),
+        )
+        .entity(&inputs.name)
+        .file(args.scene.display().to_string()));
+    }
+
+    let (fill_ground, fill_background) =
+        engine_core::tilegrid::fill_indices(&inputs.component, &inputs.tileset, &inputs.tiles)
+            .map_err(|name| {
+                EngineError::new(
+                    codes::UNKNOWN_TILE,
+                    format!("the tileset defines no tile named {name:?}"),
+                )
+                .entity(&inputs.name)
+                .file(args.scene.display().to_string())
+            })?;
+
+    let region = parse_region(args.region.as_deref(), &inputs)?;
+    let outcome = engine_core::synthesize::synthesize(&engine_core::synthesize::Request {
+        grid: &inputs.grid,
+        tiles: &inputs.tiles,
+        compat: &inputs.compat,
+        seed,
+        params,
+        fill_ground,
+        fill_background,
+        prior: prior_cells.as_deref(),
+        locked: &locked,
+        region,
+    })
+    .map_err(|e| e.entity(&inputs.name).file(args.scene.display().to_string()))?;
+
+    let layout = engine_core::tilelayout::TileLayout {
+        header: engine_core::tilelayout::LayoutHeader {
+            format: engine_core::tilelayout::FORMAT.to_string(),
+            scene: args
+                .scene
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            entity: inputs.name.clone(),
+            tileset: inputs.component.tileset.clone(),
+            tileset_hash: engine_core::tileset::digest(&inputs.tileset),
+            inputs_hash: digest.clone(),
+            size: inputs.component.size,
+            seed,
+            block: params.block,
+            overlap: params.overlap,
+            attempts: params.attempts,
+            fallbacks: outcome.fallbacks,
+            offsets: inputs.grid.offsets.clone(),
+        },
+        cells: outcome
+            .cells
+            .iter()
+            .enumerate()
+            .map(|(cell, tile)| {
+                engine_core::tilelayout::Cell::new(
+                    inputs.tiles[*tile].token.clone(),
+                    locked.get(cell).copied().unwrap_or(false),
+                )
+            })
+            .collect(),
+    };
+
+    if args.write {
+        if let Some(parent) = inputs.target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                EngineError::new(
+                    codes::SCENE_WRITE_FAILED,
+                    format!("could not create {}: {e}", parent.display()),
+                )
+            })?;
+        }
+        engine_core::formatter::write_atomic(&inputs.target, &layout.to_text())?;
+    }
+
+    let placed = layout
+        .cells
+        .iter()
+        .filter(|c| !c.token.is_empty())
+        .count();
+    println!(
+        "{}",
+        serde_json::json!({
+            "scene": args.scene.display().to_string(),
+            "entity": inputs.name,
+            "layout": inputs.target.display().to_string(),
+            "tileset": inputs.component.tileset,
+            "seed": seed,
+            "size": inputs.component.size,
+            "cells": placed,
+            "locked": locked.iter().filter(|l| **l).count(),
+            "terraced": !inputs.grid.offsets.is_empty(),
+            "blocks": outcome.blocks,
+            "solved": outcome.solved,
+            "retries": outcome.retries,
+            // Blocks that used up their retries and kept what stood there. The
+            // number that says a tileset is over-constrained without reading
+            // the picture.
+            "fallbacks": outcome.fallbacks,
+            "vertices": engine_core::tilegrid::vertex_count(
+                &inputs.tileset,
+                &inputs.tiles,
+                &outcome.cells,
+            ),
+            "inputs_hash": digest,
+            "written": args.write,
+        })
+    );
+    Ok(())
+}
+
+/// Read the scene, resolve the grid's two files, and derive its terracing.
+fn read_grid(args: &SynthesizeArgs) -> Result<GridInputs> {
+    // A grid with no layout yet is exactly the case this command exists to
+    // fix, so its own absence must not stop the scene loading — the
+    // `load_scene_for_bake` trade.
+    let scene = load_scene_for_synthesis(&args.scene)?;
+    let base_dir = args.scene.parent().unwrap_or(Path::new("")).to_path_buf();
+    let name = sole_entity_with::<engine_core::components::TileGrid>(
+        &scene,
+        &args.scene,
+        &args.entity,
+        "TileGrid",
+        "tile grids",
+    )?;
+    let handle = scene.entity(&name).expect("named above");
+    let component = (*scene
+        .world
+        .get::<&engine_core::components::TileGrid>(handle)
+        .expect("filtered above"))
+    .clone();
+
+    let tileset_path = engine_core::tileset::resolve_tileset(&component.tileset, &base_dir)
+        .map_err(|e| e.entity(&name).file(args.scene.display().to_string()))?;
+    let tileset = engine_core::tileset::load_tileset(&tileset_path)?;
+    let tiles = engine_core::tileset::expand(&tileset).map_err(|e| e.entity(&name))?;
+    let compat = engine_core::tileset::Compat::build(&tiles);
+
+    let grid = engine_core::tilelayout::Grid {
+        size: component.size,
+        offsets: scene.tile_grid_offsets(&name, &component, tileset.cell),
+    };
+    let target = match &args.out {
+        Some(path) => path.clone(),
+        None => base_dir.join(&component.layout),
+    };
+
+    Ok(GridInputs {
+        name,
+        component,
+        tileset,
+        tiles,
+        compat,
+        grid,
+        target,
+    })
+}
+
+/// Load a scene whose grid may have no layout yet, and whose layout may be
+/// stale — the two states this command is run to leave.
+fn load_scene_for_synthesis(path: &PathBuf) -> Result<Scene> {
+    const TOLERATED: &[&str] = &[
+        codes::TILE_LAYOUT_MISSING,
+        codes::TILE_LAYOUT_STALE,
+        codes::TILE_LAYOUT_MALFORMED,
+        codes::TILE_LAYOUT_MISMATCH,
+        codes::TILE_LAYOUT_ILLEGAL,
+        codes::UNKNOWN_TILE,
+        // A grid that cannot be built yet is the whole reason to run this.
+        codes::GI_BAKE_MISSING,
+        codes::GI_BAKE_STALE,
+    ];
+
+    let display = path.display().to_string();
+    let source = std::fs::read_to_string(path).map_err(|e| {
+        EngineError::new(
+            codes::SCENE_UNREADABLE,
+            format!("could not read scene: {e}"),
+        )
+        .file(&display)
+    })?;
+
+    let mut diagnostics = engine_core::validate::validate_source(&source, &display);
+    diagnostics.retain(|d| !TOLERATED.contains(&d.error));
+    let fatal: Vec<EngineError> = diagnostics
+        .into_iter()
+        .filter(|d| !d.is_warning())
+        .collect();
+    if !fatal.is_empty() {
+        for error in &fatal {
+            error.emit();
+        }
+        return Err(EngineError::new(
+            codes::VALIDATION_FAILED,
+            format!("{} is not valid; fix it before synthesizing", display),
+        )
+        .file(&display));
+    }
+
+    Scene::from_source_ignoring(&source, &display, TOLERATED).map_err(|errors| {
+        for error in errors.iter().skip(1) {
+            error.emit();
+        }
+        errors.into_iter().next().expect("non-empty")
+    })
+}
+
+fn solve_params(
+    args: &SynthesizeArgs,
+    inputs: &GridInputs,
+) -> Result<engine_core::synthesize::Params> {
+    let mut params = engine_core::synthesize::Params::default();
+    if let Some(text) = &args.block {
+        let pair = parse_pair(text, "--block")?;
+        params.block = [pair.0, u32::MAX, pair.1];
+    }
+    if let Some(overlap) = args.overlap {
+        params.overlap = overlap.max(1);
+    }
+    if let Some(attempts) = args.attempts {
+        params.attempts = attempts.max(1);
+    }
+    let _ = inputs;
+    Ok(params)
+}
+
+fn parse_pair(text: &str, flag: &str) -> Result<(u32, u32)> {
+    let parts: Vec<&str> = text.split(',').collect();
+    let parsed: Option<Vec<u32>> = (parts.len() == 2)
+        .then(|| parts.iter().map(|p| p.trim().parse::<u32>().ok()).collect())
+        .flatten();
+    match parsed {
+        Some(values) if values[0] > 0 && values[1] > 0 => Ok((values[0], values[1])),
+        _ => Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!("{flag} takes two positive whole numbers, as x,z — found {text:?}"),
+        )),
+    }
+}
+
+fn parse_region(text: Option<&str>, inputs: &GridInputs) -> Result<Option<[u32; 4]>> {
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    let parts: Vec<&str> = text.split(',').collect();
+    let parsed: Option<Vec<u32>> = (parts.len() == 4)
+        .then(|| parts.iter().map(|p| p.trim().parse::<u32>().ok()).collect())
+        .flatten();
+    let Some(values) = parsed else {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!("--region takes four whole cell indices, as x0,z0,x1,z1 — found {text:?}"),
+        ));
+    };
+    let [x0, z0, x1, z1] = [values[0], values[1], values[2], values[3]];
+    if x0 > x1 || z0 > z1 {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!("--region {text:?} runs backwards; it is x0,z0,x1,z1 inclusive"),
+        ));
+    }
+    let [nx, _, nz] = inputs.component.size;
+    if x1 >= nx || z1 >= nz {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!(
+                "--region {text:?} reaches past the grid, which is {nx} by {nz} cells \
+                 (indices are 0-based and inclusive)"
+            ),
+        ));
+    }
+    Ok(Some([x0, z0, x1, z1]))
+}
+
+/// Everything a layout is a function of.
+///
+/// The locked set is in here because a lock is an *input* to the solve: pinning
+/// a cell and re-running produces a different world, and a digest that ignored
+/// it would call the old file current.
+fn inputs_digest(
+    inputs: &GridInputs,
+    seed: u32,
+    params: engine_core::synthesize::Params,
+    prior: Option<&engine_core::tilelayout::TileLayout>,
+) -> String {
+    let mut h = engine_core::gi::InputsHasher::new();
+    h.str(&engine_core::tileset::digest(&inputs.tileset));
+    h.str(&inputs.component.tileset);
+    h.str(&inputs.component.fill_ground);
+    h.str(&inputs.component.fill_background);
+    for axis in inputs.component.size {
+        h.u32(axis);
+    }
+    h.u32(seed);
+    for axis in params.block {
+        h.u32(axis);
+    }
+    h.u32(params.overlap).u32(params.attempts);
+    h.u32(inputs.grid.offsets.len() as u32);
+    for offset in &inputs.grid.offsets {
+        h.u32(*offset as u32);
+    }
+    // Which cells are pinned, not what they hold: what they hold is the
+    // layout's own content, and hashing it would make the digest a checksum of
+    // the file rather than of its inputs.
+    if let Some(layout) = prior {
+        for (index, cell) in layout.cells.iter().enumerate() {
+            if cell.locked {
+                h.u32(index as u32).str(&cell.token);
+            }
+        }
+    }
+    h.finish()
+}
+
+/// The staleness half, mirroring `check_bake`.
+fn check_layout(args: &SynthesizeArgs, inputs: &GridInputs, digest: &str) -> Result<()> {
+    let text = std::fs::read_to_string(&inputs.target).map_err(|e| {
+        EngineError::new(
+            codes::TILE_LAYOUT_MISSING,
+            format!(
+                "could not read {}: {e}; run `engine synthesize --write`",
+                inputs.target.display()
+            ),
+        )
+        .entity(&inputs.name)
+        .file(args.scene.display().to_string())
+    })?;
+    let layout = engine_core::tilelayout::TileLayout::parse(&text).map_err(|bad| {
+        EngineError::new(
+            codes::TILE_LAYOUT_MALFORMED,
+            format!("{}: {bad}", inputs.target.display()),
+        )
+        .entity(&inputs.name)
+        .file(args.scene.display().to_string())
+    })?;
+
+    if layout.header.inputs_hash != digest {
+        return Err(EngineError::new(
+            codes::TILE_LAYOUT_STALE,
+            format!(
+                "{} was solved from different inputs (file {}, scene now {}); \
+                 re-run `engine synthesize --write`",
+                inputs.target.display(),
+                layout.header.inputs_hash,
+                digest
+            ),
+        )
+        .entity(&inputs.name)
+        .file(args.scene.display().to_string()));
+    }
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "scene": args.scene.display().to_string(),
+            "entity": inputs.name,
+            "layout": inputs.target.display().to_string(),
+            "current": true,
+            "cells": layout.cells.len(),
+            "locked": layout.cells.iter().filter(|c| c.locked).count(),
+            "fallbacks": layout.header.fallbacks,
+            "inputs_hash": digest,
         })
     );
     Ok(())

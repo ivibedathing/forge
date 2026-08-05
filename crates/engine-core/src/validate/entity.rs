@@ -867,7 +867,9 @@ pub(super) fn walk<'a>(
             // A `Shard` (M43) is the third: a `convex_hull` collider on one,
             // with no asset, collides with the hull the shard draws — which is
             // what makes a broken piece's drawn shape and collided shape
-            // impossible to author apart.
+            // impossible to author apart. A `TileGrid` (M47) is the fourth, and
+            // it is the case that most needs it: a village nobody can walk on
+            // is a village nobody can use.
             if mesh_shape
                 && collider_data.asset.is_none()
                 && !has_mesh
@@ -875,6 +877,7 @@ pub(super) fn walk<'a>(
                 && road.is_none()
                 && junction.is_none()
                 && shard_path.is_none()
+                && tile_grid.is_none()
             {
                 errors.push(
                     cx.err(
