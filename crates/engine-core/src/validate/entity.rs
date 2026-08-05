@@ -138,6 +138,81 @@ impl Kind {
     }
 }
 
+/// One row of [`RECIPE_RULES`]: a component that refuses a `Mesh` and a
+/// `Material` beside it, with the prose that makes its error its own.
+/// `pub(super)` so the test corpus can iterate the real table — a new row
+/// gets its trip test by existing.
+pub(super) struct RecipeRule {
+    /// The component's name, as `.component()` reports it.
+    pub(super) component: &'static str,
+    /// The noun of the message — "a Water component", "a LightProbeVolume".
+    label: &'static str,
+    pub(super) code: &'static str,
+    /// Why the extra is refused; spliced between the extras and the fix.
+    why: &'static str,
+}
+
+/// The seven components that forbid a `Mesh` and a `Material` beside them —
+/// six recipes that **own their geometry**, plus `LightProbeVolume`, which
+/// owns none (it is a *region of space*; the reason differs, the rule does
+/// not). One table in `Kind::TEMPLATE.forbidden`'s shape rather than seven
+/// hand-copied blocks, so the list is countable and a new recipe is one row
+/// plus its error code. `Tree` and `Shard` are deliberately absent: they
+/// forbid only the `Mesh` — a Tree's `Material` is its bark, a Shard's the
+/// surface of the thing it broke off — and keep their own blocks in the walk.
+pub(super) const RECIPE_RULES: &[RecipeRule] = &[
+    RecipeRule {
+        component: "Cloud",
+        label: "a Cloud component",
+        code: codes::CLOUD_WITH_MESH,
+        why: "a Cloud grows its own geometry (sized by Transform.scale) \
+              and carries its own colours",
+    },
+    RecipeRule {
+        component: "Road",
+        label: "a Road component",
+        code: codes::ROAD_WITH_MESH,
+        why: "a road generates its own surface from its centerline and \
+              carries its own colours",
+    },
+    RecipeRule {
+        component: "Junction",
+        label: "a Junction component",
+        code: codes::JUNCTION_WITH_MESH,
+        why: "a junction generates its own patch from the roads that reach \
+              it and carries its own colours",
+    },
+    RecipeRule {
+        component: "Water",
+        label: "a Water component",
+        code: codes::WATER_WITH_MESH,
+        why: "water generates its own surface (sized by Transform.scale) \
+              and carries its own colours",
+    },
+    RecipeRule {
+        component: "Terrain",
+        label: "a Terrain component",
+        code: codes::TERRAIN_WITH_MESH,
+        why: "terrain generates its own surface (sized by Transform.scale) \
+              and paints it from its layers",
+    },
+    RecipeRule {
+        component: "Meadow",
+        label: "a Meadow component",
+        code: codes::MEADOW_WITH_MESH,
+        why: "a meadow grows its own plants (over the footprint \
+              Transform.scale gives) and carries its own colours in its \
+              stages",
+    },
+    RecipeRule {
+        component: "LightProbeVolume",
+        label: "a LightProbeVolume",
+        code: codes::LIGHT_PROBE_VOLUME_WITH_MESH,
+        why: "a probe volume is a region of space that lights other \
+              surfaces and draws nothing itself",
+    },
+];
+
 /// Walk every entity — or every template (M37) — pushing per-entry errors and
 /// collecting the rest.
 pub(super) fn walk<'a>(
@@ -357,6 +432,10 @@ pub(super) fn walk<'a>(
         // has needs the `SkinnedCollider` beside it.
         let mut ragdoll: Option<(crate::components::Ragdoll, String)> = None;
         let mut tree_path: Option<String> = None;
+        // Whether this entity's `Tree` asks for wind (M46), and whether its
+        // `Material` is one the foliage pipelines do not cover.
+        let mut tree_sways = false;
+        let mut transparent_material: Option<String> = None;
         let mut shard_path: Option<String> = None;
         let mut cloud_path: Option<String> = None;
         let mut material_paths: Vec<String> = Vec::new();
@@ -449,6 +528,14 @@ pub(super) fn walk<'a>(
             }
             if type_name == "Tree" {
                 tree_path = Some(component_path.clone());
+            }
+            if let Some(ComponentData::Tree(tree)) = &checked.parsed {
+                tree_sways = tree.sways();
+            }
+            if let Some(ComponentData::Material(material)) = &checked.parsed {
+                if material.is_transparent() {
+                    transparent_material = Some(component_path.clone());
+                }
             }
             if type_name == "Shard" {
                 shard_path = Some(component_path.clone());
@@ -1037,6 +1124,34 @@ pub(super) fn walk<'a>(
             );
         }
 
+        // A tree's wind is a *vertex stage*, and the foliage pipelines cover
+        // the opaque colour passes and the two casters — not the blended one
+        // (M46 §7). Leaves are opaque by construction, so the only way to reach
+        // that pass with a tree is a transparent bark material, and a tree that
+        // then stands still while every other tree in the scene moves is the
+        // trap this repo keeps writing down: a feature that renders as if it
+        // were absent. A warning rather than an error, because the tree is
+        // still a correct tree.
+        if let (true, Some(path)) = (tree_sways && tree_path.is_some(), &transparent_material) {
+            errors.push(
+                cx.err(
+                    codes::TREE_SWAY_NEEDS_OPAQUE_BARK,
+                    format!(
+                        "the Tree on {name:?} asks for wind, but its Material is \
+                         transparent, and the wind is applied only on the opaque \
+                         pipelines — this tree will render still while the rest of \
+                         the scene moves; make the bark opaque, or set \"wind\" and \
+                         \"flutter\" to 0 to say the stillness is deliberate"
+                    ),
+                    path,
+                )
+                .entity(name)
+                .component("Tree")
+                .field("wind")
+                .warning(),
+            );
+        }
+
         // ── Shard entity checks (M43) ─────────────────────────────────
         //
         // A `Shard` *is* the entity's geometry, for `tree_with_mesh`'s reason:
@@ -1059,68 +1174,64 @@ pub(super) fn walk<'a>(
             );
         }
 
-        // ── Cloud entity checks (M20) ─────────────────────────────────
+        // ── Recipes refuse a Mesh and a Material ──────────────────────
         //
-        // A `Cloud` grows the entity's geometry and shades it with its own
-        // fields, so a `Mesh` or a `Material` beside it is a second, silently
-        // ignored answer to what this entity is — `water_with_mesh`'s reasoning,
-        // and an error for the same reason: the two authorings look identical in
-        // the file and nothing in the render says which one lost.
-        if let Some(path) = &cloud_path {
-            if has_mesh || !material_paths.is_empty() {
-                let extras = match (has_mesh, material_paths.is_empty()) {
-                    (true, false) => "a Mesh and a Material",
-                    (true, true) => "a Mesh",
-                    _ => "a Material",
-                };
+        // A recipe *is* the entity's geometry (and a `LightProbeVolume` is a
+        // region of space that grows none), so a `Mesh` or a `Material`
+        // beside one is a second, silently ignored answer to what this
+        // entity is — invariant 2's hidden state in miniature. An error
+        // rather than a warning because the two authorings look identical in
+        // the file and nothing in the render says which one lost. Driven by
+        // [`RECIPE_RULES`], where seven hand copies of this block stood.
+        if has_mesh || !material_paths.is_empty() {
+            let extras = match (has_mesh, material_paths.is_empty()) {
+                (true, false) => "a Mesh and a Material",
+                (true, true) => "a Mesh",
+                _ => "a Material",
+            };
+            // In table order, which follows the walk's section order, so a
+            // scene that (illegally but parseably) stacks two recipes on one
+            // entity still reports them in the order it always has.
+            let present: [(&str, Option<&String>); 7] = [
+                ("Cloud", cloud_path.as_ref()),
+                ("Road", road.as_ref().map(|(_, path)| path)),
+                ("Junction", junction.as_ref().map(|(_, path)| path)),
+                ("Water", water.as_ref().map(|(_, path)| path)),
+                ("Terrain", terrain.as_ref().map(|(_, path)| path)),
+                ("Meadow", meadow.as_ref().map(|(_, path)| path)),
+                (
+                    "LightProbeVolume",
+                    light_probe_volume.as_ref().map(|(_, path)| path),
+                ),
+            ];
+            for (component, path) in present {
+                let Some(path) = path else { continue };
+                let rule = RECIPE_RULES
+                    .iter()
+                    .find(|rule| rule.component == component)
+                    .expect("every present-recipe entry has a table row");
                 errors.push(
                     cx.err(
-                        codes::CLOUD_WITH_MESH,
+                        rule.code,
                         format!(
-                            "entity {name:?} has a Cloud component and also {extras}; \
-                             a Cloud grows its own geometry (sized by Transform.scale) \
-                             and carries its own colours — drop the extra component"
+                            "entity {name:?} has {} and also {extras}; {} — drop \
+                             the extra component",
+                            rule.label, rule.why
                         ),
                         path,
                     )
                     .entity(name)
-                    .component("Cloud"),
+                    .component(component),
                 );
             }
         }
 
-        // ── Road surface checks (M23) ─────────────────────────────────
-        //
-        // Same rule as water and cloud: a `Road` generates its own ribbon and
-        // carries its own colours, so a `Mesh` or `Material` beside it is a
-        // second, silently ignored answer to what this surface is.
+        // ── Road surface checks (M23/M40) ─────────────────────────────
         //
         // (A road with a collider and no Transform is a road the car falls
         // through — already `missing_transform` from the collider check above.
         // One problem, one error.)
-        if let Some((_, path)) = &road {
-            if has_mesh || !material_paths.is_empty() {
-                let extras = match (has_mesh, material_paths.is_empty()) {
-                    (true, false) => "a Mesh and a Material",
-                    (true, true) => "a Mesh",
-                    _ => "a Material",
-                };
-                errors.push(
-                    cx.err(
-                        codes::ROAD_WITH_MESH,
-                        format!(
-                            "entity {name:?} has a Road component and also {extras}; \
-                             a road generates its own surface from its centerline and \
-                             carries its own colours — drop the extra component"
-                        ),
-                        path,
-                    )
-                    .entity(name)
-                    .component("Road"),
-                );
-            }
-        }
-
+        //
         // A road that follows a terrain samples the ground in world space and
         // brings the answer back into its own local space (M40). That mapping
         // is exact for the translation, scale and yaw a road is actually placed
@@ -1151,63 +1262,8 @@ pub(super) fn walk<'a>(
             }
         }
 
-        // ── Junction surface checks (M40) ─────────────────────────────
-        //
-        // The road rule, one primitive over: a `Junction` generates its own
-        // patch and carries its own colours, so a `Mesh` or `Material` beside
-        // it is a second, silently ignored answer to what this surface is.
-        if let Some((_, path)) = &junction {
-            if has_mesh || !material_paths.is_empty() {
-                let extras = match (has_mesh, material_paths.is_empty()) {
-                    (true, false) => "a Mesh and a Material",
-                    (true, true) => "a Mesh",
-                    _ => "a Material",
-                };
-                errors.push(
-                    cx.err(
-                        codes::JUNCTION_WITH_MESH,
-                        format!(
-                            "entity {name:?} has a Junction component and also {extras}; \
-                             a junction generates its own patch from the roads that reach \
-                             it and carries its own colours — drop the extra component"
-                        ),
-                        path,
-                    )
-                    .entity(name)
-                    .component("Junction"),
-                );
-            }
-        }
-
         // ── Water surface checks (M18) ────────────────────────────────
         if let Some((water, path)) = &water {
-            // A `Water` entity generates its own grid and shades it with its
-            // own fields, so a `Mesh` or `Material` beside it is a second,
-            // silently ignored answer to what this surface is — invariant 2's
-            // hidden state in miniature. An error rather than a warning
-            // because the two authorings look identical in the file and
-            // nothing in the render tells you which one lost.
-            if has_mesh || !material_paths.is_empty() {
-                let extras = match (has_mesh, material_paths.is_empty()) {
-                    (true, false) => "a Mesh and a Material",
-                    (true, true) => "a Mesh",
-                    _ => "a Material",
-                };
-                errors.push(
-                    cx.err(
-                        codes::WATER_WITH_MESH,
-                        format!(
-                            "entity {name:?} has a Water component and also {extras}; \
-                             water generates its own surface (sized by Transform.scale) \
-                             and carries its own colours — drop the extra component"
-                        ),
-                        path,
-                    )
-                    .entity(name)
-                    .component("Water"),
-                );
-            }
-
             // The Gerstner constraint. Past a total steepness of 1 the surface
             // folds through itself: crests curl into loops, normals invert, and
             // the render looks like a shader bug rather than like the number
@@ -1241,31 +1297,6 @@ pub(super) fn walk<'a>(
 
         // ── Terrain checks (M22) ─────────────────────────────────────────
         if let Some((terrain, path)) = &terrain {
-            // Same rule as water, for the same reason: the patch generates its
-            // own surface and paints it from its own layers, so a Mesh or a
-            // Material beside it is a second, silently ignored answer to what
-            // this ground is.
-            if has_mesh || !material_paths.is_empty() {
-                let extras = match (has_mesh, material_paths.is_empty()) {
-                    (true, false) => "a Mesh and a Material",
-                    (true, true) => "a Mesh",
-                    _ => "a Material",
-                };
-                errors.push(
-                    cx.err(
-                        codes::TERRAIN_WITH_MESH,
-                        format!(
-                            "entity {name:?} has a Terrain component and also {extras}; \
-                             terrain generates its own surface (sized by Transform.scale) \
-                             and paints it from its layers — drop the extra component"
-                        ),
-                        path,
-                    )
-                    .entity(name)
-                    .component("Terrain"),
-                );
-            }
-
             // A backwards band is silent otherwise: the layer's weight is zero
             // everywhere, so it simply never appears and the author is left
             // looking at the shader for a missing material that was never asked
@@ -1388,31 +1419,6 @@ pub(super) fn walk<'a>(
 
         // ── Meadow checks (M29) ──────────────────────────────────────────
         if let Some((meadow, path)) = &meadow {
-            // Same rule as every other recipe: the component grows the entity's
-            // geometry and carries its own colours, so a Mesh or Material beside
-            // it is a second, silently ignored answer to what this entity is.
-            if has_mesh || !material_paths.is_empty() {
-                let extras = match (has_mesh, material_paths.is_empty()) {
-                    (true, false) => "a Mesh and a Material",
-                    (true, true) => "a Mesh",
-                    _ => "a Material",
-                };
-                errors.push(
-                    cx.err(
-                        codes::MEADOW_WITH_MESH,
-                        format!(
-                            "entity {name:?} has a Meadow component and also {extras}; \
-                             a meadow grows its own plants (over the footprint \
-                             Transform.scale gives) and carries its own colours in its \
-                             stages — drop the extra component"
-                        ),
-                        path,
-                    )
-                    .entity(name)
-                    .component("Meadow"),
-                );
-            }
-
             // Refused before anything is allocated, because a hung render with
             // no output is the worst failure an agent loop can hit — M19's rule,
             // counted here in triangles because a meadow's cost is the *product*
@@ -1441,32 +1447,6 @@ pub(super) fn walk<'a>(
 
         // ── LightProbeVolume checks (M35) ────────────────────────────────
         if let Some((volume, path)) = &light_probe_volume {
-            // The recipe rule, for a component that grows no geometry at all:
-            // this entity is a *region of space*, and a Mesh beside it is a
-            // second, silently ignored answer to what the entity is. Stated
-            // separately from the other recipes because the reason differs —
-            // the others own geometry, this one owns none.
-            if has_mesh || !material_paths.is_empty() {
-                let extras = match (has_mesh, material_paths.is_empty()) {
-                    (true, false) => "a Mesh and a Material",
-                    (true, true) => "a Mesh",
-                    _ => "a Material",
-                };
-                errors.push(
-                    cx.err(
-                        codes::LIGHT_PROBE_VOLUME_WITH_MESH,
-                        format!(
-                            "entity {name:?} has a LightProbeVolume and also {extras}; \
-                             a probe volume is a region of space that lights other \
-                             surfaces and draws nothing itself — drop the extra component"
-                        ),
-                        path,
-                    )
-                    .entity(name)
-                    .component("LightProbeVolume"),
-                );
-            }
-
             // The Transform *is* the bounds — there is no other source for
             // them, so without one the volume covers nothing and every probe
             // would land on top of every other.

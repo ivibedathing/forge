@@ -51,6 +51,13 @@ impl Locomotion {
         Self { previous }
     }
 
+    /// Whether the world had any stride-driven player at build time — the
+    /// viewer's step-loop gate, so a scene with nothing but a walker still
+    /// gets its phase advanced.
+    pub fn is_empty(&self) -> bool {
+        self.previous.is_empty()
+    }
+
     /// Advance each stride-driven player by the ground its entity covered.
     ///
     /// Runs **after** physics, so the distance is the one the entity actually
@@ -448,6 +455,16 @@ struct Leg {
 impl Leg {
     /// Where this foot should be, in skin space — or `None` when the chain is
     /// too short to move it anywhere.
+    ///
+    /// The foot keeps the **authored clearance** the clip gave it, measured
+    /// off the entity's own floor plane (local y = 0, carried into the world
+    /// by the model matrix), re-based onto the terrain under the foot — with
+    /// `sole` as the closest the ankle may come to that terrain. On ground
+    /// that matches the authoring plane this is a no-op, which is the
+    /// property that makes it safe: snapping every low foot *down* to the
+    /// ground instead was measured as an 18 cm crouch-bob (against the clip's
+    /// authored 4 cm) with the swing foot shuffling along the floor — the
+    /// solver fighting the animator on every frame the clip lifts a heel.
     fn target(
         &self,
         globals: &[Mat4],
@@ -460,10 +477,12 @@ impl Leg {
             return None;
         }
         let animated = model.transform_point3(origin(&globals[self.ankle]));
-        let wanted = ground.height(animated.x, animated.z) + self.sole;
-        // Clamped, because planting is a correction: a foot in mid-swing must
-        // not be dragged to the floor, and an unbounded lift would stand a
-        // character on a cliff it is passing.
+        let surface = ground.height(animated.x, animated.z);
+        let clearance = animated.y - model.w_axis.y;
+        let wanted = surface + clearance.max(self.sole);
+        // Clamped, because planting is a correction: an unbounded drop would
+        // fold a character into a canyon it is walking past, and an unbounded
+        // lift would stand it on a cliff.
         let y = wanted.clamp(
             animated.y - component.max_drop,
             animated.y + component.max_lift,

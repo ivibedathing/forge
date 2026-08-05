@@ -2091,6 +2091,45 @@ pub struct Tree {
     /// specular is what separates them from felt.
     #[schemars(range(min = 0.0, max = 1.0))]
     pub leaf_roughness: f32,
+
+    /// How far the outermost twigs lean at full gust, in degrees (M46). `>= 0`;
+    /// `0` holds the whole tree perfectly still, which is the pre-M46 tree.
+    ///
+    /// The lean is a rotation about the tree's own foot, weighted so that the
+    /// trunk barely moves and each generation of branches gives back about half
+    /// the remaining distance to the full angle — so this is what the *twigs*
+    /// do, and the trunk does a fraction of it.
+    ///
+    /// The default is a light breeze. A still day is around `1`, a gale that
+    /// bends a crown visibly is `8`, and past `20` the canopy shears off its
+    /// branches: the sway is a rendering effect with no stiffness in it, and
+    /// nothing stops a leaf overtaking the shoot it hangs on.
+    #[schemars(range(min = 0.0))]
+    pub wind: f32,
+
+    /// How fast gusts travel across the scene, in metres per second. `>= 0`.
+    ///
+    /// The same field [`Meadow::wind_speed`] carries, at the same scale and
+    /// against the same travelling noise — so a meadow under a stand of trees
+    /// gusts *with* them rather than to its own rhythm. It also sets how fast
+    /// individual leaves beat: a stiffer breeze flutters them faster.
+    #[schemars(range(min = 0.0))]
+    pub wind_speed: f32,
+
+    /// Which way the wind blows, in degrees — `0` toward −Z, the engine's
+    /// forward axis, matching [`Meadow::wind_direction`], a camera, a light and
+    /// a particle cone.
+    pub wind_direction: f32,
+
+    /// How far one leaf beats about its own attachment, in degrees (M46).
+    /// `>= 0`; `0` leaves the foliage rigid and the tree still bends.
+    ///
+    /// This is the fast, per-leaf half of the motion: each leaf turns its face
+    /// to the wind on its own phase, several times a second, which is what the
+    /// eye actually reads as "leaves" at any distance. Bark does not flutter —
+    /// a branch is not a leaf.
+    #[schemars(range(min = 0.0))]
+    pub flutter: f32,
 }
 
 impl Default for Tree {
@@ -2121,6 +2160,14 @@ impl Default for Tree {
             leaves_per_branch: 6,
             leaf_color: Vec3::new(0.09, 0.26, 0.08),
             leaf_roughness: 0.75,
+            // The one place in this engine where a new field does *not* default
+            // to the behaviour that preceded it (M46 §2): a tree that stands
+            // perfectly still is wrong rather than plain, so the default is a
+            // light breeze and `wind: 0` is the opt-out.
+            wind: 2.5,
+            wind_speed: 3.0,
+            wind_direction: 0.0,
+            flutter: 9.0,
         }
     }
 }
@@ -2187,6 +2234,17 @@ impl Default for Wave {
 }
 
 impl Tree {
+    /// Whether this tree moves at all (M46) — the test that decides between the
+    /// foliage pipelines and the ones that compile `mesh.wgsl` as it sits on
+    /// disk.
+    ///
+    /// A tree that answers `false` uploads no sway attribute and draws through
+    /// the M19 path, byte for byte. That is the opt-out the default-on
+    /// departure rests on, and it is asserted rather than assumed.
+    pub fn sways(&self) -> bool {
+        (self.wind > 0.0 || self.flutter > 0.0) && self.wind.is_finite() && self.flutter.is_finite()
+    }
+
     /// The leaves' surface, assembled from the foliage fields. Opaque and
     /// non-metallic by construction — see the type's note on why leaves cannot
     /// be transparent.

@@ -301,6 +301,80 @@ pub(super) fn wheel(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Engine
     }
 }
 
+/// One cross-entity name reference: the two-arm check every "this component
+/// names an entity carrying X" pass shares. Arm one — the name resolves to
+/// nothing — reports `not_found` with a suggestion drawn from every entity;
+/// arm two — it resolves, but the target has no X — reports `invalid` with a
+/// suggestion drawn from the entities that *do* carry X. Six passes were
+/// line-for-line copies of this shape before it was factored (the wheel pass
+/// keeps its own second arm: its predicate is "dynamic body, not itself",
+/// not "carries a component").
+pub(super) struct Reference<'a> {
+    /// The phrase both messages open with, ending at the quoted name —
+    /// "the Meadow on \"Lawn\" names terrain \"Hill\"".
+    pub(super) subject: String,
+    /// The name being resolved.
+    pub(super) name: &'a str,
+    pub(super) owner: &'a str,
+    pub(super) component: &'a str,
+    pub(super) field: &'static str,
+    /// JSON pointer of the naming field.
+    pub(super) path: String,
+    /// What the target must carry, as the message says it — "Terrain
+    /// component", "HudPanel".
+    pub(super) target: &'static str,
+    /// Why the target must be one; follows "has no {target}; ".
+    pub(super) why: &'static str,
+    pub(super) not_found: &'static str,
+    pub(super) invalid: &'static str,
+}
+
+/// Check one [`Reference`], returning whether it resolved to a valid target —
+/// the junction pass chains its closed-road check on the answer.
+pub(super) fn check_reference(
+    cx: &Cx<'_>,
+    reference: Reference<'_>,
+    seen_names: &[&str],
+    target_names: &std::collections::BTreeSet<String>,
+    errors: &mut Vec<EngineError>,
+) -> bool {
+    if !seen_names.contains(&reference.name) {
+        errors.push(
+            cx.err(
+                reference.not_found,
+                format!(
+                    "{}, which is not an entity in this scene",
+                    reference.subject
+                ),
+                &reference.path,
+            )
+            .entity(reference.owner)
+            .component(reference.component)
+            .field(reference.field)
+            .suggest_from(reference.name, seen_names.iter().copied()),
+        );
+        return false;
+    }
+    if !target_names.contains(reference.name) {
+        errors.push(
+            cx.err(
+                reference.invalid,
+                format!(
+                    "{}, but that entity has no {}; {}",
+                    reference.subject, reference.target, reference.why
+                ),
+                &reference.path,
+            )
+            .entity(reference.owner)
+            .component(reference.component)
+            .field(reference.field)
+            .suggest_from(reference.name, target_names.iter().map(String::as_str)),
+        );
+        return false;
+    }
+    true
+}
+
 /// Meadows (M29): the ground a meadow names must be a `Terrain`.
 pub(super) fn meadow(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
     let SceneFacts {
@@ -320,39 +394,25 @@ pub(super) fn meadow(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Engin
         let Some(ground) = &meadow.terrain else {
             continue;
         };
-        let terrain_path = format!("{meadow_component_path}/terrain");
-        if !seen_names.contains(&ground.as_str()) {
-            errors.push(
-                cx.err(
-                    codes::MEADOW_TERRAIN_NOT_FOUND,
-                    format!(
-                        "the Meadow on {owner:?} names terrain {ground:?}, which is \
-                         not an entity in this scene"
-                    ),
-                    &terrain_path,
-                )
-                .entity(owner)
-                .component("Meadow")
-                .field("terrain")
-                .suggest_from(ground, seen_names.iter().copied()),
-            );
-        } else if !terrain_names.contains(ground.as_str()) {
-            errors.push(
-                cx.err(
-                    codes::MEADOW_TERRAIN_INVALID,
-                    format!(
-                        "the Meadow on {owner:?} names terrain {ground:?}, but that \
-                         entity has no Terrain component; a meadow samples its \
-                         ground height from a Terrain patch, so the name must be one"
-                    ),
-                    &terrain_path,
-                )
-                .entity(owner)
-                .component("Meadow")
-                .field("terrain")
-                .suggest_from(ground, terrain_names.iter().map(String::as_str)),
-            );
-        }
+        check_reference(
+            cx,
+            Reference {
+                subject: format!("the Meadow on {owner:?} names terrain {ground:?}"),
+                name: ground,
+                owner,
+                component: "Meadow",
+                field: "terrain",
+                path: format!("{meadow_component_path}/terrain"),
+                target: "Terrain component",
+                why: "a meadow samples its ground height from a Terrain patch, \
+                      so the name must be one",
+                not_found: codes::MEADOW_TERRAIN_NOT_FOUND,
+                invalid: codes::MEADOW_TERRAIN_INVALID,
+            },
+            seen_names,
+            terrain_names,
+            errors,
+        );
     }
 }
 
@@ -374,39 +434,25 @@ pub(super) fn road_ground(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<
         let Some(ground) = &road.follow_terrain else {
             continue;
         };
-        let terrain_path = format!("{road_component_path}/follow_terrain");
-        if !seen_names.contains(&ground.as_str()) {
-            errors.push(
-                cx.err(
-                    codes::ROAD_TERRAIN_NOT_FOUND,
-                    format!(
-                        "the Road on {owner:?} follows terrain {ground:?}, which is not \
-                         an entity in this scene"
-                    ),
-                    &terrain_path,
-                )
-                .entity(owner)
-                .component("Road")
-                .field("follow_terrain")
-                .suggest_from(ground, seen_names.iter().copied()),
-            );
-        } else if !terrain_names.contains(ground.as_str()) {
-            errors.push(
-                cx.err(
-                    codes::ROAD_TERRAIN_INVALID,
-                    format!(
-                        "the Road on {owner:?} follows terrain {ground:?}, but that \
-                         entity has no Terrain component; a road samples its ground \
-                         height from a Terrain patch, so the name must be one"
-                    ),
-                    &terrain_path,
-                )
-                .entity(owner)
-                .component("Road")
-                .field("follow_terrain")
-                .suggest_from(ground, terrain_names.iter().map(String::as_str)),
-            );
-        }
+        check_reference(
+            cx,
+            Reference {
+                subject: format!("the Road on {owner:?} follows terrain {ground:?}"),
+                name: ground,
+                owner,
+                component: "Road",
+                field: "follow_terrain",
+                path: format!("{road_component_path}/follow_terrain"),
+                target: "Terrain component",
+                why: "a road samples its ground height from a Terrain patch, \
+                      so the name must be one",
+                not_found: codes::ROAD_TERRAIN_NOT_FOUND,
+                invalid: codes::ROAD_TERRAIN_INVALID,
+            },
+            seen_names,
+            terrain_names,
+            errors,
+        );
     }
 }
 
@@ -427,41 +473,31 @@ pub(super) fn junction(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Eng
     for (owner, junction, component_path) in junctions {
         for (index, arm) in junction.arms.iter().enumerate() {
             let arm_path = format!("{component_path}/arms/{index}/road");
-            if !seen_names.contains(&arm.road.as_str()) {
-                errors.push(
-                    cx.err(
-                        codes::JUNCTION_ROAD_NOT_FOUND,
-                        format!(
-                            "arm {index} of the Junction on {owner:?} names road \
-                             {:?}, which is not an entity in this scene",
-                            arm.road
-                        ),
-                        &arm_path,
-                    )
-                    .entity(owner)
-                    .component("Junction")
-                    .field("arms")
-                    .suggest_from(&arm.road, seen_names.iter().copied()),
-                );
-            } else if !road_names.contains(arm.road.as_str()) {
-                errors.push(
-                    cx.err(
-                        codes::JUNCTION_ROAD_INVALID,
-                        format!(
-                            "arm {index} of the Junction on {owner:?} names road \
-                             {:?}, but that entity has no Road component; a junction \
-                             is bounded by the mouths of roads, so every arm must \
-                             name one",
-                            arm.road
-                        ),
-                        &arm_path,
-                    )
-                    .entity(owner)
-                    .component("Junction")
-                    .field("arms")
-                    .suggest_from(&arm.road, road_names.iter().map(String::as_str)),
-                );
-            } else if closed_road_names.contains(arm.road.as_str()) {
+            let resolved = check_reference(
+                cx,
+                Reference {
+                    subject: format!(
+                        "arm {index} of the Junction on {owner:?} names road {:?}",
+                        arm.road
+                    ),
+                    name: &arm.road,
+                    owner,
+                    component: "Junction",
+                    field: "arms",
+                    path: arm_path.clone(),
+                    target: "Road component",
+                    why: "a junction is bounded by the mouths of roads, so \
+                          every arm must name one",
+                    not_found: codes::JUNCTION_ROAD_NOT_FOUND,
+                    invalid: codes::JUNCTION_ROAD_INVALID,
+                },
+                seen_names,
+                road_names,
+                errors,
+            );
+            // The third arm is this pass's own: a *valid* road that happens
+            // to be a loop has no free end for a junction to meet.
+            if resolved && closed_road_names.contains(arm.road.as_str()) {
                 errors.push(
                     cx.err(
                         codes::JUNCTION_ARM_CLOSED,
@@ -504,42 +540,26 @@ pub(super) fn buoyancy(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Eng
     // that cannot do anything, which is exactly the class of mistake a render
     // cannot show you.
     for (owner, buoyancy, component_path) in buoyancies {
-        let water_path = format!("{component_path}/water");
         if !buoyancy.water.trim().is_empty() {
-            if !seen_names.contains(&buoyancy.water.as_str()) {
-                errors.push(
-                    cx.err(
-                        codes::BUOYANCY_WATER_NOT_FOUND,
-                        format!(
-                            "the Buoyancy on {owner:?} names water {:?}, which is not an \
-                             entity in this scene",
-                            buoyancy.water
-                        ),
-                        &water_path,
-                    )
-                    .entity(owner)
-                    .component("Buoyancy")
-                    .field("water")
-                    .suggest_from(&buoyancy.water, seen_names.iter().copied()),
-                );
-            } else if !water_names.contains(buoyancy.water.as_str()) {
-                errors.push(
-                    cx.err(
-                        codes::BUOYANCY_WATER_INVALID,
-                        format!(
-                            "the Buoyancy on {owner:?} names water {:?}, but that entity \
-                             has no Water component; a body floats on a Water surface, so \
-                             the name must be one",
-                            buoyancy.water
-                        ),
-                        &water_path,
-                    )
-                    .entity(owner)
-                    .component("Buoyancy")
-                    .field("water")
-                    .suggest_from(&buoyancy.water, water_names.iter().map(String::as_str)),
-                );
-            }
+            check_reference(
+                cx,
+                Reference {
+                    subject: format!("the Buoyancy on {owner:?} names water {:?}", buoyancy.water),
+                    name: &buoyancy.water,
+                    owner,
+                    component: "Buoyancy",
+                    field: "water",
+                    path: format!("{component_path}/water"),
+                    target: "Water component",
+                    why: "a body floats on a Water surface, so the name must \
+                          be one",
+                    not_found: codes::BUOYANCY_WATER_NOT_FOUND,
+                    invalid: codes::BUOYANCY_WATER_INVALID,
+                },
+                seen_names,
+                water_names,
+                errors,
+            );
         }
 
         let dynamic = body_kinds.get(owner.as_str()) == Some(&crate::components::BodyKind::Dynamic);
@@ -585,42 +605,26 @@ pub(super) fn foot_planting(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Ve
     // the clip put them, with nothing in the file or the render saying why the
     // component appears to do nothing.
     for (owner, plant, plant_component_path) in foot_plants {
-        let ground_path = format!("{plant_component_path}/ground");
-        if !seen_names.contains(&plant.ground.as_str()) {
-            errors.push(
-                cx.err(
-                    codes::FOOT_PLANT_GROUND_NOT_FOUND,
-                    format!(
-                        "the FootPlant on {owner:?} names ground {:?}, which is not \
-                         an entity in this scene",
-                        plant.ground
-                    ),
-                    &ground_path,
-                )
-                .entity(owner)
-                .component("FootPlant")
-                .field("ground")
-                .suggest_from(&plant.ground, seen_names.iter().copied()),
-            );
-        } else if !terrain_names.contains(plant.ground.as_str()) {
-            errors.push(
-                cx.err(
-                    codes::FOOT_PLANT_GROUND_NOT_TERRAIN,
-                    format!(
-                        "the FootPlant on {owner:?} names ground {:?}, but that entity \
-                         has no Terrain component; feet are planted against a Terrain \
-                         and deliberately not against the physics world, so that the \
-                         pose stays a pure function of the files",
-                        plant.ground
-                    ),
-                    &ground_path,
-                )
-                .entity(owner)
-                .component("FootPlant")
-                .field("ground")
-                .suggest_from(&plant.ground, terrain_names.iter().map(String::as_str)),
-            );
-        }
+        check_reference(
+            cx,
+            Reference {
+                subject: format!("the FootPlant on {owner:?} names ground {:?}", plant.ground),
+                name: &plant.ground,
+                owner,
+                component: "FootPlant",
+                field: "ground",
+                path: format!("{plant_component_path}/ground"),
+                target: "Terrain component",
+                why: "feet are planted against a Terrain and deliberately not \
+                      against the physics world, so that the pose stays a \
+                      pure function of the files",
+                not_found: codes::FOOT_PLANT_GROUND_NOT_FOUND,
+                invalid: codes::FOOT_PLANT_GROUND_NOT_TERRAIN,
+            },
+            seen_names,
+            terrain_names,
+            errors,
+        );
 
         // A bounded budget an agent can be told about, rather than a solver
         // that plants four feet and silently ignores the fifth.
@@ -666,39 +670,24 @@ pub(super) fn hud_parent(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<E
         let Some(parent) = parent else {
             continue;
         };
-        let parent_path = format!("{component_path}/parent");
-        if !seen_names.contains(&parent.as_str()) {
-            errors.push(
-                cx.err(
-                    codes::HUD_PARENT_NOT_FOUND,
-                    format!(
-                        "the {component} on {owner:?} names parent {parent:?}, which is \
-                         not an entity in this scene"
-                    ),
-                    &parent_path,
-                )
-                .entity(owner)
-                .component(*component)
-                .field("parent")
-                .suggest_from(parent, seen_names.iter().copied()),
-            );
-        } else if !hud_panel_names.contains(parent.as_str()) {
-            errors.push(
-                cx.err(
-                    codes::HUD_PARENT_NOT_PANEL,
-                    format!(
-                        "the {component} on {owner:?} names parent {parent:?}, but that \
-                         entity has no HudPanel; only a panel lays children out, so the \
-                         name must be one"
-                    ),
-                    &parent_path,
-                )
-                .entity(owner)
-                .component(*component)
-                .field("parent")
-                .suggest_from(parent, hud_panel_names.iter().map(String::as_str)),
-            );
-        }
+        check_reference(
+            cx,
+            Reference {
+                subject: format!("the {component} on {owner:?} names parent {parent:?}"),
+                name: parent,
+                owner,
+                component,
+                field: "parent",
+                path: format!("{component_path}/parent"),
+                target: "HudPanel",
+                why: "only a panel lays children out, so the name must be one",
+                not_found: codes::HUD_PARENT_NOT_FOUND,
+                invalid: codes::HUD_PARENT_NOT_PANEL,
+            },
+            seen_names,
+            hud_panel_names,
+            errors,
+        );
     }
 
     // Cycles and depth, walked over the resolved graph. Both are reported with

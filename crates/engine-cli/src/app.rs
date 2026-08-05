@@ -95,6 +95,11 @@ pub struct Simulation {
     pub physics: Option<engine_physics::PhysicsWorld>,
     pub particles: engine_core::particles::ParticleSystem,
     pub players: Vec<engine_core::animation::LoadedPlayer>,
+    /// Advances each stride-driven `AnimationPlayer.phase` by the ground its
+    /// entity covered (M32) — without it the viewer holds every walker at
+    /// phase 0 and the root slides under a frozen pose, while the headless
+    /// loop animates the same scene.
+    pub locomotion: engine_core::locomotion::Locomotion,
     pub scripts: Option<engine_script::ScriptHost>,
     pub assets: engine_assets::AssetServer,
     /// `--camera` from the invocation, so the per-frame camera re-resolve
@@ -438,6 +443,7 @@ impl ViewerApp {
                         || sim.scripts.is_some()
                         || sim.recorder.is_some()
                         || !sim.particles.is_empty()
+                        || !sim.locomotion.is_empty()
                     {
                         sim.accumulator += elapsed;
                         while sim.accumulator >= dt {
@@ -570,6 +576,13 @@ impl ViewerApp {
                                     .step(&mut sim.scene.world, (sim.step_index + 1) as f32 * dt);
                                 sim.contacts.apply(&events);
                             }
+                            // Locomotion reads the post-physics world, exactly
+                            // as the headless loop does: a stride is driven by
+                            // the ground the entity *covered*, and a script's
+                            // intent and the solver's answer are not the same
+                            // number (M32). Unconditional — a stride-driven
+                            // walker carried by a script alone has no physics.
+                            sim.locomotion.step(&mut sim.scene.world);
                             // Particles step between physics and the despawns,
                             // matching the headless loop step for step: a dust
                             // emitter a break spawns below is stepped from the
@@ -597,6 +610,12 @@ impl ViewerApp {
                                     if let Some(scripts) = &mut sim.scripts {
                                         scripts.sync_names(&sim.scene.world);
                                     }
+                                    // A despawned entity may be an emitter,
+                                    // and the particle system tracks a list
+                                    // it built at load — told here exactly as
+                                    // the headless loop tells it, or the
+                                    // state outlives its entity.
+                                    sim.particles.sync(&sim.scene.world);
                                 }
                                 // Breaks apply after physics, exactly as in
                                 // the headless loop — played and simulated

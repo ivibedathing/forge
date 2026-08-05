@@ -4067,6 +4067,70 @@
           "looping": true
         }
       ]
+    },
+    {
+      "name": "Runner",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            5.56,
+            -0.742,
+            -17.91
+          ],
+          "rotation": [
+            0.0,
+            125.0,
+            0.0
+          ]
+        },
+        {
+          "type": "Mesh",
+          "asset": "../meshes/rigged_soldier.gltf"
+        },
+        {
+          "type": "Material",
+          "albedo": [
+            0.3,
+            0.27,
+            0.22
+          ],
+          "roughness": 0.7,
+          "metallic": 0.05,
+          "normal_map": "../textures/plate_normal.png",
+          "orm_map": "../textures/plate_orm.png",
+          "uv_scale": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "type": "AnimationPlayer",
+          "clip": "../meshes/rigged_soldier.gltf#Run",
+          "looping": true,
+          "stride": 2.7664
+        },
+        {
+          "type": "FootPlant",
+          "feet": [
+            {
+              "ankle": "FootL",
+              "chain": 2,
+              "sole": 0.07
+            },
+            {
+              "ankle": "FootR",
+              "chain": 2,
+              "sole": 0.07
+            }
+          ],
+          "ground": "Ground",
+          "hips": "Hips",
+          "max_drop": 0.45,
+          "max_lift": 0.35,
+          "align": 24.0
+        }
+      ]
     }
   ],
   "templates": [

@@ -355,8 +355,7 @@ pub fn apply_breaks(
                 // dust is ejected *away* from the impact face.
                 let position = match pending_break.impact {
                     Some(impact) => {
-                        let outward = (impact.point - transform.position)
-                            .normalize_or(Vec3::Y);
+                        let outward = (impact.point - transform.position).normalize_or(Vec3::Y);
                         impact.point + outward * (radius * 0.45)
                     }
                     // A scripted break has no impact, so the burst is the
@@ -946,12 +945,8 @@ mod tests {
         // M14 path start to finish, which is what keeps every pre-M43 scene
         // rendering as it did.
         let (mut plain, mut plain_physics) = scene(CRATE_DROP);
-        let events = apply_breaks(
-            &mut plain.world,
-            &mut plain_physics,
-            &["Crate".to_string()],
-        )
-        .unwrap();
+        let events =
+            apply_breaks(&mut plain.world, &mut plain_physics, &["Crate".to_string()]).unwrap();
         assert!(events[0].dust.is_none(), "no material, no dust");
     }
 
@@ -988,7 +983,11 @@ mod tests {
         );
         assert!(stone.acceleration.y > 0.0, "dust rises");
         assert!(wood.acceleration.y < 0.0, "sawdust falls");
-        assert_eq!(glass.blend, ParticleBlend::Additive, "glitter catches light");
+        assert_eq!(
+            glass.blend,
+            ParticleBlend::Additive,
+            "glitter catches light"
+        );
         assert_eq!(metal.blend, ParticleBlend::Additive, "so do sparks");
         assert_eq!(stone.blend, ParticleBlend::Alpha, "dust occludes");
     }

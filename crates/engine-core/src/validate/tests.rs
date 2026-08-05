@@ -2681,3 +2681,103 @@ fn a_single_probe_volume_is_fine() {
     }"#;
     assert!(!codes_of(source).contains(&codes::MULTIPLE_LIGHT_PROBE_VOLUMES));
 }
+
+// ── The walk checks every array item, and Option<enum> at depth ──────
+//
+// Three regressions from the integration audit: array items that were
+// neither numbers nor objects were never type-checked, and the M43
+// `optional_variant` unwrap was applied only to top-level component
+// fields. All three used to reach serde and come back as
+// `scene_parse_desync` — the code whose message says "engine bug".
+
+/// A string inside a `[bool; 3]` field is a located walk error.
+#[test]
+fn a_non_boolean_locked_rotation_is_a_walk_error() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Crate", "components": [
+            { "type": "Transform" },
+            { "type": "Mesh", "asset": "builtin:cube" },
+            { "type": "RigidBody", "body": "dynamic", "locked_rotations": [true, "yes", false] },
+            { "type": "Collider", "shape": "cuboid", "half_extents": [0.5, 0.5, 0.5] } ] }
+      ]
+    }"#;
+    let codes = codes_of(source);
+    assert!(codes.contains(&codes::INVALID_FIELD_TYPE), "{codes:?}");
+    assert!(!codes.contains(&codes::SCENE_PARSE_DESYNC), "{codes:?}");
+}
+
+/// A two-number point inside `Shard.points` — a nested array's own arity —
+/// is a located walk error.
+#[test]
+fn a_two_number_shard_point_is_a_walk_error() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Piece", "components": [
+            { "type": "Transform" },
+            { "type": "Shard", "points": [
+                [0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.0, 0.1, 0.0],
+                [0.0, 0.0, 0.1], [0.1, 0.1] ] } ] }
+      ]
+    }"#;
+    let codes = codes_of(source);
+    assert!(codes.contains(&codes::INVALID_FIELD_TYPE), "{codes:?}");
+    assert!(!codes.contains(&codes::SCENE_PARSE_DESYNC), "{codes:?}");
+}
+
+/// A typo in `SkinnedCollider.parts[].fit` — an `Option<enum>` one nesting
+/// level below a component field — gets the closed-vocabulary rejection and
+/// a `did_you_mean`, exactly as the top-level M43 case does.
+#[test]
+fn a_fit_typo_gets_did_you_mean_not_a_desync() {
+    let source = r#"{
+      "name": "s",
+      "entities": [
+        { "name": "Walker", "components": [
+            { "type": "Transform" },
+            { "type": "Mesh", "asset": "builtin:cube" },
+            { "type": "SkinnedCollider", "parts": [
+                { "joint": "Chest", "shape": "capsule", "radius": 0.2,
+                  "half_height": 0.15, "fit": "bne" } ] } ] }
+      ]
+    }"#;
+    let errors = validate_source(source, "test.json");
+    let bad = errors
+        .iter()
+        .find(|e| e.error == codes::INVALID_FIELD_TYPE)
+        .unwrap_or_else(|| panic!("expected invalid_field_type, got {errors:?}"));
+    assert_eq!(bad.context().unwrap().did_you_mean.as_deref(), Some("bone"));
+    assert!(!errors.iter().any(|e| e.error == codes::SCENE_PARSE_DESYNC));
+}
+
+// ── The recipe table (integration audit) ─────────────────────────────
+
+/// Every row of `RECIPE_RULES` trips its own code. Iterates the real table,
+/// so a new recipe's row gets this coverage by existing — the countability
+/// the seven hand-copied blocks never had. Extra errors (a Junction with no
+/// roads, a volume with no bake) are fine; the row's code must be among them.
+#[test]
+fn every_recipe_rule_row_fires_on_a_mesh_and_a_material() {
+    for rule in super::entity::RECIPE_RULES {
+        let source = format!(
+            r#"{{"name":"s","entities":[
+                {{"name":"Thing","components":[
+                    {{"type":"Transform"}},
+                    {{"type":"{}"}},
+                    {{"type":"Mesh","asset":"builtin:cube"}},
+                    {{"type":"Material","albedo":[0.5,0.5,0.5]}}
+                ]}}
+            ]}}"#,
+            rule.component
+        );
+        let codes = codes_of(&source);
+        assert!(
+            codes.contains(&rule.code),
+            "{} did not fire {}: {codes:?}",
+            rule.component,
+            rule.code
+        );
+    }
+}

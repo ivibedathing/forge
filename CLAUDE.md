@@ -57,7 +57,7 @@ actually says.
 | `Terrain` | A height-field patch that **owns its grid**, painted by height/slope layers; the ground everything stands on. Since M42 its `basins` cut authored hollows into the noise. | `m22-terrain.md`, `m42-terrain-basins.md` |
 | `Road` | A drivable ribbon from a polygon centerline with corner radii; markings are drawn per pixel. Since M40 it can widen per point, bank, and ride a `Terrain`. | `m23-roads.md`, `m40-road-authoring.md` |
 | `Junction` | The patch of asphalt where roads meet, bounded by the mouths of the roads that name it. **Owns its geometry**, and is drawn by the road shader. | `m40-road-authoring.md` |
-| `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. | `m19-trees.md` |
+| `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. Since M46 it moves: `wind` bends the branches, `flutter` beats the leaves. | `m19-trees.md`, `m46-foliage-sway.md` |
 | `Cloud` | A cluster of interpenetrating lobes that drifts; **owns its mesh**. | `m20-clouds.md` |
 | `Meadow` | Ground cover on a seed→grass→weeds→straw→collapse life cycle, animated entirely in the vertex stage. | `m29-meadows.md` |
 | `LightProbeVolume` | A box of baked irradiance probes; replaces the hemispheric fill with one that knows what is above a surface. Since M45 its `sun_samples` also bounce the *sun*, so a red wall reddens its neighbour. At most one per scene, and it carries no geometry. | `m35-global-illumination.md`, `m45-sun-bounce.md` |
@@ -83,15 +83,15 @@ script spawns at runtime — `m37-entity-spawning.md`).
 
 ## Current state
 
-**M0–M45 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M46 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
 M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locomotion and foot
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
 M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
-M43 material-aware fracture, M44 the break's dust, M35 global illumination, and M45 bounced
-sunlight.
+M43 material-aware fracture, M44 the break's dust, M35 global illumination, M45 bounced
+sunlight, and M46 foliage sway.
 (M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
@@ -316,6 +316,26 @@ The cross-cutting ones. Per-system traps are in each note.
   `trimesh` terrain. The symptom is the silent one — 0.17 m of descent per step against ground at
   −0.39 m, the body at −0.67 m and falling forever. `ccd` is still off unless the *parent* asks,
   so nothing that broke before this changed by a byte.
+- **A vertex-stage displacement is two pipelines, not one: the surface *and* its shadow caster**
+  (M46). A caster that skips the displacement writes a still tree into the shadow map, and the
+  mismatch between a moved surface and its own unmoved depth is self-shadow acne that crawls with
+  the wind — as far from its cause as this engine gets. The corollary is subtler: the foliage caster
+  carries a **normal attribute it otherwise has no use for**, because the flutter displaces along
+  the normal and agreeing about the bend while disagreeing about the beat is the same bug on the
+  leaves only. And a caster reading a *late* uniform field must declare the struct out past it —
+  `shadow.wgsl` stops at `surface`, so its splice extends the whole tail, while
+  `shadow_cutout.wgsl` declares its own `TerrainLayer` and must be *appended* to instead.
+- **M46 is the one milestone whose new behaviour defaults to on**, by the user's call: a tree that
+  stands perfectly still is wrong rather than plain. Thirteen baselines re-blessed in its commit —
+  every committed scene with a tree in it. The
+  house rule is otherwise unchanged, and the opt-out (`wind: 0`) is *exact* rather than nearly so —
+  it emits no vertex channel, so the draw takes the pipelines that compile `mesh.wgsl` as it sits on
+  disk. **Copy that shape rather than the exception** if a future milestone wants the same.
+- **A generator's random draws are a format contract, so read a value you already have rather than
+  drawing a new one** (M46). The leaf flutter phase is `roll / τ`, the spin `emit_leaves` had
+  already drawn; a fresh draw would have shifted every subsequent draw and **reshaped every tree in
+  the repo** to gain the animation. The same reasoning is why `tree.rs`'s jitter helpers consume a
+  draw even at `jitter: 0`.
 - **`builtin:cube`'s faces disagree on which way `u` runs, in pairs rather than in axes.** Anything
   strongly directional on a cube draws differently on all four sides. `builtin:plane`'s UVs are not
   the intuitive ones either — fixing both is deferred as its own change with its own A/B (M26).
@@ -354,16 +374,18 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**41 of the 47 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**42 of the 48 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02` in the manifest and stay the sweep's job; `cli.rs` says so
 where someone would go to add them. The pixel *allowance* is there rather than a wider threshold
 because the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held
-for eight consecutive full sweeps. **The other 41 entries carry no `diff_args` at all — they are
+for eight consecutive full sweeps. **The other 42 entries carry no `diff_args` at all — they are
 bit-exact, and a failure there is real.** `m35_gi.png` joined them in M35: five renders of it gave
-one image, so it took a hard pin rather than a tolerance.
+one image, so it took a hard pin rather than a tolerance, and `m46_foliage_sway.png` joined them the
+same way (five renders, one image) — a *moving* subject is still bit-reproducible here, because the
+motion is a pure function of the clock.
 
 **Which tour frames flake carries no information; whether one is stable under repetition does.**
 Six separate sweeps each picked a different subset of the six, M35's, M36's and M38's A/Bs
@@ -485,6 +507,11 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   shader by a GPU agreement test that reads the drawn surface back out of a render.
 - **Trees (M19)** → `m19-trees.md`. A grown tree — bark plus leaves — from a parameter recipe rather
   than a mesh file.
+- **Foliage sway (M46)** → `m46-foliage-sway.md`, design in `designs/foliage-sway-design.md`. The
+  wind, in the vertex stage: a per-vertex compliance the *generator* authors (the recursion is what
+  knows how loose a twig is), bent about the tree's own foot and fluttered per leaf along its
+  normal. Spliced at M27's seam and cast by two casters of its own, so a moving tree's shadow moves.
+  **The one milestone whose default is on** — `wind: 0` is the exact opt-out.
 - **Clouds (M20)** → `m20-clouds.md`. Drifting clusters of interpenetrating lobes.
 - **Terrain (M22)** → `m22-terrain.md`. A CPU height-field patch painted by height and slope layers;
   the ground everything else stands on.
@@ -727,7 +754,7 @@ original four, entity spawning was M37 and a CPU wave evaluator was M41.) The re
 - **Rendering**: planar reflections, cloud shadows (M38 was their prerequisite; a `Cloud` casting
   wants M16's "transparent geometry does not cast" answered), per-cascade resolution, shadows from
   point lights, spot lights, a light on the tour's explosion, a sky-dome cloud layer for cirrus and
-  overcast, tree LOD and wind. The showcase tour still renders at one cascade, deliberately —
+  overcast, and tree LOD (**wind was M46**). The showcase tour still renders at one cascade, deliberately —
   see `m38-shadow-cascades.md`. **Alpha-cut leaves are a missing feature**, not an
   authoring job: `Tree::leaf_material` synthesizes a `Material` from `leaf_color`/`leaf_roughness`
   alone, so leaf maps mean new `Tree` fields, a schema regeneration, and a validation pass.

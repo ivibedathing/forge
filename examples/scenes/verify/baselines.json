@@ -512,6 +512,18 @@
       "pinned_by": "cli.rs"
     },
     {
+      "baseline": "examples/scenes/verify/baselines/m32_walk_side.png",
+      "scene": "examples/scenes/verify/m32_walk_side.json",
+      "args": [
+        "--steps",
+        "75"
+      ],
+      "width": 640,
+      "height": 360,
+      "milestone": "M32",
+      "pinned_by": "cli.rs"
+    },
+    {
       "baseline": "examples/scenes/verify/baselines/m33_proxies.png",
       "scene": "examples/scenes/verify/m33_proxies.json",
       "args": [
@@ -633,6 +645,15 @@
      "height": 360,
      "milestone": "M45",
      "pinned_by": "cli.rs::m45_sun_bounce_diff_renders"
+    },
+    {
+     "baseline": "examples/scenes/verify/baselines/m46_foliage_sway.png",
+     "scene": "examples/scenes/verify/m46_foliage_sway.json",
+     "args": ["--time", "2.4"],
+     "width": 640,
+     "height": 360,
+     "milestone": "M46",
+     "pinned_by": "cli.rs::m46_foliage_sway_diff_renders"
     }
   ],
   "traces": [

@@ -95,6 +95,7 @@ mod tests {
             textures: Default::default(),
             terrain: None,
             joints: Vec::new(),
+            foliage: None,
         }
     }
 

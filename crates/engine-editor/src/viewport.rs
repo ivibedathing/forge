@@ -238,6 +238,7 @@ pub fn grid_items() -> Vec<RenderItem> {
             textures: Default::default(),
             terrain: None,
             joints: Vec::new(),
+            foliage: None,
         });
     };
 

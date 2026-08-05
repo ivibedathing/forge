@@ -39,6 +39,27 @@ pub(crate) struct ObjectUniform {
     pub(crate) map_params: [f32; 4],
     /// x = thickness in metres; yzw = per-channel attenuation.
     pub(crate) map_volume: [f32; 4],
+
+    /// Foliage wind (M46), appended for the reason terrain's fields and the
+    /// material maps were: every field above keeps the offset the shader
+    /// already reads it from. x = the lean of a fully-compliant vertex at full
+    /// gust, in radians; y = gust travel speed in m/s; zw = the wind direction
+    /// as a unit vector **in the entity's local XZ**, so the bend comes out
+    /// pointing the same way in the world however the tree is yawed.
+    ///
+    /// All zero for every draw that is not foliage, which never reaches a
+    /// shader that declares these.
+    pub(crate) foliage_wind: [f32; 4],
+    /// x = scene time in seconds, y = flutter amplitude in metres (0 on a
+    /// tree's bark draw); z and w unused.
+    ///
+    /// The clock rides the *object* uniform rather than the frame's on purpose:
+    /// nothing else in the mesh path needs a time, and `water.wgsl`,
+    /// `road.wgsl` and `meadow.wgsl` all read the frame uniform through their
+    /// own hand-maintained near-copies of its declaration — appending a field
+    /// there is a four-file change with a positional-offset trap in it (see
+    /// CLAUDE.md, Traps), and this needed none of that.
+    pub(crate) foliage_clock: [f32; 4],
 }
 
 /// Which map slots a draw has bound, as the bits `map_params.x` carries.

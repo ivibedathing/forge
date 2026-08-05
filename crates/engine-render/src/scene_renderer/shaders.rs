@@ -34,6 +34,39 @@ pub(crate) fn with_sky_common(source: &str) -> std::borrow::Cow<'static, str> {
 // `mesh.wgsl` and this fails loudly at startup rather than silently rendering
 // terrain as flat grey or a texture as untextured.
 
+/// Group 2 — the frame-texture group — as one registry, because **a binding
+/// number is not a position in a list** (CLAUDE.md). M38 and M35 both wanted
+/// binding 5, the cascade entry is *conditional* on top of that, and the
+/// collision was resolved by prose comments in three files. The numbers live
+/// here once; `pipelines.rs` builds the layout from them, `mod.rs` builds the
+/// bind groups from them, and a seam test pins the WGSL literals — which stay
+/// literals, because the on-disk shaders are `include_str!`ed verbatim.
+///
+/// A new group-2 resource claims [`frame_binding::NEXT_FREE`] and bumps it.
+/// Never reuse [`frame_binding::CASCADES`]' slot while `cascades == 1`: it
+/// would work in every default scene and fail at pipeline creation only under
+/// `shadow_cascades > 1`.
+pub(crate) mod frame_binding {
+    pub const SHADOW_MAP: u32 = 0;
+    pub const SHADOW_SAMPLER: u32 = 1;
+    pub const SCENE_DEPTH: u32 = 2;
+    pub const SCENE_COLOR: u32 = 3;
+    pub const SCENE_SAMPLER: u32 = 4;
+    /// The cascade matrices (M38). **Conditional**: in the layout only beyond
+    /// one cascade, but the number is held either way.
+    pub const CASCADES: u32 = 5;
+    /// First of the four SH-L1 irradiance planes (M35), `..=GI_SH_FIRST + 3`.
+    pub const GI_SH_FIRST: u32 = 6;
+    pub const GI_SAMPLER: u32 = 10;
+    /// Where the next feature starts. Referenced only by the seam test that
+    /// checks the registry's arithmetic (hence the allow: it exists to be
+    /// read by the next feature's author, not by the frame), so bumping a
+    /// neighbour without bumping this fails there rather than at a pipeline
+    /// creation nobody runs.
+    #[allow(dead_code)]
+    pub const NEXT_FREE: u32 = 11;
+}
+
 /// The anchors a producer may replace, as they appear in `mesh.wgsl`.
 pub(crate) mod anchor {
     /// The object uniform's last field, where a variant appends its own.
@@ -152,6 +185,13 @@ pub(crate) const EXTENDED_UNIFORM_TAIL: &str =
     \x20   map_params: vec4<f32>,\n\
     \x20   // x = thickness in metres; yzw = per-channel attenuation.\n\
     \x20   map_volume: vec4<f32>,\n\
+    \x20   // Foliage wind (M46): x = lean at full gust in radians, y = gust\n\
+    \x20   // travel speed in m/s, zw = wind direction as a unit vector in the\n\
+    \x20   // entity's local XZ.\n\
+    \x20   foliage_wind: vec4<f32>,\n\
+    \x20   // x = scene time in seconds, y = flutter amplitude in metres (0 on\n\
+    \x20   // bark); z and w unused.\n\
+    \x20   foliage_clock: vec4<f32>,\n\
     };\n";
 
 /// The extended frame uniform every spliced variant declares.
@@ -194,12 +234,33 @@ pub(crate) fn with_surface(producers: &[Producer]) -> std::borrow::Cow<'static, 
         &(anchor::VERTEX_STAGE, ""),
         &(anchor::AMBIENT, ""),
         &(anchor::FILL, ""),
+        // The prelude injection point below is a `str::replace` like the
+        // others, and was the one splice in this function without a seat in
+        // this loop.
+        &("struct ObjectUniform {", ""),
     ]) {
         assert_eq!(
             source.matches(anchor).count(),
             1,
             "mesh.wgsl no longer contains this anchor exactly once, so a spliced \
              pipeline variant would compile as if its feature were absent:\n{anchor}"
+        );
+    }
+
+    // An anchor with one claimant is a substitution; one that could ever have
+    // two is an assembly (CLAUDE.md, Traps). `str::replace` runs producer by
+    // producer, so a second claimant finds its anchor already gone and is a
+    // silent no-op — the feature renders as if absent, which is how M27 and
+    // M35 each shipped a bug. Terrain and texturing both claim the three
+    // surface anchors today; no variant composes them, and this assert is
+    // what turns that latent collision into a build-time panic instead of a
+    // plausible wrong picture.
+    let mut claimed = std::collections::HashSet::new();
+    for (anchor, _) in substitutions() {
+        assert!(
+            claimed.insert(*anchor),
+            "two producers claim one anchor, and the second would be a silent \
+             no-op rather than a merge — make it an assembly:\n{anchor}"
         );
     }
 
@@ -617,6 +678,159 @@ pub(crate) fn skin_producer() -> Producer {
     }
 }
 
+/// The foliage producer (M46).
+///
+/// The second producer that *moves* a vertex, and it claims the same
+/// `VertexContribution::position` skinning does — which at most one producer
+/// may set. That is not a conflict waiting to happen but the statement of a
+/// fact: a tree is a recipe with no skin, a character is a skin with no recipe,
+/// and `vertex_stage`'s assertion is what says so out loud if either ever
+/// changes.
+pub(crate) fn foliage_producer() -> Producer {
+    Producer {
+        prelude: include_str!("../shaders/foliage.wgsl"),
+        vertex: Some(VertexContribution {
+            attributes: "    @location(5) sway: vec2<f32>,\n",
+            body: "    let swayed = foliage_vertex(position, normal, sway);\n",
+            position: Some("swayed"),
+            // The normal is left alone. The bend at a tree's own amplitudes
+            // turns a leaf by a couple of degrees, which is under the shading
+            // noise of a canopy — and rotating it here would cost the same
+            // fifteen lines a meadow spends on it for a difference no render
+            // showed. A sharper wind is where this stops being true.
+            ..VertexContribution::default()
+        }),
+        // Foliage takes the fill light every other opaque surface takes; the
+        // wind moved the vertex and stopped there.
+        fill: None,
+        // Nothing in the fragment stage — the point of doing this in the vertex
+        // stage at all, and what keeps the four ULP-sensitive lighting lines
+        // reaching the compiler surrounded by the code they shipped in.
+        substitutions: Vec::new(),
+    }
+}
+
+/// The two shadow casters, foliage (M46).
+///
+/// `skinned_shadow`'s twin, splice for splice, and it exists for the same
+/// reason: a caster that does not apply the vertex stage's displacement writes
+/// a *still* tree into the shadow map, and the mismatch between a moved surface
+/// and its own unmoved depth is self-shadow acne that crawls with the wind.
+///
+/// The solid caster grows a normal attribute it otherwise has no use for. That
+/// is load-bearing: flutter displaces along the normal, and a caster that
+/// skipped it would agree with the colour pass about the bend and disagree
+/// about the beat — which is the same acne, on the leaves only, where it is
+/// hardest to attribute.
+/// Every splice is asserted to land exactly once, `with_surface`'s discipline
+/// for its reason: a caster that silently kept its own vertex stage would write
+/// a still tree and nothing would say so.
+pub(crate) fn with_foliage_caster(source: &'static str, splices: &[(&str, String)]) -> String {
+    let mut out = source.to_string();
+    for (anchor, replacement) in splices {
+        assert_eq!(
+            source.matches(*anchor).count(),
+            1,
+            "the shadow caster no longer contains this anchor exactly once, so \
+             the foliage variant would compile as if the wind were absent:\n{anchor}"
+        );
+        out = out.replace(anchor, replacement);
+    }
+    format!("{}\n{}", include_str!("../shaders/foliage.wgsl"), out)
+}
+
+/// The solid caster, with the wind spliced in.
+///
+/// Two splices, and the first is the one worth reading twice: the caster's
+/// object uniform stops at `surface`, and the wind fields sit past terrain's
+/// table and the material maps. **Uniform field offsets are positional**, so a
+/// caster that declared only the fields it reads would find `terrain` where the
+/// wind is and bend the tree by a layer count. It therefore declares the same
+/// extended tail every spliced mesh variant does.
+pub(crate) fn foliage_shadow() -> String {
+    with_foliage_caster(
+        include_str!("../shaders/shadow.wgsl"),
+        &[
+            (
+                "struct ObjectUniform {\n\
+                 \x20   mvp: mat4x4<f32>,\n\
+                 \x20   model: mat4x4<f32>,\n\
+                 \x20   normal_matrix: mat4x4<f32>,\n\
+                 \x20   albedo_metallic: vec4<f32>,\n\
+                 \x20   emissive_roughness: vec4<f32>,\n\
+                 \x20   surface: vec4<f32>,\n\
+                 };\n",
+                format!(
+                    "{EXTENDED_UNIFORM_TYPES}\nstruct ObjectUniform {{\n\
+                     \x20   mvp: mat4x4<f32>,\n\
+                     \x20   model: mat4x4<f32>,\n\
+                     \x20   normal_matrix: mat4x4<f32>,\n\
+                     \x20   albedo_metallic: vec4<f32>,\n\
+                     \x20   emissive_roughness: vec4<f32>,\n\
+                     {EXTENDED_UNIFORM_TAIL}"
+                ),
+            ),
+            (
+                "fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {\n\
+                 \x20   return frame.light_view_proj * object.model * vec4<f32>(position, 1.0);\n\
+                 }\n",
+                "fn vs_main(\n\
+                 \x20   @location(0) position: vec3<f32>,\n\
+                 \x20   @location(1) normal: vec3<f32>,\n\
+                 \x20   @location(5) sway: vec2<f32>,\n\
+                 ) -> @builtin(position) vec4<f32> {\n\
+                 \x20   let swayed = foliage_vertex(position, normal, sway);\n\
+                 \x20   return frame.light_view_proj * object.model * vec4<f32>(swayed, 1.0);\n\
+                 }\n"
+                .to_string(),
+            ),
+        ],
+    )
+}
+
+/// The cut-out caster, with the wind spliced in.
+///
+/// Its uniform already reaches `map_params` (it samples an albedo map), and it
+/// declares its own `TerrainLayer` — so this one *appends* the three fields
+/// past the end of what it declares rather than replacing the struct wholesale,
+/// which would redeclare that type. `map_volume` is among them despite nothing
+/// here reading it: it sits between `map_params` and the wind, and a prefix
+/// with a hole in it is not a prefix.
+pub(crate) fn foliage_shadow_cutout() -> String {
+    with_foliage_caster(
+        include_str!("../shaders/shadow_cutout.wgsl"),
+        &[
+            (
+                "    // x = which maps are bound, y = alpha cutoff, z = normal strength, w = ior.\n\
+                 \x20   map_params: vec4<f32>,\n\
+                 };\n",
+                "    // x = which maps are bound, y = alpha cutoff, z = normal strength, w = ior.\n\
+                 \x20   map_params: vec4<f32>,\n\
+                 \x20   // Declared but unread: the wind past it is only at the\n\
+                 \x20   // right offset if this is here (M46).\n\
+                 \x20   map_volume: vec4<f32>,\n\
+                 \x20   foliage_wind: vec4<f32>,\n\
+                 \x20   foliage_clock: vec4<f32>,\n\
+                 };\n"
+                    .to_string(),
+            ),
+            (
+                "    @location(2) uv: vec2<f32>,\n) -> VertexOut {",
+                "    @location(2) uv: vec2<f32>,\n\
+                 \x20   @location(5) sway: vec2<f32>,\n\
+                 ) -> VertexOut {"
+                    .to_string(),
+            ),
+            (
+                "    out.clip = frame.light_view_proj * object.model * vec4<f32>(position, 1.0);\n",
+                "    let swayed = foliage_vertex(position, normal, sway);\n\
+                 \x20   out.clip = frame.light_view_proj * object.model * vec4<f32>(swayed, 1.0);\n"
+                    .to_string(),
+            ),
+        ],
+    )
+}
+
 /// The two shadow casters, skinned (M27).
 ///
 /// `shadow.wgsl` reads nothing but the object uniform's model matrix, so a
@@ -661,14 +875,25 @@ pub(crate) fn skinned_shadow() -> String {
 }
 
 pub(crate) fn skinned_shadow_cutout() -> String {
-    with_skinned_caster(
+    let composed = with_skinned_caster(
         include_str!("../shaders/shadow_cutout.wgsl"),
         "    out.clip = frame.light_view_proj * object.model * vec4<f32>(position, 1.0);\n",
         "    let skinned = skin_vertex(position, normal, joint_indices, joint_weights);\n\
          \x20   out.clip = frame.light_view_proj * object.model * vec4<f32>(skinned.position, 1.0);\n",
-    )
-    .replace(
-        "    @location(2) uv: vec2<f32>,\n) -> VertexOut {",
+    );
+    // Asserted like every other splice: this second replacement chained
+    // *after* `with_skinned_caster` returned, so its assertion did not cover
+    // it — a reworded `shadow_cutout.wgsl` signature would have yielded a
+    // skinned cut-out caster that compiles without joint attributes.
+    let signature = "    @location(2) uv: vec2<f32>,\n) -> VertexOut {";
+    assert_eq!(
+        composed.matches(signature).count(),
+        1,
+        "shadow_cutout.wgsl's vertex signature no longer matches exactly once, \
+         so the skinned cut-out caster would compile without joint attributes:\n{signature}"
+    );
+    composed.replace(
+        signature,
         "    @location(2) uv: vec2<f32>,\n\
          \x20   @location(3) joint_indices: vec4<u32>,\n\
          \x20   @location(4) joint_weights: vec4<f32>,\n\
@@ -723,6 +948,18 @@ pub(crate) fn with_refraction(gi: bool) -> std::borrow::Cow<'static, str> {
 
 pub(crate) fn with_textures_and_refraction(gi: bool) -> std::borrow::Cow<'static, str> {
     with_gi(vec![texture_producer(), refraction_producer()], gi)
+}
+
+/// The mesh shader with the wind spliced in (M46), and its textured twin.
+///
+/// Foliage first and texturing second, mirroring `[skin, texture]`: the wind
+/// moves the vertex and texturing then passes that position through untouched.
+pub(crate) fn with_foliage(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![foliage_producer()], gi)
+}
+
+pub(crate) fn with_foliage_textures(gi: bool) -> std::borrow::Cow<'static, str> {
+    with_gi(vec![foliage_producer(), texture_producer()], gi)
 }
 
 /// The two lines `Road` and `Meadow` decide their fill light on, and the frame
@@ -1122,6 +1359,189 @@ pub(crate) fn with_cascades(source: &str, cascades: u32) -> std::borrow::Cow<'_,
 
 #[cfg(test)]
 mod seam_tests {
+    /// Every `MAX_*` constant exists twice by construction — a Rust `const`
+    /// that sizes the `#[repr(C)]` uniform struct and a WGSL literal in an
+    /// `include_str!`ed shader — and only `MAX_SHADOW_CASCADES` is
+    /// interpolated at splice time. The rest are hand-kept copies with
+    /// nothing holding each pair together until this test; a divergence is a
+    /// wire-format mismatch that renders a plausible wrong picture rather
+    /// than failing. The two worst are not even *named* in the WGSL:
+    /// `water.wgsl` sizes its wave array as `MAX_WAVES * 2` vec4 lanes, and
+    /// `shadow_cutout.wgsl` carries a bare element count.
+    #[test]
+    fn every_max_constant_reaches_its_shader_unchanged() {
+        use engine_core::components::MAX_POINT_LIGHTS;
+        use engine_core::meadow::MAX_GROWTH_STAGES;
+        use engine_core::road::MAX_ROAD_KERBS;
+        use engine_core::skeleton::MAX_JOINTS;
+        use engine_core::terrain::MAX_TERRAIN_LAYERS;
+        use engine_core::water::MAX_WAVES;
+
+        let named: &[(&str, &str, String)] = &[
+            (
+                "mesh.wgsl",
+                include_str!("../shaders/mesh.wgsl"),
+                format!("const MAX_POINT_LIGHTS: u32 = {MAX_POINT_LIGHTS}u;"),
+            ),
+            (
+                "road.wgsl",
+                include_str!("../shaders/road.wgsl"),
+                format!("const MAX_POINT_LIGHTS: u32 = {MAX_POINT_LIGHTS}u;"),
+            ),
+            (
+                "road.wgsl",
+                include_str!("../shaders/road.wgsl"),
+                format!("const MAX_ROAD_KERBS: u32 = {MAX_ROAD_KERBS}u;"),
+            ),
+            (
+                "meadow.wgsl",
+                include_str!("../shaders/meadow.wgsl"),
+                format!("const MAX_POINT_LIGHTS: u32 = {MAX_POINT_LIGHTS}u;"),
+            ),
+            (
+                "meadow.wgsl",
+                include_str!("../shaders/meadow.wgsl"),
+                format!("const MAX_GROWTH_STAGES: u32 = {MAX_GROWTH_STAGES}u;"),
+            ),
+            (
+                "skin.wgsl",
+                include_str!("../shaders/skin.wgsl"),
+                format!("const MAX_JOINTS: u32 = {MAX_JOINTS}u;"),
+            ),
+        ];
+        for (name, source, expected) in named {
+            assert!(
+                source.contains(expected),
+                "{name} no longer declares {expected:?} — the Rust constant \
+                 and the shader have diverged"
+            );
+        }
+
+        // The unnamed literals. Water packs each wave as two vec4 lanes, so
+        // its array length is the doubled constant with no name attached.
+        assert!(
+            include_str!("../shaders/water.wgsl")
+                .contains(&format!("waves: array<vec4<f32>, {}>,", MAX_WAVES * 2)),
+            "water.wgsl's wave array is no longer MAX_WAVES * 2 vec4 lanes"
+        );
+        assert!(
+            include_str!("../shaders/shadow_cutout.wgsl").contains(&format!(
+                "terrain_layers: array<TerrainLayer, {MAX_TERRAIN_LAYERS}>,"
+            )),
+            "shadow_cutout.wgsl's terrain layer array no longer matches \
+             MAX_TERRAIN_LAYERS"
+        );
+        // And the splice string that declares the layers for mesh variants.
+        assert!(
+            super::EXTENDED_UNIFORM_TYPES.contains(&format!(
+                "const MAX_TERRAIN_LAYERS: u32 = {MAX_TERRAIN_LAYERS}u;"
+            )),
+            "EXTENDED_UNIFORM_TYPES no longer matches MAX_TERRAIN_LAYERS"
+        );
+    }
+
+    /// The binding registry and the WGSL agree, file by file. The shaders are
+    /// `include_str!`ed verbatim, so their `@binding(N)` literals cannot read
+    /// the constants — this test is what makes the registry authoritative
+    /// over them anyway. `shadow_cutout.wgsl` is deliberately absent: its
+    /// group 2 is the *material* group (bound at index 2 for that pipeline),
+    /// a different meaning for the same group index.
+    #[test]
+    fn the_binding_registry_matches_the_shader_text() {
+        use super::frame_binding as b;
+
+        // The registry's own arithmetic: the GI block sits directly after the
+        // cascade slot, and NEXT_FREE is directly after the GI sampler.
+        assert_eq!(b::GI_SH_FIRST, b::CASCADES + 1);
+        assert_eq!(b::GI_SAMPLER, b::GI_SH_FIRST + 4);
+        assert_eq!(b::NEXT_FREE, b::GI_SAMPLER + 1);
+
+        fn group2_bindings(source: &str) -> Vec<u32> {
+            let mut found: Vec<u32> = source
+                .match_indices("@group(2) @binding(")
+                .filter_map(|(at, pat)| {
+                    let rest = &source[at + pat.len()..];
+                    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                    digits.parse().ok()
+                })
+                .collect();
+            found.sort_unstable();
+            found
+        }
+
+        let files: &[(&str, &str, Vec<u32>)] = &[
+            (
+                "mesh.wgsl",
+                include_str!("../shaders/mesh.wgsl"),
+                vec![b::SHADOW_MAP, b::SHADOW_SAMPLER],
+            ),
+            (
+                "water.wgsl",
+                include_str!("../shaders/water.wgsl"),
+                vec![b::SHADOW_MAP, b::SHADOW_SAMPLER, b::SCENE_DEPTH],
+            ),
+            (
+                "road.wgsl",
+                include_str!("../shaders/road.wgsl"),
+                vec![b::SHADOW_MAP, b::SHADOW_SAMPLER],
+            ),
+            (
+                "meadow.wgsl",
+                include_str!("../shaders/meadow.wgsl"),
+                vec![b::SHADOW_MAP, b::SHADOW_SAMPLER],
+            ),
+            (
+                "refraction.wgsl",
+                include_str!("../shaders/refraction.wgsl"),
+                vec![b::SCENE_COLOR, b::SCENE_SAMPLER],
+            ),
+            (
+                "water_refraction.wgsl",
+                include_str!("../shaders/water_refraction.wgsl"),
+                vec![b::SCENE_COLOR, b::SCENE_SAMPLER],
+            ),
+            (
+                "gi.wgsl",
+                include_str!("../shaders/gi.wgsl"),
+                vec![
+                    b::GI_SH_FIRST,
+                    b::GI_SH_FIRST + 1,
+                    b::GI_SH_FIRST + 2,
+                    b::GI_SH_FIRST + 3,
+                    b::GI_SAMPLER,
+                ],
+            ),
+        ];
+        for (name, source, expected) in files {
+            assert_eq!(
+                &group2_bindings(source),
+                expected,
+                "{name}'s group-2 bindings no longer match the registry"
+            );
+        }
+
+        // The cascade splice is generated text, so it can be asserted the
+        // same way — the conditional binding 5 is the one M35 had to step
+        // over, and the collision the registry exists to prevent.
+        assert!(super::cascade_bindings(3).contains(&format!(
+            "@group(2) @binding({}) var<uniform> cascade",
+            b::CASCADES
+        )));
+    }
+
+    /// Two producers claiming one substitution anchor are refused at
+    /// assembly: `str::replace` runs producer by producer, so the second
+    /// claimant would be a silent no-op, not a merge (CLAUDE.md's splice
+    /// trap — it shipped as a bug in M27 and twice in M35). Terrain and
+    /// texturing both claim the three surface anchors, so composing them is
+    /// exactly the staged case; if a `with_terrain_and_textures` is ever
+    /// wanted, the surface anchors must become an assembly first.
+    #[test]
+    #[should_panic(expected = "two producers claim one anchor")]
+    fn two_claimants_on_one_anchor_are_refused() {
+        let _ = super::with_surface(&[super::terrain_producer(), super::texture_producer()]);
+    }
+
     /// The anchors are asserted at pipeline build, but only for *presence*.
     /// This pins that each producer's substitution actually landed — a splice
     /// that silently did nothing renders the feature as if it were absent,
@@ -1522,6 +1942,100 @@ mod seam_tests {
                 assert!(both.contains(expected), "{name} lost {expected:?}");
             }
         }
+    }
+
+    /// The wind reaches the vertex stage, the lighting body is untouched, and
+    /// the textured twin carries both producers (M46).
+    #[test]
+    fn the_foliage_producer_moves_the_vertex_and_nothing_else() {
+        let plain = super::with_foliage(false);
+        for expected in [
+            "    @location(5) sway: vec2<f32>,\n",
+            "let swayed = foliage_vertex(position, normal, sway);",
+            "out.clip_position = object.mvp * vec4<f32>(swayed, 1.0);",
+            "out.world_position = (object.model * vec4<f32>(swayed, 1.0)).xyz;",
+            "foliage_wind: vec4<f32>,",
+            "fn foliage_value_noise(",
+        ] {
+            assert!(plain.contains(expected), "foliage splice lost {expected:?}");
+        }
+        // The four ULP-sensitive lines are the file's, which is the whole point
+        // of doing this in the vertex stage.
+        assert!(plain.contains("let base_color = direct + ambient + emissive;"));
+        assert!(plain.contains(super::anchor::AMBIENT));
+
+        let textured = super::with_foliage_textures(false);
+        assert!(textured.contains("let swayed = foliage_vertex(position, normal, sway);"));
+        assert!(textured.contains("let sampled = sample_maps(in.uv);"));
+        assert!(textured.contains("    @location(2) uv: vec2<f32>,\n"));
+        // The wind moves the vertex and texturing passes that position through,
+        // which is the producer order stated as an assertion.
+        assert!(textured.contains("out.clip_position = object.mvp * vec4<f32>(swayed, 1.0);"));
+    }
+
+    /// Both casters apply the *same* displacement the colour pass does, and
+    /// declare the uniform out far enough to find it (M46).
+    ///
+    /// A caster that skipped either would write depth for a tree that is
+    /// somewhere else, and the symptom — leaves acneing as the wind blows — is
+    /// nowhere near the code.
+    #[test]
+    fn the_foliage_casters_move_with_the_surface_they_shadow() {
+        let solid = super::foliage_shadow();
+        for expected in [
+            "fn foliage_vertex(",
+            "    @location(1) normal: vec3<f32>,\n",
+            "    @location(5) sway: vec2<f32>,\n",
+            "let swayed = foliage_vertex(position, normal, sway);",
+            "frame.light_view_proj * object.model * vec4<f32>(swayed, 1.0)",
+            // Declared out past terrain's table and the maps, or the wind is
+            // read at the wrong offset.
+            "terrain_layers: array<TerrainLayer, MAX_TERRAIN_LAYERS>,",
+            "map_volume: vec4<f32>,",
+            "foliage_clock: vec4<f32>,",
+        ] {
+            assert!(solid.contains(expected), "solid caster lost {expected:?}");
+        }
+        assert!(
+            !solid.contains("vec4<f32>(position, 1.0)"),
+            "the caster still transforms the undisplaced position somewhere"
+        );
+
+        let cutout = super::foliage_shadow_cutout();
+        for expected in [
+            "    @location(5) sway: vec2<f32>,\n",
+            "let swayed = foliage_vertex(position, normal, sway);",
+            "map_volume: vec4<f32>,",
+            "foliage_wind: vec4<f32>,",
+        ] {
+            assert!(
+                cutout.contains(expected),
+                "cut-out caster lost {expected:?}"
+            );
+        }
+        // It declares its own `TerrainLayer`, so the splice appends rather than
+        // replacing — a second declaration would not compile.
+        assert_eq!(cutout.matches("struct TerrainLayer {").count(), 1);
+    }
+
+    /// The gust must be the *same* function in both files, or a meadow and the
+    /// trees over it blow to two different weathers in one frame (M46).
+    #[test]
+    fn foliage_and_meadow_gust_alike() {
+        let foliage = include_str!("../shaders/foliage.wgsl");
+        let meadow = include_str!("../shaders/meadow.wgsl");
+        for shared in [
+            "h = h * 0x7FEB352Du;",
+            "h = h * 0x846CA68Bu;",
+            "let smoothed = f * f * (3.0 - 2.0 * f);",
+            "* 0.65 +",
+            "* 2.7 + 11.0",
+        ] {
+            assert!(foliage.contains(shared), "foliage.wgsl lost {shared:?}");
+            assert!(meadow.contains(shared), "meadow.wgsl lost {shared:?}");
+        }
+        assert!(meadow.contains("const GUST_SCALE: f32 = 0.06;"));
+        assert!(foliage.contains("const FOLIAGE_GUST_SCALE: f32 = 0.06;"));
     }
 
     /// Every slot past the rig's joint count is zero, and nothing indexes them

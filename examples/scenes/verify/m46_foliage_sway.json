@@ -1,0 +1,91 @@
+{
+  "name": "m46_foliage_sway",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.10, 0.24, 0.58],
+    "sky_horizon": [0.55, 0.66, 0.78],
+    "sky_ground": [0.10, 0.12, 0.09],
+    "shadows": true,
+    "shadow_distance": 32.0,
+    "samples": 4
+  },
+  "entities": [
+    {
+      "name": "Eye",
+      "components": [
+        { "type": "Transform", "position": [0.0, 3.4, 13.0], "rotation": [-7.0, 0.0, 0.0] },
+        { "type": "Camera", "fov": 50.0, "active": true }
+      ]
+    },
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-38.0, 28.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.96, 0.88], "intensity": 2.6 }
+      ]
+    },
+    {
+      "name": "Fill",
+      "components": [
+        { "type": "AmbientLight", "color": [0.55, 0.68, 0.85], "intensity": 0.35 }
+      ]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "scale": [60.0, 1.0, 60.0] },
+        { "type": "Mesh", "asset": "builtin:plane" },
+        { "type": "Material", "albedo": [0.14, 0.20, 0.11], "roughness": 0.95 }
+      ]
+    },
+
+    {
+      "name": "Still",
+      "components": [
+        { "type": "Transform", "position": [-5.4, 0.0, 0.0] },
+        { "type": "Tree", "seed": 4, "height": 4.6, "trunk_radius": 0.2, "levels": 3,
+          "branches": 4, "branch_angle": 54.0, "branch_start": 0.32, "length_ratio": 0.64,
+          "tropism": 14.0, "crook": 9.0, "jitter": 0.3, "leaf_size": 0.22,
+          "leaves_per_branch": 11,
+          "wind": 0.0, "flutter": 0.0 },
+        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Breeze",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0] },
+        { "type": "Tree", "seed": 4, "height": 4.6, "trunk_radius": 0.2, "levels": 3,
+          "branches": 4, "branch_angle": 54.0, "branch_start": 0.32, "length_ratio": 0.64,
+          "tropism": 14.0, "crook": 9.0, "jitter": 0.3, "leaf_size": 0.22,
+          "leaves_per_branch": 11 },
+        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Gale",
+      "components": [
+        { "type": "Transform", "position": [5.4, 0.0, 0.0] },
+        { "type": "Tree", "seed": 4, "height": 4.6, "trunk_radius": 0.2, "levels": 3,
+          "branches": 4, "branch_angle": 54.0, "branch_start": 0.32, "length_ratio": 0.64,
+          "tropism": 14.0, "crook": 9.0, "jitter": 0.3, "leaf_size": 0.22,
+          "leaves_per_branch": 11,
+          "wind": 9.0, "wind_speed": 6.0, "wind_direction": 90.0, "flutter": 18.0 },
+        { "type": "Material", "albedo": [0.20, 0.13, 0.07], "roughness": 0.95 }
+      ]
+    },
+    {
+      "name": "Conifer",
+      "components": [
+        { "type": "Transform", "position": [-9.5, 0.0, -6.0] },
+        { "type": "Tree", "seed": 11, "height": 7.0, "trunk_radius": 0.24, "levels": 2,
+          "branches": 7, "whorl": 4, "branch_angle": 74.0, "branch_start": 0.12,
+          "length_ratio": 0.36, "length_falloff": 0.72, "tropism": -12.0, "crook": 4.0,
+          "leaf": "cluster", "leaf_size": 0.5, "leaves_per_branch": 7,
+          "leaf_color": [0.06, 0.18, 0.09],
+          "wind": 1.6, "flutter": 4.0 },
+        { "type": "Material", "albedo": [0.19, 0.12, 0.08], "roughness": 0.95 }
+      ]
+    }
+  ]
+}

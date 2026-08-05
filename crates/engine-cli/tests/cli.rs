@@ -5081,11 +5081,15 @@ fn the_m32_locomotion_fixture_pins_planted_feet() {
 /// The milestone's claim, proved without a pixel — M30's half of the story,
 /// which is the half this engine cares about most.
 ///
-/// A planted ankle's world Y is the terrain height under it plus the foot's
-/// `sole`, at any moment of the clip; the unplanted twin's is whatever the
-/// animator left it at, which on a slope is inside the hill. Both facts come
-/// out of `engine list-joints` and `engine terrain-height`, neither of which
-/// renders anything.
+/// A planted foot keeps its authored clearance over the terrain under it,
+/// with `sole` as the closest the ankle may come — so at contact moments the
+/// planted ankle's world Y is the terrain height plus `sole` exactly, while
+/// the unplanted twin's is whatever the animator left it at, which on a slope
+/// is inside the hill. `--time` on a stride-driven player samples `phase`
+/// (0 in the file), and at phase 0 this clip has both feet at contact, which
+/// is why the exact form of the claim holds at every sample below. Both facts
+/// come out of `engine list-joints` and `engine terrain-height`, neither of
+/// which renders anything.
 #[test]
 fn a_planted_ankle_stands_on_the_ground_and_an_unplanted_one_does_not() {
     let scene = locomotion_scene();
@@ -5211,6 +5215,105 @@ fn a_stride_driven_walk_does_not_slide_its_feet() {
         slip < 0.012,
         "the planted foot slid {slip} m over two steps; a stance foot should stay put"
     );
+}
+
+/// The side-view fixture: one walker crossing flat ground that matches the
+/// clip's own authoring plane, camera square-on to the gait.
+fn walk_side_scene() -> PathBuf {
+    repo_path("examples/scenes/verify/m32_walk_side.json")
+}
+
+#[test]
+fn the_walk_side_fixture_validates() {
+    let output = engine()
+        .arg("validate")
+        .arg(walk_side_scene())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+}
+
+/// Planting on ground that matches the authoring plane is a near no-op: the
+/// swing foot stays on the animator's arc and the hips keep the clip's own
+/// bob. This is the regression test for the crouch-shuffle bug, where every
+/// foot within `max_drop` of the ground was snapped to it — the swing foot
+/// dragged along the floor for its whole arc (peak 2 cm instead of the
+/// authored 33 cm) and the hips-drop pass crouched the walker 18 cm so both
+/// legs could reach at once.
+///
+/// Step 52 is the left foot's swing peak: the clip holds it ~0.41 m up while
+/// the right bears weight flat, dipped to where `sole` clamps it.
+#[test]
+fn planting_on_flat_ground_leaves_the_swing_foot_to_the_animator() {
+    let output = engine()
+        .arg("list-joints")
+        .arg(walk_side_scene())
+        .arg("--entity")
+        .arg("Walker")
+        .arg("--steps")
+        .arg("52")
+        .output()
+        .unwrap();
+    let rig = json_stdout(&output)["rigs"][0].clone();
+    let world_y = |name: &str| -> f64 {
+        rig["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["name"] == name)
+            .unwrap_or_else(|| panic!("no joint {name} in {rig}"))["world"]["position"][1]
+            .as_f64()
+            .unwrap()
+    };
+
+    let swing = world_y("FootL");
+    assert!(
+        swing > 0.25,
+        "the swing ankle is at y={swing}; the clip authors ~0.40 — a low swing \
+         foot means planting is dragging it toward the ground again"
+    );
+    let stance = world_y("FootR");
+    assert!(
+        (stance - 0.073).abs() < 2e-3,
+        "the stance ankle is at y={stance}, wanted its sole height 0.073"
+    );
+    let hips = world_y("Hips");
+    assert!(
+        hips > 0.86,
+        "the hips are at y={hips} against the clip's ~0.885 — a low pelvis \
+         means the hips-drop pass is crouching to reach a dragged foot"
+    );
+}
+
+/// The fixture rendered mid-stride, pinned bit-exactly: swing foot up, stance
+/// foot on the ground, no crouch. Renders at `samples: 1` because terrain is
+/// in frame (M22's rule); measured at one image across five renders.
+#[test]
+fn the_m32_walk_side_fixture_pins_the_undistorted_walk() {
+    let scene = walk_side_scene();
+    let baseline = repo_path("examples/scenes/verify/baselines/m32_walk_side.png");
+
+    let diff = engine()
+        .arg("diff-render")
+        .arg(&scene)
+        .arg(&baseline)
+        .arg("--steps")
+        .arg("75")
+        .output()
+        .unwrap();
+    if !diff.status.success() {
+        let stderr = String::from_utf8_lossy(&diff.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "diff-render failed for a non-GPU reason: {stderr}"
+        );
+        eprintln!("skipping render pin: no usable GPU on this machine");
+        return;
+    }
+    let report: serde_json::Value = serde_json::from_str(stdout_of(&diff).trim()).unwrap();
+    assert_eq!(report["pass"], true, "{report}");
+    assert_eq!(report["diff_pixels"], 0, "{report}");
 }
 
 // ── The baselines the sweep used to be the only check on ──────────────────
@@ -7462,8 +7565,29 @@ fn bake_gi_check_catches_a_scene_whose_geometry_moved() {
 /// It is the M37–M43 merge's failure written as a test: the tour gained an
 /// entity's worth of geometry per milestone, all 1,050 probes moved on the
 /// re-bake, and every gate stayed green.
+///
+/// Checked only on the machine class bakes are blessed on, for the lap
+/// recording's reason: the digest hashes the scene's generated triangles, trees
+/// ride the mesh list, and the tree generator's `sin`/`cos` disagree in their
+/// last bits between Apple's libm and glibc's — so the tour's digest is
+/// per-platform the way tree baselines are. Measured, not supposed: the same
+/// tree hashes `0cdf029474f3adba` here and `20f853f325e55e0d` on x86-64 Linux,
+/// while `re_baking_the_fixture_reproduces_the_committed_file` passes there —
+/// the bake's own arithmetic reproduces byte-for-byte cross-platform, and the
+/// tree-free fixture stays covered everywhere. Only scenes with generated trig
+/// geometry lose this check off-platform, and they get it back on every
+/// macOS run.
 #[test]
 fn every_committed_gi_bake_matches_its_scene() {
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        eprintln!(
+            "skipping the staleness sweep: bakes are blessed on aarch64 macOS, and this is {} {}",
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        );
+        return;
+    }
+
     let mut checked = 0;
     for scene in scenes_with_probe_volumes() {
         let output = engine()
@@ -7541,6 +7665,100 @@ fn m45_sun_bounce_diff_renders() {
         "examples/scenes/verify/baselines/m45_sun_bounce.png",
         &[],
     );
+}
+
+// ── Foliage sway (M46) ────────────────────────────────────────────────────
+
+/// Bit-reproducible for `m19_trees.png`'s reasons — CPU-generated geometry, a
+/// ground *plane* rather than a `Terrain`, and nothing fine against relief.
+/// Measured before blessing: five renders, one image.
+///
+/// Rendered at `--time 2.4` deliberately: at time 0 the gust is still a gust
+/// (the noise is sampled at a coordinate, not ramped up from nothing), but a
+/// fixture for a moving thing that pins the clock at zero invites the next
+/// person to assume the clock does not matter. It does — the same scene at
+/// `--time 0` is a different image, and this scene's `Still` tree is the one
+/// that is not.
+#[test]
+fn m46_foliage_sway_diff_renders() {
+    pin_baseline(
+        "examples/scenes/verify/m46_foliage_sway.json",
+        "examples/scenes/verify/baselines/m46_foliage_sway.png",
+        &["--time", "2.4"],
+    );
+}
+
+/// The whole default-on departure in one assertion (M46 §2): a tree that asks
+/// for no wind renders the *same bytes* at any clock, and one that does not ask
+/// does not.
+///
+/// This is what makes `wind: 0` a real opt-out rather than a very slow sway,
+/// and it is the property the A/B against `main` measures on the other side.
+#[test]
+fn a_windless_tree_renders_the_same_at_every_moment() {
+    let dir = std::env::temp_dir().join(format!("engine-m46-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = repo_path("examples/scenes/verify/m46_foliage_sway.json");
+    let render = |time: &str, name: &str| {
+        let out = dir.join(name);
+        let output = engine()
+            .arg("screenshot")
+            .arg(&scene)
+            .arg("--out")
+            .arg(&out)
+            .arg("--time")
+            .arg(time)
+            .arg("--camera")
+            .arg("Eye")
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+                "screenshot failed for a non-GPU reason: {stderr}"
+            );
+            return None;
+        }
+        Some(std::fs::read(&out).unwrap())
+    };
+
+    // The fixture as committed moves, so its two moments differ…
+    let Some(moving_a) = render("0", "moving_a.png") else {
+        eprintln!("skipping: no usable GPU on this machine");
+        return;
+    };
+    let moving_b = render("2.4", "moving_b.png").expect("GPU worked a moment ago");
+    assert_ne!(moving_a, moving_b);
+
+    // …and the same scene with every tree stilled does not.
+    let mut still: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&scene).unwrap()).unwrap();
+    for entity in still["entities"].as_array_mut().unwrap() {
+        for component in entity["components"].as_array_mut().unwrap() {
+            if component["type"] == "Tree" {
+                component["wind"] = serde_json::json!(0.0);
+                component["flutter"] = serde_json::json!(0.0);
+            }
+        }
+    }
+    let stilled = dir.join("stilled.json");
+    std::fs::write(&stilled, serde_json::to_string_pretty(&still).unwrap()).unwrap();
+    let shot = |time: &str, name: &str| {
+        let out = dir.join(name);
+        let output = engine()
+            .arg("screenshot")
+            .arg(&stilled)
+            .arg("--out")
+            .arg(&out)
+            .arg("--time")
+            .arg(time)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+        std::fs::read(&out).unwrap()
+    };
+    assert_eq!(shot("0", "still_a.png"), shot("2.4", "still_b.png"));
 }
 
 /// **The postcard**: a surface facing a sunlit red wall gathers red light off

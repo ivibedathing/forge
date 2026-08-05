@@ -1,5 +1,70 @@
 use super::*;
 
+/// The facts one recipe pass's pipeline actually differs in. Everything else
+/// about a recipe's `RenderPipelineDescriptor` — triangle list, `vs_main` /
+/// `fs_main`, full colour writes, `DEPTH_FORMAT`, no multiview, no cache —
+/// was repeated verbatim by five constructors (~35 lines each) before
+/// [`recipe_pipeline`] absorbed it. `build_skinned`'s `mesh_pipeline` closure
+/// proved the shape; this is the same move for the unskinned passes.
+///
+/// A descriptor is plain data — identical fields build an identical pipeline —
+/// so this is pure code motion with no bearing on any ULP-sensitive path,
+/// which live in shader *text*, not in pipeline state.
+struct RecipePipeline<'a> {
+    label: &'static str,
+    shader: &'a wgpu::ShaderModule,
+    layout: &'a wgpu::PipelineLayout,
+    buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
+    blend: wgpu::BlendState,
+    cull_mode: Option<wgpu::Face>,
+    depth_write: bool,
+    depth_compare: wgpu::CompareFunction,
+}
+
+/// Build one recipe pass from its [`RecipePipeline`] facts.
+fn recipe_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    multisample: wgpu::MultisampleState,
+    recipe: RecipePipeline<'_>,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(recipe.label),
+        layout: Some(recipe.layout),
+        vertex: wgpu::VertexState {
+            module: recipe.shader,
+            entry_point: Some("vs_main"),
+            buffers: recipe.buffers,
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: recipe.shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(recipe.blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: recipe.cull_mode,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(recipe.depth_write),
+            depth_compare: Some(recipe.depth_compare),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample,
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 /// Everything a skinned draw needs, built the **first time a frame has one**
 /// (M30) and kept for the life of the renderer.
 ///
@@ -17,6 +82,26 @@ pub(crate) struct SkinnedPipelines {
     pub(crate) transparent: wgpu::RenderPipeline,
     pub(crate) textured_transparent: wgpu::RenderPipeline,
     pub(crate) refractive: wgpu::RenderPipeline,
+    pub(crate) shadow: wgpu::RenderPipeline,
+    pub(crate) shadow_cutout: wgpu::RenderPipeline,
+}
+
+/// Everything a foliage draw needs (M46), built the **first time a frame has
+/// one** and kept for the life of the renderer.
+///
+/// Lazy on `SkinnedPipelines`' precedent and for its reason: four shader
+/// compilations that a scene with no tree in it should not pay for.
+///
+/// Four variants rather than the skinned set's seven. Leaves are opaque by
+/// construction (`Tree::leaf_material`), so the only way to reach the blended
+/// pass with foliage is a *transparent bark material* — which
+/// `tree_sway_needs_opaque_bark` warns about instead, because the alternative
+/// is three more pipelines for a case no scene has and the design says so
+/// (M46 §7). Everything else about them mirrors the unskinned pipelines
+/// exactly, down to the front-face-culled caster.
+pub(crate) struct FoliagePipelines {
+    pub(crate) opaque: wgpu::RenderPipeline,
+    pub(crate) textured: wgpu::RenderPipeline,
     pub(crate) shadow: wgpu::RenderPipeline,
     pub(crate) shadow_cutout: wgpu::RenderPipeline,
 }
@@ -198,7 +283,7 @@ impl super::SceneRenderer {
         // spent on frame-scoped textures left nowhere for a material.
         let mut frame_texture_entries = vec![
             wgpu::BindGroupLayoutEntry {
-                binding: 0,
+                binding: frame_binding::SHADOW_MAP,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Depth,
@@ -215,13 +300,13 @@ impl super::SceneRenderer {
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 1,
+                binding: frame_binding::SHADOW_SAMPLER,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 2,
+                binding: frame_binding::SCENE_DEPTH,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     // Read with `textureLoad`: no sampler, so nothing
@@ -233,7 +318,7 @@ impl super::SceneRenderer {
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 3,
+                binding: frame_binding::SCENE_COLOR,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -243,7 +328,7 @@ impl super::SceneRenderer {
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 4,
+                binding: frame_binding::SCENE_SAMPLER,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
@@ -254,7 +339,7 @@ impl super::SceneRenderer {
         // entry for entry, and the four receivers declare what they always did.
         if cascades > 1 {
             frame_texture_entries.push(wgpu::BindGroupLayoutEntry {
-                binding: 5,
+                binding: frame_binding::CASCADES,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
@@ -276,18 +361,22 @@ impl super::SceneRenderer {
         // `Rgba16Float` is filterable in core WebGPU, which is the entire reason
         // the field is a 3D texture rather than a buffer — probe interpolation
         // comes free and continuous from the sampler.
-        frame_texture_entries.extend([6u32, 7, 8, 9].map(|binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D3,
-                multisampled: false,
-            },
-            count: None,
-        }));
+        frame_texture_entries.extend(
+            (frame_binding::GI_SH_FIRST..frame_binding::GI_SH_FIRST + 4).map(|binding| {
+                wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                }
+            }),
+        );
         frame_texture_entries.push(wgpu::BindGroupLayoutEntry {
-            binding: 10,
+            binding: frame_binding::GI_SAMPLER,
             visibility: wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             count: None,
@@ -1010,6 +1099,7 @@ impl super::SceneRenderer {
             road_objects: None,
             road_stride,
             skinned: None,
+            foliage: None,
             skinned_objects: None,
             palette_stride,
             meadow_pipeline,
@@ -1367,6 +1457,249 @@ impl super::SceneRenderer {
         }
     }
 
+    /// Build the foliage pipeline set, once, on the first frame that has a tree
+    /// that moves (M46).
+    ///
+    /// The bind group layouts are the *ordinary* ones — foliage needs no group
+    /// of its own, unlike skinning with its palette, because the wind is four
+    /// lanes of the object uniform every draw already has. What it does need is
+    /// one more vertex slot, at location 5: 3 and 4 belong to skinning, and a
+    /// tree is never skinned, but a shared location that only works because
+    /// nothing composes them is the kind of coincidence this repo writes down
+    /// rather than relies on.
+    pub(crate) fn build_foliage(&self, device: &wgpu::Device) -> FoliagePipelines {
+        let multisample = wgpu::MultisampleState {
+            count: self.samples,
+            ..Default::default()
+        };
+        let module = |label: &str, source: std::borrow::Cow<'static, str>| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(
+                    &source,
+                    self.cascades,
+                ))),
+            })
+        };
+        let gi = self.gi;
+        let plain = module("foliage-shader", with_foliage(gi));
+        let textured = module("foliage-textured-shader", with_foliage_textures(gi));
+
+        let position = wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            }],
+        };
+        let normal = wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+            }],
+        };
+        let uv = wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        };
+        // x = the wind weight, y = the leaf's flutter phase in turns.
+        let sway = wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        };
+
+        let plain_layouts = [
+            Some(position.clone()),
+            Some(normal.clone()),
+            Some(sway.clone()),
+        ];
+        let textured_layouts = [
+            Some(position.clone()),
+            Some(normal.clone()),
+            Some(uv.clone()),
+            Some(sway.clone()),
+        ];
+        // The solid caster carries a normal it would otherwise not need: the
+        // flutter displaces along it, and a caster that disagreed with the
+        // colour pass about where a leaf is would write acne under every leaf.
+        let caster_layouts = [Some(position), Some(normal), Some(sway.clone())];
+        let cutout_caster_layouts = [
+            plain_layouts[0].clone(),
+            plain_layouts[1].clone(),
+            Some(uv),
+            Some(sway),
+        ];
+
+        let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("foliage-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&self.object_layout),
+                Some(&self.frame_layout),
+                Some(&self.frame_textures_layout),
+            ],
+            immediate_size: 0,
+        });
+        let material_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("foliage-textured-pipeline-layout"),
+                bind_group_layouts: &[
+                    Some(&self.object_layout),
+                    Some(&self.frame_layout),
+                    Some(&self.frame_textures_layout),
+                    Some(&self.material_layout),
+                ],
+                immediate_size: 0,
+            });
+
+        let format = self.format;
+        let mesh_pipeline =
+            |label: &str,
+             module: &wgpu::ShaderModule,
+             layout: &wgpu::PipelineLayout,
+             buffers: &[Option<wgpu::VertexBufferLayout<'_>>]| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(layout),
+                    vertex: wgpu::VertexState {
+                        module,
+                        entry_point: Some("vs_main"),
+                        buffers,
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module,
+                        entry_point: Some("fs_main"),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: Some(wgpu::BlendState::REPLACE),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        cull_mode: Some(wgpu::Face::Back),
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(true),
+                        depth_compare: Some(wgpu::CompareFunction::Less),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample,
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+
+        let shadow_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("foliage-shadow-shader"),
+            source: wgpu::ShaderSource::Wgsl(foliage_shadow().into()),
+        });
+        let shadow_cutout_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("foliage-shadow-cutout-shader"),
+            source: wgpu::ShaderSource::Wgsl(foliage_shadow_cutout().into()),
+        });
+        let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("foliage-shadow-pipeline-layout"),
+            bind_group_layouts: &[Some(&self.object_layout), Some(&self.frame_layout)],
+            immediate_size: 0,
+        });
+        let shadow_cutout_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("foliage-shadow-cutout-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&self.object_layout),
+                Some(&self.frame_layout),
+                // The material group at 2, not 3 — this pipeline has no frame
+                // textures to read.
+                Some(&self.material_layout),
+            ],
+            immediate_size: 0,
+        });
+        let caster = |label: &str,
+                      module: &wgpu::ShaderModule,
+                      layout: &wgpu::PipelineLayout,
+                      buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                      fragment: Option<wgpu::FragmentState<'_>>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some("vs_main"),
+                    buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment,
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Front),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: wgpu::DepthBiasState {
+                        constant: 2,
+                        slope_scale: 2.0,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        FoliagePipelines {
+            opaque: mesh_pipeline("foliage-pipeline", &plain, &mesh_layout, &plain_layouts),
+            textured: mesh_pipeline(
+                "foliage-textured-pipeline",
+                &textured,
+                &material_pipeline_layout,
+                &textured_layouts,
+            ),
+            shadow: caster(
+                "foliage-shadow-pipeline",
+                &shadow_module,
+                &shadow_layout,
+                &caster_layouts,
+                None,
+            ),
+            shadow_cutout: caster(
+                "foliage-shadow-cutout-pipeline",
+                &shadow_cutout_module,
+                &shadow_cutout_layout,
+                &cutout_caster_layouts,
+                Some(wgpu::FragmentState {
+                    module: &shadow_cutout_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
+            ),
+        }
+    }
+
     /// The depth-only caster pass (M16). No fragment stage and no color
     /// target: the rasterizer writing depth is the whole point.
     ///
@@ -1514,41 +1847,23 @@ impl super::SceneRenderer {
             immediate_size: 0,
         });
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("sky-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+        recipe_pipeline(
+            device,
+            format,
             multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+            RecipePipeline {
+                label: "sky-pipeline",
+                shader: &shader,
+                layout: &layout,
+                buffers: &[],
+                blend: wgpu::BlendState::REPLACE,
+                cull_mode: None,
+                depth_write: false,
+                // The sky pass draws behind everything by construction — it
+                // runs first and never tests what it cannot occlude.
+                depth_compare: wgpu::CompareFunction::Always,
+            },
+        )
     }
 
     /// The water pass (M18): the blended twin of the mesh pipeline in how it
@@ -1589,41 +1904,21 @@ impl super::SceneRenderer {
             immediate_size: 0,
         });
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("water-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: vertex_layouts,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+        recipe_pipeline(
+            device,
+            format,
             multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+            RecipePipeline {
+                label: "water-pipeline",
+                shader: &shader,
+                layout: &layout,
+                buffers: vertex_layouts,
+                blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                cull_mode: None,
+                depth_write: false,
+                depth_compare: wgpu::CompareFunction::Less,
+            },
+        )
     }
 
     /// The cloud pass (M20): blended like the water pass, and culled like
@@ -1658,41 +1953,21 @@ impl super::SceneRenderer {
             immediate_size: 0,
         });
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cloud-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: vertex_layouts,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+        recipe_pipeline(
+            device,
+            format,
             multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+            RecipePipeline {
+                label: "cloud-pipeline",
+                shader: &shader,
+                layout: &layout,
+                buffers: vertex_layouts,
+                blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                cull_mode: None,
+                depth_write: false,
+                depth_compare: wgpu::CompareFunction::Less,
+            },
+        )
     }
 
     /// The road pass (M23): the mesh pipeline's opaque twin, with a fourth
@@ -1733,41 +2008,21 @@ impl super::SceneRenderer {
             immediate_size: 0,
         });
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("road-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: vertex_layouts,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+        recipe_pipeline(
+            device,
+            format,
             multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+            RecipePipeline {
+                label: "road-pipeline",
+                shader: &shader,
+                layout: &layout,
+                buffers: vertex_layouts,
+                blend: wgpu::BlendState::REPLACE,
+                cull_mode: Some(wgpu::Face::Back),
+                depth_write: true,
+                depth_compare: wgpu::CompareFunction::Less,
+            },
+        )
     }
 
     /// The meadow pass (M29): opaque, depth-writing, and **instanced**.
@@ -1831,12 +2086,14 @@ impl super::SceneRenderer {
             8 => Uint32,
         ];
 
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("meadow-pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
+        recipe_pipeline(
+            device,
+            format,
+            multisample,
+            RecipePipeline {
+                label: "meadow-pipeline",
+                shader: &shader,
+                layout: &layout,
                 buffers: &[
                     Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<MeadowVertexRaw>() as u64,
@@ -1849,34 +2106,12 @@ impl super::SceneRenderer {
                         attributes: &INSTANCE_ATTRIBUTES,
                     }),
                 ],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
+                blend: wgpu::BlendState::REPLACE,
                 cull_mode: None,
-                ..Default::default()
+                depth_write: true,
+                depth_compare: wgpu::CompareFunction::Less,
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample,
-            multiview_mask: None,
-            cache: None,
-        })
+        )
     }
 
     /// The depth copy pass (M18): one fullscreen triangle turning the opaque

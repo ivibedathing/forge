@@ -265,6 +265,14 @@ pub fn run(
             if let Some(scripts) = &mut scripts {
                 scripts.sync_names(&scene.world);
             }
+            // A despawned entity may be an emitter, and the particle system
+            // tracks a list it built at load — so it has to be told, exactly
+            // as the break and spent-burst paths below tell it. Without this
+            // the state outlives its entity: `step` and `instances` skip it,
+            // `finished` never reaps it, `live_particles` counts its frozen
+            // particles forever, and a recycled entity id would hand them to
+            // whatever entity hecs allocates next.
+            particles.sync(&scene.world);
             if let Some(trace) = trace.as_deref_mut() {
                 for name in &despawned {
                     write_line(trace, &json!({ "step": step, "despawned": name }))?;
@@ -319,7 +327,11 @@ pub fn run(
         if !spent.is_empty() {
             let mut names = Vec::with_capacity(spent.len());
             for entity in spent {
-                if let Ok(name) = scene.world.get::<&engine_core::components::Name>(entity).map(|n| n.0.clone()) {
+                if let Ok(name) = scene
+                    .world
+                    .get::<&engine_core::components::Name>(entity)
+                    .map(|n| n.0.clone())
+                {
                     names.push(name);
                 }
                 let _ = scene.world.despawn(entity);
@@ -911,7 +923,7 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
                         format!("could not serialize a {kind} for bake: {e}"),
                     )
                 })?;
-                clean_numbers(&mut value);
+                formatter::shorten_floats(&mut value);
                 let fields: Vec<(String, Value)> = value
                     .as_object()
                     .map(|object| {
@@ -929,22 +941,6 @@ pub fn bake(source: &str, scene: &Scene, out: &Path) -> Result<()> {
     }
 
     formatter::write_atomic(out, &baked)
-}
-
-/// Rewrite every number through the f32-shortest text path, so serialized
-/// components bake as `0.1` rather than the f64-widened
-/// `0.10000000149011612`. Lossless: every component numeric field is f32.
-fn clean_numbers(value: &mut Value) {
-    match value {
-        Value::Number(n) => {
-            if let Some(f) = n.as_f64() {
-                *value = number_from_f32(f as f32);
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(clean_numbers),
-        Value::Object(map) => map.values_mut().for_each(clean_numbers),
-        _ => {}
-    }
 }
 
 /// Load an `--input` timeline, if one was given. Every timeline error is
@@ -1210,4 +1206,52 @@ pub fn raycast_command(
     };
     println!("{result}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Despawning an emitter takes its particle state with it. The despawn
+    /// path used to refresh names without telling the particle system, so
+    /// the state outlived its entity — skipped by `step` and `instances`,
+    /// never reaped by `finished`, its frozen particles counted forever.
+    #[test]
+    fn despawning_an_emitter_takes_its_particles_with_it() {
+        let dir =
+            std::env::temp_dir().join(format!("engine-simulate-despawn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("kill.rhai"),
+            "fn step(world, step) {\n  if step == 3 { world.despawn_entity(\"Puff\"); }\n}\n",
+        )
+        .unwrap();
+        let scene_path = dir.join("scene.json");
+        std::fs::write(
+            &scene_path,
+            r#"{"name":"despawn-emitter","entities":[
+                {"name":"Controller","components":[
+                    {"type":"Script","source":"kill.rhai"}]},
+                {"name":"Puff","components":[
+                    {"type":"Transform"},
+                    {"type":"ParticleEmitter","rate":60.0,"lifetime":30.0,"seed":7}]}
+            ]}"#,
+        )
+        .unwrap();
+
+        let mut scene = crate::load_scene(&scene_path).unwrap();
+        let run = run(&mut scene, &scene_path, 10, None, &Viewport::DEFAULT, None).unwrap();
+
+        assert!(
+            scene.entity("Puff").is_none(),
+            "the despawn itself must have landed"
+        );
+        assert_eq!(
+            run.particles.live_particles(),
+            0,
+            "no particle may survive its emitter's entity"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

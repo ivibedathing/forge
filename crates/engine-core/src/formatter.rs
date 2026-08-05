@@ -752,6 +752,48 @@ pub fn apply_remove_component(source: &str, edit: &RemoveComponent) -> Result<St
     Ok(edited)
 }
 
+/// Replace a component wholesale: remove the entity's existing one if it has
+/// one, then add it back with `fields`.
+///
+/// This is the recipe every generator's `--write` shares (`engine fracture`,
+/// `engine fit-colliders`): remove-then-add rather than a field edit, because
+/// a generated component is arrays of objects and `SetComponentField` is for
+/// scalars. It lives here so a third generator inherits the recipe instead of
+/// hand-copying it — the copies had already begun to drift in how they
+/// guarded the removal. A missing component is the common case, not an error:
+/// most entities gain the component from this very call. Callers pass
+/// generated numbers through [`shorten_floats`] first, as both originals did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplaceComponent {
+    pub entity: String,
+    pub component: String,
+    /// Fields in authoring order.
+    pub fields: Vec<(String, Value)>,
+}
+
+/// Apply a [`ReplaceComponent`]. Any failure other than "the component is
+/// not there" (a vanished entity, a file that no longer parses) recurs in
+/// the add half and is reported from there, with the same code either path
+/// would have raised.
+pub fn apply_replace_component(source: &str, edit: &ReplaceComponent) -> Result<String> {
+    let removed = apply_remove_component(
+        source,
+        &RemoveComponent {
+            entity: edit.entity.clone(),
+            component: edit.component.clone(),
+        },
+    );
+    let base = removed.unwrap_or_else(|_| source.to_string());
+    apply_add_component(
+        &base,
+        &AddComponent {
+            entity: edit.entity.clone(),
+            component: edit.component.clone(),
+            fields: edit.fields.clone(),
+        },
+    )
+}
+
 /// Remove one entity from the scene — bake's structural splice for an entity
 /// that no longer exists in the world (it broke into fragments). Addressed
 /// by `name`; a vanished target is `edit_target_missing`.
@@ -964,6 +1006,45 @@ mod tests {
     { "name": "Camera1", "components": [ { "type": "Camera", "active": true } ] }
   ]
 }"#;
+
+    #[test]
+    fn replace_component_adds_when_absent_and_replaces_when_present() {
+        // First write: "Sphere" has no Breakable, so the replace is an add.
+        let edit = ReplaceComponent {
+            entity: "Sphere".into(),
+            component: "Breakable".into(),
+            fields: vec![("impulse_threshold".to_string(), json!(5.0))],
+        };
+        let first = apply_replace_component(SCENE, &edit).unwrap();
+        assert!(first.contains("\"type\": \"Breakable\""));
+        assert!(first.contains("\"impulse_threshold\": 5.0"));
+
+        // Second write over the first: exactly one Breakable survives, with
+        // the new fields — the refracture case, and the reason the removal
+        // half tolerates an absent component.
+        let edit = ReplaceComponent {
+            entity: "Sphere".into(),
+            component: "Breakable".into(),
+            fields: vec![("impulse_threshold".to_string(), json!(8.0))],
+        };
+        let second = apply_replace_component(&first, &edit).unwrap();
+        assert_eq!(second.matches("\"type\": \"Breakable\"").count(), 1);
+        assert!(second.contains("\"impulse_threshold\": 8.0"));
+        assert!(!second.contains("\"impulse_threshold\": 5.0"));
+        // The untouched entity is byte-identical either way.
+        assert!(second.contains("{ \"name\": \"Camera1\", \"components\": [ { \"type\": \"Camera\", \"active\": true } ] }"));
+    }
+
+    #[test]
+    fn replace_component_on_a_vanished_entity_reports_the_add_error() {
+        let edit = ReplaceComponent {
+            entity: "Nobody".into(),
+            component: "Breakable".into(),
+            fields: vec![],
+        };
+        let error = apply_replace_component(SCENE, &edit).unwrap_err();
+        assert_eq!(error.error, crate::codes::EDIT_TARGET_MISSING);
+    }
 
     #[test]
     fn set_value_changes_exactly_one_line() {
