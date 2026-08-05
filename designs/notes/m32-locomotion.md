@@ -74,6 +74,18 @@ frames the `Walker`'s own edit re-blessed.
   and the symptom is a foot that reaches the ground with nothing joining it to the knee. The hips
   drop first, by the largest deficit across legs; absent a `hips` joint the deficit is clamped and
   one leg stretches, which is bounded and reads as wrong.
+- **The viewer shipped without the locomotion step, and every walker slid in `run-scene`.**
+  `app.rs`'s fixed-step loop mirrors `simulate.rs` system for system — its comments insist the two
+  "must not diverge" — but `Locomotion` was only ever built and stepped in the headless loop, so in
+  the window the phase stayed 0 forever: the script carried the root while the skeleton held its
+  frame-0 pose, and the same scene animated correctly under `screenshot --steps`. The fix is the
+  mirror: `Simulation` carries a `Locomotion` built at construction, stepped after physics and
+  before particles, **unconditionally** (a walker carried by a script alone has no physics), and
+  the step-loop gate gains `!locomotion.is_empty()` so a scene with nothing but a stride-driven
+  walker still runs the loop. The general lesson: when a loop's correctness rule is "mirror the
+  other loop", a *new system* added to one is invisible to every diff of the other — the headless
+  A/B, the baselines and all 965 tests were green while the window was wrong, because nothing
+  automated looks at the window.
 - Scripts get `world.animation_phase`/`set_animation_phase` and the `stride` pair — **settable**,
   unlike M30's joint getters, and the distinction is where the number lives: a joint is derived and
   would be hidden state, while these are ordinary component fields the file carries. A game with its

@@ -51,6 +51,13 @@ impl Locomotion {
         Self { previous }
     }
 
+    /// Whether the world had any stride-driven player at build time — the
+    /// viewer's step-loop gate, so a scene with nothing but a walker still
+    /// gets its phase advanced.
+    pub fn is_empty(&self) -> bool {
+        self.previous.is_empty()
+    }
+
     /// Advance each stride-driven player by the ground its entity covered.
     ///
     /// Runs **after** physics, so the distance is the one the entity actually
