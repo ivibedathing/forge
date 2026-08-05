@@ -514,6 +514,13 @@ pub fn set_field(
                 "leaf_size" => c.leaf_size = scalar,
                 "leaf_color" => c.leaf_color = v3,
                 "leaf_roughness" => c.leaf_roughness = scalar,
+                // The wind fields (M46). Animating one is the cheapest thing in
+                // this list: they change no geometry, so a clip that builds a
+                // gust over `wind` costs a uniform rather than a regrown tree.
+                "wind" => c.wind = scalar,
+                "wind_speed" => c.wind_speed = scalar,
+                "wind_direction" => c.wind_direction = scalar,
+                "flutter" => c.flutter = scalar,
                 _ => return false,
             }
         }

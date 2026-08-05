@@ -253,6 +253,35 @@ pub struct RenderItem {
     /// of the node referencing a skinned mesh is ignored and the engine's
     /// `Transform` is what places the character.
     pub joints: Vec<glam::Mat4>,
+    /// The wind this draw moves in (M46) — **`None` for everything that is not
+    /// a tree**, and for a tree that asked for no wind, which is what routes
+    /// the draw onto the pipelines that compile `mesh.wgsl` as it sits on disk.
+    ///
+    /// Set together with a `mesh` carrying [`MeshData::sway`](crate::mesh::MeshData::sway):
+    /// the parameters say how hard the wind blows and the channel says how much
+    /// of it each vertex feels, and neither is any use without the other.
+    pub foliage: Option<Foliage>,
+}
+
+/// How hard the wind blows on one foliage draw (M46), resolved from the
+/// entity's [`Tree`](crate::components::Tree) into the units the vertex stage
+/// wants.
+///
+/// A tree emits two draws and they differ here: the bark's `flutter` is zero,
+/// because a branch is not a leaf.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Foliage {
+    /// How far a fully-compliant vertex leans at full gust, in **radians** —
+    /// `Tree::wind` converted once here rather than per vertex per frame.
+    pub wind: f32,
+    /// How fast gusts travel, in metres per second.
+    pub wind_speed: f32,
+    /// Which way the wind blows, as a unit vector in world XZ.
+    pub wind_direction: [f32; 2],
+    /// How far a leaf's face beats along its own normal, in **metres** — the
+    /// arc `Tree::flutter` degrees sweeps at the leaf's own size. Zero for the
+    /// bark half of a tree.
+    pub flutter: f32,
 }
 
 /// One water surface, with its geometry resolved and its transform flattened
@@ -964,6 +993,8 @@ impl Scene {
                 textures,
                 terrain: None,
                 joints,
+                // Only a `Tree` moves in the wind (M46).
+                foliage: None,
             });
         }
 
@@ -996,6 +1027,18 @@ impl Scene {
             let leaf_textures = crate::texture::MaterialTextures::resolve(&leaf_material, assets)
                 .map_err(|e| e.entity(name.clone()))?;
 
+            // The wind, resolved once per tree into the vertex stage's units
+            // (M46). Both draws take the same gust; only the leaves flutter.
+            let wind = tree.sways().then(|| {
+                let direction = crate::water::wave_direction(tree.wind_direction);
+                Foliage {
+                    wind: tree.wind.to_radians(),
+                    wind_speed: tree.wind_speed,
+                    wind_direction: [direction.x, direction.y],
+                    flutter: 0.0,
+                }
+            });
+
             items.push(RenderItem {
                 entity: name.clone(),
                 mesh: grown.bark,
@@ -1004,6 +1047,7 @@ impl Scene {
                 textures: bark_textures,
                 terrain: None,
                 joints: Vec::new(),
+                foliage: wind,
             });
             if let Some(leaves) = grown.leaves {
                 items.push(RenderItem {
@@ -1014,6 +1058,13 @@ impl Scene {
                     textures: leaf_textures,
                     terrain: None,
                     joints: Vec::new(),
+                    // A leaf's beat is an arc at its own size: `flutter`
+                    // degrees swept at `leaf_size` metres, which is what makes
+                    // the same angle read the same on an oak and on a shrub.
+                    foliage: wind.map(|w| Foliage {
+                        flutter: tree.leaf_size * tree.flutter.to_radians().sin(),
+                        ..w
+                    }),
                 });
             }
         }
@@ -1047,6 +1098,7 @@ impl Scene {
                 material,
                 textures,
                 terrain: None,
+                foliage: None,
                 joints: Vec::new(),
             });
         }
@@ -1151,6 +1203,7 @@ impl Scene {
                     textures: crate::texture::MaterialTextures::default(),
                     terrain: Some(terrain.clone()),
                     joints: Vec::new(),
+                    foliage: None,
                 }
             })
             .collect();

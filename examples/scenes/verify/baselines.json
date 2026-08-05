@@ -633,6 +633,15 @@
      "height": 360,
      "milestone": "M45",
      "pinned_by": "cli.rs::m45_sun_bounce_diff_renders"
+    },
+    {
+     "baseline": "examples/scenes/verify/baselines/m46_foliage_sway.png",
+     "scene": "examples/scenes/verify/m46_foliage_sway.json",
+     "args": ["--time", "2.4"],
+     "width": 640,
+     "height": 360,
+     "milestone": "M46",
+     "pinned_by": "cli.rs::m46_foliage_sway_diff_renders"
     }
   ],
   "traces": [

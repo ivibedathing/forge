@@ -1503,3 +1503,44 @@ interpenetrating bodies at spawn, and rapier would fling them apart), every cell
 stays inside the box, the piece count is exact, the same seed reproduces the same points, wood's
 splinters run along the grain, and glass's shards span the full thickness of the pane and come out
 smaller near the impact.
+
+## M46 — Foliage sway: `verify/m46_foliage_sway.json`
+
+Four trees at four winds, rendered at `--time 2.4`: one stilled (`wind: 0`), one at the defaults,
+one in a gale blowing across the frame rather than into it, and a conifer of clusters rather than
+blades.
+
+**The still tree beside the breezing one is the assertion.** They are the *same seed and the same
+parameters* — one field apart — so the picture is a controlled comparison rather than an
+illustration: whatever the wind does to the middle tree is visible as the difference between two
+otherwise identical trees, and the fact that the left one is exactly where M19 grew it is the
+opt-out working. A sway applied to everything, or one applied to nothing, changes this frame
+unmistakably.
+
+**The gale is the model's failure mode, in frame on purpose.** At `wind: 9` the bend is large enough
+to read the *shape* of the compliance field — the trunk barely moves, the limbs lean, the twigs go
+over — which is what says the weights come from the branch hierarchy rather than from height. It is
+also where a wind authored much harder starts shearing leaves off their shoots, so the fixture puts
+the usable ceiling on the page.
+
+**The shadows move with the canopies.** That is the second pipeline pair (`foliage_shadow`,
+`foliage_shadow_cutout`) doing its job; without them the frame renders with a still tree's shadow
+under a moving tree, and the leaves acne.
+
+No terrain in frame (a ground *plane*), so it carries a hard bit-exact pin
+(`m46_foliage_sway_diff_renders`) despite `samples: 4`, on `m19_trees.png`'s precedent; five
+consecutive renders came back as one image.
+
+```
+engine validate examples/scenes/verify/m46_foliage_sway.json --strict
+engine diff-render examples/scenes/verify/m46_foliage_sway.json \
+    examples/scenes/verify/baselines/m46_foliage_sway.png --time 2.4
+engine screenshot examples/scenes/verify/m46_foliage_sway.json --out /tmp/a.png --time 0
+engine filmstrip examples/scenes/verify/m46_foliage_sway.json --out /tmp/strip.png \
+    --start 0 --end 4 --frames 6 --columns 3      # the cadence, as one image
+```
+
+**What a picture cannot say is in `tree.rs`'s tests**: the channel is one weight per vertex, the
+trunk's foot is exactly 0, a leaf's vertices share one weight and one phase, no two leaves share a
+phase, and turning the wind on moves **no vertex of the geometry** — the property that kept every
+tree in the repo the shape it was.

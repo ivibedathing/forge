@@ -304,6 +304,10 @@ pub struct SceneRenderer {
     road_stride: u64,
     /// The skinned set (M30), absent until a frame has a skinned draw.
     skinned: Option<SkinnedPipelines>,
+    /// The foliage set (M46), absent until a frame has a tree that moves — on
+    /// `skinned`'s terms, and for its reason: a scene with no tree in it should
+    /// not pay four shader compilations for the wind.
+    foliage: Option<FoliagePipelines>,
     skinned_objects: Option<SkinnedObjects>,
     /// Distance between consecutive joint palettes: 6 KiB rounded up to the
     /// device's dynamic-offset alignment, which on every adapter this runs on
@@ -343,6 +347,8 @@ struct FramePlan<'a> {
     keys: Vec<usize>,
     material_keys: Vec<Option<[usize; 4]>>,
     skin_slots: Vec<Option<usize>>,
+    /// Which draws move in the wind (M46) — see `prepare`.
+    foliage: Vec<bool>,
     cutout: Vec<bool>,
     road_keys: Vec<usize>,
     water_keys: Vec<usize>,
@@ -681,6 +687,28 @@ impl SceneRenderer {
                         material.attenuation.y,
                         material.attenuation.z,
                     ],
+                    foliage_wind: match &item.foliage {
+                        // The wind arrives as a world direction and is packed
+                        // in the entity's own frame, because the bend happens
+                        // in local space — where the trunk's foot is the origin
+                        // — and has to come out pointing the same way in the
+                        // world for a tree yawed to any angle. Two trees a
+                        // scene rotated for variety must not lean apart.
+                        Some(f) => {
+                            let world =
+                                Vec3::new(f.wind_direction[0], 0.0, f.wind_direction[1]);
+                            let local = item.model.inverse().transform_vector3(world);
+                            let flat = glam::Vec2::new(local.x, local.z)
+                                .try_normalize()
+                                .unwrap_or(glam::Vec2::new(0.0, -1.0));
+                            [f.wind, f.wind_speed, flat.x, flat.y]
+                        }
+                        None => [0.0; 4],
+                    },
+                    foliage_clock: match &item.foliage {
+                        Some(f) => [time, f.flutter, 0.0, 0.0],
+                        None => [0.0; 4],
+                    },
                 },
             );
         }
@@ -706,6 +734,9 @@ impl SceneRenderer {
                     map_uv: [1.0, 1.0, 0.0, 0.0],
                     map_params: [0.0, 0.0, 1.0, 1.0],
                     map_volume: [0.0, 1.0, 1.0, 1.0],
+                    // A road is not foliage; nothing here reads these.
+                    foliage_wind: [0.0; 4],
+                    foliage_clock: [0.0; 4],
                 },
             );
         }
@@ -737,6 +768,21 @@ impl SceneRenderer {
         // everything that is not a skinned mesh — which is every draw in this
         // repo but one, and the test that keeps them on the pipelines that
         // compile `mesh.wgsl` as it sits on disk.
+        // Which draws move in the wind (M46). Both halves are required: the
+        // parameters say how hard it blows, the channel says how much each
+        // vertex feels, and a draw with one and not the other would bind a
+        // vertex slot that is not there or read weights nothing scales.
+        //
+        // `false` for every other draw in every scene, which is what keeps them
+        // on the pipelines that compile `mesh.wgsl` as it sits on disk.
+        let foliage: Vec<bool> = items
+            .iter()
+            .map(|item| item.foliage.is_some() && item.mesh.is_foliage())
+            .collect();
+        if foliage.iter().any(|&f| f) && self.foliage.is_none() {
+            self.foliage = Some(self.build_foliage(device));
+        }
+
         let mut skin_slots: Vec<Option<usize>> = vec![None; items.len()];
         let mut palettes: Vec<JointPaletteUniform> = Vec::new();
         for (index, item) in items.iter().enumerate() {
@@ -1037,6 +1083,7 @@ impl SceneRenderer {
             keys,
             material_keys,
             skin_slots,
+            foliage,
             cutout,
             road_keys,
             water_keys,
@@ -1066,6 +1113,7 @@ impl SceneRenderer {
             keys,
             material_keys,
             skin_slots,
+            foliage,
             cutout,
             road_keys,
             ..
@@ -1124,7 +1172,7 @@ impl SceneRenderer {
                         pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                     };
                     for &index in opaque {
-                        if cutout[index] || skin_slots[index].is_some() {
+                        if cutout[index] || skin_slots[index].is_some() || foliage[index] {
                             continue;
                         }
                         cast(&mut shadow_pass, index, &self.meshes[&keys[index]]);
@@ -1134,7 +1182,7 @@ impl SceneRenderer {
                     // `alpha_cutoff` never enters this loop.
                     let mut switched = false;
                     for &index in opaque {
-                        if !cutout[index] || skin_slots[index].is_some() {
+                        if !cutout[index] || skin_slots[index].is_some() || foliage[index] {
                             continue;
                         }
                         let Some(key) = material_keys[index] else {
@@ -1211,6 +1259,50 @@ impl SceneRenderer {
                                 index,
                                 slot,
                                 SkinnedInputs::cutout_caster(key),
+                            );
+                        }
+                        switched |= solid || cut;
+                    }
+                    // Foliage casters (M46), in their own two runs for the
+                    // reason the skinned ones get theirs. Without them a tree
+                    // casts the shadow of a **still** tree, and a surface
+                    // displaced away from its own recorded depth self-shadows:
+                    // the leaves acne, and the acne crawls with the wind.
+                    if let Some(set) = &self.foliage {
+                        let mut solid = false;
+                        for &index in opaque {
+                            if !foliage[index] || cutout[index] {
+                                continue;
+                            }
+                            if !solid {
+                                shadow_pass.set_pipeline(&set.shadow);
+                                shadow_pass.set_bind_group(1, frame_group, &[]);
+                                solid = true;
+                            }
+                            let mesh = &self.meshes[&keys[index]];
+                            self.draw_foliage(&mut shadow_pass, objects, mesh, index, None, true);
+                        }
+                        let mut cut = false;
+                        for &index in opaque {
+                            if !foliage[index] || !cutout[index] {
+                                continue;
+                            }
+                            let Some(key) = material_keys[index] else {
+                                continue;
+                            };
+                            if !cut {
+                                shadow_pass.set_pipeline(&set.shadow_cutout);
+                                shadow_pass.set_bind_group(1, frame_group, &[]);
+                                cut = true;
+                            }
+                            let mesh = &self.meshes[&keys[index]];
+                            self.draw_foliage(
+                                &mut shadow_pass,
+                                objects,
+                                mesh,
+                                index,
+                                Some((key, 2)),
+                                true,
                             );
                         }
                         switched |= solid || cut;
@@ -1351,6 +1443,7 @@ impl SceneRenderer {
             keys,
             material_keys,
             skin_slots,
+            foliage,
             road_keys,
             water_keys,
             cloud_keys,
@@ -1493,6 +1586,7 @@ impl SceneRenderer {
                     if items[index].terrain.is_none()
                         && material_keys[index].is_none()
                         && skin_slots[index].is_none()
+                        && !foliage[index]
                     {
                         draw(&mut pass, index);
                     }
@@ -1509,7 +1603,7 @@ impl SceneRenderer {
                     let Some(key) = material_keys[index] else {
                         continue;
                     };
-                    if skin_slots[index].is_some() {
+                    if skin_slots[index].is_some() || foliage[index] {
                         continue;
                     }
                     if !textured {
@@ -1576,6 +1670,43 @@ impl SceneRenderer {
                             slot,
                             SkinnedInputs::textured(key),
                         );
+                    }
+                }
+                // And the foliage draws (M46), on the same terms: two runs, at
+                // most one pipeline switch each, and a scene with no tree that
+                // moves enters neither and never built `self.foliage`.
+                //
+                // Last in the opaque pass, after the skinned draws, which is
+                // where a *new* run belongs: every draw ahead of it issues
+                // exactly what it issued before, and the ground still draws
+                // first for M22's nondeterminism reason.
+                if let Some(set) = &self.foliage {
+                    let mut plain = false;
+                    for &index in opaque {
+                        if !foliage[index] || material_keys[index].is_some() {
+                            continue;
+                        }
+                        if !plain {
+                            pass.set_pipeline(&set.opaque);
+                            plain = true;
+                        }
+                        let mesh = &self.meshes[&keys[index]];
+                        self.draw_foliage(&mut pass, objects, mesh, index, None, true);
+                    }
+                    let mut mapped = false;
+                    for &index in opaque {
+                        if !foliage[index] {
+                            continue;
+                        }
+                        let Some(key) = material_keys[index] else {
+                            continue;
+                        };
+                        if !mapped {
+                            pass.set_pipeline(&set.textured);
+                            mapped = true;
+                        }
+                        let mesh = &self.meshes[&keys[index]];
+                        self.draw_foliage(&mut pass, objects, mesh, index, Some((key, 3)), true);
                     }
                 }
                 // Nothing after this assumes a bound pipeline: the road block
@@ -1967,6 +2098,50 @@ impl SceneRenderer {
         pass.draw_indexed(0..mesh.index_count, 0, 0..1);
     }
 
+    /// One foliage draw (M46): the ordinary object uniform, plus the wind
+    /// weights in the slot at `@location(5)`.
+    ///
+    /// `material` names the map group and which group index it binds at — 3 in
+    /// the mesh passes, 2 in the cut-out caster, which has no frame textures.
+    /// `normal` is false only where nothing reads one, and **the solid caster
+    /// is not one of those places**: flutter displaces along the normal, so a
+    /// caster without it would write depth for a leaf that is somewhere else.
+    fn draw_foliage(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        objects: &Uniforms,
+        mesh: &CachedMesh,
+        index: usize,
+        material: Option<([usize; 4], u32)>,
+        normal: bool,
+    ) {
+        let Some(sway) = mesh.sway_offset else {
+            // A wind with no weights behind it cannot move anything; the
+            // `foliage` flags already refuse to route such a draw here, so this
+            // is belt and braces rather than a live path.
+            return;
+        };
+        pass.set_bind_group(
+            0,
+            &objects.bind_group,
+            &[(index as u64 * self.object_stride) as u32],
+        );
+        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+        let mut next = 1;
+        if normal {
+            pass.set_vertex_buffer(next, mesh.vertices.slice(mesh.normals_offset..));
+            next += 1;
+        }
+        if let Some((key, group)) = material {
+            pass.set_bind_group(group, &self.materials[&key].bind_group, &[]);
+            pass.set_vertex_buffer(next, mesh.vertices.slice(mesh.uvs_offset..));
+            next += 1;
+        }
+        pass.set_vertex_buffer(next, mesh.vertices.slice(sway..));
+        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+    }
+
     /// Eleven parameters, and clippy would rather they were a struct. They are
     /// nine parallel slices indexed by the *same* `Blended` index, built once
     /// per frame by `draw` and read here in one pass. A struct of borrows would
@@ -2322,6 +2497,15 @@ impl SceneRenderer {
                     SkinOffsets { joints, weights }
                 });
 
+                // The wind weights (M46), on the same terms and for the same
+                // reason: a mesh that is not foliage appends nothing, so its
+                // buffer is what it was.
+                let sway_offset = geometry.is_foliage().then(|| {
+                    let at = vertex_bytes.len() as u64;
+                    vertex_bytes.extend_from_slice(bytemuck::cast_slice(&geometry.sway));
+                    at
+                });
+
                 CachedMesh {
                     _geometry: Arc::clone(geometry),
                     vertices: buffer_with(
@@ -2333,6 +2517,7 @@ impl SceneRenderer {
                     normals_offset,
                     uvs_offset,
                     skin_offsets,
+                    sway_offset,
                     indices: buffer_with(
                         device,
                         "mesh-indices",

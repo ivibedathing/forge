@@ -33,6 +33,22 @@
 //! `diff-render` baseline. The generator and its hash are spelled out in this
 //! repo for the same reason the particle RNG is: no dependency upgrade may
 //! change what a scene looks like.
+//!
+//! # The wind (M46)
+//!
+//! The generator also authors, per vertex, **how much the wind moves this
+//! point** — [`MeshData::sway`], which the vertex stage bends the tree by. It
+//! belongs here rather than in the shader because the recursion is what knows
+//! the answer: a vertex's compliance is a fact about the chain of branches
+//! carrying it, and every shader-side guess at it from position alone is wrong
+//! somewhere (height flaps the top of the trunk, radius flaps its tapered tip,
+//! distance from the axis pins a willow's tips exactly where they should move
+//! most).
+//!
+//! The weights consume **no random draws**, and the flutter phase is recovered
+//! from a draw `emit_leaves` had already made. That is deliberate: the draw
+//! sequence is what a `seed` means here, so a new draw anywhere in it would
+//! have reshaped every tree in the repo.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -94,6 +110,9 @@ pub fn meshes_for(tree: &Tree) -> TreeMeshes {
 pub fn generate(tree: &Tree) -> (MeshData, MeshData) {
     let mut builder = Builder {
         tree,
+        // A still tree emits no sway channel at all, so its vertex buffer is
+        // the M19 one byte for byte and it draws through the M19 pipelines.
+        sway: tree.sways(),
         rng: seed_state(tree.seed),
         bark: MeshData {
             positions: Vec::new(),
@@ -118,6 +137,7 @@ pub fn generate(tree: &Tree) -> (MeshData, MeshData) {
         Vec3::X,
         tree.height,
         tree.trunk_radius,
+        0.0,
     );
 
     (builder.bark, builder.leaves)
@@ -185,10 +205,18 @@ struct Node {
     /// branch happens to align with that axis.
     normal: Vec3,
     radius: f32,
+    /// How much the wind moves this point, `[0, 1]` (M46). Carried on the node
+    /// rather than recomputed at each use, because leaves and child branches
+    /// both read it through [`sample`] and two derivations of it would be two
+    /// things to disagree.
+    sway: f32,
 }
 
 struct Builder<'a> {
     tree: &'a Tree,
+    /// Whether to author the sway channel at all — false for a windless tree,
+    /// which is what keeps its geometry byte-identical to M19's.
+    sway: bool,
     rng: u32,
     bark: MeshData,
     leaves: MeshData,
@@ -196,10 +224,37 @@ struct Builder<'a> {
 
 impl Builder<'_> {
     /// Grow one branch and everything it carries.
-    fn grow(&mut self, depth: u32, base: Vec3, axis: Vec3, normal: Vec3, length: f32, radius: f32) {
+    ///
+    /// `sway_base` is the wind weight where this branch attaches; the branch
+    /// runs from there toward its own tip weight, and hands each child whatever
+    /// it had reached at the attachment point. Continuity across a join is by
+    /// construction, which is why the canopy bends as one surface rather than
+    /// as pieces sliding against each other.
+    #[allow(clippy::too_many_arguments)]
+    fn grow(
+        &mut self,
+        depth: u32,
+        base: Vec3,
+        axis: Vec3,
+        normal: Vec3,
+        length: f32,
+        radius: f32,
+        sway_base: f32,
+    ) {
         let tree = self.tree;
         let segments = tree.segments.max(1);
         let step = length / segments as f32;
+
+        // Each generation gives back a fixed share of the distance left to 1,
+        // so depth alone makes twigs the loosest thing in the tree — and the
+        // trunk keeps a share of its own, small enough that its top drifts
+        // rather than waves.
+        let share = if depth == 0 {
+            TRUNK_SHARE
+        } else {
+            BRANCH_SHARE
+        };
+        let sway_tip = sway_base + (1.0 - sway_base) * share;
 
         let tip_radius = radius * tree.taper;
         let mut nodes: Vec<Node> = Vec::with_capacity(segments as usize + 1);
@@ -225,6 +280,11 @@ impl Builder<'_> {
                 axis,
                 normal,
                 radius: r,
+                // On a curve rather than linearly, for the taper's reason and
+                // the cantilever's: a bent rod's deflection piles up toward the
+                // free end, and interpolating straight makes the base of every
+                // branch swing more than it should.
+                sway: lerp(sway_base, sway_tip, t.powf(BEND_CURVE)),
             });
             if index == segments {
                 break;
@@ -355,6 +415,7 @@ impl Builder<'_> {
                     child_normal,
                     child_length,
                     child_radius,
+                    at.sway,
                 );
             }
         }
@@ -381,6 +442,12 @@ impl Builder<'_> {
                     .push((node.position + radial * node.radius).to_array());
                 self.bark.normals.push(radial.to_array());
                 self.bark.uvs.push([side as f32 / sides as f32, v]);
+                if self.sway {
+                    // One weight for the whole ring: a cross-section that
+                    // bends by different amounts around its circumference is
+                    // a branch changing thickness in the wind.
+                    self.bark.sway.push([node.sway, 0.0]);
+                }
             }
         }
 
@@ -414,6 +481,9 @@ impl Builder<'_> {
         self.bark.positions.push(node.position.to_array());
         self.bark.normals.push(normal.to_array());
         self.bark.uvs.push([0.5, if outward { 1.0 } else { 0.0 }]);
+        if self.sway {
+            self.bark.sway.push([node.sway, 0.0]);
+        }
 
         for side in 0..sides {
             let next = (side + 1) % sides;
@@ -458,9 +528,18 @@ impl Builder<'_> {
             let roll = self.unit() * std::f32::consts::TAU;
             let origin = at.position + radial * at.radius;
 
+            // The leaf's own beat phase, in turns — recovered from the spin it
+            // was already given about its midrib rather than drawn fresh. A new
+            // draw here would shift every subsequent draw in the tree, and the
+            // draw sequence is what a `seed` means: every tree in the repo
+            // would have changed shape to gain a flutter.
+            let sway = self
+                .sway
+                .then_some([at.sway, roll / std::f32::consts::TAU]);
+
             match tree.leaf {
-                TreeLeaf::Blade => self.emit_blade(origin, direction, roll, size),
-                TreeLeaf::Cluster => self.emit_cluster(origin, direction, roll, size),
+                TreeLeaf::Blade => self.emit_blade(origin, direction, roll, size, sway),
+                TreeLeaf::Cluster => self.emit_cluster(origin, direction, roll, size, sway),
                 TreeLeaf::None => {}
             }
         }
@@ -475,7 +554,14 @@ impl Builder<'_> {
     /// which matters here because the engine has no alpha-cut leaf textures to
     /// get it from. Emitted twice with opposite winding and normals, since
     /// backface culling is on and a leaf has two sides.
-    fn emit_blade(&mut self, origin: Vec3, direction: Vec3, roll: f32, size: f32) {
+    fn emit_blade(
+        &mut self,
+        origin: Vec3,
+        direction: Vec3,
+        roll: f32,
+        size: f32,
+        sway: Option<[f32; 2]>,
+    ) {
         let (side, fold) = leaf_frame(direction, roll);
         let width = size * LEAF_WIDTH;
 
@@ -485,15 +571,22 @@ impl Builder<'_> {
         let right = origin + direction * (size * 0.4) + side * width - fold * (width * LEAF_FOLD);
 
         for (a, b, c) in [(base, left, tip), (base, tip, right)] {
-            push_triangle(&mut self.leaves, a, b, c);
-            push_triangle(&mut self.leaves, a, c, b);
+            push_triangle(&mut self.leaves, a, b, c, sway);
+            push_triangle(&mut self.leaves, a, c, b, sway);
         }
     }
 
     /// A foliage blob: an octahedron with radial normals, squashed along the
     /// shoot. Six vertices for a unit of cover a leaf cannot give — which is
     /// what conifer sprays and background trees actually need.
-    fn emit_cluster(&mut self, origin: Vec3, direction: Vec3, roll: f32, size: f32) {
+    fn emit_cluster(
+        &mut self,
+        origin: Vec3,
+        direction: Vec3,
+        roll: f32,
+        size: f32,
+        sway: Option<[f32; 2]>,
+    ) {
         let (side, fold) = leaf_frame(direction, roll);
         let center = origin + direction * (size * 0.5);
         let radius = size * 0.5;
@@ -515,6 +608,9 @@ impl Builder<'_> {
                 .normals
                 .push(corner.normalize_or(Vec3::Y).to_array());
             self.leaves.uvs.push([0.5, 0.5]);
+            if let Some(sway) = sway {
+                self.leaves.sway.push(sway);
+            }
         }
 
         // Eight faces, each joining one end of each axis. The parity of the
@@ -576,6 +672,34 @@ const LEAF_FOLD: f32 = 0.55;
 /// How far a cluster is drawn out along its shoot.
 const CLUSTER_STRETCH: f32 = 1.6;
 
+// ── the wind weights (M46) ─────────────────────────────────────────────────
+//
+// Three constants describe the whole compliance field. They are shaped by what
+// each part of a tree does in a breeze, not fitted to anything: a trunk drifts,
+// a limb bends, a twig waves.
+
+/// Where the trunk's own weight ends up at its top.
+///
+/// Small on purpose. A trunk is the stiffest thing in the tree and its foot is
+/// in the ground; at the default `wind` this is a few centimetres of drift at
+/// six metres, which is what stops the crown from reading as pasted on while
+/// keeping the tree standing rather than swaying like a mast.
+const TRUNK_SHARE: f32 = 0.12;
+
+/// How much of the distance left to fully-compliant each *branch* generation
+/// gives back.
+///
+/// Applied per level, so depth does the work: a first-order limb reaches ~0.52,
+/// its shoots ~0.78, their twigs ~0.90. That geometric approach is why the
+/// model needs no per-level parameter array — the recursion already has one.
+const BRANCH_SHARE: f32 = 0.55;
+
+/// Exponent of the weight ramp along a branch; `1` would be linear.
+///
+/// A cantilever's deflection piles up toward its free end, so a straight ramp
+/// swings the base of every branch too much and reads as rubber.
+const BEND_CURVE: f32 = 1.7;
+
 /// A frame across a leaf's growth direction: the width axis, and the direction
 /// its wings fold toward. `roll` spins the leaf about its own midrib.
 fn leaf_frame(direction: Vec3, roll: f32) -> (Vec3, Vec3) {
@@ -593,13 +717,19 @@ fn leaf_frame(direction: Vec3, roll: f32) -> (Vec3, Vec3) {
 /// Append a flat-shaded triangle. Leaves are flat-shaded on purpose: a blade
 /// is two facets, and averaging their normals would erase the fold that makes
 /// it read.
-fn push_triangle(mesh: &mut MeshData, a: Vec3, b: Vec3, c: Vec3) {
+fn push_triangle(mesh: &mut MeshData, a: Vec3, b: Vec3, c: Vec3, sway: Option<[f32; 2]>) {
     let normal = (b - a).cross(c - a).normalize_or(Vec3::Y);
     let base = mesh.positions.len() as u32;
     for (vertex, uv) in [(a, [0.5, 0.0]), (b, [0.0, 1.0]), (c, [1.0, 1.0])] {
         mesh.positions.push(vertex.to_array());
         mesh.normals.push(normal.to_array());
         mesh.uvs.push(uv);
+        // One weight over the whole leaf, so the bend *carries* it rather than
+        // stretching it: a leaf is small enough to move as one thing, and the
+        // motion it has of its own is the flutter, which is per leaf too.
+        if let Some(sway) = sway {
+            mesh.sway.push(sway);
+        }
     }
     mesh.indices.extend_from_slice(&[base, base + 1, base + 2]);
 }
@@ -622,6 +752,7 @@ fn sample(nodes: &[Node], t: f32) -> Node {
             a.axis.lerp(b.axis, f).normalize_or(a.axis),
         ),
         radius: lerp(a.radius, b.radius, f),
+        sway: lerp(a.sway, b.sway, f),
     }
 }
 
@@ -675,9 +806,15 @@ fn unit(state: &mut u32) -> f32 {
 // ── the cache ──────────────────────────────────────────────────────────────
 
 /// A [`Tree`]'s exact field bits. Exact rather than hashed: a hash collision
-/// would silently draw the wrong tree, and the whole array is 26 words.
+/// would silently draw the wrong tree, and the whole array is 27 words.
+///
+/// The wind fields (M46) enter as the single bit [`Tree::sways`] rather than as
+/// four more words, because that is all the *geometry* depends on: how hard the
+/// wind blows is a uniform the shader reads, so two trees differing only in
+/// `wind` legitimately share one mesh and one upload — and animating `wind`
+/// does not mint a new mesh every step.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct TreeKey([u32; 26]);
+struct TreeKey([u32; 27]);
 
 impl TreeKey {
     fn of(tree: &Tree) -> Self {
@@ -708,6 +845,7 @@ impl TreeKey {
             tree.leaf_color.y.to_bits(),
             tree.leaf_color.z.to_bits(),
             tree.leaf_roughness.to_bits(),
+            tree.sways() as u32,
         ])
     }
 }
@@ -1055,5 +1193,121 @@ mod tests {
         assert!(empty.leaves.is_none());
         let leafy = meshes_for(&Tree::default());
         assert!(leafy.leaves.is_some());
+    }
+
+    // ── the wind (M46) ─────────────────────────────────────────────────
+
+    #[test]
+    fn a_windless_tree_carries_no_sway_channel() {
+        // The opt-out from the default-on departure, and the property the whole
+        // "M19 renders byte for byte" claim rests on: no channel means no extra
+        // vertex-buffer bytes and no foliage pipeline, so the draw is the one
+        // it always was.
+        let still = Tree {
+            wind: 0.0,
+            flutter: 0.0,
+            ..Tree::default()
+        };
+        let (bark, leaves) = generate(&still);
+        assert!(bark.sway.is_empty());
+        assert!(leaves.sway.is_empty());
+        assert!(!bark.is_foliage());
+
+        let moving = generate(&Tree::default());
+        assert!(moving.0.is_foliage() && moving.1.is_foliage());
+    }
+
+    #[test]
+    fn the_wind_fields_move_no_vertex_of_the_geometry() {
+        // The weights are authored beside the positions and consume no random
+        // draws, so turning the wind on must not reshape the tree — the draw
+        // sequence is what a `seed` means here, and a tree that changed shape
+        // when it started moving would have broken every scene tuned before it.
+        let still = Tree {
+            wind: 0.0,
+            flutter: 0.0,
+            ..Tree::default()
+        };
+        let (a, _) = generate(&still);
+        let (b, _) = generate(&Tree::default());
+        assert_eq!(a.positions, b.positions);
+        assert_eq!(a.normals, b.normals);
+        assert_eq!(a.indices, b.indices);
+
+        // And how hard it blows changes nothing at all, which is why the cache
+        // key carries one bit rather than four words.
+        let (c, _) = generate(&Tree {
+            wind: 30.0,
+            wind_speed: 11.0,
+            wind_direction: 137.0,
+            flutter: 25.0,
+            ..Tree::default()
+        });
+        assert_eq!(b.positions, c.positions);
+        assert_eq!(b.sway, c.sway);
+    }
+
+    #[test]
+    fn the_sway_channel_is_one_weight_per_vertex_and_pinned_at_the_root() {
+        let (bark, leaves) = generate(&Tree::default());
+        assert_eq!(bark.sway.len(), bark.positions.len());
+        assert_eq!(leaves.sway.len(), leaves.positions.len());
+
+        for [weight, phase] in bark.sway.iter() {
+            assert!(
+                (0.0..=1.0).contains(weight),
+                "a weight outside [0, 1] scales the wind past what it says: {weight}"
+            );
+            assert_eq!(*phase, 0.0, "bark does not flutter");
+        }
+
+        // The trunk's foot is exactly fixed, and something up in the canopy is
+        // most of the way to fully compliant. Both matter: a tree pinned
+        // nowhere slides out of the ground, and one pinned everywhere is still.
+        let lowest = bark
+            .positions
+            .iter()
+            .zip(&bark.sway)
+            .min_by(|a, b| a.0[1].total_cmp(&b.0[1]))
+            .expect("a tree has vertices");
+        assert_eq!(lowest.1[0], 0.0);
+        let loosest = bark
+            .sway
+            .iter()
+            .map(|s| s[0])
+            .fold(f32::MIN, |a, b| a.max(b));
+        assert!(loosest > 0.7, "no part of this tree waves: {loosest}");
+    }
+
+    #[test]
+    fn the_weight_rises_up_the_trunk_and_a_leaf_moves_as_one_piece() {
+        // Up the trunk, because a cantilever's deflection piles up toward its
+        // free end. The trunk of a `levels: 0` tree is the whole tree, so its
+        // rings are the weights in order.
+        let (bark, _) = generate(&Tree {
+            levels: 0,
+            leaf: TreeLeaf::None,
+            crook: 0.0,
+            jitter: 0.0,
+            ..Tree::default()
+        });
+        let mut previous = -1.0;
+        for (position, sway) in bark.positions.iter().zip(&bark.sway) {
+            if position[1] > 0.0 {
+                assert!(sway[0] >= previous || position[1] < 0.01);
+                previous = previous.max(sway[0]);
+            }
+        }
+
+        // A leaf takes one weight and one phase over all its vertices: the bend
+        // then carries it rather than stretching it, and its own beat is what
+        // it moves by.
+        let (_, leaves) = generate(&Tree::default());
+        let first = leaves.sway[0];
+        assert!(leaves.sway[..3].iter().all(|s| *s == first));
+        assert!(
+            leaves.sway.iter().any(|s| s[1] != first[1]),
+            "every leaf beating on one phase is a canopy flapping as a sheet"
+        );
     }
 }

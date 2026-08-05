@@ -36,3 +36,9 @@ design doc.
 routines move 3 pixels of `m19_trees.png` by one channel step (measured; Rust does not contract
 floats, so this is libm, not FMA), so bless from the debug binary `cargo test` runs. Every pre-tree
 fixture is profile-insensitive; the constraint arrives with CPU-generated geometry.
+
+**Since M46 a tree moves** (`m46-foliage-sway.md`): four `wind`/`flutter` fields, and a per-vertex
+compliance weight this generator authors beside the positions. Two rules from that build bind
+anything editing this file — **the draw sequence is a format contract**, so the flutter phase reuses
+a number `emit_leaves` had already drawn rather than taking a new one; and `TreeKey` carries the
+wind as a single bit, because only *whether* the channel is emitted changes the geometry.

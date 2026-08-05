@@ -86,6 +86,26 @@ pub(crate) struct SkinnedPipelines {
     pub(crate) shadow_cutout: wgpu::RenderPipeline,
 }
 
+/// Everything a foliage draw needs (M46), built the **first time a frame has
+/// one** and kept for the life of the renderer.
+///
+/// Lazy on `SkinnedPipelines`' precedent and for its reason: four shader
+/// compilations that a scene with no tree in it should not pay for.
+///
+/// Four variants rather than the skinned set's seven. Leaves are opaque by
+/// construction (`Tree::leaf_material`), so the only way to reach the blended
+/// pass with foliage is a *transparent bark material* — which
+/// `tree_sway_needs_opaque_bark` warns about instead, because the alternative
+/// is three more pipelines for a case no scene has and the design says so
+/// (M46 §7). Everything else about them mirrors the unskinned pipelines
+/// exactly, down to the front-face-culled caster.
+pub(crate) struct FoliagePipelines {
+    pub(crate) opaque: wgpu::RenderPipeline,
+    pub(crate) textured: wgpu::RenderPipeline,
+    pub(crate) shadow: wgpu::RenderPipeline,
+    pub(crate) shadow_cutout: wgpu::RenderPipeline,
+}
+
 /// Which optional vertex slots and bind groups one skinned pipeline declares.
 ///
 /// Two variants' worth of difference, spelled out rather than inferred: a
@@ -1079,6 +1099,7 @@ impl super::SceneRenderer {
             road_objects: None,
             road_stride,
             skinned: None,
+            foliage: None,
             skinned_objects: None,
             palette_stride,
             meadow_pipeline,
@@ -1426,6 +1447,248 @@ impl super::SceneRenderer {
                 &shadow_cutout_module,
                 &shadow_cutout_layout,
                 &textured_layouts,
+                Some(wgpu::FragmentState {
+                    module: &shadow_cutout_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
+            ),
+        }
+    }
+
+    /// Build the foliage pipeline set, once, on the first frame that has a tree
+    /// that moves (M46).
+    ///
+    /// The bind group layouts are the *ordinary* ones — foliage needs no group
+    /// of its own, unlike skinning with its palette, because the wind is four
+    /// lanes of the object uniform every draw already has. What it does need is
+    /// one more vertex slot, at location 5: 3 and 4 belong to skinning, and a
+    /// tree is never skinned, but a shared location that only works because
+    /// nothing composes them is the kind of coincidence this repo writes down
+    /// rather than relies on.
+    pub(crate) fn build_foliage(&self, device: &wgpu::Device) -> FoliagePipelines {
+        let multisample = wgpu::MultisampleState {
+            count: self.samples,
+            ..Default::default()
+        };
+        let module = |label: &str, source: std::borrow::Cow<'static, str>| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(with_sky_common(&with_cascades(
+                    &source,
+                    self.cascades,
+                ))),
+            })
+        };
+        let gi = self.gi;
+        let plain = module("foliage-shader", with_foliage(gi));
+        let textured = module("foliage-textured-shader", with_foliage_textures(gi));
+
+        let position = wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            }],
+        };
+        let normal = wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+            }],
+        };
+        let uv = wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        };
+        // x = the wind weight, y = the leaf's flutter phase in turns.
+        let sway = wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        };
+
+        let plain_layouts = [
+            Some(position.clone()),
+            Some(normal.clone()),
+            Some(sway.clone()),
+        ];
+        let textured_layouts = [
+            Some(position.clone()),
+            Some(normal.clone()),
+            Some(uv.clone()),
+            Some(sway.clone()),
+        ];
+        // The solid caster carries a normal it would otherwise not need: the
+        // flutter displaces along it, and a caster that disagreed with the
+        // colour pass about where a leaf is would write acne under every leaf.
+        let caster_layouts = [Some(position), Some(normal), Some(sway.clone())];
+        let cutout_caster_layouts = [
+            plain_layouts[0].clone(),
+            plain_layouts[1].clone(),
+            Some(uv),
+            Some(sway),
+        ];
+
+        let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("foliage-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&self.object_layout),
+                Some(&self.frame_layout),
+                Some(&self.frame_textures_layout),
+            ],
+            immediate_size: 0,
+        });
+        let material_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("foliage-textured-pipeline-layout"),
+                bind_group_layouts: &[
+                    Some(&self.object_layout),
+                    Some(&self.frame_layout),
+                    Some(&self.frame_textures_layout),
+                    Some(&self.material_layout),
+                ],
+                immediate_size: 0,
+            });
+
+        let format = self.format;
+        let mesh_pipeline = |label: &str,
+                             module: &wgpu::ShaderModule,
+                             layout: &wgpu::PipelineLayout,
+                             buffers: &[Option<wgpu::VertexBufferLayout<'_>>]| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some("vs_main"),
+                    buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample,
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        let shadow_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("foliage-shadow-shader"),
+            source: wgpu::ShaderSource::Wgsl(foliage_shadow().into()),
+        });
+        let shadow_cutout_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("foliage-shadow-cutout-shader"),
+            source: wgpu::ShaderSource::Wgsl(foliage_shadow_cutout().into()),
+        });
+        let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("foliage-shadow-pipeline-layout"),
+            bind_group_layouts: &[Some(&self.object_layout), Some(&self.frame_layout)],
+            immediate_size: 0,
+        });
+        let shadow_cutout_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("foliage-shadow-cutout-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&self.object_layout),
+                Some(&self.frame_layout),
+                // The material group at 2, not 3 — this pipeline has no frame
+                // textures to read.
+                Some(&self.material_layout),
+            ],
+            immediate_size: 0,
+        });
+        let caster = |label: &str,
+                      module: &wgpu::ShaderModule,
+                      layout: &wgpu::PipelineLayout,
+                      buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                      fragment: Option<wgpu::FragmentState<'_>>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some("vs_main"),
+                    buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment,
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Front),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: wgpu::DepthBiasState {
+                        constant: 2,
+                        slope_scale: 2.0,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        FoliagePipelines {
+            opaque: mesh_pipeline("foliage-pipeline", &plain, &mesh_layout, &plain_layouts),
+            textured: mesh_pipeline(
+                "foliage-textured-pipeline",
+                &textured,
+                &material_pipeline_layout,
+                &textured_layouts,
+            ),
+            shadow: caster(
+                "foliage-shadow-pipeline",
+                &shadow_module,
+                &shadow_layout,
+                &caster_layouts,
+                None,
+            ),
+            shadow_cutout: caster(
+                "foliage-shadow-cutout-pipeline",
+                &shadow_cutout_module,
+                &shadow_cutout_layout,
+                &cutout_caster_layouts,
                 Some(wgpu::FragmentState {
                     module: &shadow_cutout_module,
                     entry_point: Some("fs_main"),
