@@ -533,9 +533,7 @@ impl Builder<'_> {
             // draw here would shift every subsequent draw in the tree, and the
             // draw sequence is what a `seed` means: every tree in the repo
             // would have changed shape to gain a flutter.
-            let sway = self
-                .sway
-                .then_some([at.sway, roll / std::f32::consts::TAU]);
+            let sway = self.sway.then_some([at.sway, roll / std::f32::consts::TAU]);
 
             match tree.leaf {
                 TreeLeaf::Blade => self.emit_blade(origin, direction, roll, size, sway),

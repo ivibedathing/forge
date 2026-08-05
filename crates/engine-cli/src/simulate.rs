@@ -327,7 +327,11 @@ pub fn run(
         if !spent.is_empty() {
             let mut names = Vec::with_capacity(spent.len());
             for entity in spent {
-                if let Ok(name) = scene.world.get::<&engine_core::components::Name>(entity).map(|n| n.0.clone()) {
+                if let Ok(name) = scene
+                    .world
+                    .get::<&engine_core::components::Name>(entity)
+                    .map(|n| n.0.clone())
+                {
                     names.push(name);
                 }
                 let _ = scene.world.despawn(entity);

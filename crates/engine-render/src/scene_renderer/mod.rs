@@ -695,8 +695,7 @@ impl SceneRenderer {
                         // world for a tree yawed to any angle. Two trees a
                         // scene rotated for variety must not lean apart.
                         Some(f) => {
-                            let world =
-                                Vec3::new(f.wind_direction[0], 0.0, f.wind_direction[1]);
+                            let world = Vec3::new(f.wind_direction[0], 0.0, f.wind_direction[1]);
                             let local = item.model.inverse().transform_vector3(world);
                             let flat = glam::Vec2::new(local.x, local.z)
                                 .try_normalize()

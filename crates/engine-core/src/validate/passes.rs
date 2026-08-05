@@ -544,10 +544,7 @@ pub(super) fn buoyancy(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Eng
             check_reference(
                 cx,
                 Reference {
-                    subject: format!(
-                        "the Buoyancy on {owner:?} names water {:?}",
-                        buoyancy.water
-                    ),
+                    subject: format!("the Buoyancy on {owner:?} names water {:?}", buoyancy.water),
                     name: &buoyancy.water,
                     owner,
                     component: "Buoyancy",
@@ -611,10 +608,7 @@ pub(super) fn foot_planting(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Ve
         check_reference(
             cx,
             Reference {
-                subject: format!(
-                    "the FootPlant on {owner:?} names ground {:?}",
-                    plant.ground
-                ),
+                subject: format!("the FootPlant on {owner:?} names ground {:?}", plant.ground),
                 name: &plant.ground,
                 owner,
                 component: "FootPlant",

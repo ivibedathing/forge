@@ -452,7 +452,6 @@ struct Leg {
     sole: f32,
 }
 
-
 impl Leg {
     /// Where this foot should be, in skin space — or `None` when the chain is
     /// too short to move it anywhere.

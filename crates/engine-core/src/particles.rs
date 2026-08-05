@@ -528,9 +528,8 @@ mod tests {
     fn a_duration_makes_a_burst_rather_than_a_fountain() {
         // Emission stops at the duration; the particles already born live out
         // their own lifetime, exactly as `rate: 0` has always meant.
-        let scene = scene(
-            r#"{"type":"ParticleEmitter","rate":60.0,"lifetime":0.5,"duration":0.1}"#,
-        );
+        let scene =
+            scene(r#"{"type":"ParticleEmitter","rate":60.0,"lifetime":0.5,"duration":0.1}"#);
         let mut system = ParticleSystem::build(&scene.world);
         for _ in 0..6 {
             system.step(&scene.world, 1.0 / 60.0);
@@ -578,7 +577,10 @@ mod tests {
             system.step(&asked.world, 1.0 / 60.0);
         }
         assert!(system.live_particles() > 0);
-        assert!(system.finished(&asked.world).is_empty(), "not while it lives");
+        assert!(
+            system.finished(&asked.world).is_empty(),
+            "not while it lives"
+        );
 
         for _ in 0..30 {
             system.step(&asked.world, 1.0 / 60.0);
@@ -586,9 +588,8 @@ mod tests {
         assert_eq!(system.finished(&asked.world).len(), 1, "spent, and asked");
 
         // The same emitter without the flag is spent and stays.
-        let kept = scene(
-            r#"{"type":"ParticleEmitter","rate":60.0,"lifetime":0.2,"duration":0.05}"#,
-        );
+        let kept =
+            scene(r#"{"type":"ParticleEmitter","rate":60.0,"lifetime":0.2,"duration":0.05}"#);
         let mut system = ParticleSystem::build(&kept.world);
         for _ in 0..36 {
             system.step(&kept.world, 1.0 / 60.0);

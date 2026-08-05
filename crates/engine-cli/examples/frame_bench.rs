@@ -31,7 +31,10 @@ use std::time::Instant;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let scene_path = PathBuf::from(args.next().expect("usage: frame_bench <scene> [frames] [w] [h]"));
+    let scene_path = PathBuf::from(
+        args.next()
+            .expect("usage: frame_bench <scene> [frames] [w] [h]"),
+    );
     let frames: u32 = args.next().map_or(120, |a| a.parse().unwrap());
     let width: u32 = args.next().map_or(2560, |a| a.parse().unwrap());
     let height: u32 = args.next().map_or(1440, |a| a.parse().unwrap());
@@ -51,7 +54,11 @@ fn main() {
 
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("bench-target"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -63,9 +70,20 @@ fn main() {
 
     let (lights0, env0) = scene.resolved_at(0.0);
     let samples = env0.samples.max(1);
-    let depth = engine_render::scene_renderer::depth_texture_multisampled(&gpu.device, width, height, samples);
+    let depth = engine_render::scene_renderer::depth_texture_multisampled(
+        &gpu.device,
+        width,
+        height,
+        samples,
+    );
     let msaa = (samples > 1).then(|| {
-        engine_render::scene_renderer::msaa_color_texture(&gpu.device, FORMAT, width, height, samples)
+        engine_render::scene_renderer::msaa_color_texture(
+            &gpu.device,
+            FORMAT,
+            width,
+            height,
+            samples,
+        )
     });
     // Cached exactly as the viewer caches it: the file is read once and only
     // the fold runs per frame.
@@ -83,8 +101,14 @@ fn main() {
 
     let mut t = [0u128; 8];
     const PHASES: [&str; 8] = [
-        "render_items_at", "water/cloud/road/meadow", "hud_tree", "gi::evaluate",
-        "hud::rasterize", "draw(record+submit)", "gpu wait", "TOTAL",
+        "render_items_at",
+        "water/cloud/road/meadow",
+        "hud_tree",
+        "gi::evaluate",
+        "hud::rasterize",
+        "draw(record+submit)",
+        "gpu wait",
+        "TOTAL",
     ];
 
     // Twenty warm-up frames first: the geometry caches, the texture uploads and
@@ -122,14 +146,18 @@ fn main() {
         t[3] += mark.elapsed().as_nanos();
 
         let mark = Instant::now();
-        let canvas = (!hud.is_empty())
-            .then(|| engine_render::hud::rasterize(&hud, &[], width, height));
+        let canvas =
+            (!hud.is_empty()).then(|| engine_render::hud::rasterize(&hud, &[], width, height));
         if frame == WARMUP {
             if let Some(overlay) = &canvas {
                 for c in &overlay.canvases {
                     eprintln!(
                         "hud canvas {}x{} at ({},{}) = {} px",
-                        c.width, c.height, c.origin_x, c.origin_y, c.width * c.height
+                        c.width,
+                        c.height,
+                        c.origin_x,
+                        c.origin_y,
+                        c.width * c.height
                     );
                 }
             }
@@ -137,7 +165,9 @@ fn main() {
         t[4] += mark.elapsed().as_nanos();
 
         let view_projection = engine_render::scene_renderer::view_projection(
-            &camera, camera_model, width as f32 / height as f32,
+            &camera,
+            camera_model,
+            width as f32 / height as f32,
         );
 
         let mark = Instant::now();
@@ -176,7 +206,10 @@ fn main() {
         t[7] += whole.elapsed().as_nanos();
     }
 
-    println!("{} frames at {width}x{height}, samples={samples} (after {WARMUP} warm-up frames)", frames);
+    println!(
+        "{} frames at {width}x{height}, samples={samples} (after {WARMUP} warm-up frames)",
+        frames
+    );
     for (name, total) in PHASES.iter().zip(t) {
         let ms = total as f64 / 1.0e6 / frames as f64;
         println!("{ms:9.3} ms  {name}");

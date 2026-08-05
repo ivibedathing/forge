@@ -1291,17 +1291,12 @@ mod tests {
                 // carry that leaked would show up as a third.
                 if opaque {
                     let rgb = [canvas.pixels[i], canvas.pixels[i + 1], canvas.pixels[i + 2]];
-                    let a = [
-                        encode_srgb(0.2),
-                        encode_srgb(0.6),
-                        encode_srgb(0.9),
-                    ];
-                    let b = [
-                        encode_srgb(0.9),
-                        encode_srgb(0.1),
-                        encode_srgb(0.4),
-                    ];
-                    assert!(rgb == a || rgb == b, "unexpected colour at ({x}, {y}): {rgb:?}");
+                    let a = [encode_srgb(0.2), encode_srgb(0.6), encode_srgb(0.9)];
+                    let b = [encode_srgb(0.9), encode_srgb(0.1), encode_srgb(0.4)];
+                    assert!(
+                        rgb == a || rgb == b,
+                        "unexpected colour at ({x}, {y}): {rgb:?}"
+                    );
                 }
             }
         }

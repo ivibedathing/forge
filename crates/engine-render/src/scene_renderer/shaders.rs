@@ -782,7 +782,7 @@ pub(crate) fn foliage_shadow() -> String {
                  \x20   let swayed = foliage_vertex(position, normal, sway);\n\
                  \x20   return frame.light_view_proj * object.model * vec4<f32>(swayed, 1.0);\n\
                  }\n"
-                    .to_string(),
+                .to_string(),
             ),
         ],
     )
@@ -2008,7 +2008,10 @@ mod seam_tests {
             "map_volume: vec4<f32>,",
             "foliage_wind: vec4<f32>,",
         ] {
-            assert!(cutout.contains(expected), "cut-out caster lost {expected:?}");
+            assert!(
+                cutout.contains(expected),
+                "cut-out caster lost {expected:?}"
+            );
         }
         // It declares its own `TerrainLayer`, so the splice appends rather than
         // replacing — a second declaration would not compile.
