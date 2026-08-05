@@ -33,6 +33,7 @@ pub mod spawn;
 pub mod synthesize;
 pub mod terrain;
 pub mod texture;
+pub mod tilegrid;
 pub mod tilelayout;
 pub mod tileset;
 pub mod tree;

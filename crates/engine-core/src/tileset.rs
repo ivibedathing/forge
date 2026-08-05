@@ -497,6 +497,40 @@ pub fn expand(tileset: &Tileset) -> Result<Vec<ExpandedTile>> {
     Ok(expanded)
 }
 
+/// A digest of everything about a tileset that changes what a solve or a draw
+/// produces.
+///
+/// Content rather than file bytes, so reformatting a tileset does not
+/// invalidate every layout that names it while any change to a socket, a
+/// weight, a part or a palette entry does. Feeds both a layout's
+/// `tileset_hash` and the merged-geometry cache key.
+pub fn digest(tileset: &Tileset) -> String {
+    let mut h = crate::gi::InputsHasher::new();
+    h.vec3(tileset.cell);
+    h.u32(tileset.palette.len() as u32);
+    for (key, material) in &tileset.palette {
+        h.str(key);
+        // The material through its own serialization: it is plain data, and
+        // spelling out twenty fields here is a list that silently stops
+        // matching the day one is added.
+        h.str(&serde_json::to_string(material).unwrap_or_default());
+    }
+    h.u32(tileset.tiles.len() as u32);
+    for tile in &tileset.tiles {
+        h.str(&tile.name);
+        h.f32(tile.weight);
+        h.u32(tile.rotations);
+        for face in Face::ALL {
+            h.str(tile.faces.get(face));
+        }
+        h.u32(tile.parts.len() as u32);
+        for part in &tile.parts {
+            h.str(&serde_json::to_string(part).unwrap_or_default());
+        }
+    }
+    h.finish()
+}
+
 // ── Adjacency ─────────────────────────────────────────────────────────
 
 /// Which expanded tiles may sit in which direction from which, as a bitset per

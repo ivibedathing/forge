@@ -688,6 +688,98 @@ pub fn apply_daylight(
     (lights, environment)
 }
 
+/// A `TileGrid`'s grown geometry, hung on its entity at load (M47).
+///
+/// A **runtime component**: a hecs component that is deliberately *not* in the
+/// `components!` list, exactly as `Name` is. `ComponentData::collect_from`
+/// therefore never serializes it, validation never sees it, and a `--bake`
+/// writes the `TileGrid` that produced it rather than a copy of its vertices.
+///
+/// This is not hidden state (invariant 2): it is a pure function of two text
+/// files on disk, in the same way a resolved `Material` is a pure function of
+/// the `materials/*.json` it names. It exists because a tile grid needs *files*
+/// while `physics::build` and `render_items_at` see only a `&World`.
+pub struct ResolvedTileGrid(pub std::sync::Arc<crate::tilegrid::TileGridSolid>);
+
+/// Grow every `TileGrid`'s geometry, given the scene's own directory.
+///
+/// Runs once at load, after `resolve_scene_materials` and for its reason:
+/// nothing downstream should have to know a grid came from two files. Errors
+/// are collected rather than returned on the first — validation has already
+/// reported them, and this is the backstop for a scene whose files changed
+/// underneath it.
+pub fn resolve_scene_tile_grids(scene: &mut Scene, base_dir: &std::path::Path) -> Vec<EngineError> {
+    let mut errors = Vec::new();
+    let grids: Vec<(String, crate::components::TileGrid)> = scene
+        .world
+        .query::<(&Name, &crate::components::TileGrid)>()
+        .iter()
+        .map(|(name, grid)| (name.0.clone(), grid.clone()))
+        .collect();
+
+    for (name, grid) in grids {
+        let solid = match grow_one(base_dir, &grid) {
+            Ok(solid) => solid,
+            Err(e) => {
+                errors.push(e.entity(name).component("TileGrid"));
+                continue;
+            }
+        };
+        let Some(entity) = scene.entity(&name) else {
+            continue;
+        };
+        let _ = scene.world.insert_one(entity, ResolvedTileGrid(solid));
+    }
+    errors
+}
+
+fn grow_one(
+    base_dir: &std::path::Path,
+    grid: &crate::components::TileGrid,
+) -> Result<std::sync::Arc<crate::tilegrid::TileGridSolid>> {
+    let tileset_path = crate::tileset::resolve_tileset(&grid.tileset, base_dir)?;
+    let tileset = crate::tileset::load_tileset(&tileset_path)?;
+    let tiles = crate::tileset::expand(&tileset)?;
+
+    let layout_path = base_dir.join(&grid.layout);
+    let text = std::fs::read_to_string(&layout_path).map_err(|e| {
+        EngineError::new(
+            crate::codes::TILE_LAYOUT_MISSING,
+            format!(
+                "could not read the tile layout at {}: {e}; run `engine synthesize`",
+                layout_path.display()
+            ),
+        )
+    })?;
+    let layout = crate::tilelayout::TileLayout::parse(&text).map_err(|bad| {
+        EngineError::new(
+            crate::codes::TILE_LAYOUT_MALFORMED,
+            format!("the tile layout at {:?} is not readable: {bad}", grid.layout),
+        )
+    })?;
+    let resolved = layout.resolve(&tiles).map_err(|unknown| {
+        EngineError::new(
+            crate::codes::UNKNOWN_TILE,
+            format!(
+                "the tile layout at {:?} places {} the tileset does not define: {}",
+                grid.layout,
+                if unknown.len() == 1 { "a tile" } else { "tiles" },
+                unknown.join(", ")
+            ),
+        )
+    })?;
+
+    // The layout's own offsets, not recomputed ones: a layout is only
+    // meaningful beside the terrace it was solved against, and re-deriving them
+    // here is how the drawn village and the solved one start to disagree.
+    Ok(crate::tilegrid::solid_for(
+        &tileset,
+        &layout.grid(),
+        &tiles,
+        &resolved,
+    ))
+}
+
 /// A scene loaded into an ECS world.
 pub struct Scene {
     pub name: String,
@@ -778,10 +870,24 @@ impl Scene {
             return Err(errors.into_iter().map(|e| e.file(path)).collect());
         }
 
-        Ok(Self::instantiate(file))
+        let mut scene = Self::instantiate(file);
+        // A tile grid needs two *files* — its tileset and its solved layout —
+        // and both `physics::build` and `render_items_at` see only a `&World`.
+        // So the geometry is grown once here, where the scene's directory is
+        // still in hand, and hung on the entity as a runtime component.
+        let errors = resolve_scene_tile_grids(&mut scene, base_dir);
+        if !errors.is_empty() {
+            return Err(errors.into_iter().map(|e| e.file(path)).collect());
+        }
+        Ok(scene)
     }
 
     /// Spawn a parsed scene file into a fresh world.
+    ///
+    /// **A `TileGrid` built this way draws nothing** — its geometry comes from
+    /// two files, and this function has no directory to resolve them against.
+    /// [`Scene::from_source`] runs [`resolve_scene_tile_grids`] afterwards;
+    /// the direct callers here are tests that carry no tile grids.
     pub fn instantiate(file: SceneFile) -> Self {
         let physics = file.physics.unwrap_or_default();
         let environment = file.environment.unwrap_or_default();
@@ -1104,7 +1210,94 @@ impl Scene {
         }
 
         items.extend(self.terrain_items());
+        items.extend(self.tile_grid_items(assets)?);
 
+        Ok(items)
+    }
+
+    /// The column lift, in cells, a grid takes from the `Terrain` it names
+    /// (M47) — empty for a flat grid.
+    ///
+    /// **Whole cells, not metres.** A continuous offset leaves a slot down
+    /// every wall between two columns at different heights, and no tile knows
+    /// what its neighbour's offset is; snapping keeps every face flush and
+    /// reads as a terrace. A pure function of the terrain, the transforms and
+    /// the cell size, so `synthesize`, `validate` and the loader all reach the
+    /// same numbers without passing them around.
+    pub fn tile_grid_offsets(&self, entity_name: &str, grid: &crate::components::TileGrid, cell: glam::Vec3) -> Vec<i32> {
+        if grid.ground.is_empty() || cell.y <= 0.0 {
+            return Vec::new();
+        }
+        let Some(entity) = self.entity(entity_name) else {
+            return Vec::new();
+        };
+        let placement = self.transform_of(entity);
+        let [nx, _, nz] = grid.size;
+        let mut offsets = Vec::with_capacity((nx * nz) as usize);
+        // z outer, x inner — which *is* `x + nx*z`, the order `Grid::offset`
+        // indexes by.
+        for z in 0..nz {
+            for x in 0..nx {
+                let local = glam::Vec3::new(
+                    (x as f32 + 0.5 - nx as f32 * 0.5) * cell.x,
+                    0.0,
+                    (z as f32 + 0.5 - nz as f32 * 0.5) * cell.z,
+                );
+                let world = placement.matrix().transform_point3(local);
+                let ground = self
+                    .terrain_height(&grid.ground, world.x, world.z)
+                    .unwrap_or(placement.position.y);
+                offsets.push(((ground - placement.position.y) / cell.y).round() as i32);
+            }
+        }
+        offsets
+    }
+
+    /// One draw per palette material a solved grid used (M47).
+    ///
+    /// Several items for one entity, which `Tree` already does for its bark and
+    /// its leaves — so a tile grid rides the ordinary mesh path and shadows,
+    /// fog, point lights, GI, picking and the editor's selection all come free,
+    /// with no second copy of any of them.
+    ///
+    /// Sorted by entity name, then emitted in the palette's own `BTreeMap`
+    /// order, for the reason `terrain_items` sorts: the draw list must not
+    /// depend on how a map happened to iterate.
+    pub fn tile_grid_items(&self, assets: &dyn crate::texture::AssetSource) -> Result<Vec<RenderItem>> {
+        let mut grids: Vec<(String, glam::Mat4, std::sync::Arc<crate::tilegrid::TileGridSolid>)> =
+            self.world
+                .query::<(Entity, &ResolvedTileGrid)>()
+                .iter()
+                .map(|(entity, solid)| {
+                    (
+                        self.world
+                            .get::<&Name>(entity)
+                            .map(|n| n.0.clone())
+                            .unwrap_or_default(),
+                        self.transform_of(entity).matrix(),
+                        std::sync::Arc::clone(&solid.0),
+                    )
+                })
+                .collect();
+        grids.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut items = Vec::new();
+        for (name, model, solid) in grids {
+            for (_, material, mesh) in &solid.by_palette {
+                let textures = crate::texture::MaterialTextures::resolve(material, assets)
+                    .map_err(|e| e.entity(name.clone()))?;
+                items.push(RenderItem {
+                    entity: name.clone(),
+                    mesh: std::sync::Arc::clone(mesh),
+                    model,
+                    material: material.clone(),
+                    textures,
+                    terrain: None,
+                    joints: Vec::new(),
+                    foliage: None,
+                });
+            }
+        }
         Ok(items)
     }
 

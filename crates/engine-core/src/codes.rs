@@ -381,6 +381,8 @@ registry! {
         "an unlocked cell in a tile layout violates the tileset's adjacency rules";
     TILE_GRID_TOO_COMPLEX = "tile_grid_too_complex", Input,
         "a TileGrid's cells and tiles would grow more vertices than the engine builds";
+    TILE_GRID_GROUND_NOT_FOUND = "tile_grid_ground_not_found", Input,
+        "a TileGrid's \"ground\" names no entity in the scene";
     TILE_GRID_GROUND_INVALID = "tile_grid_ground_invalid", Input,
         "a TileGrid's \"ground\" must name an entity that has a Terrain component";
 

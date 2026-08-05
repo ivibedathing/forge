@@ -62,8 +62,10 @@ pub struct LayoutHeader {
     pub entity: String,
     /// The tileset reference, as the component spelled it.
     pub tileset: String,
-    /// Digest of the tileset file's bytes, so a tileset edited under a layout
-    /// is caught without re-reading it.
+    /// Digest of the tileset's *content* — see `tileset::digest`. Content
+    /// rather than file bytes so reformatting a tileset does not invalidate
+    /// every layout that names it, while any change to a socket, a weight or a
+    /// part does.
     pub tileset_hash: String,
     /// Digest of every input the solve read; what `synthesize --check`
     /// recomputes.

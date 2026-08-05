@@ -39,6 +39,10 @@ pub(super) struct SceneFacts<'a> {
     pub(super) distinct_layers: Vec<(String, String)>,
     pub(super) wheels: Vec<(String, crate::components::Wheel, String)>,
     pub(super) meadows: Vec<(String, crate::components::Meadow, String)>,
+    /// Every `TileGrid` that may name a `Terrain` to terrace to (M47) — a
+    /// cross-entity reference, so it waits for the pass where every name is
+    /// known. The meadow pass's shape.
+    pub(super) tile_grids: Vec<(String, crate::components::TileGrid, String)>,
     /// Roads that name a `Terrain` to follow (M40), and junctions that name
     /// roads — both are cross-entity references, so both wait for the pass
     /// where every name is known. The meadow pass's shape.
@@ -211,6 +215,13 @@ pub(super) const RECIPE_RULES: &[RecipeRule] = &[
         why: "a probe volume is a region of space that lights other \
               surfaces and draws nothing itself",
     },
+    RecipeRule {
+        component: "TileGrid",
+        label: "a TileGrid component",
+        code: codes::TILE_GRID_WITH_MESH,
+        why: "a tile grid grows its own geometry from its tileset's tiles \
+              and paints it from that tileset's palette",
+    },
 ];
 
 /// Walk every entity — or every template (M37) — pushing per-entry errors and
@@ -251,6 +262,7 @@ pub(super) fn walk<'a>(
     // is another entity, so the check waits until every name is known — the
     // wheel pass's shape.
     let mut meadows: Vec<(String, crate::components::Meadow, String)> = Vec::new();
+    let mut tile_grids: Vec<(String, crate::components::TileGrid, String)> = Vec::new();
     // Road and junction pass inputs (M40), for the meadow pass's reason: a road
     // names the terrain it rides on and a junction names the roads that reach
     // it, and neither name can be checked until every entity has been seen.
@@ -456,6 +468,7 @@ pub(super) fn walk<'a>(
         let mut junction: Option<(crate::components::Junction, String)> = None;
         let mut meadow: Option<(crate::components::Meadow, String)> = None;
         let mut light_probe_volume: Option<(crate::components::LightProbeVolume, String)> = None;
+        let mut tile_grid: Option<(crate::components::TileGrid, String)> = None;
         // Whether this entity carries anything a `HudInteract` could use as
         // its hit box (M31).
         let mut has_hud_element = false;
@@ -612,6 +625,10 @@ pub(super) fn walk<'a>(
                 Some(ComponentData::LightProbeVolume(v)) => {
                     probe_volumes.push((name.to_string(), component_path.clone()));
                     light_probe_volume = Some((v, component_path));
+                }
+                Some(ComponentData::TileGrid(g)) => {
+                    tile_grids.push((name.to_string(), g.clone(), component_path.clone()));
+                    tile_grid = Some((g, component_path));
                 }
                 Some(ComponentData::FootPlant(p)) => {
                     foot_plant = Some(component_path.clone());
@@ -1192,7 +1209,7 @@ pub(super) fn walk<'a>(
             // In table order, which follows the walk's section order, so a
             // scene that (illegally but parseably) stacks two recipes on one
             // entity still reports them in the order it always has.
-            let present: [(&str, Option<&String>); 7] = [
+            let present: [(&str, Option<&String>); 8] = [
                 ("Cloud", cloud_path.as_ref()),
                 ("Road", road.as_ref().map(|(_, path)| path)),
                 ("Junction", junction.as_ref().map(|(_, path)| path)),
@@ -1203,6 +1220,7 @@ pub(super) fn walk<'a>(
                     "LightProbeVolume",
                     light_probe_volume.as_ref().map(|(_, path)| path),
                 ),
+                ("TileGrid", tile_grid.as_ref().map(|(_, path)| path)),
             ];
             for (component, path) in present {
                 let Some(path) = path else { continue };
@@ -1635,6 +1653,7 @@ pub(super) fn walk<'a>(
 
     SceneFacts {
         roads,
+        tile_grids,
         junctions,
         road_names,
         closed_road_names,

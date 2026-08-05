@@ -154,6 +154,7 @@ build fails.
 | `tile_layout_stale` | 1 | a tile layout was solved from different inputs than the scene now holds; re-run `engine synthesize` |
 | `tile_layout_illegal` | 1 | an unlocked cell in a tile layout violates the tileset's adjacency rules |
 | `tile_grid_too_complex` | 1 | a TileGrid's cells and tiles would grow more vertices than the engine builds |
+| `tile_grid_ground_not_found` | 1 | a TileGrid's "ground" names no entity in the scene |
 | `tile_grid_ground_invalid` | 1 | a TileGrid's "ground" must name an entity that has a Terrain component |
 | `hud_parent_not_found` | 1 | a HUD element's "parent" names no entity in the scene |
 | `hud_parent_not_panel` | 1 | a HUD element's "parent" must name an entity that has a HudPanel |
