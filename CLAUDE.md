@@ -60,6 +60,7 @@ actually says.
 | `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. Since M46 it moves: `wind` bends the branches, `flutter` beats the leaves. | `m19-trees.md`, `m46-foliage-sway.md` |
 | `Cloud` | A cluster of interpenetrating lobes that drifts; **owns its mesh**. | `m20-clouds.md` |
 | `Meadow` | Ground cover on a seed→grass→weeds→straw→collapse life cycle, animated entirely in the vertex stage. | `m29-meadows.md` |
+| `TileGrid` | A grid filled by **model synthesis** from a `tilesets/*.json`, drawn as one merged mesh per palette material. **Owns its geometry**, and carries no geometry of its own in the scene: it names a tileset and a solved `layout`, and renders nothing until `engine synthesize` has written one. | `m47-tile-synthesis.md` |
 | `LightProbeVolume` | A box of baked irradiance probes; replaces the hemispheric fill with one that knows what is above a surface. Since M45 its `sun_samples` also bounce the *sun*, so a red wall reddens its neighbour. At most one per scene, and it carries no geometry. | `m35-global-illumination.md`, `m45-sun-bounce.md` |
 | `HudText` | Screen-anchored text at an integer scale of the 8×8 font. | `m11_6-hud.md` |
 | `HudRect` | A screen-anchored coloured rectangle — bars, backdrops, gauges. | `m11_6-hud.md` |
@@ -67,8 +68,8 @@ actually says.
 | `HudImage` | A nine-sliced textured rectangle. **With no `slice` it is all middle band, and the middle band tiles.** | `m31-ui-system.md` |
 | `HudInteract` | Makes the HUD element on its own entity hoverable, pressable and clickable — polled, never dispatched. | `m31-ui-system.md` |
 
-**Recipes own their geometry**, so `Water`, `Terrain`, `Road`, `Junction`, `Cloud` and `Meadow`
-carry **no `Mesh` and no `Material`** — authoring one is a validation error. `Tree` and `Shard` are
+**Recipes own their geometry**, so `Water`, `Terrain`, `Road`, `Junction`, `Cloud`, `Meadow` and
+`TileGrid` carry **no `Mesh` and no `Material`** — authoring one is a validation error. `Tree` and `Shard` are
 the exceptions on materials only: a tree's `Material` is its bark, and a shard's is the surface the
 thing it broke off was painted. A `LightProbeVolume` carries neither for a different reason: it is
 a *region of space* that grows no geometry at all.
@@ -81,9 +82,14 @@ script spawns at runtime — `m37-entity-spawning.md`).
 
 **System order per fixed step**: animations → scripts → physics → particles → render.
 
+**Two more file kinds, both named by a `TileGrid` and both routed by *shape*** the way clips and
+materials are (M47): `tilesets/*.json` (a palette plus tiles as parts and sockets — see
+`docs/scene-format.md`) and `layouts/*.tiles.json` (the solved grid, written by `engine synthesize`,
+one line per grid row, `!` to lock a cell).
+
 ## Current state
 
-**M0–M46 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M47 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
@@ -91,7 +97,7 @@ M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locom
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
 M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
 M43 material-aware fracture, M44 the break's dust, M35 global illumination, M45 bounced
-sunlight, and M46 foliage sway.
+sunlight, M46 foliage sway, and M47 tile synthesis.
 (M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
@@ -148,6 +154,16 @@ engine bake-gi <scene.json> [--entity Name] [--out path] [--samples N] [--check]
 engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
 #   the irradiance the renderer would use here, the pre-M35 fallback beside it,
 #   the blend weight and how open the sky is — a number, not a picture (M35)
+engine synthesize <scene.json> [--entity N] [--seed S] [--region x0,z0,x1,z1]
+#                  [--block x,z] [--overlap N] [--attempts N] [--out p] [--write] [--check]
+#   solve a TileGrid's layout by model synthesis in overlapping blocks (M47).
+#   --region re-solves only the blocks meeting a rectangle **of cells**, reading
+#   the rest as fixed border — that is how an area changes without re-rolling
+#   the world. The second command that writes into the project, after bake-gi,
+#   and --check is its staleness gate for the same reason
+engine list-tiles <tileset.json>
+#   every tile at every rotation, its six sockets, and how many tiles may sit
+#   across each face. `partners: 0` is a tile that can never be placed (M47)
 engine water-height <scene.json> --at x,z [--entity N] [--time T] [--steps N]
 #   where the water is, and which way it faces (M41); the first query that takes a
 #   clock, and the first that can answer "no water here" rather than a height
@@ -336,6 +352,26 @@ The cross-cutting ones. Per-system traps are in each note.
   already drawn; a fresh draw would have shifted every subsequent draw and **reshaped every tree in
   the repo** to gain the animation. The same reasoning is why `tree.rs`'s jitter helpers consume a
   draw even at `jitter: 0`.
+- **A constraint solver's fallback must revert, not fill** (M47). Boris the Brave's
+  modifying-in-blocks says a block that runs out of retries takes the known-good fill, which is
+  right when every border *is* that fill — true of the first pass and false of every block after it,
+  whose border is an already-solved neighbour. Writing the fill in produced an illegal grid whose
+  diff was nowhere near the block that failed. Reverting is legal by induction instead. And the
+  AC-4 seeding beside it must queue each removal **once**, not once per starved face: `propagate`
+  decrements a neighbour's counters per stack entry, so duplicates drove supports below zero and
+  turned solvable blocks into contradictions — presenting as a tileset that merely looked
+  over-constrained.
+- **A grid that follows terrain must *clear* the ground, not split the difference with it** (M47).
+  Rounding the terrace lift to nearest buries half the cells: the hillside comes up through the
+  flagstones, and a ball dropped on the plaza rests on *terrain* and rolls away down a slope nothing
+  in the frame explains. `engine terrain-height` is what finds it — 0.344 where the deck was at
+  0.12. Rounding up leaves a gap under the low cells, and a gap is something a tile can fill.
+  Relatedly, **a terrace step is a free edge**: shearing the adjacency by the columns' difference in
+  lift is geometrically right and obliges every tileset to carry a socket for the side of a hill.
+- **A `BTreeMap` component field publishes `additionalProperties` and no `properties`** (M47), so
+  the validation walk reported every key of a map as `unknown_field`. No component had a map field
+  before `Tileset.palette`, which is why the walk never needed the arm — and why adding it could
+  not move anything that predates it.
 - **`builtin:cube`'s faces disagree on which way `u` runs, in pairs rather than in axes.** Anything
   strongly directional on a cube draws differently on all four sides. `builtin:plane`'s UVs are not
   the intuitive ones either — fixing both is deferred as its own change with its own A/B (M26).
@@ -374,14 +410,14 @@ binary), `--diff-dir` to write diff PNGs, and `--render-to DIR` + `ENGINE=<other
 A/B bit-exactness check as a loop rather than a reconstruction. Both golden traces are checked too,
 GPU-free.
 
-**42 of the 48 baselines are pinned by a test.** The six that are not are the six `showcase_*`
+**45 of the 51 baselines are pinned by a test.** The six that are not are the six `showcase_*`
 frames, deliberately: they are not byte-reproducible on this adapter (measured repeatedly at four to
 six distinct images from six renders of an *unchanged* scene, on any binary), so a test asserting
 them would fail at random, which is worse than no test. They keep a `diff_args` tolerance of
 `--threshold 24 --max-diff-percent 0.02` in the manifest and stay the sweep's job; `cli.rs` says so
 where someone would go to add them. The pixel *allowance* is there rather than a wider threshold
 because the residual is one or two pixels well outside it, not a haze just over it — 24/0.02 held
-for eight consecutive full sweeps. **The other 42 entries carry no `diff_args` at all — they are
+for eight consecutive full sweeps. **The other 45 entries carry no `diff_args` at all — they are
 bit-exact, and a failure there is real.** `m35_gi.png` joined them in M35: five renders of it gave
 one image, so it took a hard pin rather than a tolerance, and `m46_foliage_sway.png` joined them the
 same way (five renders, one image) — a *moving* subject is still bit-reproducible here, because the
@@ -527,6 +563,12 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   `Junction` — the patch a ribbon cannot be. Every one of them defaults to M23.
 - **Meadows (M29)** → `m29-meadows.md`. Ground cover on a seed→grass→weeds→straw→collapse life
   cycle, animated entirely in the vertex stage.
+- **Tile synthesis (M47)** → `m47-tile-synthesis.md`, design in `designs/tile-synthesis-design.md`.
+  The first recipe whose output is an **arrangement** rather than a mesh: a `tilesets/*.json` whose
+  tiles are *grown* from parametric parts (so a tileset is JSON an agent writes from a prompt, not a
+  `.glb`), a per-face socket graph, and model synthesis **in overlapping blocks** filling a grid.
+  The solved layout is a committed sidecar, which is what makes `synthesize --region` a local edit
+  rather than a re-roll, and what a `!` locks a cell in.
 
 ### Environment and time
 
@@ -816,6 +858,16 @@ original four, entity spawning was M37 and a CPU wave evaluator was M41.) The re
   `impulse_threshold` defaults, and a *decal* where something broke — the one thing a burst cannot
   do, since particles all die. (Dust itself was M44; `designs/fracture-design.md` §7 records the
   reversal and what answered its objection.)
+- **Tile synthesis** (after M47): adjacency **learned from a sample grid** — model synthesis
+  proper infers it from an example arrangement, and this milestone authors sockets instead because
+  that is the half an agent can write from a prompt; more part kinds (`arch`, `stairs`, `prism`,
+  and a `mesh` part for when you *do* have art); dungeon, street and forest tilesets (a forest wants
+  tiles that place real `Tree` recipes, i.e. **props**, which is an M37 templates question);
+  editable-WFC's dirty-cell picker and similarity heuristic, which minimise churn *within* a
+  re-solved block and need possibility sets carried across invocations; transparent palette
+  materials (a merged mesh sorts as one blob at the entity origin); blocking in Y; a `TileGrid`
+  inside a template (runtime file resolution, entangled with hot reload); and **carving the terrain
+  to meet the grid**, which is M40's road-carving question again and takes M40's answer.
 - **Deferred with an A/B attached**: fixing `builtin:plane`/`builtin:cube`'s UV layout, and changing
   `builtin:triangle`.
 

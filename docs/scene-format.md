@@ -193,3 +193,39 @@ separate documents with their own schemas, and `engine validate` accepts both
 directly. A material file is referenced by `Material.asset`, which is exclusive
 with every other field on that component — a shared material cannot be tinted
 per entity, by design.
+
+Since M47 there are two more, both named by a `TileGrid`, and both routed by
+**shape** rather than by filename the way clips and materials are:
+
+**A tileset (`tilesets/*.json`)** holds a `cell` size in metres, a `palette` of
+named materials, and a list of `tiles`. A tile is *grown, not modelled*: it
+carries parametric `parts` — `box`, `wedge`, `cylinder` — in the same `at`
+(centre) and `size` (full extent) metres a `Transform` uses, cell-local with the
+origin at the cell's centre in X and Z and its floor in Y. Each of its six
+`faces` carries a socket string saying what may sit against it:
+
+| Written | Mates | Meaning |
+|---|---|---|
+| `"0"` | `"0"` | nothing here; reserved |
+| `"x"` | `"x"` | symmetric — the common case, so it has no suffix |
+| `"x_l"` | `"x_r"` | one half of a mirrored pair |
+| `"x_i"` | ignores the turn | vertical faces only |
+
+`rotations` of 1, 2 or 4 expands the tile over quarter-turns about Y before
+anything else runs; a vertical socket keeps its rotation index unless suffixed
+`_i`. A tileset's own references — a palette entry's `asset`, and that
+material's texture maps — are relative to **the tileset file**, which is what
+makes one shareable, and they are rebased onto the scene at load.
+
+**A layout (`layouts/*.tiles.json`)** is the solved grid, written by
+`engine synthesize`: NDJSON, a header object then one line per grid row, cells
+`name@rotation` separated by spaces. **The line order is the layout** — x
+fastest, then z, then y — and it is checked, because a permuted file parses as
+valid JSON and renders a wrong world. A `!` before a token locks that cell: a
+hard constraint the solver never re-picks, byte-identical after a full re-solve,
+and the way an author says "the door goes *there*".
+
+The grid's **vertical ends are closed and its horizontal edges are open**: a
+patch is a window onto a larger world sideways, but there is no storey below the
+ground or above the sky. That single rule is what keeps roofs off the ground
+floor without any tile having to say so.

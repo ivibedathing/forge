@@ -1544,3 +1544,50 @@ engine filmstrip examples/scenes/verify/m46_foliage_sway.json --out /tmp/strip.p
 trunk's foot is exactly 0, a leaf's vertices share one weight and one phase, no two leaves share a
 phase, and turning the wind on moves **no vertex of the geometry** — the property that kept every
 tree in the repo the shape it was.
+
+## M47 — Tile synthesis: `verify/m47_tiles.json`
+
+A ten-by-eight village of the `tilesets/village.json` tileset, terraced onto a `Terrain`, with a
+hand-authored cottage pinned into the layout beside the solved rest. What the picture asserts, item
+by item:
+
+- **The tiles are grown, not modelled.** Every wall, roof, plinth and post in frame is a box, a
+  wedge or a cylinder the engine built from `examples/tilesets/village.json` — there is no mesh file
+  anywhere in this scene except the ball.
+- **All three part kinds**: box walls and plinths, wedge roof gables, cylinder posts.
+- **Rotation works.** Walls and corners appear at all four turns around the cottages. A reversed
+  face permutation renders every wall facing inward and is unmissable, which is why the unit test
+  checks the permutation against the rotated *geometry* rather than a table.
+- **A terrace step.** The west column of the grid sits a whole cell below the rest, and the
+  plinths under the raised cells reach down to meet the hillside. The lift rounds **up**, so the
+  village clears the ground rather than splitting the difference with it.
+- **A locked cottage beside a solved village.** Nine `!` cells at (1..3, 0, 1..3). A solver change
+  moves one and not the other, which makes the diff diagnostic rather than uniform.
+- **A ball at rest on flush slabs**, straddling the seam between two cobble cells at exactly
+  `y = 3.1189` with zero velocity. That is the `merge_internal_edges` assertion: a tiled floor is
+  the canonical coplanar-triangle case, and without the flag a body resting across a shared edge
+  takes a contact normal along it and leaves.
+
+`samples: 1`, so it carries a **hard bit-exact pin** (`the_m47_tiles_fixture_matches_its_baseline`)
+even with terrain in frame — five consecutive renders came back as one image. The palette is fully
+opaque, because merged per-palette meshes sort as one blob at the entity origin.
+
+```
+engine validate examples/scenes/verify/m47_tiles.json --strict
+engine list-tiles examples/tilesets/village.json        # every socket's partner count
+engine synthesize examples/scenes/verify/m47_tiles.json --check
+engine diff-render examples/scenes/verify/m47_tiles.json \
+    examples/scenes/verify/baselines/m47_tiles.png --steps 240
+engine simulate examples/scenes/verify/m47_tiles.json --steps 240 --entity Ball
+engine synthesize examples/scenes/verify/m47_tiles.json --region 0,0,2,2 --seed 404 --write
+```
+
+That last line is the milestone's point: it re-solves one corner of the village and leaves every
+other cell byte for byte. `git diff` on the layout is the proof, and
+`a_region_re_solve_leaves_the_rest_of_the_village_alone` is the test.
+
+**What a picture cannot say is in `tileset.rs`, `tilelayout.rs` and `synthesize.rs`'s tests**: that
+a turn moves geometry and sockets together, that mating is symmetric across every pair, that the
+file's line order is its layout, that every solved cell agrees with all six neighbours, that one
+seed reproduces one village, that a locked cell survives a full re-solve, and that a block which
+cannot be solved gives up and leaves what stood there rather than hanging.

@@ -126,6 +126,17 @@ engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
                                              # the irradiance the renderer would use here,
                                              # the pre-M35 fallback beside it, and the share
                                              # of it that bounced off a sunlit surface
+engine synthesize <scene.json> [--entity Name] [--seed S] [--region x0,z0,x1,z1]
+                  [--block x,z] [--overlap N] [--attempts N] [--out path]
+                  [--write] [--check]
+                                             # solve a TileGrid's layout by model synthesis
+                                             # in overlapping blocks. --region re-solves only
+                                             # the blocks meeting a rectangle **of cells**,
+                                             # reading the rest as fixed border; --check
+                                             # writes nothing and exits 1 (tile_layout_stale)
+                                             # when the scene has moved since the solve
+engine list-tiles <tileset.json>             # every tile at every rotation, its six sockets,
+                                             # and how many tiles may sit across each face
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
 engine list-components [--component Name]    # scene + component JSON Schemas
 engine list-components --markdown            # the same vocabulary, as prose
@@ -497,3 +508,52 @@ same numeric range constraints `engine validate` enforces, so third-party
 validators (`ajv`, `check-jsonschema`) agree with the engine about the same
 file. Only cross-field rules (`Camera.far > near`) and semantic checks
 (duplicates, asset existence) go beyond the schema.
+
+## Tile synthesis (M47)
+
+`engine synthesize` is the second command that **writes into the project**,
+after `bake-gi`, and it is that command's shape for that command's reasons: the
+solve is expensive, its output is an artifact the scene names, and the artifact
+is what a later edit edits. A `TileGrid` renders nothing until it has one, and
+the missing-file error says so (`tile_layout_missing`).
+
+Its stdout object carries `entity`, `layout`, `tileset`, `seed`, `size`,
+`cells`, `locked`, `terraced`, `blocks`, `solved`, `retries`, `fallbacks`,
+`vertices`, `inputs_hash` and `written`. Two of those are the diagnostics worth
+knowing:
+
+- **`fallbacks`** counts blocks that used up their retries and kept whatever
+  stood in them. An over-constrained tileset does not fail loudly, it produces
+  bland output — this is the number that says so without reading the picture.
+- **`retries`** is the same signal one step earlier: a tileset that is *nearly*
+  over-constrained spends retries long before it starts falling back.
+
+`--write` is required to change anything; without it the report is printed and
+the file is untouched, the `fracture` convention. `--out` redirects the write
+**only** — the prior layout, and therefore every locked cell, is always read
+from the one the component names.
+
+`--region x0,z0,x1,z1` is inclusive and **in cells, not metres**: the layout is
+indexed in cells, and metres would make the flag's meaning depend on
+`Transform.scale`. It re-solves the blocks whose interior meets that rectangle
+and reads everything else as fixed border, which is what makes changing one
+corner of a village an edit rather than a re-roll. It needs an existing layout
+to build on (`invalid_invocation` otherwise), and a rectangle reaching past the
+grid is refused rather than clamped.
+
+**One property this does not have.** A region solve over a block does not
+reproduce what a full solve produced there: in a full scan that block's east and
+south borders were the known-good fill, and in a region solve they are
+already-solved neighbours. Different constraints, different answer.
+
+`engine list-tiles <tileset.json>` prints the expansion — one entry per tile per
+rotation, in the order the solver indexes them — with each face's resolved
+socket, the rotation index a vertical face carries, and **how many tiles may sit
+across it**. A `partners: 0` is a tile that can never be placed that side, which
+`engine validate` reports on the same file as `tile_socket_orphaned`. A socket
+graph is a constraint problem rather than a description, so it is the half of a
+tileset that comes out of a prompt wrong; this is the command that makes it
+fixable.
+
+A tileset file validates on its own, routed **by shape** — a top-level `tiles`,
+no `entities`, no `tracks` — the way clip and material files already are.
