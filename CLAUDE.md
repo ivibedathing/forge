@@ -89,7 +89,7 @@ one line per grid row, `!` to lock a cell).
 
 ## Current state
 
-**M0–M48 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M49 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
@@ -97,7 +97,7 @@ M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locom
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
 M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
 M43 material-aware fracture, M44 the break's dust, M35 global illumination, M45 bounced
-sunlight, M46 foliage sway, M47 tile synthesis, and M48 its ergonomics.
+sunlight, M46 foliage sway, M47 tile synthesis, M48 its ergonomics, and M49 tile constraints.
 (M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
@@ -156,13 +156,16 @@ engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
 #   the blend weight and how open the sky is — a number, not a picture (M35)
 engine synthesize <scene.json> [--entity N] [--seed S]
 #                  [--region x0,z0,x1,z1 | --at x,z | --around Name] [--radius M]
-#                  [--block x,z] [--overlap N] [--attempts N] [--out p] [--write] [--check]
+#                  [--block x,z] [--overlap N] [--attempts N] [--out p]
+#                  [--reset] [--write] [--check]
 #   solve a TileGrid's layout by model synthesis in overlapping blocks (M47).
 #   Re-solves only the blocks meeting the area, reading the rest as fixed border
 #   — that is how an area changes without re-rolling the world. --region is in
 #   cells; --at/--around are world metres and clamp to the grid (M48). The second
 #   command that writes into the project, after bake-gi, and --check is its
-#   staleness gate for the same reason
+#   staleness gate for the same reason. --reset solves from the fill keeping
+#   locks, and is what makes a tileset's new constraints reach a layout that
+#   already exists (M49)
 engine tile-grid <scene.json> [--entity N] [--at x,z]
 #   what a solved grid holds: footprint, terrace lifts, a tile census, and per
 #   --at the whole column at a world XZ — including `surface_y`, the height a
@@ -359,6 +362,18 @@ The cross-cutting ones. Per-system traps are in each note.
   already drawn; a fresh draw would have shifted every subsequent draw and **reshaped every tree in
   the repo** to gain the animation. The same reasoning is why `tree.rs`'s jitter helpers consume a
   draw even at `jitter: 0`.
+- **A constraint that rejects must reject *worsening*, not imperfection** (M49). Strict rejection —
+  re-roll a block on any violation — cannot converge: a region breaking a rule usually extends past
+  every block that could be blamed for it, so no block can fix it and all of them fall back. It
+  measured as **every block failing every attempt**, 380 of them, at every block size and budget
+  tried. A block is now asked not to *increase* the violations blamed on it, which is exactly strict
+  from the known-good fill. Two corollaries: an already-broken layout is never **repaired** (hence
+  `synthesize --reset`, or adding constraints to a tileset silently does nothing), and a rule
+  nothing can satisfy is a **no-op** rather than a wipe.
+- **A saturated counter looks like a flat response** (M49). Sweeping a tileset weight over four
+  values reported *identical* retry counts, which reads as "the weight does not matter" and actually
+  meant every attempt was failing regardless, so the budget was spent in full every time. Check
+  whether a counter is pinned at its ceiling before concluding an input has no effect.
 - **A constraint solver's fallback must revert, not fill** (M47). Boris the Brave's
   modifying-in-blocks says a block that runs out of retries takes the known-good fill, which is
   right when every border *is* that fill — true of the first pass and false of every block after it,
@@ -576,6 +591,12 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   `.glb`), a per-face socket graph, and model synthesis **in overlapping blocks** filling a grid.
   The solved layout is a committed sidecar, which is what makes `synthesize --region` a local edit
   rather than a re-roll, and what a `!` locks a cell in.
+- **Tile constraints (M49)** → `m49-tile-constraints.md`, design in
+  `designs/tile-constraints-design.md`. The properties face adjacency **cannot state**: one
+  constraint type with four predicates (`count`, `regions`, `region_size`, `region_contains`) over
+  a tileset's own tiles, enforced by rejecting a block that breaks them. Without it the village was
+  one 60-cell mass and the tour's hamlet was 24 walls enclosing **zero** rooms. Rejection is
+  **do no harm**, which is the only form that converges — and why `--reset` exists.
 - **Tile-synthesis ergonomics (M48)** → `m48-tile-ergonomics.md`. M24's argument applied to M47:
   `engine tile-grid` (what is in that column, and what height would a body land on), world-metre
   region selection, and `list-tiles --sheet`. Also records a **substitution worth reading** — the
@@ -870,7 +891,10 @@ original four, entity spawning was M37 and a CPU wave evaluator was M41.) The re
   `impulse_threshold` defaults, and a *decal* where something broke — the one thing a burst cannot
   do, since particles all die. (Dust itself was M44; `designs/fracture-design.md` §7 records the
   reversal and what answered its objection.)
-- **Tile synthesis** (after M47): adjacency **learned from a sample grid** — model synthesis
+- **Tile synthesis** (after M47/M49): constraints checked **inside propagation** rather than by
+  rejection — the real version, which has to decide whether a candidate tile could disconnect a
+  half-decided region, and which is what to build when the measured retry rate says rejection is
+  the bottleneck; adjacency **learned from a sample grid** — model synthesis
   proper infers it from an example arrangement, and this milestone authors sockets instead because
   that is the half an agent can write from a prompt; more part kinds (`arch`, `stairs`, `prism`,
   and a `mesh` part for when you *do* have art); dungeon, street and forest tilesets (a forest wants

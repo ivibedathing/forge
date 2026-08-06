@@ -129,7 +129,7 @@ engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
 engine synthesize <scene.json> [--entity Name] [--seed S]
                   [--region x0,z0,x1,z1 | --at x,z | --around Name] [--radius M]
                   [--block x,z] [--overlap N] [--attempts N] [--out path]
-                  [--write] [--check]
+                  [--reset] [--write] [--check]
                                              # solve a TileGrid's layout by model synthesis
                                              # in overlapping blocks. --region takes cells;
                                              # --at/--around take world metres. Each re-solves
@@ -561,6 +561,21 @@ resolved to as `region`.
 
 A `--radius` of zero is the single cell the point falls in, which still pulls in
 every block overlapping it.
+
+**`--reset` throws the existing layout away and solves from the known-good
+fill, keeping locked cells** (M49). It is needed because a tileset's region
+constraints are enforced by rejecting a block that breaks them, and that
+rejection is **do no harm**: a block is accepted when it does not *increase* the
+violations blamed on it. That is what lets a re-solve converge at all — strict
+rejection cannot, because a region breaking a rule usually extends past every
+block that could be blamed for it. The corollary is that a layout which already
+breaks a rule is never repaired, only kept from worsening, so **adding
+constraints to a tileset changes nothing until `--reset` is passed**.
+
+`rejected` in the report names which constraint turned down how many block
+attempts. One rule doing all the rejecting is either the rule that matters or
+the one that is too tight; either way it is the one to look at. A rule nothing
+can satisfy is a **no-op** rather than a wipe, for the do-no-harm reason above.
 
 **One property this does not have.** A region solve over a block does not
 reproduce what a full solve produced there: in a full scan that block's east and

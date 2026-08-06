@@ -137,9 +137,34 @@ region that is still half-undecided. That is a real algorithm (DeBroglie has
 one) and it is a milestone by itself. Rejection is twenty lines against
 machinery that exists.
 
+### Rejection is *do no harm*, not *be perfect*
+
+Written first as strict rejection — any violation re-rolls the block — and that
+does not converge. Measured: **every block failed every attempt**, at every
+block size from 3×3 to 8×8 and at 20 and 60 attempts, all 380 of them.
+
+The reason is the blame rule below meeting an already-violating layout. A grid
+whose walls form one 60-cell mass has that violation blamed on *every* block
+that touches it, and no block can fix it because most of the mass lies outside
+anything it can change. Strict rejection therefore rejects for ever.
+
+So a block is asked not to **increase** the violations blamed on it. Starting
+from the known-good fill there are none, so a fresh solve is exactly strict; and
+a re-solve of a broken layout can improve or hold rather than falling back to
+nothing.
+
+The corollary is the flag: **an existing violating layout is never repaired**,
+only kept from worsening, so adding constraints to a tileset changes nothing
+until `synthesize --reset` throws the old layout away and solves from the fill
+with the locks still in it. Without that, the feature silently does nothing to
+the very layouts it was built for.
+
 **What it costs** is rejection sampling's usual problem: if a constraint is
 rarely satisfied by chance, every block exhausts its attempts and the grid
-degrades. Three things make that safe rather than silent:
+degrades. Measured on the village: about **thirty attempts a block**, and a
+fully clean solve on roughly one seed in eight — which is why the default
+budget moves from M47's ten to sixty when a tileset carries rules. Three things
+make the rest safe rather than silent:
 
 1. A failed block **reverts** (M47's rule), so the result is still a legal grid
    rather than garbage.

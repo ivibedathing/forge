@@ -1591,3 +1591,10 @@ a turn moves geometry and sockets together, that mating is symmetric across ever
 file's line order is its layout, that every solved cell agrees with all six neighbours, that one
 seed reproduces one village, that a locked cell survives a full re-solve, and that a block which
 cannot be solved gives up and leaves what stood there rather than hanging.
+
+**Updated by M49 (tile constraints).** The fixture's village is now solved under the tileset's own
+region rules, and what it asserts is measured rather than judged: three buildings of 10, 11 and 15
+cells rather than one mass of 60, each with a room in it, on a street that is a single connected
+region. `the_committed_village_is_buildings_rather_than_one_mass` is that census as a test. The seed
+moved from 7 to 41 — about one seed in eight solves with no fallbacks at all — and the layout is now
+reproduced by `engine synthesize --reset --write` rather than by a scratch script.

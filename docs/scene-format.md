@@ -211,6 +211,15 @@ origin at the cell's centre in X and Z and its floor in Y. Each of its six
 | `"x_l"` | `"x_r"` | one half of a mirrored pair |
 | `"x_i"` | ignores the turn | vertical faces only |
 
+A tileset may also carry **`constraints`** (M49): region properties the solver
+must satisfy, which face adjacency cannot state. One shape with four optional
+predicates over a set of tiles named by their authored names — `count` (how many
+cells), `regions` (how many connected regions; `max: 1` is connectivity),
+`region_size` (how big each is) and `region_contains` (what each must hold).
+They are evaluated on the ground layer, 4-connected in XZ, and a terrace step
+does not split a region. Without them the village came out as one 60-cell mass
+and the tour's hamlet as walls enclosing no rooms at all.
+
 `rotations` of 1, 2 or 4 expands the tile over quarter-turns about Y before
 anything else runs; a vertical socket keeps its rotation index unless suffixed
 `_i`. A tileset's own references — a palette entry's `asset`, and that
