@@ -2107,6 +2107,11 @@ struct GridInputs {
     tiles: Vec<engine_core::tileset::ExpandedTile>,
     compat: engine_core::tileset::Compat,
     grid: engine_core::tilelayout::Grid,
+    /// Where the prior layout is read from: always the one the *component*
+    /// names. `--out` redirects the write only — the locks and the layout a
+    /// region solve builds on belong to the scene, not to wherever this run
+    /// happens to be putting its output.
+    source: PathBuf,
     target: PathBuf,
 }
 
@@ -2141,7 +2146,7 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
 
     // The prior layout, when there is one. Locked cells and `--region` both
     // read from it, and both are meaningless without it.
-    let prior = std::fs::read_to_string(&inputs.target)
+    let prior = std::fs::read_to_string(&inputs.source)
         .ok()
         .and_then(|text| engine_core::tilelayout::TileLayout::parse(&text).ok())
         .filter(|layout| layout.header.size == inputs.component.size);
@@ -2159,7 +2164,7 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
                     format!(
                         "the layout at {} places tiles the tileset no longer defines: {}; \
                          delete it to solve from scratch",
-                        inputs.target.display(),
+                        inputs.source.display(),
                         unknown.join(", ")
                     ),
                 )
@@ -2178,7 +2183,7 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
             format!(
                 "--region re-solves part of an existing layout, and there is none at {}; \
                  run `engine synthesize --write` once first",
-                inputs.target.display()
+                inputs.source.display()
             ),
         )
         .entity(&inputs.name)
@@ -2323,9 +2328,10 @@ fn read_grid(args: &SynthesizeArgs) -> Result<GridInputs> {
         size: component.size,
         offsets: scene.tile_grid_offsets(&name, &component, tileset.cell),
     };
+    let source = base_dir.join(&component.layout);
     let target = match &args.out {
         Some(path) => path.clone(),
-        None => base_dir.join(&component.layout),
+        None => source.clone(),
     };
 
     Ok(GridInputs {
@@ -2335,6 +2341,7 @@ fn read_grid(args: &SynthesizeArgs) -> Result<GridInputs> {
         tiles,
         compat,
         grid,
+        source,
         target,
     })
 }
@@ -2498,12 +2505,12 @@ fn inputs_digest(
 
 /// The staleness half, mirroring `check_bake`.
 fn check_layout(args: &SynthesizeArgs, inputs: &GridInputs, digest: &str) -> Result<()> {
-    let text = std::fs::read_to_string(&inputs.target).map_err(|e| {
+    let text = std::fs::read_to_string(&inputs.source).map_err(|e| {
         EngineError::new(
             codes::TILE_LAYOUT_MISSING,
             format!(
                 "could not read {}: {e}; run `engine synthesize --write`",
-                inputs.target.display()
+                inputs.source.display()
             ),
         )
         .entity(&inputs.name)
@@ -2512,7 +2519,7 @@ fn check_layout(args: &SynthesizeArgs, inputs: &GridInputs, digest: &str) -> Res
     let layout = engine_core::tilelayout::TileLayout::parse(&text).map_err(|bad| {
         EngineError::new(
             codes::TILE_LAYOUT_MALFORMED,
-            format!("{}: {bad}", inputs.target.display()),
+            format!("{}: {bad}", inputs.source.display()),
         )
         .entity(&inputs.name)
         .file(args.scene.display().to_string())
@@ -2524,7 +2531,7 @@ fn check_layout(args: &SynthesizeArgs, inputs: &GridInputs, digest: &str) -> Res
             format!(
                 "{} was solved from different inputs (file {}, scene now {}); \
                  re-run `engine synthesize --write`",
-                inputs.target.display(),
+                inputs.source.display(),
                 layout.header.inputs_hash,
                 digest
             ),
@@ -2538,7 +2545,7 @@ fn check_layout(args: &SynthesizeArgs, inputs: &GridInputs, digest: &str) -> Res
         serde_json::json!({
             "scene": args.scene.display().to_string(),
             "entity": inputs.name,
-            "layout": inputs.target.display().to_string(),
+            "layout": inputs.source.display().to_string(),
             "current": true,
             "cells": layout.cells.len(),
             "locked": layout.cells.iter().filter(|c| c.locked).count(),

@@ -416,11 +416,16 @@ impl Grid {
 pub struct Violation {
     pub cell: usize,
     pub face: Face,
-    /// Whether the author pinned this cell. The two cases get different codes:
-    /// an unlocked violation is `tile_layout_illegal` (the file was hand-edited
-    /// into an illegal state, or the solver is broken), a locked one is
-    /// `tile_layout_forced` (the author asserted it, and the engine draws it
-    /// and says so).
+    /// Whether the author pinned **either side** of this interface. The two
+    /// cases get different codes: an unlocked violation is
+    /// `tile_layout_illegal` (the file was hand-edited into an illegal state,
+    /// or the solver is broken), a locked one is `tile_layout_forced` (the
+    /// author asserted it, and the engine draws it and says so).
+    ///
+    /// Either side, not this cell alone. Pinning a floor out in the open makes
+    /// the surrounding cobble break too, and telling the author that their
+    /// neighbours are corrupt when they are the collateral of a lock the author
+    /// wrote is the report pointing at the wrong file.
     pub locked: bool,
     /// What the offending face is up against, for the message.
     pub against: Option<usize>,
@@ -455,14 +460,17 @@ pub fn verify_adjacency(
                 Neighbour::Open => true,
             };
             if !ok {
+                let against = match grid.neighbour(cell, face) {
+                    Neighbour::Cell(other) => Some(other),
+                    _ => None,
+                };
+                let locked = layout.cells[cell].locked
+                    || against.is_some_and(|other| layout.cells[other].locked);
                 violations.push(Violation {
                     cell,
                     face,
-                    locked: layout.cells[cell].locked,
-                    against: match grid.neighbour(cell, face) {
-                        Neighbour::Cell(other) => Some(other),
-                        _ => None,
-                    },
+                    locked,
+                    against,
                 });
             }
         }

@@ -4069,6 +4069,33 @@
       ]
     },
     {
+      "name": "Hamlet",
+      "components": [
+        {
+          "type": "Transform",
+          "position": [
+            -46.0,
+            0.0,
+            2.0
+          ]
+        },
+        {
+          "type": "TileGrid",
+          "tileset": "../tilesets/village.json",
+          "layout": "layouts/tour_village.tiles.json",
+          "size": [
+            7,
+            2,
+            6
+          ],
+          "seed": 4,
+          "fill_ground": "cobble",
+          "fill_background": "air",
+          "ground": "Ground"
+        }
+      ]
+    },
+    {
       "name": "Runner",
       "components": [
         {

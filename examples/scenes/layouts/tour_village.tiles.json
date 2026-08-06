@@ -1,0 +1,13 @@
+{"format":"forge-tiles-1","scene":"showcase_tour.json","entity":"Hamlet","tileset":"../tilesets/village.json","tileset_hash":"36e7d9142ab87e1c","inputs_hash":"e5eba5770292c9c6","size":[7,2,6],"seed":4,"block":[8,4294967295,8],"overlap":1,"attempts":10,"fallbacks":0,"offsets":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}
+{"y":0,"z":0,"row":"wall@3 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 corner@1"}
+{"y":0,"z":1,"row":"corner@1 corner@3 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0"}
+{"y":0,"z":2,"row":"cobble@0 corner@1 wall@0 corner@3 cobble@0 cobble@0 cobble@0"}
+{"y":0,"z":3,"row":"wall_window@0 wall_window@0 wall_window@2 corner@2 cobble@0 post@0 cobble@0"}
+{"y":0,"z":4,"row":"wall@2 wall_window@2 wall@0 wall@0 wall@0 wall@0 wall@0"}
+{"y":0,"z":5,"row":"cobble@0 corner@0 wall_window@2 wall@2 wall_window@2 wall_door@2 wall@2"}
+{"y":1,"z":0,"row":"roof_gable@0 air@0 air@0 air@0 air@0 air@0 roof_gable@1"}
+{"y":1,"z":1,"row":"roof_gable@0 roof_gable@1 air@0 air@0 air@0 air@0 air@0"}
+{"y":1,"z":2,"row":"air@0 roof_gable@1 roof_gable@0 roof_gable@0 air@0 air@0 air@0"}
+{"y":1,"z":3,"row":"roof_gable@0 roof_gable@1 roof_gable@0 roof_gable@1 air@0 air@0 air@0"}
+{"y":1,"z":4,"row":"roof_gable@0 roof_gable@1 chimney@0 roof_gable@1 roof_gable@0 roof_gable@1 roof_gable@0"}
+{"y":1,"z":5,"row":"air@0 roof_gable@0 roof_gable@1 roof_gable@0 roof_gable@0 roof_gable@1 roof_gable@0"}

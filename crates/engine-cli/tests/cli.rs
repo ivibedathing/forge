@@ -7801,3 +7801,391 @@ fn bake_gi_check_refuses_an_output_path() {
     assert_eq!(output.status.code(), Some(2), "{lines:?}");
     assert_eq!(codes_of(&lines), ["invalid_invocation"]);
 }
+
+// ── Tile synthesis (M47) ───────────────────────────────────────────────────
+//
+// The properties a picture cannot state. The render pin says the village looks
+// the way it looked; these say the solve is reproducible, that a region edit is
+// *local*, and that a lock is a lock — which is the whole point of a committed
+// layout rather than a roll of the dice at load.
+
+const M47_SCENE: &str = "examples/scenes/verify/m47_tiles.json";
+const M47_LAYOUT: &str = "examples/scenes/verify/layouts/m47_village.tiles.json";
+
+fn tile_scratch(test: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("engine-m47-{}-{test}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// One `engine synthesize` run writing into a scratch file, so no test touches
+/// the committed layout.
+fn synthesize_into(dir: &Path, args: &[&str]) -> serde_json::Value {
+    let mut command = engine();
+    command
+        .arg("synthesize")
+        .arg(repo_path(M47_SCENE))
+        .arg("--out")
+        .arg(dir.join("layout.tiles.json"))
+        .arg("--write");
+    for arg in args {
+        command.arg(arg);
+    }
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    json_out(&output)
+}
+
+/// The layout's rows keyed `(y, z)`, for comparing two solves cell by cell.
+fn layout_rows(path: &Path) -> std::collections::BTreeMap<(u64, u64), Vec<String>> {
+    let text = std::fs::read_to_string(path).unwrap();
+    text.lines()
+        .skip(1)
+        .filter(|l| !l.trim().is_empty())
+        .map(|line| {
+            let row: serde_json::Value = serde_json::from_str(line).unwrap();
+            (
+                (row["y"].as_u64().unwrap(), row["z"].as_u64().unwrap()),
+                row["row"]
+                    .as_str()
+                    .unwrap()
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_m47_tiles_fixture_matches_its_baseline() {
+    pin_baseline(
+        "examples/scenes/verify/m47_tiles.json",
+        "examples/scenes/verify/baselines/m47_tiles.png",
+        &["--steps", "240"],
+    );
+}
+
+/// A committed layout is a function of its inputs, so re-running the solve on
+/// an unchanged scene must leave the file byte for byte as it was. Without
+/// this every `synthesize` is a diff, and the artifact stops being reviewable.
+#[test]
+fn the_committed_layout_is_what_the_solver_produces() {
+    let dir = tile_scratch("stable");
+    synthesize_into(&dir, &[]);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("layout.tiles.json")).unwrap(),
+        std::fs::read_to_string(repo_path(M47_LAYOUT)).unwrap(),
+        "re-solving the fixture must reproduce the committed layout exactly"
+    );
+}
+
+#[test]
+fn the_same_seed_solves_the_same_village_twice() {
+    let dir = tile_scratch("twice");
+    synthesize_into(&dir, &["--seed", "31"]);
+    let once = std::fs::read_to_string(dir.join("layout.tiles.json")).unwrap();
+    synthesize_into(&dir, &["--seed", "31"]);
+    assert_eq!(
+        once,
+        std::fs::read_to_string(dir.join("layout.tiles.json")).unwrap()
+    );
+
+    synthesize_into(&dir, &["--seed", "32"]);
+    assert_ne!(
+        once,
+        std::fs::read_to_string(dir.join("layout.tiles.json")).unwrap(),
+        "and a different seed does not"
+    );
+}
+
+/// **Requirement 3, as a property.** A region re-solve changes cells inside the
+/// blocks it selected and none outside them — which is what makes "change this
+/// corner of the village" an edit rather than a re-roll.
+#[test]
+fn a_region_re_solve_leaves_the_rest_of_the_village_alone() {
+    let dir = tile_scratch("region");
+    synthesize_into(&dir, &[]);
+    let before = layout_rows(&dir.join("layout.tiles.json"));
+
+    // A different seed, so anything the region *may* touch visibly does.
+    let report = synthesize_into(&dir, &["--region", "0,0,2,2", "--seed", "404"]);
+    let after = layout_rows(&dir.join("layout.tiles.json"));
+
+    assert!(
+        report["solved"].as_u64().unwrap() < report["blocks"].as_u64().unwrap(),
+        "the region must select a subset of the blocks: {report}"
+    );
+
+    let mut changed = 0;
+    for (key, row) in &before {
+        for (x, (was, is)) in row.iter().zip(&after[key]).enumerate() {
+            if was != is {
+                changed += 1;
+                // The fixture's blocks are 8 wide with an overlap of 1, so the
+                // block holding 0,0..2,2 spans x 0..7 — the only cells reachable.
+                assert!(x < 8, "cell x={x} moved and no selected block holds it");
+            }
+        }
+    }
+    assert!(changed > 0, "the re-solve did something");
+}
+
+/// A `!` in the layout is a hard constraint the solver never re-picks, so a
+/// hand-authored cottage survives a *full* re-solve at another seed. This is
+/// the smallest possible version of editing a generated world.
+#[test]
+fn locked_cells_survive_a_full_re_solve() {
+    let dir = tile_scratch("locked");
+    synthesize_into(&dir, &[]);
+    let before = layout_rows(&dir.join("layout.tiles.json"));
+    let locked: Vec<((u64, u64), usize, String)> = before
+        .iter()
+        .flat_map(|(key, row)| {
+            row.iter()
+                .enumerate()
+                .filter(|(_, cell)| cell.starts_with('!'))
+                .map(move |(x, cell)| (*key, x, cell.clone()))
+        })
+        .collect();
+    assert!(
+        locked.len() >= 9,
+        "the fixture pins a cottage; found {} locked cells",
+        locked.len()
+    );
+
+    synthesize_into(&dir, &["--seed", "9001"]);
+    let after = layout_rows(&dir.join("layout.tiles.json"));
+    for (key, x, cell) in locked {
+        assert_eq!(after[&key][x], cell, "locked cell at {key:?} x={x} moved");
+    }
+}
+
+/// The committed layout is current, and saying so **writes nothing** — the
+/// property that lets a contract test run it, and `bake_gi_check_passes_on_a_
+/// current_bake`'s shape.
+#[test]
+fn synthesize_check_passes_on_the_committed_layout() {
+    let committed = repo_path(M47_LAYOUT);
+    let before = std::fs::read(&committed).expect("the fixture's layout is committed");
+
+    let output = engine()
+        .arg("synthesize")
+        .arg(repo_path(M47_SCENE))
+        .arg("--check")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let report = json_out(&output);
+    assert_eq!(report["current"], true);
+    assert_eq!(report["entity"], "Village");
+    assert_eq!(
+        std::fs::read(&committed).unwrap(),
+        before,
+        "--check must not write; it just did"
+    );
+}
+
+/// A scene whose grid has moved under its layout is caught by `--check` rather
+/// than by a village that quietly disagrees with its own terrain — the
+/// `gi_bake_stale` mirror, and the reason this check is not in `validate`.
+#[test]
+fn synthesize_check_reports_a_stale_layout() {
+    let dir = tile_scratch("stale");
+    std::fs::create_dir_all(dir.join("layouts")).unwrap();
+    std::fs::copy(
+        repo_path("examples/tilesets/village.json"),
+        dir.join("village.json"),
+    )
+    .unwrap();
+    std::fs::copy(
+        repo_path(M47_LAYOUT),
+        dir.join("layouts/m47_village.tiles.json"),
+    )
+    .unwrap();
+
+    // Same layout, a scene that now asks for a different seed.
+    let scene = std::fs::read_to_string(repo_path(M47_SCENE))
+        .unwrap()
+        .replace("../../tilesets/village.json", "village.json")
+        .replace("\"seed\": 7", "\"seed\": 8");
+    let scene_path = dir.join("m47.json");
+    std::fs::write(&scene_path, scene).unwrap();
+
+    let output = engine()
+        .arg("synthesize")
+        .arg(&scene_path)
+        .arg("--check")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(codes_of(&stderr_lines(&output)), ["tile_layout_stale"]);
+}
+
+/// `--check` writes nothing, so `--out` has nothing to name — the guard
+/// `bake-gi --check` carries, for the same reason.
+#[test]
+fn synthesize_check_refuses_an_output_path() {
+    let output = engine()
+        .arg("synthesize")
+        .arg(repo_path(M47_SCENE))
+        .arg("--check")
+        .arg("--out")
+        .arg(std::env::temp_dir().join("never_written.tiles.json"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(codes_of(&stderr_lines(&output)), ["invalid_invocation"]);
+}
+
+#[test]
+fn a_region_that_reaches_past_the_grid_is_refused() {
+    let output = engine()
+        .arg("synthesize")
+        .arg(repo_path(M47_SCENE))
+        .arg("--region")
+        .arg("0,0,99,99")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(codes_of(&stderr_lines(&output)), ["invalid_invocation"]);
+}
+
+/// `list-tiles` is what makes a tileset authorable from a prompt: the socket
+/// graph is a constraint problem rather than a description, so the linter has
+/// to say which face has nobody to mate.
+#[test]
+fn list_tiles_reports_every_expansion_and_its_partners() {
+    let output = engine()
+        .arg("list-tiles")
+        .arg(repo_path("examples/tilesets/village.json"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let report = json_out(&output);
+
+    assert_eq!(report["authored"], 10);
+    assert_eq!(report["expanded"], 23, "rotations expand before the solver");
+
+    // Authored order, then rotation — cobble, post and floor take one turn
+    // each, so `wall`'s four start at index 3. The order is a format contract:
+    // the solver's bitsets index into this list.
+    let tiles = report["tiles"].as_array().unwrap();
+    assert_eq!(tiles[0]["token"], "cobble@0");
+    assert_eq!(tiles[3]["token"], "wall@0");
+    assert_eq!(tiles[5]["token"], "wall@2");
+
+    // Every face of every tile has somebody to sit against, which is the
+    // property `engine validate` reports as `tile_socket_orphaned`.
+    for tile in tiles {
+        for face in ["px", "nx", "py", "ny", "pz", "nz"] {
+            assert!(
+                tile["faces"][face]["partners"].as_u64().unwrap() > 0,
+                "{} has no partner across {face}",
+                tile["token"]
+            );
+        }
+    }
+}
+
+/// An orphaned socket is a warning, not an error: the tileset works, it just
+/// holds a tile that can never appear. Reporting it by name is the difference
+/// between "the village came out empty" and a one-character fix.
+#[test]
+fn validate_warns_about_a_socket_with_no_partner() {
+    let dir = tile_scratch("orphan");
+    let path = dir.join("broken.json");
+    std::fs::write(
+        &path,
+        r#"{"tiles": [
+             {"name": "a", "faces": {"px": "join"}},
+             {"name": "b", "faces": {"px": "jion"}}
+           ]}"#,
+    )
+    .unwrap();
+
+    let output = engine().arg("validate").arg(&path).output().unwrap();
+    let lines = stderr_lines(&output);
+    assert_eq!(output.status.code(), Some(0), "a warning is still valid");
+    assert!(
+        lines.iter().any(|l| l["error"] == "tile_socket_orphaned"
+            && l["message"].as_str().unwrap().contains("\"join\"")),
+        "{lines:?}"
+    );
+
+    // And `--strict` promotes it, which is what CI runs.
+    let strict = engine()
+        .arg("validate")
+        .arg(&path)
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert_eq!(strict.status.code(), Some(1));
+}
+
+/// A tileset is routed by *shape* — a top-level `tiles`, no `entities` — the
+/// way clip and material files already are.
+#[test]
+fn a_tileset_validates_as_its_own_file_kind() {
+    let output = engine()
+        .arg("validate")
+        .arg(repo_path("examples/tilesets/village.json"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    assert_eq!(json_out(&output)["valid"], true);
+}
+
+/// A layout the tileset could not have produced is an error when the cell is
+/// free and a warning when the author pinned it. That split is what lets an
+/// author assert something odd without the engine calling it a bug.
+#[test]
+fn an_illegal_cell_is_an_error_and_a_forced_one_is_a_warning() {
+    let dir = tile_scratch("illegal");
+    std::fs::create_dir_all(dir.join("layouts")).unwrap();
+
+    // The fixture, copied somewhere writable. The tileset comes with it rather
+    // than being pointed at: an asset reference must stay relative to the
+    // scene (invariant 3), so an absolute path into the checkout is refused.
+    std::fs::copy(
+        repo_path("examples/tilesets/village.json"),
+        dir.join("village.json"),
+    )
+    .unwrap();
+    let scene = std::fs::read_to_string(repo_path(M47_SCENE))
+        .unwrap()
+        .replace("../../tilesets/village.json", "village.json");
+    let scene_path = dir.join("m47.json");
+    std::fs::write(&scene_path, scene).unwrap();
+
+    // The header names the tileset too, and `tile_layout_mismatch` compares
+    // the two — so the copy has to say the same thing the copied scene does.
+    let layout = std::fs::read_to_string(repo_path(M47_LAYOUT))
+        .unwrap()
+        .replace("../../tilesets/village.json", "village.json");
+    let layout_path = dir.join("layouts/m47_village.tiles.json");
+
+    // A `floor` out in the open: its four `in` sockets meet cobble's `out`.
+    std::fs::write(&layout_path, layout.replacen("cobble@0", "floor@0", 1)).unwrap();
+    let output = engine().arg("validate").arg(&scene_path).output().unwrap();
+    assert!(
+        codes_of(&stderr_lines(&output)).contains(&"tile_layout_illegal".to_string()),
+        "{:?}",
+        stderr_lines(&output)
+    );
+    assert_eq!(output.status.code(), Some(1));
+
+    // The same cell, locked: the author asserted it, so the engine draws it
+    // and says so.
+    std::fs::write(&layout_path, layout.replacen("cobble@0", "!floor@0", 1)).unwrap();
+    let forced = engine().arg("validate").arg(&scene_path).output().unwrap();
+    let lines = stderr_lines(&forced);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l["error"] == "tile_layout_forced" && l["severity"] == "warning"),
+        "{lines:?}"
+    );
+    assert_eq!(forced.status.code(), Some(0), "a warning is still valid");
+}
