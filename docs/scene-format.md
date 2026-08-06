@@ -193,3 +193,70 @@ separate documents with their own schemas, and `engine validate` accepts both
 directly. A material file is referenced by `Material.asset`, which is exclusive
 with every other field on that component — a shared material cannot be tinted
 per entity, by design.
+
+Since M47 there are two more, both named by a `TileGrid`, and both routed by
+**shape** rather than by filename the way clips and materials are:
+
+**A tileset (`tilesets/*.json`)** holds a `cell` size in metres, a `palette` of
+named materials, and a list of `tiles`. A tile is *grown, not modelled*: it
+carries parametric `parts` — `box`, `wedge`, `cylinder` — in the same `at`
+(centre) and `size` (full extent) metres a `Transform` uses, cell-local with the
+origin at the cell's centre in X and Z and its floor in Y. Each of its six
+`faces` carries a socket string saying what may sit against it:
+
+| Written | Mates | Meaning |
+|---|---|---|
+| `"0"` | `"0"` | nothing here; reserved |
+| `"x"` | `"x"` | symmetric — the common case, so it has no suffix |
+| `"x_l"` | `"x_r"` | one half of a mirrored pair |
+| `"x_i"` | ignores the turn | vertical faces only |
+
+A tileset may also carry **`constraints`** (M49): region properties the solver
+must satisfy, which face adjacency cannot state. One shape with four optional
+predicates over a set of tiles named by their authored names — `count` (how many
+cells), `regions` (how many connected regions; `max: 1` is connectivity),
+`region_size` (how big each is) and `region_contains` (what each must hold).
+They are evaluated on the ground layer, 4-connected in XZ, and a terrace step
+does not split a region. Without them the village came out as one 60-cell mass
+and the tour's hamlet as walls enclosing no rooms at all.
+
+`rotations` of 1, 2 or 4 expands the tile over quarter-turns about Y before
+anything else runs; a vertical socket keeps its rotation index unless suffixed
+`_i`. A tileset's own references — a palette entry's `asset`, and that
+material's texture maps — are relative to **the tileset file**, which is what
+makes one shareable, and they are rebased onto the scene at load.
+
+**A layout (`layouts/*.tiles.json`)** is the solved grid, written by
+`engine synthesize`: NDJSON, a header object then one line per grid row, cells
+`name@rotation` separated by spaces. **The line order is the layout** — x
+fastest, then z, then y — and it is checked, because a permuted file parses as
+valid JSON and renders a wrong world. A `!` before a token locks that cell: a
+hard constraint the solver never re-picks, byte-identical after a full re-solve,
+and the way an author says "the door goes *there*".
+
+The grid's **vertical ends are closed and its horizontal edges are open** by
+default: a patch is a window onto a larger world sideways, but there is no
+storey below the ground or above the sky. That single rule is what keeps roofs
+off the ground floor without any tile having to say so. Since M51 the
+component may say `"edges": "closed"`, which constrains every free edge — the
+border **and** every terrace seam — as the fill pair (street at ground, air
+above), so a structure must complete inside the grid and on its own terrace.
+Closed is what keeps a village's houses whole; open remains the default and is
+M47 exactly.
+
+**A locked floor cell is a building plot** (M51). Under a tileset whose floors
+only mate wall interiors, a `!floor@0` in the layout forces propagation to
+grow a complete house around it — which is the reliable way to *place*
+buildings, since a constraint solver rarely completes a large structure by
+luck. `clear_tiles` and `--reset` both keep locks, so plots survive every
+rebuild.
+
+Since M50 a script can re-solve part of a grid while the scene runs:
+`world.synthesize("Village", x, z, radius)` re-solves the blocks meeting a
+world-space disc — with an optional fifth argument for the seed — and
+`world.clear_tiles("Village")` puts every unlocked cell back to the tileset's
+fill, keeping the locks. Both are queued and applied between the scripts and
+physics, like `world.spawn_entity`. **The layout file is still where a run
+starts and nothing writes back**, so a runtime arrangement lives only in the
+run; `engine tile-grid --steps N` is how to read one. A `TileGrid` carrying a
+`Collider` is refused, because its geometry is also a physics trimesh.

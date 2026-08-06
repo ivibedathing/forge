@@ -22,6 +22,17 @@ pub fn scene_schema() -> Value {
     to_value(schemars::schema_for!(SceneFile))
 }
 
+/// Schema for a tileset file (M47).
+///
+/// A tileset is a file kind of its own rather than a component's contents, so
+/// it has no `oneOf` variant to be lifted out of — but it drives the same
+/// `walk_component` field check every component does, which is what gives it
+/// unknown-field `did_you_mean`, closed-vocabulary part kinds and numeric
+/// ranges without a line of bespoke checking.
+pub fn tileset_schema() -> Value {
+    to_value(schemars::schema_for!(crate::tileset::Tileset))
+}
+
 /// Both schemas, as `engine list-components` emits them.
 pub fn full_schema() -> Value {
     serde_json::json!({

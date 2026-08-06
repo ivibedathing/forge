@@ -471,6 +471,23 @@ impl PhysicsWorld {
                     },
                 );
             }
+            // A tile grid's village (M47), merged across every palette — the
+            // per-material split is a *rendering* product, and physics wants
+            // one mesh per entity name. Grown once at load by
+            // `resolve_scene_tile_grids`, so the collided village and the drawn
+            // one are the same vertices rather than two builds of them.
+            for (name, solid) in world
+                .query::<(&Name, &engine_core::scene::ResolvedTileGrid)>()
+                .iter()
+            {
+                surfaces.insert(
+                    name.0.clone(),
+                    GeneratedSurface {
+                        kind: "TileGrid",
+                        mesh: std::sync::Arc::clone(&solid.0.collision),
+                    },
+                );
+            }
             surfaces
         };
 
@@ -1960,12 +1977,13 @@ fn build_collider(
         }
         ColliderShapeKind::Trimesh | ColliderShapeKind::ConvexHull => {
             // Geometry comes from the explicit asset, else the entity's own
-            // Mesh, else a surface the entity *generates*: its Terrain (M22) or
-            // its Road (M23). Those last two are how ground and asphalt become
-            // collidable without a mesh file duplicating what the renderer
-            // already draws — and, for a road, they are what makes the surface
-            // driven and the surface drawn impossible to author apart.
-            let (asset, mesh, from_road) = match (
+            // Mesh, else a surface the entity *generates*: its Terrain (M22),
+            // its Road (M23) or its TileGrid (M47). Those are how ground,
+            // asphalt and a village become collidable without a mesh file
+            // duplicating what the renderer already draws — and they are what
+            // makes the surface driven and the surface drawn impossible to
+            // author apart.
+            let (asset, mesh, merge_internal_edges) = match (
                 collider.asset.as_deref().or(entity_mesh),
                 terrain,
                 generated,
@@ -1987,10 +2005,12 @@ fn build_collider(
                 (None, None, Some(generated)) => (
                     format!("the {} on {entity:?}", generated.kind),
                     std::sync::Arc::clone(&generated.mesh),
-                    // A junction's patch is road-generated geometry too:
-                    // the same coplanar-triangle contact bug is waiting on
-                    // it, and a car crossing a junction is exactly the case
-                    // that finds it.
+                    // Every generated surface takes the edge merge. A
+                    // junction's patch is road geometry and a car crossing one
+                    // is exactly the case that finds the bug; a **tiled floor**
+                    // is the canonical coplanar case, since every slab is flush
+                    // with its neighbours and anything standing on one is
+                    // resting across a shared edge.
                     true,
                 ),
                 (None, None, None) => {
@@ -2020,15 +2040,15 @@ fn build_collider(
                     // implies `MERGE_DUPLICATE_VERTICES`, which also welds the
                     // crease vertices a road's surface and skirt do not share.
                     //
-                    // **Only** road-generated geometry, deliberately. Every
-                    // other trimesh keeps the flags it has had since M12,
+                    // **Only** generated geometry, deliberately. Every
+                    // authored trimesh keeps the flags it has had since M12,
                     // because turning this on for all of them moves an existing
                     // baseline: the ball in `verify/m22_terrain.json` comes to
                     // rest ~20 cm away, which is 1339 pixels of a fixture this
                     // milestone has no business touching. Terrain has the same
                     // latent bug and should probably take the same flag — as
                     // its own change, with its own re-blessed baseline.
-                    let flags = if from_road {
+                    let flags = if merge_internal_edges {
                         rapier3d::geometry::TriMeshFlags::FIX_INTERNAL_EDGES
                     } else {
                         rapier3d::geometry::TriMeshFlags::empty()

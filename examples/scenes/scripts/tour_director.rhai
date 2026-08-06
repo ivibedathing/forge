@@ -12,16 +12,34 @@
 //   station 2 360-539    water/ice   PBR response, scripted waves, spray
 //   station 3 540-719    breaking    rigid bodies, fragments, explosion
 //   station 4 720-899    the world   vehicle, wheels, HUD, camera
-//   leg 5     900-1079   the way back, and then the whole thing again
+//   leg 5     900-1079   west to the hamlet, which is bare ground by now
+//   leg 6    1080-1259   it builds itself, solved live, while the camera
+//                        crosses it (M50)
+//   leg 7    1260-1439   the way back, and then the whole thing again
 //
-// Past step 900 the camera neither stops nor parks. Leg 5 flies it from the
-// wide finale back down to the forest, and the tour repeats on a 1080-step
-// lap. That return leg is the whole reason the path is a *cycle* of six legs
-// over seven keys (the seventh is the first again) rather than five legs that
-// clamp at the last one — clamping is what made the finale replay its own
-// three seconds over and over while everything else in the world kept moving.
+// The village gets two legs because it needs both: an approach, since the aim
+// only swings to a new subject at 62% of a leg and a village arrived at is a
+// village already built; and a crossing, whose aim is *constant* — the only
+// leg whose two aim keys are the same point — so the hamlet stays centred for
+// the whole three seconds it takes to solve.
+//
+// Past step 900 the camera neither stops nor parks, and the tour repeats on a
+// 1440-step lap. That return leg is the whole reason the path is a *cycle* of
+// eight legs over nine keys (the ninth is the first again) rather than five
+// legs that clamp at the last one — clamping is what made the finale replay
+// its own three seconds over and over while everything else in the world kept
+// moving.
 // Nothing resets on a new lap: the crates stay broken, the fire keeps burning,
-// the truck keeps circling. The camera is the only thing that comes round.
+// the truck keeps circling. The camera is the only thing that comes round —
+// and the village, which is rebuilt from scratch on every lap and comes out
+// different each time, because its seed advances with the step rather than
+// with the lap position.
+//
+// `total` stays 900: the tour *proper* is still the five stations in fifteen
+// seconds, and the village is on the way home. That is also what keeps every
+// frame before step 900 arithmetically identical to the run six baselines were
+// blessed from — the counter's denominator is the only thing a new leg could
+// have moved, and it does not move.
 
 fn ease(t) {
     if t < 0.0 { t = 0.0; }
@@ -36,9 +54,9 @@ fn mix3(a, b, t) {
 fn step(world, step) {
     let seg = 180;
     let total = 900;    // the tour proper: five stations
-    let cycle = 1080;   // one lap of the loop: those five legs plus the way home
+    let cycle = 1440;   // one lap: five stations, two village legs, the way home
 
-    // Seven camera keys for six legs: each station's framing, the next one's,
+    // Nine camera keys for eight legs: each station's framing, the next one's,
     // and finally the first one again so the path closes. The camera is
     // *always* travelling; only the aim settles.
     let eyes = [
@@ -48,6 +66,8 @@ fn step(world, step) {
         [ -1.6,  3.8,  23.5],
         [  3.0, 14.0,  40.0],
         [-20.0, 23.0,  36.0],
+        [-30.0, 16.0,  30.0],
+        [-64.0, 14.0, -14.0],
         [-27.0,  7.5, -20.5],
     ];
     let aims = [
@@ -57,6 +77,8 @@ fn step(world, step) {
         [ -1.0, 1.2,  15.0],
         [  0.0, 3.0,   8.0],
         [  0.0, 3.0,   2.0],
+        [-46.0, 3.0,   2.0],
+        [-46.0, 3.0,   2.0],
         [-13.0, 2.5, -10.0],
     ];
     let titles = [
@@ -65,7 +87,9 @@ fn step(world, step) {
         "03 WATER AND ICE",
         "04 BREAKING",
         "05 THE WHOLE WORLD",
-        "06 THE WAY BACK",
+        "06 TO THE VILLAGE",
+        "07 TILE SYNTHESIS",
+        "08 THE WAY BACK",
     ];
     let systems = [
         "MESHES . GLTF . MATERIALS . LIGHTING . ANIMATION",
@@ -73,6 +97,8 @@ fn step(world, step) {
         "GERSTNER WAVES . DEPTH . REFRACTION . FOAM . SPRAY . FROST",
         "RIGID BODIES . COLLISION . FRAGMENTS . BLAST",
         "VEHICLE . WHEELS . HUD . CAMERA . ALL OF IT",
+        "TILESETS . SOCKETS . A GRID WITH NOTHING IN IT",
+        "336 CELLS . SOLVED IN BLOCKS . WHILE YOU WATCH",
         "NOTHING RESET . THE WORLD KEPT RUNNING",
     ];
 
@@ -109,6 +135,40 @@ fn step(world, step) {
     if step == 545 { world.set_linear_velocity("Boulder", 13.0, 0.0, 0.0); }
     if step == 600 { world.break_entity("IcePillar"); }
     if step == 636 { world.explode(-1.0, 0.9, 15.0, 6.5, 210.0); }
+
+    // Stations 06 and 07: the village builds itself, solved live (M50).
+    //
+    // The clear fires at the top of the approach, while the camera is still
+    // 60 m away and aimed at the arena, so what the aim finds when it swings is
+    // bare cobble — and the village then grows across it rather than blinking
+    // into place. From the fill the solve is strict (M49's do-no-harm rule has
+    // no violations to preserve), which is why this builds rather than churns.
+    //
+    // `p`, not `step`, because the leg is a position on the lap. The *seed* is
+    // the other way round on purpose: it advances with the step, so lap two
+    // grows a different village on the same ground, which a still layout
+    // cannot show and is the whole reason this is a station.
+    if p == 900 { world.clear_tiles("Hamlet"); }
+    if p >= 1080 && p < 1260 && (p - 1080) % 44 == 0 {
+        // One call per **block**, not a raster of discs (M51). A disc
+        // re-solves the whole blocks it meets, so overlapping discs re-roll a
+        // block repeatedly and the houses flicker through arrangements. The
+        // committed layout is solved at block 8,7 — four quadrants — and the
+        // four discs below are the quadrants' plot positions at radius 1, so
+        // each quadrant is solved exactly once per lap and the hamlet builds
+        // house by house while the camera crosses it.
+        //
+        // The plots themselves are locked floor cells in the layout file:
+        // `clear_tiles` keeps locks, and the sockets then force a whole house
+        // to grow around each plot — which is what makes a lap's rebuild
+        // houses rather than junk. The seed still advances with the step, so
+        // every lap's houses differ in shape; only their plots hold still.
+        let quadrant = (p - 1080) / 44;
+        if quadrant == 0 { world.synthesize("Hamlet", -53.0, -1.0, 1.0, 900 + step); }
+        if quadrant == 1 { world.synthesize("Hamlet", -39.0, -1.0, 1.0, 900 + step); }
+        if quadrant == 2 { world.synthesize("Hamlet", -53.0,  9.0, 1.0, 900 + step); }
+        if quadrant == 3 { world.synthesize("Hamlet", -39.0,  9.0, 1.0, 900 + step); }
+    }
 
     // Blast dust: one second of it, then silence. An emitter that cannot be
     // switched off would have to smoulder through the other four stations.

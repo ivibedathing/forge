@@ -441,6 +441,35 @@ pub(super) fn check_value(
                 return false;
             };
 
+            // A map-typed field (`Tileset.palette`, a `BTreeMap<String, _>`)
+            // publishes `additionalProperties` and no `properties` at all: its
+            // keys are data, so every one of them would otherwise report as
+            // `unknown_field`. Check the values against the one item schema and
+            // leave the keys alone. No component has a map field, so this arm
+            // is unreachable for everything that predates M47.
+            if schema["properties"].is_null() {
+                if let Some(item) = schema.get("additionalProperties") {
+                    if item.is_object() {
+                        let item = schemas.resolve(item);
+                        let mut clean = true;
+                        for (key, entry) in map {
+                            clean &= check_value(
+                                cx,
+                                schemas,
+                                item,
+                                entry,
+                                component,
+                                entity,
+                                key,
+                                &format!("{json_path}/{key}"),
+                                errors,
+                            );
+                        }
+                        return clean;
+                    }
+                }
+            }
+
             let empty = Map::new();
             let properties = schema["properties"].as_object().unwrap_or(&empty);
             let mut clean = true;

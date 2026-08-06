@@ -1,0 +1,909 @@
+{
+  "cell": [
+    2.0,
+    2.5,
+    2.0
+  ],
+  "palette": {
+    "cobble": {
+      "albedo": [
+        0.3,
+        0.29,
+        0.28
+      ],
+      "roughness": 0.92
+    },
+    "plaster": {
+      "albedo": [
+        0.62,
+        0.58,
+        0.5
+      ],
+      "roughness": 0.95
+    },
+    "thatch": {
+      "albedo": [
+        0.34,
+        0.25,
+        0.12
+      ],
+      "roughness": 0.9
+    },
+    "timber": {
+      "albedo": [
+        0.19,
+        0.12,
+        0.07
+      ],
+      "roughness": 0.8
+    }
+  },
+  "constraints": [
+    {
+      "name": "a building, not a curtain wall",
+      "tiles": [
+        "wall",
+        "wall_door",
+        "wall_window",
+        "corner",
+        "floor"
+      ],
+      "region_size": {
+        "min": 9,
+        "max": 18
+      },
+      "region_contains": {
+        "tiles": [
+          "floor"
+        ],
+        "min": 1
+      }
+    },
+    {
+      "name": "a house has four corners",
+      "tiles": [
+        "wall",
+        "wall_door",
+        "wall_window",
+        "corner",
+        "floor"
+      ],
+      "region_contains": {
+        "tiles": [
+          "corner"
+        ],
+        "min": 4,
+        "max": 4
+      }
+    },
+    {
+      "name": "every house has a door",
+      "tiles": [
+        "wall",
+        "wall_door",
+        "wall_window",
+        "corner",
+        "floor"
+      ],
+      "region_contains": {
+        "tiles": [
+          "wall_door"
+        ],
+        "min": 1
+      }
+    },
+    {
+      "name": "the street reaches every door",
+      "tiles": [
+        "cobble",
+        "post"
+      ],
+      "regions": {
+        "max": 1
+      }
+    }
+  ],
+  "tiles": [
+    {
+      "name": "cobble",
+      "weight": 11.0,
+      "rotations": 1,
+      "faces": {
+        "px": "out",
+        "nx": "out",
+        "pz": "out",
+        "nz": "out",
+        "py": "sky_i",
+        "ny": "0"
+      },
+      "parts": [
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            -1.45,
+            0.0
+          ],
+          "size": [
+            2.0,
+            2.9,
+            2.0
+          ],
+          "material": "cobble"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            0.06,
+            0.0
+          ],
+          "size": [
+            2.0,
+            0.12,
+            2.0
+          ],
+          "material": "cobble"
+        }
+      ]
+    },
+    {
+      "name": "post",
+      "weight": 0.8,
+      "rotations": 1,
+      "faces": {
+        "px": "out",
+        "nx": "out",
+        "pz": "out",
+        "nz": "out",
+        "py": "sky_i",
+        "ny": "0"
+      },
+      "parts": [
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            -1.45,
+            0.0
+          ],
+          "size": [
+            2.0,
+            2.9,
+            2.0
+          ],
+          "material": "cobble"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            0.06,
+            0.0
+          ],
+          "size": [
+            2.0,
+            0.12,
+            2.0
+          ],
+          "material": "cobble"
+        },
+        {
+          "kind": "cylinder",
+          "at": [
+            0.0,
+            1.2,
+            0.0
+          ],
+          "size": [
+            0.26,
+            2.16,
+            0.26
+          ],
+          "sides": 8,
+          "material": "timber"
+        }
+      ]
+    },
+    {
+      "name": "floor",
+      "weight": 2.0,
+      "rotations": 1,
+      "faces": {
+        "px": "in",
+        "nx": "in",
+        "pz": "in",
+        "nz": "in",
+        "py": "wtop_i",
+        "ny": "0"
+      },
+      "parts": [
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            -1.45,
+            0.0
+          ],
+          "size": [
+            2.0,
+            2.9,
+            2.0
+          ],
+          "material": "cobble"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            0.09,
+            0.0
+          ],
+          "size": [
+            2.0,
+            0.18,
+            2.0
+          ],
+          "material": "timber"
+        }
+      ]
+    },
+    {
+      "name": "wall",
+      "weight": 2.0,
+      "rotations": 4,
+      "faces": {
+        "px": "run_r",
+        "nx": "run_l",
+        "pz": "in",
+        "nz": "out",
+        "py": "wtop_i",
+        "ny": "0"
+      },
+      "parts": [
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            -1.45,
+            0.0
+          ],
+          "size": [
+            2.0,
+            2.9,
+            2.0
+          ],
+          "material": "cobble"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            0.09,
+            0.0
+          ],
+          "size": [
+            2.0,
+            0.18,
+            2.0
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            2.0,
+            2.18,
+            0.3
+          ],
+          "material": "plaster"
+        },
+        {
+          "kind": "box",
+          "at": [
+            -0.92,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            0.16,
+            2.18,
+            0.34
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.92,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            0.16,
+            2.18,
+            0.34
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            2.43,
+            -0.85
+          ],
+          "size": [
+            2.0,
+            0.14,
+            0.38
+          ],
+          "material": "timber"
+        }
+      ]
+    },
+    {
+      "name": "wall_door",
+      "weight": 0.5,
+      "rotations": 4,
+      "faces": {
+        "px": "run_r",
+        "nx": "run_l",
+        "pz": "in",
+        "nz": "out",
+        "py": "wtop_i",
+        "ny": "0"
+      },
+      "parts": [
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            -1.45,
+            0.0
+          ],
+          "size": [
+            2.0,
+            2.9,
+            2.0
+          ],
+          "material": "cobble"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            0.09,
+            0.0
+          ],
+          "size": [
+            2.0,
+            0.18,
+            2.0
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            -0.7,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            0.6,
+            2.18,
+            0.3
+          ],
+          "material": "plaster"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.7,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            0.6,
+            2.18,
+            0.3
+          ],
+          "material": "plaster"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            2.15,
+            -0.85
+          ],
+          "size": [
+            0.8,
+            0.42,
+            0.34
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            -0.92,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            0.16,
+            2.18,
+            0.34
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.92,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            0.16,
+            2.18,
+            0.34
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            2.43,
+            -0.85
+          ],
+          "size": [
+            2.0,
+            0.14,
+            0.38
+          ],
+          "material": "timber"
+        }
+      ]
+    },
+    {
+      "name": "wall_window",
+      "weight": 0.8,
+      "rotations": 4,
+      "faces": {
+        "px": "run_r",
+        "nx": "run_l",
+        "pz": "in",
+        "nz": "out",
+        "py": "wtop_i",
+        "ny": "0"
+      },
+      "parts": [
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            -1.45,
+            0.0
+          ],
+          "size": [
+            2.0,
+            2.9,
+            2.0
+          ],
+          "material": "cobble"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            0.09,
+            0.0
+          ],
+          "size": [
+            2.0,
+            0.18,
+            2.0
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            0.79,
+            -0.85
+          ],
+          "size": [
+            2.0,
+            1.22,
+            0.3
+          ],
+          "material": "plaster"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            2.13,
+            -0.85
+          ],
+          "size": [
+            2.0,
+            0.46,
+            0.3
+          ],
+          "material": "plaster"
+        },
+        {
+          "kind": "box",
+          "at": [
+            -0.8,
+            1.65,
+            -0.85
+          ],
+          "size": [
+            0.4,
+            0.5,
+            0.3
+          ],
+          "material": "plaster"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.8,
+            1.65,
+            -0.85
+          ],
+          "size": [
+            0.4,
+            0.5,
+            0.3
+          ],
+          "material": "plaster"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            1.42,
+            -0.85
+          ],
+          "size": [
+            1.24,
+            0.08,
+            0.34
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            -0.92,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            0.16,
+            2.18,
+            0.34
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.92,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            0.16,
+            2.18,
+            0.34
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            2.43,
+            -0.85
+          ],
+          "size": [
+            2.0,
+            0.14,
+            0.38
+          ],
+          "material": "timber"
+        }
+      ]
+    },
+    {
+      "name": "corner",
+      "weight": 0.4,
+      "rotations": 4,
+      "faces": {
+        "px": "run_r",
+        "nx": "out",
+        "pz": "run_l",
+        "nz": "out",
+        "py": "wtop_i",
+        "ny": "0"
+      },
+      "parts": [
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            -1.45,
+            0.0
+          ],
+          "size": [
+            2.0,
+            2.9,
+            2.0
+          ],
+          "material": "cobble"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            0.09,
+            0.0
+          ],
+          "size": [
+            2.0,
+            0.18,
+            2.0
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            2.0,
+            2.18,
+            0.3
+          ],
+          "material": "plaster"
+        },
+        {
+          "kind": "box",
+          "at": [
+            -0.85,
+            1.27,
+            0.15
+          ],
+          "size": [
+            0.3,
+            2.18,
+            1.7
+          ],
+          "material": "plaster"
+        },
+        {
+          "kind": "box",
+          "at": [
+            -0.85,
+            1.27,
+            -0.85
+          ],
+          "size": [
+            0.34,
+            2.18,
+            0.34
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.0,
+            2.43,
+            -0.85
+          ],
+          "size": [
+            2.0,
+            0.14,
+            0.38
+          ],
+          "material": "timber"
+        },
+        {
+          "kind": "box",
+          "at": [
+            -0.85,
+            2.43,
+            0.15
+          ],
+          "size": [
+            0.38,
+            0.14,
+            1.7
+          ],
+          "material": "timber"
+        }
+      ]
+    },
+    {
+      "name": "roof_gable",
+      "weight": 5.0,
+      "rotations": 2,
+      "faces": {
+        "px": "above",
+        "nx": "above",
+        "pz": "ridge",
+        "nz": "ridge",
+        "py": "0",
+        "ny": "wtop_i"
+      },
+      "parts": [
+        {
+          "kind": "wedge",
+          "at": [
+            -0.5,
+            0.6,
+            0.0
+          ],
+          "size": [
+            1.0,
+            1.2,
+            2.0
+          ],
+          "rise": "px",
+          "material": "thatch"
+        },
+        {
+          "kind": "wedge",
+          "at": [
+            0.5,
+            0.6,
+            0.0
+          ],
+          "size": [
+            1.0,
+            1.2,
+            2.0
+          ],
+          "rise": "nx",
+          "material": "thatch"
+        }
+      ]
+    },
+    {
+      "name": "roof_gable_end",
+      "weight": 3.0,
+      "rotations": 4,
+      "faces": {
+        "px": "above",
+        "nx": "above",
+        "pz": "ridge",
+        "nz": "above",
+        "py": "0",
+        "ny": "wtop_i"
+      },
+      "parts": [
+        {
+          "kind": "wedge",
+          "at": [
+            -0.5,
+            0.6,
+            0.0
+          ],
+          "size": [
+            1.0,
+            1.2,
+            2.0
+          ],
+          "rise": "px",
+          "material": "thatch"
+        },
+        {
+          "kind": "wedge",
+          "at": [
+            0.5,
+            0.6,
+            0.0
+          ],
+          "size": [
+            1.0,
+            1.2,
+            2.0
+          ],
+          "rise": "nx",
+          "material": "thatch"
+        }
+      ]
+    },
+    {
+      "name": "chimney",
+      "weight": 0.6,
+      "rotations": 2,
+      "faces": {
+        "px": "above",
+        "nx": "above",
+        "pz": "ridge",
+        "nz": "ridge",
+        "py": "0",
+        "ny": "wtop_i"
+      },
+      "parts": [
+        {
+          "kind": "wedge",
+          "at": [
+            -0.5,
+            0.6,
+            0.0
+          ],
+          "size": [
+            1.0,
+            1.2,
+            2.0
+          ],
+          "rise": "px",
+          "material": "thatch"
+        },
+        {
+          "kind": "wedge",
+          "at": [
+            0.5,
+            0.6,
+            0.0
+          ],
+          "size": [
+            1.0,
+            1.2,
+            2.0
+          ],
+          "rise": "nx",
+          "material": "thatch"
+        },
+        {
+          "kind": "box",
+          "at": [
+            0.35,
+            1.1,
+            0.0
+          ],
+          "size": [
+            0.5,
+            2.2,
+            0.5
+          ],
+          "material": "cobble"
+        }
+      ]
+    },
+    {
+      "name": "air",
+      "weight": 6.0,
+      "rotations": 1,
+      "faces": {
+        "px": "above",
+        "nx": "above",
+        "pz": "above",
+        "nz": "above",
+        "py": "0",
+        "ny": "sky_i"
+      },
+      "parts": []
+    }
+  ]
+}

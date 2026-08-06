@@ -4318,6 +4318,89 @@ impl Default for LightProbeVolume {
     }
 }
 
+/// A grid of tiles synthesized from a tileset (M47).
+///
+/// The recipe whose output is an *arrangement* rather than a mesh: a tileset
+/// says which tiles may touch which, `engine synthesize` fills the grid with
+/// tiles that agree, and the whole thing is drawn as one merged surface per
+/// palette material. It owns its geometry, so a `Mesh` or a `Material` beside
+/// it is `tile_grid_with_mesh`.
+///
+/// The grid is **centred on its entity in X and Z, and bottom-anchored in Y** —
+/// terrain is XZ-centred and a building stands on the ground rather than
+/// straddling it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TileGrid {
+    /// Path to the tileset, relative to the **scene file** (invariant 3),
+    /// conventionally `tilesets/<name>.json`.
+    pub tileset: String,
+
+    /// Path to the solved layout, relative to the scene file, conventionally
+    /// `layouts/<name>.tiles.json`.
+    ///
+    /// Written by `engine synthesize`. A path that is not there is
+    /// `tile_layout_missing`, which says to run it — the `gi_bake_missing`
+    /// shape, for the `bake-gi` reason: a grid solved at load could not be
+    /// edited, because "modify this area" needs a previous layout to modify.
+    pub layout: String,
+
+    /// Cells along X, Y and Z.
+    ///
+    /// Repeated in the layout's header, deliberately, so a component edited
+    /// after its solve is caught by a comparison rather than by recomputing a
+    /// digest — `BakedGi::matches`'s trade.
+    #[schemars(with = "[u32; 3]", inner(range(min = 1, max = 256)))]
+    pub size: [u32; 3],
+
+    /// What the solver's random choices are drawn from.
+    pub seed: u32,
+
+    /// The tile every unlocked cell starts as at `y == 0`, and the arrangement
+    /// a block reverts to having never been solved.
+    ///
+    /// Empty means the tileset's first tile. Both fills must be able to tile
+    /// the grid on their own, or the initial state is itself a contradiction —
+    /// `tile_fill_not_self_compatible`.
+    pub fill_ground: String,
+
+    /// The tile every unlocked cell starts as above `y == 0`. Empty means the
+    /// tileset's last tile.
+    pub fill_background: String,
+
+    /// A `Terrain` entity the grid terraces to, by whole cells.
+    ///
+    /// Empty means flat. Whole cells rather than metres because a continuous
+    /// offset leaves a slot down every wall between two columns at different
+    /// heights, and no tile knows what its neighbour's offset is.
+    pub ground: String,
+
+    /// What lies beyond the grid's free edges — its borders, and its terrace
+    /// seams (M51).
+    ///
+    /// `open` (the default, and M47 exactly) constrains nothing there: the
+    /// patch is a window onto a larger world, and a structure may run off the
+    /// edge. `closed` constrains every free edge as the **fill** — street at
+    /// ground level, air above — so a structure must complete inside the grid
+    /// and on its own terrace. Closed is what keeps a village's houses whole.
+    pub edges: crate::tilelayout::Edges,
+}
+
+impl Default for TileGrid {
+    fn default() -> Self {
+        Self {
+            tileset: String::new(),
+            layout: String::new(),
+            size: [8, 2, 8],
+            seed: 0,
+            fill_ground: String::new(),
+            fill_background: String::new(),
+            ground: String::new(),
+            edges: crate::tilelayout::Edges::Open,
+        }
+    }
+}
+
 /// hecs; generating all three from one list is what stops a new component from
 /// being loadable but unsuggestable, or schema'd but never spawned.
 macro_rules! components {
@@ -4400,6 +4483,7 @@ components!(
     Buoyancy,
     Shard,
     LightProbeVolume,
+    TileGrid,
 );
 
 #[cfg(test)]
@@ -4507,7 +4591,8 @@ mod tests {
                 "Ragdoll",
                 "Buoyancy",
                 "Shard",
-                "LightProbeVolume"
+                "LightProbeVolume",
+                "TileGrid"
             ]
         );
     }

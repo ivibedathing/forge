@@ -1,0 +1,17 @@
+{"format":"forge-tiles-1","scene":"m50_live_tiles.json","entity":"Village","tileset":"../../tilesets/village.json","tileset_hash":"c71d6d864f1d51d0","inputs_hash":"bd15cb2bd72dc7c2","size":[10,2,8],"seed":5,"block":[6,4294967295,5],"overlap":1,"attempts":60,"fallbacks":0,"edges":"closed"}
+{"y":0,"z":0,"row":"cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0"}
+{"y":0,"z":1,"row":"cobble@0 corner@0 wall_door@0 corner@3 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0"}
+{"y":0,"z":2,"row":"cobble@0 wall@1 !floor@0 wall@3 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0"}
+{"y":0,"z":3,"row":"cobble@0 corner@1 wall@2 corner@2 cobble@0 cobble@0 post@0 cobble@0 cobble@0 cobble@0"}
+{"y":0,"z":4,"row":"cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0"}
+{"y":0,"z":5,"row":"cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 cobble@0 corner@0 wall@0 corner@3 cobble@0"}
+{"y":0,"z":6,"row":"cobble@0 cobble@0 cobble@0 cobble@0 post@0 cobble@0 wall_door@1 !floor@0 wall@3 cobble@0"}
+{"y":0,"z":7,"row":"cobble@0 cobble@0 cobble@0 cobble@0 post@0 cobble@0 corner@1 wall_door@2 corner@2 cobble@0"}
+{"y":1,"z":0,"row":"air@0 air@0 air@0 air@0 air@0 air@0 air@0 air@0 air@0 air@0"}
+{"y":1,"z":1,"row":"air@0 roof_gable_end@0 roof_gable_end@1 roof_gable_end@3 air@0 air@0 air@0 air@0 air@0 air@0"}
+{"y":1,"z":2,"row":"air@0 roof_gable_end@2 roof_gable_end@1 roof_gable_end@3 air@0 air@0 air@0 air@0 air@0 air@0"}
+{"y":1,"z":3,"row":"air@0 roof_gable_end@1 chimney@1 roof_gable_end@3 air@0 air@0 air@0 air@0 air@0 air@0"}
+{"y":1,"z":4,"row":"air@0 air@0 air@0 air@0 air@0 air@0 air@0 air@0 air@0 air@0"}
+{"y":1,"z":5,"row":"air@0 air@0 air@0 air@0 air@0 air@0 roof_gable_end@0 roof_gable_end@0 roof_gable_end@0 air@0"}
+{"y":1,"z":6,"row":"air@0 air@0 air@0 air@0 air@0 air@0 roof_gable@0 roof_gable@0 roof_gable@0 air@0"}
+{"y":1,"z":7,"row":"air@0 air@0 air@0 air@0 air@0 air@0 roof_gable_end@2 roof_gable_end@2 roof_gable_end@2 air@0"}

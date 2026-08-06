@@ -139,6 +139,14 @@
         ],
         "type": "string"
       },
+      "Edges": {
+        "description": "What lies beyond a grid's free edges — its borders, and its terrace seams\n(M51).\n\n`Open` is M47 exactly: a free edge constrains nothing, the patch is a\nwindow onto a larger world. `Closed` is the WFC literature's *boundary\ncondition*: everything beyond a free edge is taken to be the fill — street\nat ground level, air above — so an interior can never leak off the world.\nA building must then complete inside the grid and on its own terrace,\nwhich is what stops houses being truncated at the border or cut open by a\nlift step.",
+        "enum": [
+          "open",
+          "closed"
+        ],
+        "type": "string"
+      },
       "FractureMaterial": {
         "description": "What a `Breakable` is made of (M43).\n\n`glass` shatters into radial slivers that fly far and fast; `wood` splits\ninto splinters along the grain and tumbles about its long axis; `stone`\nbreaks into chunky blocks that barely scatter, so a granite block comes\napart and its pieces *drop*; `metal` tears into a few large plates that\nmove together and slide.\n\nFour, because four is what the fracture generator has distinct algorithms\nfor and what the runtime has distinct behaviour for. A fifth would need\nboth, and \"generic\" is spelled by leaving the field out.\n\nNOTE: leave these variants undocumented, for [`ParticleBlend`]'s reason —\na doc comment on an enum *variant* makes schemars emit oneOf/const instead\nof a flat `\"enum\": [...]`, which blinds the validation walk's\nclosed-vocabulary check. Measured here: `\"material\": \"wud\"` reported\nnothing at all until these four comments moved up into this one.",
         "enum": [
@@ -4032,6 +4040,74 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "description": "A grid of tiles synthesized from a tileset (M47).\n\nThe recipe whose output is an *arrangement* rather than a mesh: a tileset\nsays which tiles may touch which, `engine synthesize` fills the grid with\ntiles that agree, and the whole thing is drawn as one merged surface per\npalette material. It owns its geometry, so a `Mesh` or a `Material` beside\nit is `tile_grid_with_mesh`.\n\nThe grid is **centred on its entity in X and Z, and bottom-anchored in Y** —\nterrain is XZ-centred and a building stands on the ground rather than\nstraddling it.",
+        "properties": {
+          "edges": {
+            "$ref": "#/$defs/Edges",
+            "default": "open",
+            "description": "What lies beyond the grid's free edges — its borders, and its terrace\nseams (M51).\n\n`open` (the default, and M47 exactly) constrains nothing there: the\npatch is a window onto a larger world, and a structure may run off the\nedge. `closed` constrains every free edge as the **fill** — street at\nground level, air above — so a structure must complete inside the grid\nand on its own terrace. Closed is what keeps a village's houses whole."
+          },
+          "fill_background": {
+            "default": "",
+            "description": "The tile every unlocked cell starts as above `y == 0`. Empty means the\ntileset's last tile.",
+            "type": "string"
+          },
+          "fill_ground": {
+            "default": "",
+            "description": "The tile every unlocked cell starts as at `y == 0`, and the arrangement\na block reverts to having never been solved.\n\nEmpty means the tileset's first tile. Both fills must be able to tile\nthe grid on their own, or the initial state is itself a contradiction —\n`tile_fill_not_self_compatible`.",
+            "type": "string"
+          },
+          "ground": {
+            "default": "",
+            "description": "A `Terrain` entity the grid terraces to, by whole cells.\n\nEmpty means flat. Whole cells rather than metres because a continuous\noffset leaves a slot down every wall between two columns at different\nheights, and no tile knows what its neighbour's offset is.",
+            "type": "string"
+          },
+          "layout": {
+            "default": "",
+            "description": "Path to the solved layout, relative to the scene file, conventionally\n`layouts/<name>.tiles.json`.\n\nWritten by `engine synthesize`. A path that is not there is\n`tile_layout_missing`, which says to run it — the `gi_bake_missing`\nshape, for the `bake-gi` reason: a grid solved at load could not be\nedited, because \"modify this area\" needs a previous layout to modify.",
+            "type": "string"
+          },
+          "seed": {
+            "default": 0,
+            "description": "What the solver's random choices are drawn from.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "size": {
+            "default": [
+              8,
+              2,
+              8
+            ],
+            "description": "Cells along X, Y and Z.\n\nRepeated in the layout's header, deliberately, so a component edited\nafter its solve is caught by a comparison rather than by recomputing a\ndigest — `BakedGi::matches`'s trade.",
+            "items": {
+              "format": "uint32",
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "tileset": {
+            "default": "",
+            "description": "Path to the tileset, relative to the **scene file** (invariant 3),\nconventionally `tilesets/<name>.json`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "TileGrid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "ComponentData"
@@ -4068,7 +4144,8 @@
     "Ragdoll",
     "Buoyancy",
     "Shard",
-    "LightProbeVolume"
+    "LightProbeVolume",
+    "TileGrid"
   ],
   "scene": {
     "$defs": {
@@ -7363,6 +7440,74 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A grid of tiles synthesized from a tileset (M47).\n\nThe recipe whose output is an *arrangement* rather than a mesh: a tileset\nsays which tiles may touch which, `engine synthesize` fills the grid with\ntiles that agree, and the whole thing is drawn as one merged surface per\npalette material. It owns its geometry, so a `Mesh` or a `Material` beside\nit is `tile_grid_with_mesh`.\n\nThe grid is **centred on its entity in X and Z, and bottom-anchored in Y** —\nterrain is XZ-centred and a building stands on the ground rather than\nstraddling it.",
+            "properties": {
+              "edges": {
+                "$ref": "#/$defs/Edges",
+                "default": "open",
+                "description": "What lies beyond the grid's free edges — its borders, and its terrace\nseams (M51).\n\n`open` (the default, and M47 exactly) constrains nothing there: the\npatch is a window onto a larger world, and a structure may run off the\nedge. `closed` constrains every free edge as the **fill** — street at\nground level, air above — so a structure must complete inside the grid\nand on its own terrace. Closed is what keeps a village's houses whole."
+              },
+              "fill_background": {
+                "default": "",
+                "description": "The tile every unlocked cell starts as above `y == 0`. Empty means the\ntileset's last tile.",
+                "type": "string"
+              },
+              "fill_ground": {
+                "default": "",
+                "description": "The tile every unlocked cell starts as at `y == 0`, and the arrangement\na block reverts to having never been solved.\n\nEmpty means the tileset's first tile. Both fills must be able to tile\nthe grid on their own, or the initial state is itself a contradiction —\n`tile_fill_not_self_compatible`.",
+                "type": "string"
+              },
+              "ground": {
+                "default": "",
+                "description": "A `Terrain` entity the grid terraces to, by whole cells.\n\nEmpty means flat. Whole cells rather than metres because a continuous\noffset leaves a slot down every wall between two columns at different\nheights, and no tile knows what its neighbour's offset is.",
+                "type": "string"
+              },
+              "layout": {
+                "default": "",
+                "description": "Path to the solved layout, relative to the scene file, conventionally\n`layouts/<name>.tiles.json`.\n\nWritten by `engine synthesize`. A path that is not there is\n`tile_layout_missing`, which says to run it — the `gi_bake_missing`\nshape, for the `bake-gi` reason: a grid solved at load could not be\nedited, because \"modify this area\" needs a previous layout to modify.",
+                "type": "string"
+              },
+              "seed": {
+                "default": 0,
+                "description": "What the solver's random choices are drawn from.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "size": {
+                "default": [
+                  8,
+                  2,
+                  8
+                ],
+                "description": "Cells along X, Y and Z.\n\nRepeated in the layout's header, deliberately, so a component edited\nafter its solve is caught by a comparison rather than by recomputing a\ndigest — `BakedGi::matches`'s trade.",
+                "items": {
+                  "format": "uint32",
+                  "maximum": 256,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "tileset": {
+                "default": "",
+                "description": "Path to the tileset, relative to the **scene file** (invariant 3),\nconventionally `tilesets/<name>.json`.",
+                "type": "string"
+              },
+              "type": {
+                "const": "TileGrid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -7553,6 +7698,14 @@
           }
         },
         "type": "object"
+      },
+      "Edges": {
+        "description": "What lies beyond a grid's free edges — its borders, and its terrace seams\n(M51).\n\n`Open` is M47 exactly: a free edge constrains nothing, the patch is a\nwindow onto a larger world. `Closed` is the WFC literature's *boundary\ncondition*: everything beyond a free edge is taken to be the fill — street\nat ground level, air above — so an interior can never leak off the world.\nA building must then complete inside the grid and on its own terrace,\nwhich is what stops houses being truncated at the border or cut open by a\nlift step.",
+        "enum": [
+          "open",
+          "closed"
+        ],
+        "type": "string"
       },
       "EntityDef": {
         "additionalProperties": false,

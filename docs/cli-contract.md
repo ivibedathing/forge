@@ -126,6 +126,26 @@ engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
                                              # the irradiance the renderer would use here,
                                              # the pre-M35 fallback beside it, and the share
                                              # of it that bounced off a sunlit surface
+engine synthesize <scene.json> [--entity Name] [--seed S]
+                  [--region x0,z0,x1,z1 | --at x,z | --around Name] [--radius M]
+                  [--block x,z] [--overlap N] [--attempts N] [--out path]
+                  [--reset] [--write] [--check]
+                                             # solve a TileGrid's layout by model synthesis
+                                             # in overlapping blocks. --region takes cells;
+                                             # --at/--around take world metres. Each re-solves
+                                             # only the blocks meeting the area, reading the
+                                             # rest as fixed border; --check writes nothing and
+                                             # exits 1 (tile_layout_stale) when the scene has
+                                             # moved since the solve
+engine tile-grid <scene.json> [--entity Name] [--at x,z]
+                                             # what a solved grid holds: its footprint, terrace
+                                             # lifts and tile census, and per --at the whole
+                                             # column at a world XZ including surface_y — the
+                                             # height a body dropped there lands on
+engine list-tiles <tileset.json> [--sheet out.json]
+                                             # every tile at every rotation, its six sockets,
+                                             # and how many tiles may sit across each face.
+                                             # --sheet writes a contact-sheet scene to look at
 engine inspect <scene.json> [--entity Name]  # every field, defaults filled in
 engine list-components [--component Name]    # scene + component JSON Schemas
 engine list-components --markdown            # the same vocabulary, as prose
@@ -246,6 +266,31 @@ A `--trace` gains two event lines on the same terms — `{"step": N, "spawned":
 from positions. Instance names are never reused within a run, which is what
 keeps a row name unambiguous. A trace of a scene that spawns nothing is
 unchanged, both golden ones included.
+
+**`synthesized`** appears on the `simulate` report only when the run re-solved a
+`TileGrid` at runtime (M50) — `world.synthesize(entity, x, z, radius[, seed])`
+re-solves the blocks meeting a world-space disc, and `world.clear_tiles(entity)`
+returns every unlocked cell to the tileset's fill. It counts applied requests of
+both kinds, so a pre-M50 report is byte-identical.
+
+A `--trace` gains one event line per applied request: `{"step": N,
+"synthesized": "Hamlet", "changed": 38, "region": [3, 5, 5, 6], "blocks": 2,
+"fallbacks": 0}`. The `region` key is present for a solve and absent for a
+clear, which is how the line says which verb ran; `changed` counts cells whose
+tile is not what it was, and is the number that distinguishes "re-solved and
+settled on the same arrangement" from "did nothing".
+
+Two refusals, both at the script call so the error is located at the line that
+asked: a disc lying entirely off the grid is `tile_region_off_grid` rather than
+a silent no-op, and a `TileGrid` carrying a `Collider` cannot be re-solved at
+runtime at all — its geometry is also a physics trimesh, and rebuilding one
+mid-run perturbs the broad phase for every body in the scene.
+
+`engine tile-grid --steps N [--input f]` reports the grid **as the run left
+it** rather than as the committed layout has it. Nothing writes a runtime
+arrangement back to disk, so this is the only way to read one; locks, size and
+the header's `fallbacks` still come from the file, which a runtime solve never
+touches.
 
 ## Animation
 
@@ -497,3 +542,102 @@ same numeric range constraints `engine validate` enforces, so third-party
 validators (`ajv`, `check-jsonschema`) agree with the engine about the same
 file. Only cross-field rules (`Camera.far > near`) and semantic checks
 (duplicates, asset existence) go beyond the schema.
+
+## Tile synthesis (M47)
+
+`engine synthesize` is the second command that **writes into the project**,
+after `bake-gi`, and it is that command's shape for that command's reasons: the
+solve is expensive, its output is an artifact the scene names, and the artifact
+is what a later edit edits. A `TileGrid` renders nothing until it has one, and
+the missing-file error says so (`tile_layout_missing`).
+
+Its stdout object carries `entity`, `layout`, `tileset`, `seed`, `size`,
+`cells`, `locked`, `terraced`, `blocks`, `solved`, `retries`, `fallbacks`,
+`vertices`, `inputs_hash` and `written`. Two of those are the diagnostics worth
+knowing:
+
+- **`fallbacks`** counts blocks that used up their retries and kept whatever
+  stood in them. An over-constrained tileset does not fail loudly, it produces
+  bland output — this is the number that says so without reading the picture.
+- **`retries`** is the same signal one step earlier: a tileset that is *nearly*
+  over-constrained spends retries long before it starts falling back.
+
+`--write` is required to change anything; without it the report is printed and
+the file is untouched, the `fracture` convention. `--out` redirects the write
+**only** — the prior layout, and therefore every locked cell, is always read
+from the one the component names.
+
+**Three spellings of one area, because a script has indices and an author has a
+position.** All three re-solve the blocks whose interior meets the area and read
+everything else as fixed border, which is what makes changing one corner of a
+village an edit rather than a re-roll. Each needs an existing layout to build on
+(`invalid_invocation` otherwise), and each reports the cell rectangle it
+resolved to as `region`.
+
+- `--region x0,z0,x1,z1` — inclusive, **in cells**. The exact form. A rectangle
+  reaching past the grid is refused rather than clamped, because a script that
+  computed the wrong index should hear about it.
+- `--at x,z [--radius M]` — **world metres** (M48). Clamped to the grid rather
+  than refused: "re-solve around the well" is reasonable near an edge. Only an
+  area entirely off the grid is an error, and it points at `engine tile-grid`
+  for the footprint.
+- `--around Name [--radius M]` — `--at`, taking the position from an entity. An
+  unknown name is `entity_not_found` with a `did_you_mean`.
+
+A `--radius` of zero is the single cell the point falls in, which still pulls in
+every block overlapping it.
+
+**`--reset` throws the existing layout away and solves from the known-good
+fill, keeping locked cells** (M49). It is needed because a tileset's region
+constraints are enforced by rejecting a block that breaks them, and that
+rejection is **do no harm**: a block is accepted when it does not *increase* the
+violations blamed on it. That is what lets a re-solve converge at all — strict
+rejection cannot, because a region breaking a rule usually extends past every
+block that could be blamed for it. The corollary is that a layout which already
+breaks a rule is never repaired, only kept from worsening, so **adding
+constraints to a tileset changes nothing until `--reset` is passed**.
+
+`rejected` in the report names which constraint turned down how many block
+attempts. One rule doing all the rejecting is either the rule that matters or
+the one that is too tight; either way it is the one to look at. A rule nothing
+can satisfy is a **no-op** rather than a wipe, for the do-no-harm reason above.
+
+**One property this does not have.** A region solve over a block does not
+reproduce what a full solve produced there: in a full scan that block's east and
+south borders were the known-good fill, and in a region solve they are
+already-solved neighbours. Different constraints, different answer.
+
+`engine list-tiles <tileset.json>` prints the expansion — one entry per tile per
+rotation, in the order the solver indexes them — with each face's resolved
+socket, the rotation index a vertical face carries, and **how many tiles may sit
+across it**. A `partners: 0` is a tile that can never be placed that side, which
+`engine validate` reports on the same file as `tile_socket_orphaned`. A socket
+graph is a constraint problem rather than a description, so it is the half of a
+tileset that comes out of a prompt wrong; this is the command that makes it
+fixable.
+
+`--sheet out.json` writes a **contact sheet** (M48): a scene and a layout laying
+every tile out with one column per tile and one row per rotation, so a tileset
+can be screenshotted rather than imagined. A column that reads as one shape
+turning is a rotation set that works; one that does not is a face permutation
+that does not. Every cell is locked, which is why the sheet exists with no
+special case in validation — tiles laid side by side almost never satisfy each
+other's sockets, and a locked violation is `tile_layout_forced`, a warning the
+author asserted. It frames itself from what the tiles actually grow, so a
+tileset whose parts overhang their cells or reach below their floor is neither
+cropped nor left hanging.
+
+A tileset file validates on its own, routed **by shape** — a top-level `tiles`,
+no `entities`, no `tracks` — the way clip and material files already are.
+
+`engine tile-grid <scene> [--entity Name] [--at x,z]` is the other half of that
+argument, applied to the *solved* grid rather than the tileset: it reports the
+footprint in world metres, the range of terrace lifts, a census of the tiles
+placed, and — with `--at` — the whole column standing at a world XZ, each cell's
+tile, rotation, lock and floor height.
+
+Its most useful field is **`surface_y`: the height that column's geometry
+actually reaches**, which is where a body dropped there comes to rest. That
+number is what a scene author needs to place anything on a village, and working
+it out from the layout file by hand is what this command exists to stop.
+`--at` off the grid is `invalid_invocation` naming the footprint.

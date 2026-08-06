@@ -1428,9 +1428,269 @@ pub(super) fn check_component(
                 }
             }
         }
+
+        // A tile grid names two files and everything else follows from them:
+        // the tileset says what may be placed, the layout says what was. Both
+        // are read here, at `validate`, for the reason the GI bake is — a grid
+        // whose layout disagrees with its tileset draws a village that is
+        // quietly wrong rather than failing.
+        //
+        // The one check that is *not* here is `tile_layout_stale`, which needs
+        // the scene's terrain to recompute the column offsets. It belongs to
+        // `synthesize --check`, exactly as `gi_bake_stale` belongs to
+        // `bake-gi --check`.
+        ComponentData::TileGrid(ref component) => {
+            errors.extend(check_tile_grid(cx, component, entity, component_path));
+        }
     }
 
     checked
+}
+
+/// A `TileGrid`'s two files, and whether the layout is one its tileset could
+/// have produced.
+fn check_tile_grid(
+    cx: &Cx<'_>,
+    component: &crate::components::TileGrid,
+    entity: &str,
+    component_path: &str,
+) -> Vec<EngineError> {
+    let mut errors = Vec::new();
+    let base_dir = Path::new(cx.file).parent().unwrap_or(Path::new(""));
+    let at = |field: &str| format!("{component_path}/{field}");
+    let here = |code: &'static str, message: String, field: &'static str| {
+        cx.err(code, message, &at(field))
+            .entity(entity)
+            .component("TileGrid")
+            .field(field)
+    };
+
+    // The tileset, and its own diagnostics with its own line numbers — M9's
+    // clip-error precedent, the same way a `Material.asset` is reported.
+    let tileset = match crate::tileset::resolve_tileset(&component.tileset, base_dir) {
+        Err(resolve) => {
+            errors.push(here(resolve.error, resolve.message.clone(), "tileset"));
+            return errors;
+        }
+        Ok(path) => {
+            let display = path.display().to_string();
+            if let Ok(source) = std::fs::read_to_string(&path) {
+                errors.extend(super::validate_tileset_source(&source, &display));
+            }
+            match crate::tileset::load_tileset(&path) {
+                Ok(loaded) => loaded,
+                Err(e) => {
+                    // Already reported above with the tileset's own line
+                    // numbers; nothing downstream can run without it.
+                    if !errors.iter().any(|reported| reported.error == e.error) {
+                        errors.push(here(e.error, e.message.clone(), "tileset"));
+                    }
+                    return errors;
+                }
+            }
+        }
+    };
+
+    let tiles = match crate::tileset::expand(&tileset) {
+        Ok(tiles) => tiles,
+        Err(e) => {
+            errors.push(here(e.error, e.message.clone(), "tileset"));
+            return errors;
+        }
+    };
+
+    for (field, name) in [
+        ("fill_ground", &component.fill_ground),
+        ("fill_background", &component.fill_background),
+    ] {
+        if name.is_empty() {
+            continue;
+        }
+        if !tileset.tiles.iter().any(|tile| &tile.name == name) {
+            errors.push(
+                here(
+                    codes::UNKNOWN_TILE,
+                    format!(
+                        "entity {entity:?} fills with {name:?}, which the tileset \
+                         {:?} does not define",
+                        component.tileset
+                    ),
+                    if field == "fill_ground" {
+                        "fill_ground"
+                    } else {
+                        "fill_background"
+                    },
+                )
+                .suggest_from(name, tileset.tiles.iter().map(|t| t.name.as_str())),
+            );
+        }
+    }
+
+    let layout_file = base_dir.join(&component.layout);
+    if component.layout.is_empty() || !layout_file.is_file() {
+        let named = if component.layout.is_empty() {
+            "names no layout file".to_string()
+        } else {
+            format!("names no layout file at {:?}", component.layout)
+        };
+        errors.push(here(
+            codes::TILE_LAYOUT_MISSING,
+            format!(
+                "entity {entity:?} {named} (layout paths resolve relative to the \
+                 scene file); run `engine synthesize` to write one"
+            ),
+            "layout",
+        ));
+        return errors;
+    }
+
+    let Ok(text) = std::fs::read_to_string(&layout_file) else {
+        errors.push(here(
+            codes::TILE_LAYOUT_MALFORMED,
+            format!("could not read the tile layout at {:?}", component.layout),
+            "layout",
+        ));
+        return errors;
+    };
+    let layout = match crate::tilelayout::TileLayout::parse(&text) {
+        Ok(layout) => layout,
+        Err(bad) => {
+            errors.push(here(
+                codes::TILE_LAYOUT_MALFORMED,
+                format!(
+                    "the tile layout at {:?} is not readable: {bad}; re-run \
+                     `engine synthesize`",
+                    component.layout
+                ),
+                "layout",
+            ));
+            return errors;
+        }
+    };
+
+    // The cheap mismatches first — a component edited after its solve, which is
+    // the one an author hits most. `BakedGi::matches`'s trade.
+    if layout.header.size != component.size {
+        errors.push(here(
+            codes::TILE_LAYOUT_MISMATCH,
+            format!(
+                "entity {entity:?} is a {:?} grid but its layout was solved for {:?}; \
+                 re-run `engine synthesize`",
+                component.size, layout.header.size
+            ),
+            "size",
+        ));
+        return errors;
+    }
+    if layout.header.tileset != component.tileset {
+        errors.push(here(
+            codes::TILE_LAYOUT_MISMATCH,
+            format!(
+                "entity {entity:?} names the tileset {:?} but its layout was solved \
+                 against {:?}; re-run `engine synthesize`",
+                component.tileset, layout.header.tileset
+            ),
+            "tileset",
+        ));
+        return errors;
+    }
+    if layout.header.edges != component.edges {
+        errors.push(here(
+            codes::TILE_LAYOUT_MISMATCH,
+            format!(
+                "entity {entity:?} wants {:?} edges but its layout was solved with \
+                 {:?} ones; re-run `engine synthesize --reset --write`",
+                component.edges, layout.header.edges
+            ),
+            "edges",
+        ));
+        return errors;
+    }
+
+    let resolved = match layout.resolve(&tiles) {
+        Ok(resolved) => resolved,
+        Err(unknown) => {
+            for token in unknown {
+                errors.push(
+                    here(
+                        codes::UNKNOWN_TILE,
+                        format!(
+                            "the layout at {:?} places {token:?}, which the tileset \
+                             {:?} no longer defines; re-run `engine synthesize`",
+                            component.layout, component.tileset
+                        ),
+                        "layout",
+                    )
+                    .suggest_from(&token, tiles.iter().map(|t| t.token.as_str())),
+                );
+            }
+            return errors;
+        }
+    };
+
+    let grown = crate::tilegrid::vertex_count(&tileset, &tiles, &resolved);
+    if grown > crate::tilegrid::MAX_TILE_GRID_VERTICES {
+        errors.push(here(
+            codes::TILE_GRID_TOO_COMPLEX,
+            format!(
+                "entity {entity:?} would grow {grown} vertices, more than the {} the \
+                 engine builds; use fewer cells or simpler tiles",
+                crate::tilegrid::MAX_TILE_GRID_VERTICES
+            ),
+            "size",
+        ));
+        return errors;
+    }
+
+    // The check the sidecar format exists to make possible: that the committed
+    // layout is one this tileset could have produced. Split in two, because a
+    // locked cell that breaks the rules is the author's assertion and an
+    // unlocked one is a hand-edit or a solver bug.
+    let grid = layout.grid();
+    let compat = crate::tileset::Compat::build(&tiles);
+    // The fill pair is only consulted on a closed grid's free edges (M51); an
+    // unresolvable fill name was already reported by the fill checks above, so
+    // falling back to the defaults here cannot mask anything.
+    let fill = crate::tilegrid::fill_indices(component, &tileset, &tiles)
+        .unwrap_or((0, tiles.len().saturating_sub(1)));
+    for bad in
+        crate::tilelayout::verify_adjacency(&layout, &grid, &tiles, &resolved, &compat, fill)
+    {
+        let (x, y, z) = grid.coords(bad.cell);
+        let placed = &tiles[resolved[bad.cell]].token;
+        let against = match bad.against {
+            Some(other) => format!("{:?}", tiles[resolved[other]].token),
+            None => "the grid's own end".to_string(),
+        };
+        let face = crate::tileset::Face::KEYS[bad.face.index()];
+        if bad.locked {
+            errors.push(
+                here(
+                    codes::TILE_LAYOUT_FORCED,
+                    format!(
+                        "the layout at {:?} locks {placed:?} at ({x}, {y}, {z}), whose \
+                         {face} socket refuses {against}; the engine draws it as written",
+                        component.layout
+                    ),
+                    "layout",
+                )
+                .warning(),
+            );
+        } else {
+            errors.push(here(
+                codes::TILE_LAYOUT_ILLEGAL,
+                format!(
+                    "the layout at {:?} places {placed:?} at ({x}, {y}, {z}), whose \
+                     {face} socket refuses {against}; re-run `engine synthesize`, or \
+                     lock the cell with a leading \"!\" to assert it",
+                    component.layout
+                ),
+                "layout",
+            ));
+        }
+    }
+
+    errors
 }
 
 /// The `shard_degenerate` error, shared by the two places points can appear:

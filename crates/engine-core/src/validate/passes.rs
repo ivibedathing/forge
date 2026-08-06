@@ -416,6 +416,46 @@ pub(super) fn meadow(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<Engin
     }
 }
 
+/// Tile grids that follow a terrain (M47): the ground a grid terraces to.
+///
+/// The meadow pass's shape, and the same failure it prevents — a `ground` that
+/// resolves to nothing falls back to a flat grid at the entity's own Y, which
+/// is a village floating over a hillside with nothing in the file or the render
+/// saying why.
+pub(super) fn tile_grid_ground(cx: &Cx<'_>, facts: &SceneFacts<'_>, errors: &mut Vec<EngineError>) {
+    let SceneFacts {
+        tile_grids,
+        terrain_names,
+        seen_names,
+        ..
+    } = facts;
+
+    for (owner, grid, component_path) in tile_grids {
+        if grid.ground.is_empty() {
+            continue;
+        }
+        check_reference(
+            cx,
+            Reference {
+                subject: format!("the TileGrid on {owner:?} names ground {:?}", grid.ground),
+                name: &grid.ground,
+                owner,
+                component: "TileGrid",
+                field: "ground",
+                path: format!("{component_path}/ground"),
+                target: "Terrain component",
+                why: "a tile grid terraces its columns to a Terrain patch, so \
+                      the name must be one",
+                not_found: codes::TILE_GRID_GROUND_NOT_FOUND,
+                invalid: codes::TILE_GRID_GROUND_INVALID,
+            },
+            seen_names,
+            terrain_names,
+            errors,
+        );
+    }
+}
+
 /// Roads that follow a terrain (M40): the ground a road rides on.
 ///
 /// The meadow pass's shape, and the same failure it prevents — a

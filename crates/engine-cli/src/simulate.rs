@@ -77,6 +77,10 @@ pub fn run(
     // Whether there is an overlay at all, checked once: a scene without one
     // must take exactly the pre-M31 path, per-step and per-frame.
     let hud_present = !scene.hud_tree(&assets).is_empty();
+    // Built by the first `world.synthesize` and not before (M50): a run that
+    // never asks reads no tileset twice and holds no grid state.
+    let mut live_grids: Option<engine_core::tilelive::LiveGrids> = None;
+    let mut synthesized = 0u64;
 
     for step in 1..=steps {
         let step_index = u64::from(step) - 1;
@@ -177,6 +181,41 @@ pub fn run(
                 for (name, _) in &spawned {
                     write_line(trace, &json!({ "step": step, "spawned": name }))?;
                 }
+            }
+        }
+
+        // Tile-grid solves (M50) land here, beside the spawns and for their
+        // reason: after the scripts that asked, before the physics step, so a
+        // village regrown this step is the village this step's frame draws.
+        // Nothing to drain is the pre-M50 path exactly — no `LiveGrids` is
+        // built and no tileset is read a second time.
+        let requests = scripts
+            .as_ref()
+            .map(ScriptHost::take_synthesis)
+            .unwrap_or_default();
+        for request in &requests {
+            let report = live_grids
+                .get_or_insert_with(|| {
+                    engine_core::tilelive::LiveGrids::new(
+                        scene_path.parent().unwrap_or(Path::new("")),
+                    )
+                })
+                .apply(scene, request)?;
+            synthesized += 1;
+            if let Some(trace) = trace.as_deref_mut() {
+                let mut line = json!({
+                    "step": step,
+                    "synthesized": report.entity,
+                    "changed": report.changed,
+                });
+                // A region key only for a solve — a clear has no disc, and an
+                // absent key is how the trace says which verb ran.
+                if let Some(region) = report.region {
+                    line["region"] = json!(region);
+                    line["blocks"] = json!(report.solved);
+                    line["fallbacks"] = json!(report.fallbacks);
+                }
+                write_line(trace, &line)?;
             }
         }
 
@@ -387,6 +426,8 @@ pub fn run(
         interaction,
         quit_at_step,
         spawned,
+        synthesized,
+        live_grids,
     })
 }
 
@@ -466,6 +507,15 @@ pub struct StepRun {
     /// reports forty, which is the number that answers "did my gun fire at
     /// all" when the frame shows nothing.
     pub spawned: u64,
+    /// How many tile-grid solves the run applied (M50) — `world.synthesize`
+    /// and `world.clear_tiles` together. Zero for every scene that calls
+    /// neither, and the report omits it at zero, so a pre-M50 report is
+    /// byte-identical.
+    pub synthesized: u64,
+    /// The grids this run re-solved (M50), so a query command can report what
+    /// the run *made* rather than what the committed layout says. `None` when
+    /// nothing synthesized, which is every scene that predates the feature.
+    pub live_grids: Option<engine_core::tilelive::LiveGrids>,
 }
 
 fn write_line(trace: &mut dyn Write, line: &Value) -> Result<()> {
@@ -1056,6 +1106,11 @@ pub fn simulate_command(
     // that answers "did it fire at all" when the last frame shows nothing.
     if outcome.spawned > 0 {
         result["spawned"] = json!(outcome.spawned);
+    }
+    // Likewise for tile-grid solves (M50): absent at zero, so every scene that
+    // synthesizes nothing at runtime reports what it always did.
+    if outcome.synthesized > 0 {
+        result["synthesized"] = json!(outcome.synthesized);
     }
     if let Some(path) = &bake_path {
         result["baked"] = json!(path.display().to_string());

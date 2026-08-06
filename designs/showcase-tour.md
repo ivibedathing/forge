@@ -138,19 +138,27 @@ forever and the camera replayed the finale's own three-second leg on repeat
 while the fire burned, the truck drove and the daylight kept warming. The
 symptom was the camera; the cause was that the key path had an end.
 
-So it does not have one. The path is a cycle of six legs over seven keys —
-the seventh being the first again — and `p = step % 1080` is the lap position
-the whole director reads instead of the step. Leg 5 is the flight home:
-900–1079 descends from the wide finale over the burning fire and the debris
-field back to the forest key, and then the five stations run again.
+So it does not have one. The path is a cycle — since M50, of eight legs over
+nine keys, the ninth being the first again — and `p = step % 1440` is the lap
+position the whole director reads instead of the step. Legs 5 and 6 fly west to
+the hamlet and cross it while it solves itself out of bare cobble; leg 7 is the
+flight home, and then the five stations run again.
+
+M50 *appended* those two legs rather than inserting them, which is what keeps
+every cue and every eased interpolation in steps 0–899 the same arithmetic on
+the same integers. `total` stays 900 for the same reason and an honest one: the
+tour proper is still five stations in fifteen seconds, and the village is on the
+way home.
 
 Three properties are load-bearing:
 
-- **The first lap is arithmetically untouched.** For `step < 1080` the
+- **The first lap is arithmetically untouched.** For `step < 1440` the
   modulo is the identity, so every expression a committed baseline was
   blessed from is the same expression evaluated on the same integer. The six
   showcase baselines diff at zero pixels across this change, which is how it
-  was checked. The same care is why the time bar picks a *numerator and
+  was checked. (M50 moved four of them anyway — not through the arithmetic, but
+  because the hamlet grew to 14×12 cells and is visible from the arena at that
+  size.) The same care is why the time bar picks a *numerator and
   denominator* rather than scaling a fraction — `320 * x / n` and
   `320 * (x / n)` are not the same float.
 - **Nothing resets.** A lap is a camera move, not a replay: the crates stay

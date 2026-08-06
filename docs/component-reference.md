@@ -39,6 +39,7 @@ scene's components with the defaults filled in.
 | [`Shard`](#shard) | A convex piece of a broken thing (M43), as a point set that **owns its |
 | [`SkinnedCollider`](#skinnedcollider) | Collision proxies that follow a skinned character's pose (M33). |
 | [`Terrain`](#terrain) | A patch of ground: displaced terrain with a procedurally shaded surface |
+| [`TileGrid`](#tilegrid) | A grid of tiles synthesized from a tileset (M47). |
 | [`Transform`](#transform) | Position, orientation, and scale. |
 | [`Tree`](#tree) | A procedurally generated tree (M19): trunk, recursive branches, and leaves, |
 | [`Water`](#water) | A body of water: an ocean, a lake, a pond, a canal. |
@@ -895,6 +896,31 @@ far finer than the grid.
 | `segments` | `integer` | `128` | Quads per axis across the patch. `[1, 512]`.  The resolution the *relief* is drawn and collided at. What matters is metres per quad against [`feature_scale`](Terrain::feature_scale): a 200 m patch at 192 has one vertex per metre, which resolves a 40 m hill comfortably and a 3 m hummock not at all. Surface *detail* is per pixel and does not care. (at least 1, at most 512) |
 | `texture_scale` | `number` | `4` | Metres across one cell of the surface-detail noise. `> 0`.  The scale of the mottling within a layer and of the fingers along the boundary between two — the *texture*, as opposed to the relief. Around a few metres reads as ground cover seen from standing height. (greater than 0) |
 | `warp` | `number` | `0` | Domain warp: how far the field is dragged sideways before it is summed, as a fraction of [`feature_scale`](Terrain::feature_scale). `[0, 2]`; 0 (the default) is off.  Two lines of arithmetic, and the largest single difference between "fBm" and "landscape". Unwarped fBm is isotropic blobs; warping shears them into ridges and valleys that read as though water once ran over them. Past ~1 the surface starts to look smeared. (at least 0, at most 2) |
+
+## TileGrid
+
+A grid of tiles synthesized from a tileset (M47).
+
+The recipe whose output is an *arrangement* rather than a mesh: a tileset
+says which tiles may touch which, `engine synthesize` fills the grid with
+tiles that agree, and the whole thing is drawn as one merged surface per
+palette material. It owns its geometry, so a `Mesh` or a `Material` beside
+it is `tile_grid_with_mesh`.
+
+The grid is **centred on its entity in X and Z, and bottom-anchored in Y** —
+terrain is XZ-centred and a building stands on the ground rather than
+straddling it.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `edges` | `"open"` \| `"closed"` | — | What lies beyond a grid's free edges — its borders, and its terrace seams (M51).  `Open` is M47 exactly: a free edge constrains nothing, the patch is a window onto a larger world. `Closed` is the WFC literature's *boundary condition*: everything beyond a free edge is taken to be the fill — street at ground level, air above — so an interior can never leak off the world. A building must then complete inside the grid and on its own terrace, which is what stops houses being truncated at the border or cut open by a lift step. |
+| `fill_background` | `string` | `""` | The tile every unlocked cell starts as above `y == 0`. Empty means the tileset's last tile. |
+| `fill_ground` | `string` | `""` | The tile every unlocked cell starts as at `y == 0`, and the arrangement a block reverts to having never been solved.  Empty means the tileset's first tile. Both fills must be able to tile the grid on their own, or the initial state is itself a contradiction — `tile_fill_not_self_compatible`. |
+| `ground` | `string` | `""` | A `Terrain` entity the grid terraces to, by whole cells.  Empty means flat. Whole cells rather than metres because a continuous offset leaves a slot down every wall between two columns at different heights, and no tile knows what its neighbour's offset is. |
+| `layout` | `string` | `""` | Path to the solved layout, relative to the scene file, conventionally `layouts/<name>.tiles.json`.  Written by `engine synthesize`. A path that is not there is `tile_layout_missing`, which says to run it — the `gi_bake_missing` shape, for the `bake-gi` reason: a grid solved at load could not be edited, because "modify this area" needs a previous layout to modify. |
+| `seed` | `integer` | `0` | What the solver's random choices are drawn from. (at least 0) |
+| `size` | `[integer; 3]` | `[8, 2, 8]` | Cells along X, Y and Z.  Repeated in the layout's header, deliberately, so a component edited after its solve is caught by a comparison rather than by recomputing a digest — `BakedGi::matches`'s trade. |
+| `tileset` | `string` | `""` | Path to the tileset, relative to the **scene file** (invariant 3), conventionally `tilesets/<name>.json`. |
 
 ## Transform
 

@@ -122,6 +122,14 @@ pub struct Simulation {
     /// What the most recent script step put on screen; empty between HUD
     /// pushes and for scripts that never call `world.hud`.
     pub hud_lines: Vec<String>,
+    /// The scene's own directory, kept for the one thing in the step loop that
+    /// resolves a file at runtime: a tile grid's tileset and layout (M50).
+    pub base_dir: std::path::PathBuf,
+    /// Grids re-solved this session (M50). Built by the first
+    /// `world.synthesize` and not before, exactly as the headless loop builds
+    /// it — the two paths must not diverge, or a recorded input stops
+    /// reproducing what the window did.
+    pub live_grids: Option<engine_core::tilelive::LiveGrids>,
 }
 
 /// `--record-input`: writes one timeline line whenever the held set changes,
@@ -566,6 +574,33 @@ impl ViewerApp {
                                 // where the headless loop does, or the
                                 // emitter never emits (M44).
                                 sim.particles.sync(&sim.scene.world);
+                            }
+                            // Tile-grid solves (M50) land here, where the
+                            // headless loop puts them: after the scripts that
+                            // asked, before the physics step. A failed solve
+                            // stops the session rather than leaving the window
+                            // drawing a village nobody can explain.
+                            let requests = sim
+                                .scripts
+                                .as_ref()
+                                .map(engine_script::ScriptHost::take_synthesis)
+                                .unwrap_or_default();
+                            if !requests.is_empty() {
+                                let base_dir = sim.base_dir.clone();
+                                let grids = sim.live_grids.get_or_insert_with(|| {
+                                    engine_core::tilelive::LiveGrids::new(base_dir)
+                                });
+                                let mut failed = None;
+                                for request in &requests {
+                                    if let Err(e) = grids.apply(&mut sim.scene, request) {
+                                        failed = Some(e);
+                                        break;
+                                    }
+                                }
+                                if let Some(e) = failed {
+                                    self.error = Some(e);
+                                    break;
+                                }
                             }
                             if let Some(physics) = &mut sim.physics {
                                 // `step_index` is 0-based and incremented
