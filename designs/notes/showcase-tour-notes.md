@@ -7,17 +7,30 @@ alternatives; this file has what the build learned.*
 
 `examples/scenes/showcase_tour.json` is a 15-second (900-step) camera move through five 180-step
 stations — forest / campfire / water+ice / breaking / wide — with every system running at once, plus
-four scripts (`scripts/tour_{director,wildlife,effects,truck}.rhai`) and six 640×360 baselines
-(per-adapter, checked by hand with `diff-render`, not by a CLI test).
+four scripts (`scripts/tour_{director,wildlife,effects,truck}.rhai`) and seven 640×360 baselines
+(per-adapter, checked by hand with `diff-render`, not by a CLI test). The seventh, `showcase_1150`,
+is on the lap rather than in the fifteen seconds: it is the village mid-build (M50).
 
-**The camera path is a closed cycle, not a timeline that ends.** Six legs over seven keys (the
-seventh is the first again), read through `p = step % 1080`, so past step 900 leg 5 flies the camera
-home from the wide finale and the five stations come round again on an 18-second lap — the director
-used to clamp its station index, which replayed the finale's own three seconds forever while the
-world went on moving. **Nothing resets on a lap**: breaks stay one-shot, so station 04 later shows a
-debris field, and `day_length: 300` means lap two is dusk. The first lap is *arithmetically* the
-pre-loop one (`step % 1080` is the identity below 1080, and the time bar picks a numerator and
-denominator rather than scaling a fraction), so all six baselines diff at zero pixels. Rhai's
+**The camera path is a closed cycle, not a timeline that ends.** Eight legs over nine keys (the
+ninth is the first again), read through `p = step % 1440`, so past step 900 the camera flies west to
+the hamlet, watches it build itself (M50), and comes home on a 24-second lap — the director used to
+clamp its station index, which replayed the finale's own three seconds forever while the world went
+on moving. **Nothing resets on a lap**: breaks stay one-shot, so station 04 later shows a debris
+field, and `day_length: 300` means lap two is dusk. The village is the exception and deliberately
+so — it is cleared and re-solved every lap, from a seed that advances with the *step* rather than
+the lap position, so it comes out different each time.
+
+The first lap is *arithmetically* the pre-loop one (`step % 1440` is the identity below 1440, and
+the time bar picks a numerator and denominator rather than scaling a fraction). **`total` stays
+900** through M50 for the same reason: the tour proper is still five stations in fifteen seconds
+and the village is on the way home, so the HUD counter's denominator — the one thing a new leg
+could have moved in an already-blessed frame — does not move.
+
+**The village needs two legs, not one.** The aim only swings to a new subject at 62% of a leg, so a
+village *reached* in one leg is a village already finished by the time it is looked at. Leg 5 is the
+approach and leg 6 is the crossing, and the crossing is the only leg in the tour whose two aim keys
+are the same point — a constant aim is what keeps the hamlet centred for the three seconds it takes
+to solve. Rhai's
 function-expression depth budget is **16 in a debug build**, which is why the director spells
 sub-expressions into `let`s instead of nesting one more paren.
 

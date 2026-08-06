@@ -60,7 +60,7 @@ actually says.
 | `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. Since M46 it moves: `wind` bends the branches, `flutter` beats the leaves. | `m19-trees.md`, `m46-foliage-sway.md` |
 | `Cloud` | A cluster of interpenetrating lobes that drifts; **owns its mesh**. | `m20-clouds.md` |
 | `Meadow` | Ground cover on a seed→grass→weeds→straw→collapse life cycle, animated entirely in the vertex stage. | `m29-meadows.md` |
-| `TileGrid` | A grid filled by **model synthesis** from a `tilesets/*.json`, drawn as one merged mesh per palette material. **Owns its geometry**, and carries no geometry of its own in the scene: it names a tileset and a solved `layout`, and renders nothing until `engine synthesize` has written one. | `m47-tile-synthesis.md` |
+| `TileGrid` | A grid filled by **model synthesis** from a `tilesets/*.json`, drawn as one merged mesh per palette material. **Owns its geometry**, and carries no geometry of its own in the scene: it names a tileset and a solved `layout`, and renders nothing until `engine synthesize` has written one. Since M50 a script can re-solve part of it mid-run. | `m47-tile-synthesis.md`, `m50-runtime-synthesis.md` |
 | `LightProbeVolume` | A box of baked irradiance probes; replaces the hemispheric fill with one that knows what is above a surface. Since M45 its `sun_samples` also bounce the *sun*, so a red wall reddens its neighbour. At most one per scene, and it carries no geometry. | `m35-global-illumination.md`, `m45-sun-bounce.md` |
 | `HudText` | Screen-anchored text at an integer scale of the 8×8 font. | `m11_6-hud.md` |
 | `HudRect` | A screen-anchored coloured rectangle — bars, backdrops, gauges. | `m11_6-hud.md` |
@@ -89,7 +89,7 @@ one line per grid row, `!` to lock a cell).
 
 ## Current state
 
-**M0–M49 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M50 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
@@ -97,8 +97,8 @@ M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locom
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
 M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
 M43 material-aware fracture, M44 the break's dust, M35 global illumination, M45 bounced
-sunlight, M46 foliage sway, M47 tile synthesis, M48 its ergonomics, and M49 tile constraints.
-(M7 editor at scope E0–E2 + validation
+sunlight, M46 foliage sway, M47 tile synthesis, M48 its ergonomics, M49 tile constraints, and
+M50 runtime synthesis. (M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
@@ -166,10 +166,12 @@ engine synthesize <scene.json> [--entity N] [--seed S]
 #   staleness gate for the same reason. --reset solves from the fill keeping
 #   locks, and is what makes a tileset's new constraints reach a layout that
 #   already exists (M49)
-engine tile-grid <scene.json> [--entity N] [--at x,z]
+engine tile-grid <scene.json> [--entity N] [--at x,z] [--steps N] [--input f]
 #   what a solved grid holds: footprint, terrace lifts, a tile census, and per
 #   --at the whole column at a world XZ — including `surface_y`, the height a
-#   body dropped there lands on (M48)
+#   body dropped there lands on (M48). --steps reports the grid as a *run* left
+#   it rather than as the file has it, which since M50 is the only way to read a
+#   runtime arrangement — nothing writes one back to disk
 engine list-tiles <tileset.json> [--sheet out.json]
 #   every tile at every rotation, its six sockets, and how many tiles may sit
 #   across each face. `partners: 0` is a tile that can never be placed (M47).
@@ -370,6 +372,19 @@ The cross-cutting ones. Per-system traps are in each note.
   from the known-good fill. Two corollaries: an already-broken layout is never **repaired** (hence
   `synthesize --reset`, or adding constraints to a tileset silently does nothing), and a rule
   nothing can satisfy is a **no-op** rather than a wipe.
+- **A rejection rule that *counts* is not a rule that bounds** (M50). M49's do-no-harm accepts a
+  block that does not increase the number of violations blamed on it, so once one over-size built
+  region exists, extending it is free. Sweeping the tour's village with overlapping discs — five or
+  six solves per block — took it from the committed layout's 13 rooms and 103 open cells to **3 and
+  53**: one raft of roofs with no street, which is the exact failure M49 exists to fix, reintroduced
+  by re-solving rather than by a bad rule. **One pass per block** is the spacing that keeps rooms.
+  The general form: a constraint checked by counting violations cannot stop the violation it has
+  already counted from growing.
+- **A world-space disc cannot sweep a grid** (M50). `radius` is one number for both axes, so a disc
+  wide enough in z to reach the far side of a 24 m grid is wide enough in x to re-solve all of it —
+  a line of discs across the tour's hamlet solved the same two z rows fourteen times and built the
+  middle third only. A **raster**, z outer and x inner, is the shape. The trace is what says so:
+  every line read `region: [.., 5, .., 6]`, where the picture just looked sparse.
 - **A saturated counter looks like a flat response** (M49). Sweeping a tileset weight over four
   values reported *identical* retry counts, which reads as "the weight does not matter" and actually
   meant every attempt was failing regardless, so the budget was spent in full every time. Check
@@ -597,6 +612,14 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   a tileset's own tiles, enforced by rejecting a block that breaks them. Without it the village was
   one 60-cell mass and the tour's hamlet was 24 walls enclosing **zero** rooms. Rejection is
   **do no harm**, which is the only form that converges — and why `--reset` exists.
+- **Runtime synthesis (M50)** → `m50-runtime-synthesis.md`, design in
+  `designs/runtime-synthesis-design.md`. The solver, reachable from a script:
+  `world.synthesize(entity, x, z, radius[, seed])` re-solves the blocks meeting a world-space disc
+  and `world.clear_tiles(entity)` returns the grid to its fill, both queued beside `spawn_entity`
+  and applied between the scripts and physics. The committed layout is still where a run *starts*;
+  nothing writes back. The tour spends it on two village legs — a hamlet that assembles itself out
+  of bare cobble while the camera crosses it. **Physics does not follow**: a grid with a `Collider`
+  is refused rather than re-solved.
 - **Tile-synthesis ergonomics (M48)** → `m48-tile-ergonomics.md`. M24's argument applied to M47:
   `engine tile-grid` (what is in that column, and what height would a body land on), world-metre
   region selection, and `list-tiles --sheet`. Also records a **substitution worth reading** — the
@@ -891,7 +914,13 @@ original four, entity spawning was M37 and a CPU wave evaluator was M41.) The re
   `impulse_threshold` defaults, and a *decal* where something broke — the one thing a burst cannot
   do, since particles all die. (Dust itself was M44; `designs/fracture-design.md` §7 records the
   reversal and what answered its objection.)
-- **Tile synthesis** (after M47/M49): constraints checked **inside propagation** rather than by
+- **Tile synthesis** (after M47/M49/M50): the **collider following a runtime solve** — a village you
+  can walk in while it rebuilds, which wants `Presence` to carry a regenerated surface and, before
+  that, an answer to the broad-phase perturbation a mid-run trimesh swap causes; **writing a runtime
+  arrangement back**, which is really the question of whether a `screenshot` may write into the
+  project (`bake-gi` and `synthesize` both answer "only when a command whose name says so is run");
+  a solve **spread across steps**, which a 60×60 grid would want and which needs a budget in cells
+  rather than in time; constraints checked **inside propagation** rather than by
   rejection — the real version, which has to decide whether a candidate tile could disconnect a
   half-decided region, and which is what to build when the measured retry rate says rejection is
   the bottleneck; adjacency **learned from a sample grid** — model synthesis

@@ -238,3 +238,13 @@ The grid's **vertical ends are closed and its horizontal edges are open**: a
 patch is a window onto a larger world sideways, but there is no storey below the
 ground or above the sky. That single rule is what keeps roofs off the ground
 floor without any tile having to say so.
+
+Since M50 a script can re-solve part of a grid while the scene runs:
+`world.synthesize("Village", x, z, radius)` re-solves the blocks meeting a
+world-space disc — with an optional fifth argument for the seed — and
+`world.clear_tiles("Village")` puts every unlocked cell back to the tileset's
+fill, keeping the locks. Both are queued and applied between the scripts and
+physics, like `world.spawn_entity`. **The layout file is still where a run
+starts and nothing writes back**, so a runtime arrangement lives only in the
+run; `engine tile-grid --steps N` is how to read one. A `TileGrid` carrying a
+`Collider` is refused, because its geometry is also a physics trimesh.

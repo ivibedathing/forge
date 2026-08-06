@@ -156,6 +156,8 @@ build fails.
 | `tile_grid_too_complex` | 1 | a TileGrid's cells and tiles would grow more vertices than the engine builds |
 | `tile_grid_ground_not_found` | 1 | a TileGrid's "ground" names no entity in the scene |
 | `tile_grid_ground_invalid` | 1 | a TileGrid's "ground" must name an entity that has a Terrain component |
+| `tile_region_off_grid` | 1 | a runtime synthesis disc lies entirely off the grid it names; `engine tile-grid` reports the footprint |
+| `tile_grid_collides` | 1 | a TileGrid with a Collider cannot be re-solved at runtime; its trimesh is built once, and rebuilding it mid-run moves every body in the scene |
 | `hud_parent_not_found` | 1 | a HUD element's "parent" names no entity in the scene |
 | `hud_parent_not_panel` | 1 | a HUD element's "parent" must name an entity that has a HudPanel |
 | `hud_parent_cycle` | 1 | a chain of HUD "parent" references loops back on itself |

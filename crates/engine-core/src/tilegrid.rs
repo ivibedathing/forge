@@ -83,6 +83,74 @@ pub fn cell_origin(tileset: &Tileset, grid: &Grid, index: usize) -> Vec3 {
     )
 }
 
+/// Why a world-space disc selected no cells.
+///
+/// Two cases rather than one `Option`, because they want different words: a
+/// negative radius is a caller's mistake and an off-grid centre is a scene's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionMiss {
+    /// The radius was negative, or `NaN`.
+    BadRadius,
+    /// The disc lies entirely off the grid.
+    OffGrid,
+}
+
+/// The cell rectangle a world-space disc covers: `[x0, z0, x1, z1]`, inclusive.
+///
+/// The inverse of [`cell_origin`], and the one implementation of it — the CLI's
+/// `--at`/`--around` and the runtime `world.synthesize` both come here, because
+/// two implementations of one mapping is how a generator and its query start
+/// disagreeing (M40's road learned it).
+///
+/// A disc that overhangs an edge **clamps** rather than failing: "re-solve
+/// around the well" is a sensible thing to ask near a boundary. Only a disc
+/// entirely off the grid is a miss.
+pub fn region_around(
+    centre: Vec3,
+    radius: f32,
+    placement: &crate::components::Transform,
+    size: [u32; 3],
+    cell: Vec3,
+) -> std::result::Result<[u32; 4], RegionMiss> {
+    // Negated so a NaN fails. `radius < 0.0` is a different function — it is
+    // *false* for NaN — and a NaN radius would floor into a garbage cell range
+    // rather than being refused.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(radius >= 0.0) {
+        return Err(RegionMiss::BadRadius);
+    }
+
+    // World → the grid's own frame → cells. Y is dropped before the inverse
+    // rather than after: the disc is a footprint, and a caller standing on a
+    // hillside means the column under it, not the column its eye height
+    // happens to project to through a rotated placement.
+    let local = placement
+        .matrix()
+        .inverse()
+        .transform_point3(centre - Vec3::new(0.0, centre.y, 0.0));
+    let [nx, _, nz] = size;
+    let to_cell = |value: f32, extent: u32, size: f32| value / size + extent as f32 * 0.5;
+    let (cx, cz) = (to_cell(local.x, nx, cell.x), to_cell(local.z, nz, cell.z));
+    let (rx, rz) = (radius / cell.x, radius / cell.z);
+
+    let span = |centre: f32, radius: f32, extent: u32| -> Option<(u32, u32)> {
+        let low = (centre - radius).floor();
+        let high = (centre + radius).floor();
+        if high < 0.0 || low >= extent as f32 {
+            return None;
+        }
+        Some((
+            low.max(0.0) as u32,
+            (high.min(extent as f32 - 1.0)).max(0.0) as u32,
+        ))
+    };
+
+    match (span(cx, rx, nx), span(cz, rz, nz)) {
+        (Some((x0, x1)), Some((z0, z1))) => Ok([x0, z0, x1, z1]),
+        _ => Err(RegionMiss::OffGrid),
+    }
+}
+
 /// Vertices this grid would grow, exactly.
 pub fn vertex_count(tileset: &Tileset, tiles: &[ExpandedTile], resolved: &[usize]) -> usize {
     resolved
@@ -214,6 +282,96 @@ pub fn fill_indices(
         pick(&component.fill_ground, 0)?,
         pick(&component.fill_background, last)?,
     ))
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+
+    /// A 10×8 grid of 2 m cells, centred on the origin: world x −10..10,
+    /// z −8..8.
+    fn placed() -> (crate::components::Transform, [u32; 3], Vec3) {
+        (
+            crate::components::Transform::default(),
+            [10, 2, 8],
+            Vec3::new(2.0, 2.5, 2.0),
+        )
+    }
+
+    #[test]
+    fn a_disc_at_the_centre_covers_the_cells_around_it() {
+        let (placement, size, cell) = placed();
+        assert_eq!(
+            region_around(Vec3::ZERO, 2.0, &placement, size, cell),
+            Ok([4, 3, 6, 5])
+        );
+    }
+
+    /// The property the tour depends on: a camera flying past an edge asks for
+    /// a disc that hangs off it, and gets the part that is there.
+    #[test]
+    fn a_disc_hanging_off_an_edge_clamps() {
+        let (placement, size, cell) = placed();
+        assert_eq!(
+            region_around(Vec3::new(-11.0, 0.0, 0.0), 3.0, &placement, size, cell),
+            Ok([0, 2, 1, 5])
+        );
+    }
+
+    /// Entirely off is a miss rather than an empty rectangle — the caller has
+    /// to be able to tell "nothing there" from "nothing changed".
+    #[test]
+    fn a_disc_entirely_off_the_grid_misses() {
+        let (placement, size, cell) = placed();
+        assert_eq!(
+            region_around(Vec3::new(400.0, 0.0, 0.0), 2.0, &placement, size, cell),
+            Err(RegionMiss::OffGrid)
+        );
+    }
+
+    /// Negated float comparison, so a NaN fails rather than flooring into a
+    /// garbage cell range.
+    #[test]
+    fn a_nan_radius_is_refused() {
+        let (placement, size, cell) = placed();
+        assert_eq!(
+            region_around(Vec3::ZERO, f32::NAN, &placement, size, cell),
+            Err(RegionMiss::BadRadius)
+        );
+        assert_eq!(
+            region_around(Vec3::ZERO, -1.0, &placement, size, cell),
+            Err(RegionMiss::BadRadius)
+        );
+    }
+
+    /// The mapping is the inverse of `cell_origin`: the cell a disc of radius
+    /// zero selects is the cell whose origin that position is inside.
+    #[test]
+    fn a_zero_radius_disc_names_the_cell_the_origin_belongs_to() {
+        let (placement, size, cell) = placed();
+        let grid = Grid {
+            size,
+            offsets: Vec::new(),
+        };
+        for index in 0..grid.cell_count() {
+            let (x, _, z) = grid.coords(index);
+            if grid.coords(index).1 != 0 {
+                continue;
+            }
+            let tileset = Tileset {
+                cell,
+                palette: BTreeMap::new(),
+                tiles: Vec::new(),
+                constraints: Vec::new(),
+            };
+            let origin = cell_origin(&tileset, &grid, index);
+            assert_eq!(
+                region_around(origin, 0.0, &placement, size, cell),
+                Ok([x, z, x, z]),
+                "cell {x},{z}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

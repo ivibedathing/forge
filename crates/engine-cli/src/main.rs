@@ -670,6 +670,16 @@ enum Command {
         /// A world XZ position. Reports the column standing there.
         #[arg(long, allow_hyphen_values = true)]
         at: Option<String>,
+        /// Step the scene this many times first, and report the grid as it
+        /// then stands (M50). Without it the report is the committed layout —
+        /// which is what a run *starts* from, not what `world.synthesize` may
+        /// since have made of it.
+        #[arg(long)]
+        steps: Option<u32>,
+        /// An input timeline to replay while stepping, as `--steps` needs when
+        /// the script that synthesizes is driven by keys.
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// Print a tileset's tiles: every rotation, its six sockets, how many
@@ -946,7 +956,13 @@ fn main() {
             check,
             reset,
         }),
-        Command::TileGrid { scene, entity, at } => tile_grid(scene, entity, at),
+        Command::TileGrid {
+            scene,
+            entity,
+            at,
+            steps,
+            input,
+        } => tile_grid(scene, entity, at, steps, input),
         Command::ListTiles { tileset, sheet } => list_tiles(tileset, sheet),
         Command::ListComponents {
             component,
@@ -2600,57 +2616,29 @@ fn resolve_region(
         (None, None) => return Ok(None),
     };
 
-    // Negated so a NaN fails. `args.radius < 0.0` is a different function — it
-    // is *false* for NaN — and a NaN radius would floor into a garbage cell
-    // range rather than being refused.
-    #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    if !(args.radius >= 0.0) {
-        return Err(EngineError::new(
-            codes::INVALID_INVOCATION,
-            format!("--radius must be zero or more metres, found {}", args.radius),
-        ));
-    }
-
-    // World → the grid's own frame → cells, the inverse of `cell_origin`.
-    let local = placement
-        .matrix()
-        .inverse()
-        .transform_point3(centre - glam::Vec3::new(0.0, centre.y, 0.0));
-    let [nx, _, nz] = size;
-    let to_cell = |value: f32, extent: u32, size: f32| value / size + extent as f32 * 0.5;
-    let (cx, cz) = (
-        to_cell(local.x, nx, cell.x),
-        to_cell(local.z, nz, cell.z),
-    );
-    let (rx, rz) = (args.radius / cell.x, args.radius / cell.z);
-
-    let span = |centre: f32, radius: f32, extent: u32| -> Option<(u32, u32)> {
-        let low = (centre - radius).floor();
-        let high = (centre + radius).floor();
-        if high < 0.0 || low >= extent as f32 {
-            return None;
-        }
-        Some((
-            low.max(0.0) as u32,
-            (high.min(extent as f32 - 1.0)).max(0.0) as u32,
-        ))
-    };
-
-    let (Some((x0, x1)), Some((z0, z1))) = (span(cx, rx, nx), span(cz, rz, nz)) else {
-        return Err(EngineError::new(
-            codes::INVALID_INVOCATION,
-            format!(
-                "the region around ({}, {}) at radius {} does not meet the grid on \
-                 {name:?}; `engine tile-grid {}` reports its footprint",
-                centre.x,
-                centre.z,
-                args.radius,
-                args.scene.display()
+    // The shared mapping (M50), not a second copy of it: `world.synthesize`
+    // resolves the same disc through the same function, and a test pins the two
+    // agreeing.
+    engine_core::tilegrid::region_around(centre, args.radius, placement, size, cell)
+        .map(Some)
+        .map_err(|miss| match miss {
+            engine_core::tilegrid::RegionMiss::BadRadius => EngineError::new(
+                codes::INVALID_INVOCATION,
+                format!("--radius must be zero or more metres, found {}", args.radius),
             ),
-        )
-        .entity(name));
-    };
-    Ok(Some([x0, z0, x1, z1]))
+            engine_core::tilegrid::RegionMiss::OffGrid => EngineError::new(
+                codes::INVALID_INVOCATION,
+                format!(
+                    "the region around ({}, {}) at radius {} does not meet the grid on \
+                     {name:?}; `engine tile-grid {}` reports its footprint",
+                    centre.x,
+                    centre.z,
+                    args.radius,
+                    args.scene.display()
+                ),
+            )
+            .entity(name),
+        })
 }
 
 fn parse_region_cells(text: &str, size: [u32; 3]) -> Result<Option<[u32; 4]>> {
@@ -2790,11 +2778,18 @@ fn check_layout(args: &SynthesizeArgs, inputs: &GridInputs, digest: &str) -> Res
 /// `--at` takes **world** metres and reports the whole column standing there,
 /// including `surface_y`: the height the column's geometry actually reaches,
 /// which is where a body dropped on it comes to rest.
-fn tile_grid(scene_path: PathBuf, entity: Option<String>, at: Option<String>) -> Result<()> {
-    let scene = load_scene(&scene_path)?;
+fn tile_grid(
+    scene_path: PathBuf,
+    entity: Option<String>,
+    at: Option<String>,
+    steps: Option<u32>,
+    input: Option<PathBuf>,
+) -> Result<()> {
+    let mut scene = load_scene(&scene_path)?;
+    let scene = &mut scene;
     let base_dir = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
     let name = sole_entity_with::<engine_core::components::TileGrid>(
-        &scene,
+        scene,
         &scene_path,
         &entity,
         "TileGrid",
@@ -2806,7 +2801,7 @@ fn tile_grid(scene_path: PathBuf, entity: Option<String>, at: Option<String>) ->
         .get::<&engine_core::components::TileGrid>(handle)
         .expect("filtered above"))
     .clone();
-    let placement = transform_of(&scene, handle);
+    let placement = transform_of(scene, handle);
 
     let tileset_path = engine_core::tileset::resolve_tileset(&component.tileset, &base_dir)
         .map_err(|e| e.entity(&name).file(scene_path.display().to_string()))?;
@@ -2825,7 +2820,7 @@ fn tile_grid(scene_path: PathBuf, entity: Option<String>, at: Option<String>) ->
         .entity(&name)
         .file(scene_path.display().to_string())
     })?;
-    let layout = engine_core::tilelayout::TileLayout::parse(&text).map_err(|bad| {
+    let mut layout = engine_core::tilelayout::TileLayout::parse(&text).map_err(|bad| {
         EngineError::new(
             codes::TILE_LAYOUT_MALFORMED,
             format!("the tile layout at {:?} is not readable: {bad}", component.layout),
@@ -2834,6 +2829,30 @@ fn tile_grid(scene_path: PathBuf, entity: Option<String>, at: Option<String>) ->
         .file(scene_path.display().to_string())
     })?;
     let grid = layout.grid();
+
+    // `--steps` reports the *live* grid (M50): the committed layout is where a
+    // run starts, and a scene whose script synthesizes has made something else
+    // of it by the time anyone would ask. Nothing writes a runtime arrangement
+    // back to disk, so without this the only way to read one is a picture.
+    //
+    // Tokens only. Locks, size, offsets and the header's `fallbacks` belong to
+    // the file and a runtime solve never touches them.
+    if let Some(steps) = steps {
+        let timeline = crate::simulate::load_input(input.as_deref())?;
+        let run = crate::simulate::run(
+            scene,
+            &scene_path,
+            steps,
+            timeline.as_ref(),
+            &engine_core::input::Viewport::DEFAULT,
+            None,
+        )?;
+        if let Some(tokens) = run.live_grids.as_ref().and_then(|grids| grids.tokens(&name)) {
+            for (cell, token) in layout.cells.iter_mut().zip(tokens) {
+                cell.token = token;
+            }
+        }
+    }
 
     // A census by authored name rather than by expansion: four rotations of one
     // wall is one kind of wall to whoever is reading this.
@@ -5077,6 +5096,8 @@ fn run_scene(
             step_index: 0,
             last: None,
             hud_lines: Vec::new(),
+            base_dir: scene_path.parent().unwrap_or(Path::new("")).to_path_buf(),
+            live_grids: None,
         })
     } else {
         None

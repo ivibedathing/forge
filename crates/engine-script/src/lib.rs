@@ -33,6 +33,7 @@ use engine_core::daylight::{Daylight, DaylightSettings};
 use engine_core::input::{self, InputState, Pointer};
 use engine_core::scene::{EnvironmentSettings, TemplateDef};
 use engine_core::spawn::{SpawnLedger, SpawnRefusal};
+use engine_core::tilelive::{RequestKind, SynthesisRequest};
 use engine_core::{codes, EngineError, Result};
 use hecs::World;
 use rhai::packages::{
@@ -229,6 +230,12 @@ pub struct ScriptHost {
     /// `RefCell` borrow it never needed to pay for spawning would be a cost
     /// on scenes that spawn nothing.
     fresh_names: Rc<RefCell<HashMap<String, hecs::Entity>>>,
+    /// Tile-grid solves `world.synthesize` / `world.clear_tiles` queued (M50),
+    /// drained via [`ScriptHost::take_synthesis`]. Queued for `take_breaks`'
+    /// reason and one of its own: a solve regrows an entity's geometry, and
+    /// doing that mid-script would make a grid's drawn shape depend on whether
+    /// the line that changed it ran before or after the line that read it.
+    synthesis: Rc<RefCell<Vec<SynthesisRequest>>>,
 }
 
 /// What scripts see: the world, entity names, and the fixed timestep.
@@ -289,6 +296,9 @@ struct WorldApi {
     despawns: Rc<RefCell<Vec<String>>>,
     /// Names spawned since the last `sync_names`, consulted after `names`.
     fresh_names: Rc<RefCell<HashMap<String, hecs::Entity>>>,
+    /// `world.synthesize` / `world.clear_tiles` (M50): grid solves queued for
+    /// after this step.
+    synthesis: Rc<RefCell<Vec<SynthesisRequest>>>,
 }
 
 impl WorldApi {
@@ -325,6 +335,59 @@ impl WorldApi {
             format!("no entity named {name:?}").into(),
             Position::NONE,
         )))
+    }
+
+    /// That the name is an entity, that it has a `TileGrid`, and that the grid
+    /// is one runtime synthesis may touch (M50).
+    ///
+    /// The `Collider` refusal is here rather than only where the solve runs so
+    /// that it points at the script line that asked. A grid's collider is a
+    /// static trimesh built once; rebuilding one mid-run perturbs the broad
+    /// phase and moves every body in the scene, so the answer is no rather than
+    /// a stale collider or a silent one.
+    fn check_grid(&self, name: &str) -> std::result::Result<(), Box<EvalAltResult>> {
+        let entity = self.entity(name)?;
+        let world = self.world.borrow();
+        if world.get::<&engine_core::components::TileGrid>(entity).is_err() {
+            return Err(runtime(format!("entity {name:?} has no TileGrid")));
+        }
+        if world.get::<&engine_core::components::Collider>(entity).is_ok() {
+            return Err(runtime(format!(
+                "entity {name:?} has a Collider, so its geometry is also a physics trimesh \
+                 and cannot be re-solved while the scene runs; drop the Collider, or solve \
+                 it with `engine synthesize`"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Queue one disc solve, shared by both arities of `world.synthesize`.
+    fn queue_synthesis(
+        &mut self,
+        name: &str,
+        x: f64,
+        z: f64,
+        radius: f64,
+        seed: Option<u32>,
+    ) -> std::result::Result<(), Box<EvalAltResult>> {
+        self.check_grid(name)?;
+        // Negated so a NaN fails, `explode`'s rule: a NaN radius would floor
+        // into a garbage cell range rather than being refused.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(radius >= 0.0) {
+            return Err(runtime(format!(
+                "a synthesis radius must be zero or more metres, found {radius}"
+            )));
+        }
+        self.synthesis.borrow_mut().push(SynthesisRequest {
+            entity: name.to_string(),
+            kind: RequestKind::Solve {
+                at: [x as f32, z as f32],
+                radius: radius as f32,
+                seed,
+            },
+        });
+        Ok(())
     }
 
     /// Borrow one component mutably for the duration of a closure; `what`
@@ -1131,6 +1194,49 @@ fn curated_engine() -> rhai::Engine {
             // breaks are applied and for the same reason.
             w.ledger.borrow_mut().forget(name);
             w.despawns.borrow_mut().push(name.to_string());
+            Ok(())
+        },
+    );
+
+    // ── Runtime tile synthesis (M50) ───────────────────────────────────
+    //
+    // Two verbs, both queued and both validated here rather than where they
+    // are applied: a script wrote a *name*, so the error that names it belongs
+    // at the line that wrote it, not two systems later in a sim loop.
+    engine.register_fn(
+        "synthesize",
+        |w: &mut WorldApi,
+         name: &str,
+         x: f64,
+         z: f64,
+         radius: f64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            w.queue_synthesis(name, x, z, radius, None)
+        },
+    );
+    engine.register_fn(
+        "synthesize",
+        |w: &mut WorldApi,
+         name: &str,
+         x: f64,
+         z: f64,
+         radius: f64,
+         seed: i64|
+         -> std::result::Result<(), Box<EvalAltResult>> {
+            // Negative seeds wrap rather than fail: the natural way to derive
+            // one in a script is arithmetic on the step, and a script has no
+            // unsigned type to keep that arithmetic in.
+            w.queue_synthesis(name, x, z, radius, Some(seed as u32))
+        },
+    );
+    engine.register_fn(
+        "clear_tiles",
+        |w: &mut WorldApi, name: &str| -> std::result::Result<(), Box<EvalAltResult>> {
+            w.check_grid(name)?;
+            w.synthesis.borrow_mut().push(SynthesisRequest {
+                entity: name.to_string(),
+                kind: RequestKind::Clear,
+            });
             Ok(())
         },
     );
@@ -2129,6 +2235,7 @@ impl ScriptHost {
             spawns: Rc::new(RefCell::new(Vec::new())),
             despawns: Rc::new(RefCell::new(Vec::new())),
             fresh_names: Rc::new(RefCell::new(HashMap::new())),
+            synthesis: Rc::new(RefCell::new(Vec::new())),
         }))
     }
 
@@ -2204,6 +2311,16 @@ impl ScriptHost {
         self.kicks.borrow_mut().drain(..).collect()
     }
 
+    /// Drain the tile-grid solves scripts queued this step, in call order (M50).
+    ///
+    /// Applied by the caller between the scripts and physics, through
+    /// [`engine_core::tilelive::LiveGrids`] — which is where the tileset, the
+    /// layout and the solver live. The scripting crate carries the request and
+    /// not the answer.
+    pub fn take_synthesis(&self) -> Vec<SynthesisRequest> {
+        self.synthesis.borrow_mut().drain(..).collect()
+    }
+
     /// Run every script's `step` for step index `step`, with `input` as the
     /// held-key set for the duration of the step, `pointer` as where the
     /// mouse pointed during it, and `contacts` as the touching-state left by
@@ -2252,6 +2369,7 @@ impl ScriptHost {
             spawns: Rc::clone(&self.spawns),
             despawns: Rc::clone(&self.despawns),
             fresh_names: Rc::clone(&self.fresh_names),
+            synthesis: Rc::clone(&self.synthesis),
         };
 
         let mut failure: Option<EngineError> = None;

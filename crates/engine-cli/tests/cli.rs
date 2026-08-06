@@ -2634,16 +2634,18 @@ fn the_showcase_tour_keeps_touring_past_its_fifteen_seconds() {
     );
 
     // A lap later it is home, having travelled rather than looped in place.
-    let (home, line) = camera_at("1080");
+    // The lap is 1440 steps since M50: five stations, the two village legs,
+    // and the way back.
+    let (home, line) = camera_at("1440");
     assert!(
         apart(home, opening) < 0.25,
         "one lap should return the camera to its opening key, not to {home:?}"
     );
-    assert_eq!(line, "TOUR LAP 2  06 THE WAY BACK");
+    assert_eq!(line, "TOUR LAP 2  08 THE WAY BACK");
 
     // And the stations themselves come round: 90 steps into the new lap is
     // the forest again, framed exactly as station 01 frames it.
-    let (_, line) = camera_at("1170");
+    let (_, line) = camera_at("1530");
     assert_eq!(line, "TOUR LAP 2  01 FOREST");
 }
 
@@ -8725,4 +8727,274 @@ fn an_unsatisfiable_bound_is_reported_by_validate() {
         "{:?}",
         stderr_lines(&output)
     );
+}
+
+// ── M50: runtime synthesis ─────────────────────────────────────────────────
+
+const M50_SCENE: &str = "examples/scenes/verify/m50_live_tiles.json";
+
+/// The fixture's frame is the *product* of the runtime path: the script clears
+/// the grid at step 0 and sweeps a disc across it, so a frame rendered with the
+/// feature deleted is bare cobble. Pinned bit-exactly — five renders gave one
+/// image, which is what `samples: 1` on flat ground buys.
+#[test]
+fn the_m50_live_tiles_fixture_matches_its_baseline() {
+    pin_baseline(
+        M50_SCENE,
+        "examples/scenes/verify/baselines/m50_live_tiles.png",
+        &["--steps", "70"],
+    );
+}
+
+/// The tile census `engine tile-grid` reports, optionally after stepping.
+fn tile_census(scene: &str, args: &[&str]) -> serde_json::Value {
+    let mut command = engine();
+    command.arg("tile-grid").arg(repo_path(scene));
+    for arg in args {
+        command.arg(arg);
+    }
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    json_out(&output)["tiles"].clone()
+}
+
+/// The determinism claim, and the one a baseline rests on: a runtime solve is a
+/// pure function of the layout, the tileset and the calls a script made against
+/// a fixed clock.
+#[test]
+fn a_runtime_solve_is_the_same_twice() {
+    let first = tile_census(M50_SCENE, &["--steps", "70"]);
+    let second = tile_census(M50_SCENE, &["--steps", "70"]);
+    assert_eq!(first, second);
+}
+
+/// And what it produces is not the committed layout — without this the test
+/// above passes on a build where `world.synthesize` does nothing at all.
+#[test]
+fn a_runtime_solve_leaves_the_committed_layout_behind() {
+    assert_ne!(
+        tile_census(M50_SCENE, &[]),
+        tile_census(M50_SCENE, &["--steps", "70"]),
+        "stepping the fixture must change what the grid holds"
+    );
+}
+
+/// `simulate` counts what it applied — M25's rule that a run reports what it
+/// did. Both verbs count: one clear plus eight sweeps.
+#[test]
+fn simulate_reports_the_solves_it_applied() {
+    let output = engine()
+        .arg("simulate")
+        .arg(repo_path(M50_SCENE))
+        .arg("--steps")
+        .arg("70")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    assert_eq!(json_out(&output)["synthesized"], 9);
+}
+
+/// A scene that synthesizes nothing at runtime reports exactly what it did
+/// before the feature existed — the house rule, as a test rather than a claim.
+#[test]
+fn a_scene_that_never_synthesizes_reports_no_count() {
+    let output = engine()
+        .arg("simulate")
+        .arg(repo_path(M47_SCENE))
+        .arg("--steps")
+        .arg("30")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    assert!(
+        json_out(&output).get("synthesized").is_none(),
+        "the key must be absent, not zero"
+    );
+}
+
+/// A scratch scene with the village tileset **copied in beside it**, a script,
+/// and a solved layout.
+///
+/// Copied rather than named by absolute path: invariant 3 is that assets are
+/// referenced relative to the scene file, and `validate` refuses an absolute
+/// one — correctly, and it caught the first version of this helper.
+fn live_scratch(test: &str, script: &str, extra: &str) -> PathBuf {
+    let dir = tile_scratch(test);
+    std::fs::write(dir.join("live.rhai"), script).unwrap();
+    std::fs::copy(
+        repo_path("examples/tilesets/village.json"),
+        dir.join("village.json"),
+    )
+    .unwrap();
+    let scene = format!(
+        r#"{{
+          "name": "live",
+          "entities": [
+            {{ "name": "Village", "components": [
+                {{ "type": "Transform" }},
+                {{ "type": "TileGrid", "tileset": "village.json", "layout": "live.tiles.json",
+                   "size": [8, 2, 6], "seed": 3,
+                   "fill_ground": "cobble", "fill_background": "air" }}{extra}
+            ] }},
+            {{ "name": "Mason", "components": [
+                {{ "type": "Transform" }},
+                {{ "type": "Script", "source": "live.rhai" }}
+            ] }}
+          ]
+        }}"#
+    );
+    let path = dir.join("live.json");
+    std::fs::write(&path, scene).unwrap();
+    let output = engine()
+        .arg("synthesize")
+        .arg(&path)
+        .arg("--write")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    dir
+}
+
+/// A disc meeting no cell is an error, not a silent no-op: "the village did not
+/// change" is indistinguishable from "the village was already right", and only
+/// one of those is something the author can fix.
+#[test]
+fn a_disc_off_the_grid_is_refused() {
+    let dir = live_scratch(
+        "offgrid",
+        "fn step(world, step) { world.synthesize(\"Village\", 400.0, 0.0, 2.0); }",
+        "",
+    );
+    let output = engine()
+        .arg("simulate")
+        .arg(dir.join("live.json"))
+        .arg("--steps")
+        .arg("2")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        codes_of(&stderr_lines(&output)).contains(&"tile_region_off_grid".to_string()),
+        "{:?}",
+        stderr_lines(&output)
+    );
+}
+
+/// A grid whose geometry is also a physics trimesh is refused rather than
+/// re-solved: rebuilding a static collider mid-run perturbs the broad phase and
+/// moves every body in the scene. Refused **at the call**, so the error points
+/// at the script line rather than at a system two steps later.
+#[test]
+fn a_grid_with_a_collider_refuses_runtime_synthesis() {
+    let dir = live_scratch(
+        "collider",
+        "fn step(world, step) { world.synthesize(\"Village\", 0.0, 0.0, 2.0); }",
+        ", { \"type\": \"Collider\", \"shape\": \"trimesh\" }",
+    );
+    let output = engine()
+        .arg("simulate")
+        .arg(dir.join("live.json"))
+        .arg("--steps")
+        .arg("2")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stderr_lines(&output);
+    let error = lines
+        .iter()
+        .find(|l| l["error"] == "script_runtime_error")
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(
+        error["message"].as_str().unwrap().contains("Collider"),
+        "{error}"
+    );
+}
+
+/// `clear_tiles` keeps the author's pins. It is the first half of
+/// `synthesize --reset`, and locks are the one thing a reset does not throw
+/// away.
+#[test]
+fn clear_tiles_keeps_locked_cells() {
+    let dir = live_scratch(
+        "locks",
+        "fn step(world, step) { if step == 0 { world.clear_tiles(\"Village\"); } }",
+        "",
+    );
+    // Pin one ground cell as something the fill is not — by hand, which is
+    // exactly how an author pins a cell.
+    let layout = dir.join("live.tiles.json");
+    let text = std::fs::read_to_string(&layout).unwrap();
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    let row: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
+    let mut tokens: Vec<String> = row["row"]
+        .as_str()
+        .unwrap()
+        .split(' ')
+        .map(String::from)
+        .collect();
+    tokens[0] = "!post@0".to_string();
+    lines[1] = serde_json::json!({
+        "y": row["y"], "z": row["z"], "row": tokens.join(" "),
+    })
+    .to_string();
+    std::fs::write(&layout, format!("{}\n", lines.join("\n"))).unwrap();
+
+    let output = engine()
+        .arg("tile-grid")
+        .arg(dir.join("live.json"))
+        .arg("--steps")
+        .arg("3")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let report = json_out(&output);
+    assert_eq!(report["locked"], 1);
+    // Cleared to cobble and air everywhere the author did not pin — and the
+    // pinned post survived.
+    assert_eq!(report["tiles"]["post"], 1, "{report}");
+    assert!(report["tiles"].get("wall").is_none(), "{report}");
+}
+
+/// The world→cell mapping has exactly one implementation (M50). A disc resolved
+/// by `world.synthesize` must name the cells `engine synthesize --at` names, or
+/// the runtime path and the command drift into two notions of "near" — which is
+/// how M40's road and its query started disagreeing.
+#[test]
+fn the_runtime_region_is_the_one_the_command_resolves() {
+    let dir = live_scratch(
+        "region",
+        "fn step(world, step) { if step == 0 { world.synthesize(\"Village\", -3.0, 1.5, 2.5); } }",
+        "",
+    );
+    let trace = dir.join("trace.jsonl");
+    let output = engine()
+        .arg("simulate")
+        .arg(dir.join("live.json"))
+        .arg("--steps")
+        .arg("1")
+        .arg("--trace")
+        .arg(&trace)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let traced: serde_json::Value = std::fs::read_to_string(&trace)
+        .unwrap()
+        .lines()
+        .find(|l| l.contains("synthesized"))
+        .map(|l| serde_json::from_str(l).unwrap())
+        .unwrap();
+
+    let output = engine()
+        .arg("synthesize")
+        .arg(dir.join("live.json"))
+        .arg("--at")
+        .arg("-3,1.5")
+        .arg("--radius")
+        .arg("2.5")
+        .arg("--out")
+        .arg(dir.join("scratch.tiles.json"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    assert_eq!(traced["region"], json_out(&output)["region"]);
 }

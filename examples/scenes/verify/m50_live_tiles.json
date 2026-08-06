@@ -1,0 +1,70 @@
+{
+  "name": "M50 runtime synthesis",
+  "environment": {
+    "sky": true,
+    "sky_zenith": [0.34, 0.48, 0.72],
+    "sky_horizon": [0.72, 0.76, 0.78],
+    "sky_ground": [0.24, 0.22, 0.2],
+    "shadows": true,
+    "shadow_distance": 60.0,
+    "samples": 1
+  },
+  "physics": { "gravity": [0.0, -9.81, 0.0] },
+  "entities": [
+    {
+      "name": "Sun",
+      "components": [
+        { "type": "Transform", "rotation": [-38.0, 208.0, 0.0] },
+        { "type": "DirectionalLight", "color": [1.0, 0.96, 0.88], "intensity": 1.45 }
+      ]
+    },
+    {
+      "name": "Sky",
+      "components": [{ "type": "AmbientLight", "color": [0.62, 0.68, 0.8], "intensity": 0.26 }]
+    },
+    {
+      "name": "Ground",
+      "components": [
+        { "type": "Transform", "position": [0.0, -0.02, 0.0], "scale": [60.0, 1.0, 60.0] },
+        {
+          "type": "Terrain",
+          "seed": 11,
+          "segments": 48,
+          "height": 0.0,
+          "feature_scale": 22.0,
+          "layers": [{ "albedo": [0.28, 0.34, 0.18], "roughness": 0.95 }]
+        },
+        { "type": "Collider", "shape": "trimesh" }
+      ]
+    },
+    {
+      "name": "Village",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0] },
+        {
+          "type": "TileGrid",
+          "tileset": "../../tilesets/village.json",
+          "layout": "layouts/m50_village.tiles.json",
+          "size": [10, 2, 8],
+          "seed": 5,
+          "fill_ground": "cobble",
+          "fill_background": "air"
+        }
+      ]
+    },
+    {
+      "name": "Mason",
+      "components": [
+        { "type": "Transform", "position": [0.0, 0.0, 0.0] },
+        { "type": "Script", "source": "m50_live_tiles.rhai" }
+      ]
+    },
+    {
+      "name": "Eye",
+      "components": [
+        { "type": "Transform", "position": [1.0, 11.0, -19.0], "rotation": [24.0, 182.0, 0.0] },
+        { "type": "Camera", "active": true, "near": 0.1, "far": 200.0 }
+      ]
+    }
+  ]
+}

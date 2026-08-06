@@ -267,6 +267,31 @@ from positions. Instance names are never reused within a run, which is what
 keeps a row name unambiguous. A trace of a scene that spawns nothing is
 unchanged, both golden ones included.
 
+**`synthesized`** appears on the `simulate` report only when the run re-solved a
+`TileGrid` at runtime (M50) — `world.synthesize(entity, x, z, radius[, seed])`
+re-solves the blocks meeting a world-space disc, and `world.clear_tiles(entity)`
+returns every unlocked cell to the tileset's fill. It counts applied requests of
+both kinds, so a pre-M50 report is byte-identical.
+
+A `--trace` gains one event line per applied request: `{"step": N,
+"synthesized": "Hamlet", "changed": 38, "region": [3, 5, 5, 6], "blocks": 2,
+"fallbacks": 0}`. The `region` key is present for a solve and absent for a
+clear, which is how the line says which verb ran; `changed` counts cells whose
+tile is not what it was, and is the number that distinguishes "re-solved and
+settled on the same arrangement" from "did nothing".
+
+Two refusals, both at the script call so the error is located at the line that
+asked: a disc lying entirely off the grid is `tile_region_off_grid` rather than
+a silent no-op, and a `TileGrid` carrying a `Collider` cannot be re-solved at
+runtime at all — its geometry is also a physics trimesh, and rebuilding one
+mid-run perturbs the broad phase for every body in the scene.
+
+`engine tile-grid --steps N [--input f]` reports the grid **as the run left
+it** rather than as the committed layout has it. Nothing writes a runtime
+arrangement back to disk, so this is the only way to read one; locks, size and
+the header's `fallbacks` still come from the file, which a runtime solve never
+touches.
+
 ## Animation
 
 Pose is a pure function of (files, time): `--time T` on `screenshot` and

@@ -663,6 +663,25 @@
      "height": 450,
      "milestone": "M47",
      "pinned_by": "cli.rs::the_m47_tiles_fixture_matches_its_baseline"
+    },
+    {
+     "baseline": "examples/scenes/verify/baselines/showcase_1150.png",
+     "scene": "examples/scenes/showcase_tour.json",
+     "args": ["--steps", "1150"],
+     "diff_args": ["--threshold", "24", "--max-diff-percent", "0.02"],
+     "width": 640,
+     "height": 360,
+     "milestone": "M50",
+     "pinned_by": "the sweep only -- a tour frame, and this adapter will not render one bit-exactly"
+    },
+    {
+     "baseline": "examples/scenes/verify/baselines/m50_live_tiles.png",
+     "scene": "examples/scenes/verify/m50_live_tiles.json",
+     "args": ["--steps", "70"],
+     "width": 800,
+     "height": 450,
+     "milestone": "M50",
+     "pinned_by": "cli.rs::the_m50_live_tiles_fixture_matches_its_baseline"
     }
   ],
   "traces": [

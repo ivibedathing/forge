@@ -36,6 +36,7 @@ pub mod terrain;
 pub mod texture;
 pub mod tilegrid;
 pub mod tilelayout;
+pub mod tilelive;
 pub mod tileset;
 pub mod tree;
 pub mod ui;

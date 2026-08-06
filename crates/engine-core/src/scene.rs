@@ -1717,7 +1717,7 @@ impl Scene {
         }
     }
 
-    fn transform_of(&self, entity: Entity) -> Transform {
+    pub(crate) fn transform_of(&self, entity: Entity) -> Transform {
         self.world
             .get::<&Transform>(entity)
             .map(|t| *t)

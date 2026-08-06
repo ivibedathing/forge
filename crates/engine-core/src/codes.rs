@@ -386,6 +386,12 @@ registry! {
     TILE_GRID_GROUND_INVALID = "tile_grid_ground_invalid", Input,
         "a TileGrid's \"ground\" must name an entity that has a Terrain component";
 
+    // ── Runtime synthesis (M50) ────────────────────────────────────────
+    TILE_REGION_OFF_GRID = "tile_region_off_grid", Input,
+        "a runtime synthesis disc lies entirely off the grid it names; `engine tile-grid` reports the footprint";
+    TILE_GRID_COLLIDES = "tile_grid_collides", Input,
+        "a TileGrid with a Collider cannot be re-solved at runtime; its trimesh is built once, and rebuilding it mid-run moves every body in the scene";
+
     // ── UI system (M31) ────────────────────────────────────────────────
     HUD_PARENT_NOT_FOUND = "hud_parent_not_found", Input,
         "a HUD element's \"parent\" names no entity in the scene";
