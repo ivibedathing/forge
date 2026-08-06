@@ -8189,3 +8189,237 @@ fn an_illegal_cell_is_an_error_and_a_forced_one_is_a_warning() {
     );
     assert_eq!(forced.status.code(), Some(0), "a warning is still valid");
 }
+
+// ── Tile-synthesis ergonomics (M48) ────────────────────────────────────────
+//
+// Three commands that exist because building the M47 fixture needed answers
+// the engine already held and would not say: which cell holds what, where a
+// body dropped on the village lands, and what the tileset I just wrote actually
+// looks like. The first was worked out by parsing the layout in Python, twice.
+
+/// `--at` in **world** metres, and `surface_y` as the height a body lands on.
+///
+/// The number is checked against physics rather than against itself: the M47
+/// fixture's ball comes to rest at exactly `surface_y` plus its radius, which
+/// is the claim that makes this query worth having.
+#[test]
+fn tile_grid_reports_the_column_under_a_world_position() {
+    let output = engine()
+        .arg("tile-grid")
+        .arg(repo_path(M47_SCENE))
+        .arg("--at")
+        .arg("0,-5")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let report = json_out(&output);
+
+    assert_eq!(report["entity"], "Village");
+    assert_eq!(report["size"], serde_json::json!([10, 2, 8]));
+    assert_eq!(report["terraced"], true);
+
+    let column = &report["column"];
+    assert_eq!(column["cell"], serde_json::json!([5, 1]));
+    assert_eq!(column["lift"], 1);
+    let surface = column["surface_y"].as_f64().unwrap();
+
+    // The ball's radius is 0.5 and it rests on this column.
+    let rest = engine()
+        .arg("simulate")
+        .arg(repo_path(M47_SCENE))
+        .arg("--steps")
+        .arg("240")
+        .arg("--entity")
+        .arg("Ball")
+        .output()
+        .unwrap();
+    let ball = &json_out(&rest)["entities"][0];
+    let resting_y = ball["position"][1].as_f64().unwrap();
+    // Millimetres, not exactness: a resting body sits slightly *into* its
+    // contact by rapier's allowed penetration, so the gap here is about 1 mm
+    // and is physics being right rather than the query being wrong.
+    assert!(
+        (resting_y - (surface + 0.5)).abs() < 5e-3,
+        "the ball rests at {resting_y}, but surface_y says {surface}"
+    );
+
+    let stack = column["stack"].as_array().unwrap();
+    assert_eq!(stack.len(), 2, "a two-storey grid has two cells per column");
+    assert_eq!(stack[0]["tile"], "cobble");
+    assert_eq!(stack[1]["parts"], 0, "air grows nothing");
+}
+
+#[test]
+fn tile_grid_names_its_footprint_when_asked_about_somewhere_else() {
+    let output = engine()
+        .arg("tile-grid")
+        .arg(repo_path(M47_SCENE))
+        .arg("--at")
+        .arg("40,0")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let lines = stderr_lines(&output);
+    assert_eq!(codes_of(&lines), ["invalid_invocation"]);
+    assert!(
+        lines[0]["message"].as_str().unwrap().contains("footprint"),
+        "{lines:?}"
+    );
+}
+
+/// The locked cottage is visible through the query, which is how an author
+/// checks a pin landed without reading the layout file.
+#[test]
+fn tile_grid_reports_a_locked_cell_as_locked() {
+    let output = engine()
+        .arg("tile-grid")
+        .arg(repo_path(M47_SCENE))
+        .arg("--at")
+        .arg("-5,-3")
+        .output()
+        .unwrap();
+    let stack = json_out(&output)["column"]["stack"].clone();
+    assert_eq!(stack[0]["tile"], "floor");
+    assert_eq!(stack[0]["locked"], true);
+    assert_eq!(stack[1]["locked"], false, "the solver roofed it");
+}
+
+/// `--around` is `--at` with the position looked up, and both are `--region`
+/// with the cell arithmetic done for you.
+#[test]
+fn a_world_region_and_an_entity_pick_the_same_cells() {
+    let at = engine()
+        .arg("synthesize")
+        .arg(repo_path(M47_SCENE))
+        .arg("--at")
+        .arg("0,-5")
+        .arg("--radius")
+        .arg("3")
+        .output()
+        .unwrap();
+    assert_eq!(at.status.code(), Some(0), "{:?}", stderr_lines(&at));
+    let region = json_out(&at)["region"].clone();
+    assert_eq!(region, serde_json::json!([3, 0, 6, 3]));
+
+    // The fixture's Ball stands at (0, _, -5).
+    let around = engine()
+        .arg("synthesize")
+        .arg(repo_path(M47_SCENE))
+        .arg("--around")
+        .arg("Ball")
+        .arg("--radius")
+        .arg("3")
+        .output()
+        .unwrap();
+    assert_eq!(json_out(&around)["region"], region);
+
+    // And neither wrote, because neither said --write.
+    assert_eq!(json_out(&at)["written"], false);
+}
+
+#[test]
+fn an_unknown_entity_to_solve_around_suggests_a_name() {
+    let output = engine()
+        .arg("synthesize")
+        .arg(repo_path(M47_SCENE))
+        .arg("--around")
+        .arg("Bell")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stderr_lines(&output);
+    assert_eq!(codes_of(&lines), ["entity_not_found"]);
+    assert_eq!(lines[0]["did_you_mean"], "Ball");
+}
+
+#[test]
+fn a_world_region_that_misses_the_grid_is_refused() {
+    let output = engine()
+        .arg("synthesize")
+        .arg(repo_path(M47_SCENE))
+        .arg("--at")
+        .arg("90,90")
+        .arg("--radius")
+        .arg("1")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(codes_of(&stderr_lines(&output)), ["invalid_invocation"]);
+}
+
+/// A region reaching off the edge **clamps** rather than failing: "re-solve
+/// around the well" is a reasonable thing to ask near a boundary.
+#[test]
+fn a_world_region_overlapping_the_edge_clamps_to_the_grid() {
+    let output = engine()
+        .arg("synthesize")
+        .arg(repo_path(M47_SCENE))
+        .arg("--at")
+        .arg("-9,-7")
+        .arg("--radius")
+        .arg("6")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let region = json_out(&output)["region"].clone();
+    assert_eq!(region[0], 0, "clamped at the low edge, not negative");
+    assert_eq!(region[1], 0);
+}
+
+/// The sheet closes prompt → tileset → *look at it*: it must render, which
+/// means it must resolve its own tileset reference and frame something.
+#[test]
+fn list_tiles_writes_a_contact_sheet_that_renders() {
+    let dir = tile_scratch("sheet");
+    let scene = dir.join("village.json");
+    let output = engine()
+        .arg("list-tiles")
+        .arg(repo_path("examples/tilesets/village.json"))
+        .arg("--sheet")
+        .arg(&scene)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
+    let sheet = json_out(&output)["sheet"].clone();
+
+    // Tiles across, rotations down, with a blank column between tiles.
+    assert_eq!(sheet["size"], serde_json::json!([19, 1, 4]));
+    assert!(scene.is_file());
+    assert!(dir.join("village.tiles.json").is_file());
+
+    // Every cell is locked, so the sheet reports `tile_layout_forced` and
+    // nothing worse — it is a valid scene that has been told what to draw.
+    let check = engine().arg("validate").arg(&scene).output().unwrap();
+    assert_eq!(
+        check.status.code(),
+        Some(0),
+        "{:?}",
+        codes_of(&stderr_lines(&check))
+    );
+    let codes = codes_of(&stderr_lines(&check));
+    assert!(codes.iter().all(|c| c == "tile_layout_forced"), "{codes:?}");
+
+    let shot = engine()
+        .arg("screenshot")
+        .arg(&scene)
+        .arg("--out")
+        .arg(dir.join("sheet.png"))
+        .arg("--width")
+        .arg("400")
+        .arg("--height")
+        .arg("200")
+        .output()
+        .unwrap();
+    if !shot.status.success() {
+        let stderr = String::from_utf8_lossy(&shot.stderr);
+        assert!(
+            stderr.contains("no_gpu_adapter") || stderr.contains("device_request_failed"),
+            "the sheet did not render: {stderr}"
+        );
+        return;
+    }
+    // Something is in frame, and it is not the whole frame: a sheet that
+    // renders a wall of geometry is one whose camera fell inside it.
+    let coverage = json_out(&shot)["digest"]["coverage"].as_f64().unwrap();
+    assert!((0.05..0.999).contains(&coverage), "coverage {coverage}");
+}

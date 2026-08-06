@@ -605,10 +605,23 @@ enum Command {
         #[arg(long)]
         seed: Option<u32>,
         /// `x0,z0,x1,z1` inclusive, **in cells**: re-solve only the blocks
-        /// whose interior meets this rectangle. Metres would make the flag's
-        /// meaning depend on Transform.scale.
+        /// whose interior meets this rectangle. The exact form, for a script
+        /// that already knows its indices.
         #[arg(long, allow_hyphen_values = true)]
         region: Option<String>,
+        /// A world XZ position to re-solve around, in **metres** (M48). What an
+        /// author has, when `--region`'s cell indices are what they would have
+        /// to work out.
+        #[arg(long, allow_hyphen_values = true, conflicts_with = "region")]
+        at: Option<String>,
+        /// An entity to re-solve around: `--at`, taking its position from the
+        /// scene.
+        #[arg(long, conflicts_with_all = ["region", "at"])]
+        around: Option<String>,
+        /// Metres either side of `--at`/`--around`. Zero is the single cell the
+        /// point falls in, which still pulls in every block overlapping it.
+        #[arg(long, default_value_t = 0.0)]
+        radius: f32,
         /// Block extent in cells, `x,z`. Y is always taken whole.
         #[arg(long)]
         block: Option<String>,
@@ -631,6 +644,24 @@ enum Command {
         check: bool,
     },
 
+    /// Print what a solved TileGrid actually holds (M48).
+    ///
+    /// The query that answers "what is *there*", which a picture cannot: the
+    /// grid's extent in world metres, its terrace lifts, a census of the tiles
+    /// it placed, and — with `--at` — the whole column standing at a world XZ,
+    /// including the height its geometry reaches, which is where a body dropped
+    /// on it comes to rest.
+    TileGrid {
+        /// The scene holding the grid.
+        scene: PathBuf,
+        /// Which `TileGrid` — required only when the scene has more than one.
+        #[arg(long)]
+        entity: Option<String>,
+        /// A world XZ position. Reports the column standing there.
+        #[arg(long, allow_hyphen_values = true)]
+        at: Option<String>,
+    },
+
     /// Print a tileset's tiles: every rotation, its six sockets, how many
     /// tiles may sit across each face, and what it grows (M47).
     ///
@@ -641,6 +672,15 @@ enum Command {
     ListTiles {
         /// The tileset file.
         tileset: PathBuf,
+        /// Write a **contact sheet** scene here: every tile at every rotation,
+        /// laid out rotations-across and tiles-down, so an authored tileset can
+        /// be screenshotted (M48). Writes the scene and a layout beside it.
+        ///
+        /// Every cell is locked, so the sheet reports `tile_layout_forced` for
+        /// each interface it forces — that warning is exactly what it is for,
+        /// and the sheet is a scratch artifact rather than something to commit.
+        #[arg(long)]
+        sheet: Option<PathBuf>,
     },
 
     /// Print the component and scene JSON Schemas.
@@ -870,6 +910,9 @@ fn main() {
             entity,
             seed,
             region,
+            at,
+            around,
+            radius,
             block,
             overlap,
             attempts,
@@ -881,6 +924,9 @@ fn main() {
             entity,
             seed,
             region,
+            at,
+            around,
+            radius,
             block,
             overlap,
             attempts,
@@ -888,7 +934,8 @@ fn main() {
             write,
             check,
         }),
-        Command::ListTiles { tileset } => list_tiles(tileset),
+        Command::TileGrid { scene, entity, at } => tile_grid(scene, entity, at),
+        Command::ListTiles { tileset, sheet } => list_tiles(tileset, sheet),
         Command::ListComponents {
             component,
             markdown,
@@ -2091,6 +2138,9 @@ struct SynthesizeArgs {
     entity: Option<String>,
     seed: Option<u32>,
     region: Option<String>,
+    at: Option<String>,
+    around: Option<String>,
+    radius: f32,
     block: Option<String>,
     overlap: Option<u32>,
     attempts: Option<u32>,
@@ -2107,6 +2157,10 @@ struct GridInputs {
     tiles: Vec<engine_core::tileset::ExpandedTile>,
     compat: engine_core::tileset::Compat,
     grid: engine_core::tilelayout::Grid,
+    /// The cell rectangle a `--region`/`--at`/`--around` resolved to, already
+    /// clamped to the grid. Resolved in `read_grid` because the world-space
+    /// forms need the scene, and nothing downstream should have to keep it.
+    region: Option<[u32; 4]>,
     /// Where the prior layout is read from: always the one the *component*
     /// names. `--out` redirects the write only — the locks and the layout a
     /// region solve builds on belong to the scene, not to wherever this run
@@ -2177,7 +2231,7 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
         None => (None, vec![false; inputs.grid.cell_count()]),
     };
 
-    if args.region.is_some() && prior_cells.is_none() {
+    if inputs.region.is_some() && prior_cells.is_none() {
         return Err(EngineError::new(
             codes::INVALID_INVOCATION,
             format!(
@@ -2201,7 +2255,6 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
                 .file(args.scene.display().to_string())
             })?;
 
-    let region = parse_region(args.region.as_deref(), &inputs)?;
     let outcome = engine_core::synthesize::synthesize(&engine_core::synthesize::Request {
         grid: &inputs.grid,
         tiles: &inputs.tiles,
@@ -2212,7 +2265,7 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
         fill_background,
         prior: prior_cells.as_deref(),
         locked: &locked,
-        region,
+        region: inputs.region,
     })
     .map_err(|e| e.entity(&inputs.name).file(args.scene.display().to_string()))?;
 
@@ -2278,6 +2331,7 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
             "cells": placed,
             "locked": locked.iter().filter(|l| **l).count(),
             "terraced": !inputs.grid.offsets.is_empty(),
+            "region": inputs.region,
             "blocks": outcome.blocks,
             "solved": outcome.solved,
             "retries": outcome.retries,
@@ -2328,6 +2382,11 @@ fn read_grid(args: &SynthesizeArgs) -> Result<GridInputs> {
         size: component.size,
         offsets: scene.tile_grid_offsets(&name, &component, tileset.cell),
     };
+    // Resolved here because `--around` needs the scene, which nothing
+    // downstream of this function keeps.
+    let placement = transform_of(&scene, handle);
+    let region = resolve_region(args, &scene, &name, component.size, tileset.cell, &placement)?;
+
     let source = base_dir.join(&component.layout);
     let target = match &args.out {
         Some(path) => path.clone(),
@@ -2341,6 +2400,7 @@ fn read_grid(args: &SynthesizeArgs) -> Result<GridInputs> {
         tiles,
         compat,
         grid,
+        region,
         source,
         target,
     })
@@ -2428,10 +2488,96 @@ fn parse_pair(text: &str, flag: &str) -> Result<(u32, u32)> {
     }
 }
 
-fn parse_region(text: Option<&str>, inputs: &GridInputs) -> Result<Option<[u32; 4]>> {
-    let Some(text) = text else {
-        return Ok(None);
+/// Which cells a run's `--region` / `--at` / `--around` selects.
+///
+/// Three spellings of one thing, because a script has cell indices and an
+/// author has a position. The world-space forms clamp to the grid rather than
+/// refusing, since "re-solve around the well" is a sensible thing to ask near
+/// an edge; only a rectangle entirely off the grid is an error.
+fn resolve_region(
+    args: &SynthesizeArgs,
+    scene: &Scene,
+    name: &str,
+    size: [u32; 3],
+    cell: glam::Vec3,
+    placement: &engine_core::components::Transform,
+) -> Result<Option<[u32; 4]>> {
+    if let Some(text) = &args.region {
+        return parse_region_cells(text, size);
+    }
+
+    let centre = match (&args.at, &args.around) {
+        (Some(text), _) => {
+            let (x, z) = parse_xz(text)?;
+            glam::Vec3::new(x, 0.0, z)
+        }
+        (None, Some(target)) => {
+            let handle = scene.entity(target).ok_or_else(|| {
+                EngineError::new(
+                    codes::ENTITY_NOT_FOUND,
+                    format!("--around names {target:?}, which is not an entity in this scene"),
+                )
+                .suggest_from(target, scene.names())
+            })?;
+            transform_of(scene, handle).position
+        }
+        (None, None) => return Ok(None),
     };
+
+    // Negated so a NaN fails. `args.radius < 0.0` is a different function — it
+    // is *false* for NaN — and a NaN radius would floor into a garbage cell
+    // range rather than being refused.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(args.radius >= 0.0) {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!("--radius must be zero or more metres, found {}", args.radius),
+        ));
+    }
+
+    // World → the grid's own frame → cells, the inverse of `cell_origin`.
+    let local = placement
+        .matrix()
+        .inverse()
+        .transform_point3(centre - glam::Vec3::new(0.0, centre.y, 0.0));
+    let [nx, _, nz] = size;
+    let to_cell = |value: f32, extent: u32, size: f32| value / size + extent as f32 * 0.5;
+    let (cx, cz) = (
+        to_cell(local.x, nx, cell.x),
+        to_cell(local.z, nz, cell.z),
+    );
+    let (rx, rz) = (args.radius / cell.x, args.radius / cell.z);
+
+    let span = |centre: f32, radius: f32, extent: u32| -> Option<(u32, u32)> {
+        let low = (centre - radius).floor();
+        let high = (centre + radius).floor();
+        if high < 0.0 || low >= extent as f32 {
+            return None;
+        }
+        Some((
+            low.max(0.0) as u32,
+            (high.min(extent as f32 - 1.0)).max(0.0) as u32,
+        ))
+    };
+
+    let (Some((x0, x1)), Some((z0, z1))) = (span(cx, rx, nx), span(cz, rz, nz)) else {
+        return Err(EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!(
+                "the region around ({}, {}) at radius {} does not meet the grid on \
+                 {name:?}; `engine tile-grid {}` reports its footprint",
+                centre.x,
+                centre.z,
+                args.radius,
+                args.scene.display()
+            ),
+        )
+        .entity(name));
+    };
+    Ok(Some([x0, z0, x1, z1]))
+}
+
+fn parse_region_cells(text: &str, size: [u32; 3]) -> Result<Option<[u32; 4]>> {
     let parts: Vec<&str> = text.split(',').collect();
     let parsed: Option<Vec<u32>> = (parts.len() == 4)
         .then(|| parts.iter().map(|p| p.trim().parse::<u32>().ok()).collect())
@@ -2449,7 +2595,7 @@ fn parse_region(text: Option<&str>, inputs: &GridInputs) -> Result<Option<[u32; 
             format!("--region {text:?} runs backwards; it is x0,z0,x1,z1 inclusive"),
         ));
     }
-    let [nx, _, nz] = inputs.component.size;
+    let [nx, _, nz] = size;
     if x1 >= nx || z1 >= nz {
         return Err(EngineError::new(
             codes::INVALID_INVOCATION,
@@ -2556,6 +2702,174 @@ fn check_layout(args: &SynthesizeArgs, inputs: &GridInputs, digest: &str) -> Res
     Ok(())
 }
 
+/// `engine tile-grid <scene> [--entity N] [--at x,z]` — what a solved grid
+/// holds (M48).
+///
+/// M24's argument, applied to M47: **looking at a picture cannot answer where
+/// something is.** Building the M47 fixture needed a flat cell to drop a ball
+/// on, and finding one meant parsing the layout file by hand — twice, because
+/// the terrain changed under it. That is exactly the re-derivation the query
+/// commands exist to stop.
+///
+/// `--at` takes **world** metres and reports the whole column standing there,
+/// including `surface_y`: the height the column's geometry actually reaches,
+/// which is where a body dropped on it comes to rest.
+fn tile_grid(scene_path: PathBuf, entity: Option<String>, at: Option<String>) -> Result<()> {
+    let scene = load_scene(&scene_path)?;
+    let base_dir = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let name = sole_entity_with::<engine_core::components::TileGrid>(
+        &scene,
+        &scene_path,
+        &entity,
+        "TileGrid",
+        "tile grids",
+    )?;
+    let handle = scene.entity(&name).expect("named above");
+    let component = (*scene
+        .world
+        .get::<&engine_core::components::TileGrid>(handle)
+        .expect("filtered above"))
+    .clone();
+    let placement = transform_of(&scene, handle);
+
+    let tileset_path = engine_core::tileset::resolve_tileset(&component.tileset, &base_dir)
+        .map_err(|e| e.entity(&name).file(scene_path.display().to_string()))?;
+    let tileset = engine_core::tileset::load_tileset(&tileset_path)?;
+    let tiles = engine_core::tileset::expand(&tileset).map_err(|e| e.entity(&name))?;
+
+    let layout_path = base_dir.join(&component.layout);
+    let text = std::fs::read_to_string(&layout_path).map_err(|e| {
+        EngineError::new(
+            codes::TILE_LAYOUT_MISSING,
+            format!(
+                "could not read the tile layout at {}: {e}; run `engine synthesize --write`",
+                layout_path.display()
+            ),
+        )
+        .entity(&name)
+        .file(scene_path.display().to_string())
+    })?;
+    let layout = engine_core::tilelayout::TileLayout::parse(&text).map_err(|bad| {
+        EngineError::new(
+            codes::TILE_LAYOUT_MALFORMED,
+            format!("the tile layout at {:?} is not readable: {bad}", component.layout),
+        )
+        .entity(&name)
+        .file(scene_path.display().to_string())
+    })?;
+    let grid = layout.grid();
+
+    // A census by authored name rather than by expansion: four rotations of one
+    // wall is one kind of wall to whoever is reading this.
+    let mut census: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for cell in &layout.cells {
+        let base = cell.token.split('@').next().unwrap_or(&cell.token);
+        *census.entry(base.to_string()).or_default() += 1;
+    }
+
+    let [nx, ny, nz] = grid.size;
+    let half = glam::Vec3::new(nx as f32 * tileset.cell.x, 0.0, nz as f32 * tileset.cell.z) * 0.5;
+    let lifts: Vec<i32> = grid.offsets.clone();
+    let mut report = serde_json::json!({
+        "scene": scene_path.display().to_string(),
+        "entity": name,
+        "tileset": component.tileset,
+        "layout": component.layout,
+        "size": grid.size,
+        "cell": tileset.cell.to_array(),
+        // The footprint in world metres, which is what an author places other
+        // things against. Y is left out: a terraced grid has no single top.
+        "footprint": {
+            "min": [placement.position.x - half.x, placement.position.z - half.z],
+            "max": [placement.position.x + half.x, placement.position.z + half.z],
+        },
+        "locked": layout.cells.iter().filter(|c| c.locked).count(),
+        "terraced": !lifts.is_empty(),
+        "lift_range": if lifts.is_empty() {
+            serde_json::json!([0, 0])
+        } else {
+            serde_json::json!([lifts.iter().min(), lifts.iter().max()])
+        },
+        "fallbacks": layout.header.fallbacks,
+        "tiles": census,
+    });
+
+    if let Some(at) = at {
+        let (x, z) = parse_xz(&at)?;
+        // World → the grid's own frame → cell indices. The inverse of what
+        // `tilegrid::cell_origin` does on the way out, so the two cannot
+        // disagree about which cell a metre lands in.
+        let local = placement.matrix().inverse().transform_point3(glam::Vec3::new(x, 0.0, z));
+        let cell_x = ((local.x / tileset.cell.x) + nx as f32 * 0.5).floor();
+        let cell_z = ((local.z / tileset.cell.z) + nz as f32 * 0.5).floor();
+        if cell_x < 0.0 || cell_z < 0.0 || cell_x >= nx as f32 || cell_z >= nz as f32 {
+            return Err(EngineError::new(
+                codes::INVALID_INVOCATION,
+                format!(
+                    "({x}, {z}) is outside the grid on {name:?}, whose footprint is \
+                     x {:.2}..{:.2}, z {:.2}..{:.2}",
+                    placement.position.x - half.x,
+                    placement.position.x + half.x,
+                    placement.position.z - half.z,
+                    placement.position.z + half.z
+                ),
+            )
+            .entity(&name)
+            .file(scene_path.display().to_string()));
+        }
+        let (cx, cz) = (cell_x as u32, cell_z as u32);
+        let lift = grid.offset(cx, cz);
+
+        let mut stack = Vec::new();
+        let mut surface = f32::MIN;
+        for y in 0..ny {
+            let index = grid.index(cx, y, cz);
+            let cell = &layout.cells[index];
+            let expanded = tiles.iter().find(|t| t.token == cell.token);
+            let parts = expanded
+                .map(|t| tileset.tiles[t.tile].parts.len())
+                .unwrap_or(0);
+            let origin = engine_core::tilegrid::cell_origin(&tileset, &grid, index);
+
+            // The height this cell's geometry actually reaches, in world
+            // metres — grown for this one tile, which is microseconds and is
+            // the same `grow_tile` the draw list goes through.
+            if let Some(expanded) = expanded {
+                let mut grown = std::collections::BTreeMap::new();
+                engine_core::tileset::grow_tile(&tileset, expanded, origin, &mut grown);
+                for mesh in grown.values() {
+                    for position in &mesh.positions {
+                        let world = placement.matrix().transform_point3(glam::Vec3::from_array(*position));
+                        surface = surface.max(world.y);
+                    }
+                }
+            }
+
+            stack.push(serde_json::json!({
+                "y": y,
+                "tile": cell.token.split('@').next().unwrap_or(&cell.token),
+                "rotation": cell.token.split('@').nth(1).and_then(|r| r.parse::<u32>().ok()),
+                "locked": cell.locked,
+                "parts": parts,
+                "floor_y": placement.matrix().transform_point3(origin).y,
+            }));
+        }
+
+        report["at"] = serde_json::json!([x, z]);
+        report["column"] = serde_json::json!({
+            "cell": [cx, cz],
+            "lift": lift,
+            // Where a body dropped here lands. `null` when the column grows
+            // nothing at all, which is an honest answer rather than a zero.
+            "surface_y": (surface > f32::MIN).then_some(surface),
+            "stack": stack,
+        });
+    }
+
+    println!("{report}");
+    Ok(())
+}
+
 /// `engine list-tiles <tileset.json>` — what a tileset actually contains
 /// (M47).
 ///
@@ -2567,7 +2881,7 @@ fn check_layout(args: &SynthesizeArgs, inputs: &GridInputs, digest: &str) -> Res
 /// across each face**. A `0` there is a tile that can never be placed that
 /// side, and it is the difference between "the village came out empty" and a
 /// one-character fix.
-fn list_tiles(path: PathBuf) -> Result<()> {
+fn list_tiles(path: PathBuf, sheet: Option<PathBuf>) -> Result<()> {
     let tileset = engine_core::tileset::load_tileset(&path)?;
     let expanded = engine_core::tileset::expand(&tileset)?;
     let compat = engine_core::tileset::Compat::build(&expanded);
@@ -2604,18 +2918,288 @@ fn list_tiles(path: PathBuf) -> Result<()> {
         })
         .collect();
 
-    println!(
-        "{}",
-        serde_json::json!({
-            "tileset": path.display().to_string(),
-            "cell": tileset.cell.to_array(),
-            "palette": tileset.palette.keys().collect::<Vec<_>>(),
-            "authored": tileset.tiles.len(),
-            "expanded": expanded.len(),
-            "tiles": tiles,
-        })
-    );
+    let mut report = serde_json::json!({
+        "tileset": path.display().to_string(),
+        "cell": tileset.cell.to_array(),
+        "palette": tileset.palette.keys().collect::<Vec<_>>(),
+        "authored": tileset.tiles.len(),
+        "expanded": expanded.len(),
+        "tiles": tiles,
+    });
+
+    if let Some(out) = sheet {
+        report["sheet"] = write_contact_sheet(&path, &tileset, &expanded, &out)?;
+    }
+
+    println!("{report}");
     Ok(())
+}
+
+/// Write a contact sheet: a scene and a layout that lay every expanded tile out
+/// in a grid, so what a tileset *says* can be looked at (M48).
+///
+/// **Rotations across, tiles down** — one column per rotation, one row per
+/// authored tile — which is the arrangement that makes a wrong face permutation
+/// obvious, since a row should read as one shape turning.
+///
+/// Every cell is locked. That is what lets the sheet exist with no special case
+/// in validation: tiles laid side by side almost never satisfy each other's
+/// sockets, and a locked violation is `tile_layout_forced`, a warning the
+/// author asserted. The scene still loads and renders.
+fn write_contact_sheet(
+    tileset_path: &Path,
+    tileset: &engine_core::tileset::Tileset,
+    expanded: &[engine_core::tileset::ExpandedTile],
+    out: &Path,
+) -> Result<serde_json::Value> {
+    let dir = out.parent().unwrap_or(Path::new(""));
+    let stem = out
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "sheet".to_string());
+    let layout_name = format!("{stem}.tiles.json");
+
+    // **Tiles across, rotations down.** A column is one tile turning, which is
+    // the reading that makes a wrong face permutation obvious; and a wide strip
+    // frames far better in a landscape screenshot than the deep one the
+    // transpose gives, where the rows run away from the camera and read as a
+    // single mass.
+    let tile_count = tileset.tiles.len().max(1) as u32;
+    let nz = tileset.tiles.iter().map(|t| t.rotations.clamp(1, 4)).max().unwrap_or(1);
+
+    // A tile that grows nothing makes the best spacer for a row shorter than
+    // the widest one; failing that, repeat the tile itself rather than invent.
+    let blank = expanded
+        .iter()
+        .find(|t| tileset.tiles[t.tile].parts.is_empty())
+        .map(|t| t.token.clone());
+
+    // A blank column between tiles, when the tileset has something that grows
+    // nothing to spare. Packed edge to edge the walls of ten tiles read as one
+    // maze; a gap is the difference between a contact sheet and a building.
+    let pitch = if blank.is_some() { 2 } else { 1 };
+    let nx = tile_count * pitch - (pitch - 1);
+
+    // Row-major in the layout's own order: x fastest, then z.
+    let mut cells: Vec<engine_core::tilelayout::Cell> = Vec::new();
+    for rotation in 0..nz {
+        for column in 0..nx {
+            let token = if column % pitch != 0 {
+                blank.clone().expect("a pitch of 2 means a blank exists")
+            } else {
+                let tile = (column / pitch) as usize;
+                expanded
+                    .iter()
+                    .find(|t| t.tile == tile && u32::from(t.rotation) == rotation)
+                    .map(|t| t.token.clone())
+                    .or_else(|| blank.clone())
+                    .unwrap_or_else(|| format!("{}@0", tileset.tiles[tile].name))
+            };
+            cells.push(engine_core::tilelayout::Cell::new(token, true));
+        }
+    }
+
+    // Before `relative_reference`, which canonicalizes: a directory that does
+    // not exist yet cannot be canonicalized, and the fallback silently resolved
+    // against the working directory instead — writing a sheet that named a
+    // tileset which was not there.
+    if !dir.as_os_str().is_empty() {
+        std::fs::create_dir_all(dir).map_err(|e| {
+            EngineError::new(
+                codes::SCENE_WRITE_FAILED,
+                format!("could not create {}: {e}", dir.display()),
+            )
+        })?;
+    }
+
+    let tileset_ref = relative_reference(dir, tileset_path).ok_or_else(|| {
+        EngineError::new(
+            codes::INVALID_INVOCATION,
+            format!(
+                "cannot write a sheet at {} that refers to the tileset at {}: an asset \
+                 reference must be relative to the scene (invariant 3), and these two \
+                 paths share no common root",
+                out.display(),
+                tileset_path.display()
+            ),
+        )
+    })?;
+
+    let layout = engine_core::tilelayout::TileLayout {
+        header: engine_core::tilelayout::LayoutHeader {
+            format: engine_core::tilelayout::FORMAT.to_string(),
+            scene: out
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            entity: "Sheet".to_string(),
+            tileset: tileset_ref.clone(),
+            tileset_hash: engine_core::tileset::digest(tileset),
+            // Not a solve, and it must not be mistaken for one: `--check`
+            // against a sheet should say stale, because re-solving it would
+            // throw the arrangement away.
+            inputs_hash: "contact-sheet".to_string(),
+            size: [nx, 1, nz],
+            seed: 0,
+            block: [nx, 1, nz],
+            overlap: 1,
+            attempts: 1,
+            fallbacks: 0,
+            offsets: Vec::new(),
+        },
+        cells,
+    };
+
+    // Framed from what the tiles actually grow, not from the cell grid: a
+    // tileset whose parts overhang their cells, or reach below its floor the
+    // way a plinth does, would otherwise be cropped or left hanging in the air.
+    // Growing every tile once is microseconds and makes the sheet self-framing
+    // for a tileset this code has never seen.
+    let grid = engine_core::tilelayout::Grid {
+        size: [nx, 1, nz],
+        offsets: Vec::new(),
+    };
+    let (mut low, mut high) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+    for (index, cell) in layout.cells.iter().enumerate() {
+        let Some(tile) = expanded.iter().find(|t| t.token == cell.token) else {
+            continue;
+        };
+        let mut grown = std::collections::BTreeMap::new();
+        let origin = engine_core::tilegrid::cell_origin(tileset, &grid, index);
+        engine_core::tileset::grow_tile(tileset, tile, origin, &mut grown);
+        for mesh in grown.values() {
+            for position in &mesh.positions {
+                let point = glam::Vec3::from_array(*position);
+                low = low.min(point);
+                high = high.max(point);
+            }
+        }
+    }
+    // A tileset of nothing but empty tiles still gets a frame to look at.
+    if low.x > high.x {
+        low = glam::Vec3::new(-tileset.cell.x, 0.0, -tileset.cell.z);
+        high = -low;
+    }
+
+    let centre = (low + high) * 0.5;
+    let span = (high - low).max_element().max(tileset.cell.y);
+    // A distance and an angle, then the position that produces them — rather
+    // than a position with a pitch fitted to it, which framed the sheet at
+    // twice the distance its width needed and left the tiles small in the top
+    // of the image.
+    //
+    // Steep, like a sprite sheet: a shallow angle lets the tall tiles in one
+    // column hide the ones behind them. The depth term keeps the nearest row of
+    // rotations from swelling over the rest.
+    const PITCH: f32 = 50.0;
+    let distance = span * 0.68 + (high.z - low.z) * 0.5;
+    let (lift, back) = (
+        distance * PITCH.to_radians().sin(),
+        distance * PITCH.to_radians().cos(),
+    );
+    let floor = low.y - 0.02;
+    let scene = serde_json::json!({
+        "name": format!("{stem} — contact sheet"),
+        "environment": { "sky": true, "shadows": true, "samples": 1 },
+        "entities": [
+            {
+                "name": "Sun",
+                "components": [
+                    { "type": "Transform", "rotation": [-52.0, 28.0, 0.0] },
+                    { "type": "DirectionalLight", "intensity": 1.6 }
+                ]
+            },
+            {
+                "name": "Sky",
+                "components": [
+                    { "type": "AmbientLight", "color": [0.62, 0.68, 0.8], "intensity": 0.3 }
+                ]
+            },
+            {
+                "name": "Sheet",
+                "components": [
+                    { "type": "Transform" },
+                    {
+                        "type": "TileGrid",
+                        "tileset": tileset_ref,
+                        "layout": layout_name,
+                        "size": [nx, 1, nz],
+                        "seed": 0
+                    }
+                ]
+            },
+            {
+                "name": "Floor",
+                "components": [
+                    {
+                        "type": "Transform",
+                        "position": [centre.x, floor, centre.z],
+                        "scale": [(high.x - low.x) * 1.15, 1.0, (high.z - low.z) * 1.15]
+                    },
+                    { "type": "Mesh", "asset": "builtin:plane" },
+                    { "type": "Material", "albedo": [0.30, 0.31, 0.33], "roughness": 0.95 }
+                ]
+            },
+            {
+                "name": "Eye",
+                "components": [
+                    {
+                        "type": "Transform",
+                        "position": [centre.x, centre.y + lift, centre.z + back],
+                        "rotation": [-PITCH, 0.0, 0.0]
+                    },
+                    { "type": "Camera", "active": true, "near": 0.1, "far": distance * 4.0 + 100.0 }
+                ]
+            }
+        ]
+    });
+
+    engine_core::formatter::write_atomic(&dir.join(&layout_name), &layout.to_text())?;
+    engine_core::formatter::write_atomic(
+        out,
+        &format!("{}\n", serde_json::to_string_pretty(&scene).expect("scene serializes")),
+    )?;
+
+    Ok(serde_json::json!({
+        "scene": out.display().to_string(),
+        "layout": dir.join(&layout_name).display().to_string(),
+        "size": [nx, 1, nz],
+        "screenshot": format!("engine screenshot {} --out sheet.png", out.display()),
+    }))
+}
+
+/// `target` as a path relative to `base_dir`, for an asset reference that has
+/// to stay relative to the scene (invariant 3).
+///
+/// Lexical over the canonicalized pair: both exist by the time this is called,
+/// and `..` is emitted rather than followed, so the result reads the way an
+/// author would have written it.
+fn relative_reference(base_dir: &Path, target: &Path) -> Option<String> {
+    let base = if base_dir.as_os_str().is_empty() {
+        std::env::current_dir().ok()?
+    } else {
+        base_dir.canonicalize().ok()?
+    };
+    let target = target.canonicalize().ok()?;
+
+    let base: Vec<_> = base.components().collect();
+    let target: Vec<_> = target.components().collect();
+    let shared = base
+        .iter()
+        .zip(&target)
+        .take_while(|(a, b)| a == b)
+        .count();
+    if shared == 0 {
+        return None;
+    }
+
+    let mut parts: Vec<String> = vec!["..".to_string(); base.len() - shared];
+    parts.extend(
+        target[shared..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    Some(parts.join(std::path::MAIN_SEPARATOR_STR))
 }
 
 /// `engine list-components [--component NAME]` — the component vocabulary

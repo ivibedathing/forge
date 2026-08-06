@@ -89,7 +89,7 @@ one line per grid row, `!` to lock a cell).
 
 ## Current state
 
-**M0–M47 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
+**M0–M48 are done** — the v1 roadmap (M0–M10) is complete, plus M11 keyboard input, M11.5 vehicle
 dynamics, M12 wheels + HUD components + collision, M13 particles, M14 breaking, M15 frame cost,
 M16 environment, M17 fire + point lights, M18 water, M19 trees, M20 clouds, M21 day/night,
 M22 terrain, M23 roads, M24/M25 agent ergonomics, M26 the material system, M27 water refraction,
@@ -97,7 +97,7 @@ M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locom
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
 M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
 M43 material-aware fracture, M44 the break's dust, M35 global illumination, M45 bounced
-sunlight, M46 foliage sway, and M47 tile synthesis.
+sunlight, M46 foliage sway, M47 tile synthesis, and M48 its ergonomics.
 (M7 editor at scope E0–E2 + validation
 panel + `--watch`.)
 
@@ -154,16 +154,23 @@ engine bake-gi <scene.json> [--entity Name] [--out path] [--samples N] [--check]
 engine gi-probe <scene.json> --at x,y,z [--normal x,y,z] [--time T]
 #   the irradiance the renderer would use here, the pre-M35 fallback beside it,
 #   the blend weight and how open the sky is — a number, not a picture (M35)
-engine synthesize <scene.json> [--entity N] [--seed S] [--region x0,z0,x1,z1]
+engine synthesize <scene.json> [--entity N] [--seed S]
+#                  [--region x0,z0,x1,z1 | --at x,z | --around Name] [--radius M]
 #                  [--block x,z] [--overlap N] [--attempts N] [--out p] [--write] [--check]
 #   solve a TileGrid's layout by model synthesis in overlapping blocks (M47).
-#   --region re-solves only the blocks meeting a rectangle **of cells**, reading
-#   the rest as fixed border — that is how an area changes without re-rolling
-#   the world. The second command that writes into the project, after bake-gi,
-#   and --check is its staleness gate for the same reason
-engine list-tiles <tileset.json>
+#   Re-solves only the blocks meeting the area, reading the rest as fixed border
+#   — that is how an area changes without re-rolling the world. --region is in
+#   cells; --at/--around are world metres and clamp to the grid (M48). The second
+#   command that writes into the project, after bake-gi, and --check is its
+#   staleness gate for the same reason
+engine tile-grid <scene.json> [--entity N] [--at x,z]
+#   what a solved grid holds: footprint, terrace lifts, a tile census, and per
+#   --at the whole column at a world XZ — including `surface_y`, the height a
+#   body dropped there lands on (M48)
+engine list-tiles <tileset.json> [--sheet out.json]
 #   every tile at every rotation, its six sockets, and how many tiles may sit
-#   across each face. `partners: 0` is a tile that can never be placed (M47)
+#   across each face. `partners: 0` is a tile that can never be placed (M47).
+#   --sheet writes a contact-sheet scene so a tileset can be looked at (M48)
 engine water-height <scene.json> --at x,z [--entity N] [--time T] [--steps N]
 #   where the water is, and which way it faces (M41); the first query that takes a
 #   clock, and the first that can answer "no water here" rather than a height
@@ -569,6 +576,11 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   `.glb`), a per-face socket graph, and model synthesis **in overlapping blocks** filling a grid.
   The solved layout is a committed sidecar, which is what makes `synthesize --region` a local edit
   rather than a re-roll, and what a `!` locks a cell in.
+- **Tile-synthesis ergonomics (M48)** → `m48-tile-ergonomics.md`. M24's argument applied to M47:
+  `engine tile-grid` (what is in that column, and what height would a body land on), world-metre
+  region selection, and `list-tiles --sheet`. Also records a **substitution worth reading** — the
+  per-block geometry caching this milestone was going to do, and the ten minutes of checking that
+  showed its premise was false.
 
 ### Environment and time
 
