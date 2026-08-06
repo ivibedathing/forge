@@ -81,6 +81,9 @@ pub struct Request<'a> {
     /// `[x0, z0, x1, z1]` inclusive, in cells: only blocks whose interior meets
     /// this rectangle are re-solved. `None` solves the whole grid.
     pub region: Option<[u32; 4]>,
+    /// Region properties a block's result must satisfy (M49). Empty is M47
+    /// exactly — no evaluation runs and no draw changes.
+    pub rules: &'a crate::constraints::Rules,
 }
 
 /// What a solve produced.
@@ -98,6 +101,13 @@ pub struct Outcome {
     /// Retries spent across every block, so a tileset that is *nearly* over
     /// constrained is visible before it starts falling back.
     pub retries: u32,
+    /// How many block attempts each constraint rejected, indexed as the
+    /// tileset declares them (M49).
+    ///
+    /// The number that turns "the village came out bland" into a named cause:
+    /// a rule doing all the rejecting is either the one that matters or the one
+    /// that is too tight, and either way it is the one to look at.
+    pub rejected: Vec<u32>,
 }
 
 /// Solve a grid.
@@ -121,6 +131,7 @@ pub fn synthesize(request: &Request<'_>) -> Result<Outcome> {
         solved: 0,
         fallbacks: 0,
         retries: 0,
+        rejected: vec![0; request.rules.len()],
     };
 
     for (index, block) in lattice.iter().enumerate() {
@@ -129,16 +140,45 @@ pub fn synthesize(request: &Request<'_>) -> Result<Outcome> {
         }
         outcome.solved += 1;
         let interior = block.interior(request.grid);
+        let mut inside = vec![false; request.grid.cell_count()];
+        for cell in &interior {
+            inside[*cell] = true;
+        }
+
+        // What this block is already answerable for, before it changes
+        // anything. A block is asked to **do no harm**, not to be perfect:
+        // strict rejection cannot converge on a layout that already violates,
+        // because the offending region extends past every block that could be
+        // blamed for it, so every block falls back forever. From the
+        // known-good fill this is empty, so a fresh solve is strict.
+        let before = blamed(request, &cells, &inside).len();
+
         let mut settled = None;
         for attempt in 0..request.params.attempts.max(1) {
             if attempt > 0 {
                 outcome.retries += 1;
             }
             let mut rng = stream(request.seed, index as u32, attempt);
-            if let Some(result) = solve_block(request, &cells, &interior, &mut rng) {
+            let Some(result) = solve_block(request, &cells, &interior, &mut rng) else {
+                continue;
+            };
+            if request.rules.is_empty() {
                 settled = Some(result);
                 break;
             }
+            // The grid as it would stand if this block were accepted: a
+            // constraint is a property of the *grid* and cannot be judged from
+            // the block alone.
+            let mut candidate = cells.clone();
+            for (local, cell) in interior.iter().enumerate() {
+                candidate[*cell] = result[local];
+            }
+            let after = blamed(request, &candidate, &inside);
+            if after.len() <= before {
+                settled = Some(result);
+                break;
+            }
+            outcome.rejected[after[0]] += 1;
         }
         match settled {
             Some(result) => {
@@ -166,6 +206,24 @@ pub fn synthesize(request: &Request<'_>) -> Result<Outcome> {
 
     outcome.cells = cells;
     Ok(outcome)
+}
+
+/// The constraints a grid breaks that this block can be blamed for.
+///
+/// **Blamed** is the load-bearing word. Regions do not respect block
+/// boundaries, so a mass straddling a border would fail the later block
+/// forever — most of it lies outside anything that block can change. A
+/// violation counts only when the cells it is about meet this block's own
+/// interior.
+fn blamed(request: &Request<'_>, cells: &[usize], inside: &[bool]) -> Vec<usize> {
+    if request.rules.is_empty() {
+        return Vec::new();
+    }
+    crate::constraints::evaluate(request.rules, request.grid, cells)
+        .into_iter()
+        .filter(|violation| violation.cells.iter().any(|cell| inside[*cell]))
+        .map(|violation| violation.constraint)
+        .collect()
 }
 
 /// The known-good arrangement, per cell.
@@ -714,8 +772,13 @@ mod tests {
                 tile("roof", 5.0, 2, faces("up", "up", "0", "wtop_i", "up", "up")),
                 tile("air", 6.0, 1, faces("up", "up", "0", "sky_i", "up", "up")),
             ],
+            constraints: Vec::new(),
         }
     }
+
+    /// M47's solver: no constraints, so no evaluation runs.
+    static NO_RULES: std::sync::LazyLock<crate::constraints::Rules> =
+        std::sync::LazyLock::new(crate::constraints::Rules::default);
 
     struct Fixture {
         tiles: Vec<ExpandedTile>,
@@ -761,6 +824,7 @@ mod tests {
             prior: None,
             locked,
             region: None,
+            rules: &NO_RULES,
         }
     }
 

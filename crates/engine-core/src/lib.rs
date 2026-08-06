@@ -9,6 +9,7 @@ pub mod animation;
 pub mod cloud;
 pub mod codes;
 pub mod components;
+pub mod constraints;
 pub mod contact;
 pub mod daylight;
 pub mod error;

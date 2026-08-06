@@ -38,6 +38,19 @@
       "roughness": 0.8
     }
   },
+  "constraints": [
+    {
+      "name": "a building, not a curtain wall",
+      "tiles": ["wall", "wall_door", "wall_window", "corner", "floor"],
+      "region_size": { "min": 4, "max": 18 },
+      "region_contains": { "tiles": ["floor"], "min": 1 }
+    },
+    {
+      "name": "the street reaches every door",
+      "tiles": ["cobble", "post"],
+      "regions": { "max": 1 }
+    }
+  ],
   "tiles": [
     {
       "name": "cobble",

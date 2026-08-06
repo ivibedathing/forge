@@ -264,6 +264,7 @@ mod tests {
                     parts: Vec::new(),
                 },
             ],
+            constraints: Vec::new(),
         }
     }
 

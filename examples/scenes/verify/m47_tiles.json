@@ -15,12 +15,12 @@
       "name": "Sun",
       "components": [
         { "type": "Transform", "rotation": [-38.0, 208.0, 0.0] },
-        { "type": "DirectionalLight", "color": [1.0, 0.96, 0.88], "intensity": 1.15 }
+        { "type": "DirectionalLight", "color": [1.0, 0.96, 0.88], "intensity": 1.45 }
       ]
     },
     {
       "name": "Sky",
-      "components": [{ "type": "AmbientLight", "color": [0.62, 0.68, 0.8], "intensity": 0.16 }]
+      "components": [{ "type": "AmbientLight", "color": [0.62, 0.68, 0.8], "intensity": 0.26 }]
     },
     {
       "name": "Ground",
@@ -51,7 +51,7 @@
           "tileset": "../../tilesets/village.json",
           "layout": "layouts/m47_village.tiles.json",
           "size": [10, 2, 8],
-          "seed": 7,
+          "seed": 41,
           "fill_ground": "cobble",
           "fill_background": "air",
           "ground": "Ground"
@@ -62,7 +62,7 @@
     {
       "name": "Ball",
       "components": [
-        { "type": "Transform", "position": [0.0, 4.0, -5.0] },
+        { "type": "Transform", "position": [-4.0, 4.0, -7.0] },
         { "type": "Mesh", "asset": "builtin:sphere" },
         { "type": "Material", "albedo": [0.85, 0.35, 0.2], "roughness": 0.4 },
         { "type": "RigidBody", "body": "dynamic" },

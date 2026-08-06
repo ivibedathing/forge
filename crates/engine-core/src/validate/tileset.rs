@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::codes;
 use crate::error::EngineError;
 use crate::lineindex::LineIndex;
-use crate::tileset::{self, Compat, Face, Tileset, MAX_PARTS_PER_TILE};
+use crate::tileset::{self, Bounds, Compat, Face, Tileset, MAX_PARTS_PER_TILE};
 
 use super::{kind_of, walk_component, ComponentSchemas, Cx};
 
@@ -91,8 +91,99 @@ pub fn validate_tileset_source(source: &str, path: &str) -> Vec<EngineError> {
     check_cell(&cx, &tileset, &mut errors);
     check_tiles(&cx, &tileset, &mut errors);
     check_sockets(&cx, &tileset, &mut errors);
+    check_constraints(&cx, &tileset, &mut errors);
     check_partners(&cx, &tileset, &mut errors);
     errors
+}
+
+/// A constraint's own coherence (M49): that it names tiles that exist, and that
+/// its bounds can be met.
+///
+/// Both failures are silent otherwise. A rule naming a tile the tileset does
+/// not define covers nothing, and a `min` above its `max` rejects every block
+/// there is — which surfaces as a village that came out as the fill, with the
+/// cause a hundred retries away.
+fn check_constraints(cx: &Cx<'_>, tileset: &Tileset, errors: &mut Vec<EngineError>) {
+    let names: Vec<&str> = tileset.tiles.iter().map(|t| t.name.as_str()).collect();
+
+    for (index, constraint) in tileset.constraints.iter().enumerate() {
+        let at = format!("/constraints/{index}");
+        let here = |code: &'static str, message: String, path: String| {
+            cx.err(code, message, &path)
+                .component("Tileset")
+                .field("constraints")
+        };
+
+        if constraint.tiles.is_empty() {
+            errors.push(here(
+                codes::TILESET_MALFORMED,
+                format!("{} names no tiles, so it constrains nothing", constraint.label()),
+                format!("{at}/tiles"),
+            ));
+        }
+
+        let mut unknown = |field: &str, listed: &[String]| {
+            for (position, name) in listed.iter().enumerate() {
+                if !names.contains(&name.as_str()) {
+                    errors.push(
+                        here(
+                            codes::UNKNOWN_TILE,
+                            format!(
+                                "{} names the tile {name:?}, which this tileset does not define",
+                                constraint.label()
+                            ),
+                            format!("{at}/{field}/{position}"),
+                        )
+                        .suggest_from(name, names.iter().copied()),
+                    );
+                }
+            }
+        };
+        unknown("tiles", &constraint.tiles);
+        if let Some(contains) = &constraint.region_contains {
+            unknown("region_contains/tiles", &contains.tiles);
+        }
+
+        let bounds = [
+            ("count", constraint.count),
+            ("regions", constraint.regions),
+            ("region_size", constraint.region_size),
+            (
+                "region_contains",
+                constraint.region_contains.as_ref().map(|c| Bounds {
+                    min: c.min,
+                    max: c.max,
+                }),
+            ),
+        ];
+        let mut stated = 0;
+        for (field, bound) in bounds {
+            let Some(bound) = bound else { continue };
+            stated += 1;
+            if !bound.is_satisfiable() {
+                errors.push(here(
+                    codes::TILESET_MALFORMED,
+                    format!(
+                        "{} asks for {} {field}, which nothing can satisfy",
+                        constraint.label(),
+                        bound.describe()
+                    ),
+                    format!("{at}/{field}"),
+                ));
+            }
+        }
+        if stated == 0 {
+            errors.push(here(
+                codes::TILESET_MALFORMED,
+                format!(
+                    "{} states no bound at all; give it a count, regions, \
+                     region_size or region_contains",
+                    constraint.label()
+                ),
+                at.clone(),
+            ));
+        }
+    }
 }
 
 fn check_cell(cx: &Cx<'_>, tileset: &Tileset, errors: &mut Vec<EngineError>) {

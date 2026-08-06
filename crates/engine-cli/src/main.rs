@@ -642,6 +642,16 @@ enum Command {
         /// moved under the layout. Writes nothing.
         #[arg(long)]
         check: bool,
+        /// Throw the existing layout away and solve from the known-good fill,
+        /// **keeping locked cells** (M49).
+        ///
+        /// Rejection is do-no-harm: a block is accepted when it does not
+        /// increase the violations blamed on it, which is what lets a re-solve
+        /// converge at all. The corollary is that a layout which already breaks
+        /// a rule is never repaired, only kept from worsening — so adding
+        /// constraints to a tileset changes nothing until this is passed.
+        #[arg(long, conflicts_with = "check")]
+        reset: bool,
     },
 
     /// Print what a solved TileGrid actually holds (M48).
@@ -919,6 +929,7 @@ fn main() {
             out,
             write,
             check,
+            reset,
         } => synthesize(SynthesizeArgs {
             scene,
             entity,
@@ -933,6 +944,7 @@ fn main() {
             out,
             write,
             check,
+            reset,
         }),
         Command::TileGrid { scene, entity, at } => tile_grid(scene, entity, at),
         Command::ListTiles { tileset, sheet } => list_tiles(tileset, sheet),
@@ -2147,6 +2159,7 @@ struct SynthesizeArgs {
     out: Option<PathBuf>,
     write: bool,
     check: bool,
+    reset: bool,
 }
 
 /// Everything a solve needs, read off the scene once.
@@ -2156,6 +2169,8 @@ struct GridInputs {
     tileset: engine_core::tileset::Tileset,
     tiles: Vec<engine_core::tileset::ExpandedTile>,
     compat: engine_core::tileset::Compat,
+    /// The tileset's region constraints, resolved to expansion indices (M49).
+    rules: engine_core::constraints::Rules,
     grid: engine_core::tilelayout::Grid,
     /// The cell rectangle a `--region`/`--at`/`--around` resolved to, already
     /// clamped to the grid. Resolved in `read_grid` because the world-space
@@ -2195,20 +2210,36 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
     }
 
     let inputs = read_grid(&args)?;
-    let params = solve_params(&args, &inputs)?;
     let seed = args.seed.unwrap_or(inputs.component.seed);
 
     // The prior layout, when there is one. Locked cells and `--region` both
-    // read from it, and both are meaningless without it.
+    // read from it, and both are meaningless without it — and so are the block
+    // params, which live in its header.
     let prior = std::fs::read_to_string(&inputs.source)
         .ok()
         .and_then(|text| engine_core::tilelayout::TileLayout::parse(&text).ok())
         .filter(|layout| layout.header.size == inputs.component.size);
 
+    // Read from the layout's own header unless a flag overrides, which is
+    // `check_bake`'s treatment of `samples` and is what makes `--check` mean
+    // anything for a layout solved at other-than-default blocks: deriving them
+    // from the CLI defaults instead reported every such layout stale forever.
+    let params = solve_params(&args, prior.as_ref(), !inputs.rules.is_empty())?;
     let digest = inputs_digest(&inputs, seed, params, prior.as_ref());
     if args.check {
         return check_layout(&args, &inputs, &digest);
     }
+
+    let (fill_ground, fill_background) =
+        engine_core::tilegrid::fill_indices(&inputs.component, &inputs.tileset, &inputs.tiles)
+            .map_err(|name| {
+                EngineError::new(
+                    codes::UNKNOWN_TILE,
+                    format!("the tileset defines no tile named {name:?}"),
+                )
+                .entity(&inputs.name)
+                .file(args.scene.display().to_string())
+            })?;
 
     let (prior_cells, locked) = match &prior {
         Some(layout) => {
@@ -2226,7 +2257,26 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
                 .file(args.scene.display().to_string())
             })?;
             let locked: Vec<bool> = layout.cells.iter().map(|c| c.locked).collect();
-            (Some(cells), locked)
+            if args.reset {
+                // The known-good fill, with the author's pins still in it: back
+                // to zero violations, and therefore back under strict
+                // constraint. Locks survive because they are the one thing a
+                // reset is *not* meant to throw away.
+                let filled = (0..inputs.grid.cell_count())
+                    .map(|index| {
+                        if locked.get(index).copied().unwrap_or(false) {
+                            cells[index]
+                        } else if inputs.grid.coords(index).1 == 0 {
+                            fill_ground
+                        } else {
+                            fill_background
+                        }
+                    })
+                    .collect();
+                (Some(filled), locked)
+            } else {
+                (Some(cells), locked)
+            }
         }
         None => (None, vec![false; inputs.grid.cell_count()]),
     };
@@ -2244,17 +2294,6 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
         .file(args.scene.display().to_string()));
     }
 
-    let (fill_ground, fill_background) =
-        engine_core::tilegrid::fill_indices(&inputs.component, &inputs.tileset, &inputs.tiles)
-            .map_err(|name| {
-                EngineError::new(
-                    codes::UNKNOWN_TILE,
-                    format!("the tileset defines no tile named {name:?}"),
-                )
-                .entity(&inputs.name)
-                .file(args.scene.display().to_string())
-            })?;
-
     let outcome = engine_core::synthesize::synthesize(&engine_core::synthesize::Request {
         grid: &inputs.grid,
         tiles: &inputs.tiles,
@@ -2266,6 +2305,7 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
         prior: prior_cells.as_deref(),
         locked: &locked,
         region: inputs.region,
+        rules: &inputs.rules,
     })
     .map_err(|e| e.entity(&inputs.name).file(args.scene.display().to_string()))?;
 
@@ -2335,6 +2375,21 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
             "blocks": outcome.blocks,
             "solved": outcome.solved,
             "retries": outcome.retries,
+            // Which rule rejected how many block attempts (M49). A rule doing
+            // all the rejecting is either the one that matters or the one that
+            // is too tight; either way it is the one to look at.
+            "rejected": outcome
+                .rejected
+                .iter()
+                .enumerate()
+                .filter(|(_, count)| **count > 0)
+                .map(|(index, count)| {
+                    serde_json::json!({
+                        "constraint": inputs.rules.0[index].label,
+                        "attempts": count,
+                    })
+                })
+                .collect::<Vec<_>>(),
             // Blocks that used up their retries and kept what stood there. The
             // number that says a tileset is over-constrained without reading
             // the picture.
@@ -2377,6 +2432,8 @@ fn read_grid(args: &SynthesizeArgs) -> Result<GridInputs> {
     let tileset = engine_core::tileset::load_tileset(&tileset_path)?;
     let tiles = engine_core::tileset::expand(&tileset).map_err(|e| e.entity(&name))?;
     let compat = engine_core::tileset::Compat::build(&tiles);
+    let rules = engine_core::constraints::Rules::prepare(&tileset, &tiles)
+        .map_err(|e| e.entity(&name).file(args.scene.display().to_string()))?;
 
     let grid = engine_core::tilelayout::Grid {
         size: component.size,
@@ -2399,6 +2456,7 @@ fn read_grid(args: &SynthesizeArgs) -> Result<GridInputs> {
         tileset,
         tiles,
         compat,
+        rules,
         grid,
         region,
         source,
@@ -2455,11 +2513,30 @@ fn load_scene_for_synthesis(path: &PathBuf) -> Result<Scene> {
     })
 }
 
+/// Retries a block gets when its tileset carries constraints (M49).
+const DEFAULT_CONSTRAINED_ATTEMPTS: u32 = 60;
+
 fn solve_params(
     args: &SynthesizeArgs,
-    inputs: &GridInputs,
+    prior: Option<&engine_core::tilelayout::TileLayout>,
+    constrained: bool,
 ) -> Result<engine_core::synthesize::Params> {
-    let mut params = engine_core::synthesize::Params::default();
+    let mut params = match prior {
+        Some(layout) => engine_core::synthesize::Params {
+            block: layout.header.block,
+            overlap: layout.header.overlap,
+            attempts: layout.header.attempts,
+        },
+        None => engine_core::synthesize::Params::default(),
+    };
+    // A constrained tileset needs a bigger budget: rejection sampling throws
+    // attempts away, and the village's rules take about thirty tries a block.
+    // How many tries a rule costs is not something an author should have to
+    // discover from a `fallbacks` count, so the default moves with the feature
+    // rather than staying at M47's ten.
+    if prior.is_none() && constrained {
+        params.attempts = params.attempts.max(DEFAULT_CONSTRAINED_ATTEMPTS);
+    }
     if let Some(text) = &args.block {
         let pair = parse_pair(text, "--block")?;
         params.block = [pair.0, u32::MAX, pair.1];
@@ -2470,7 +2547,6 @@ fn solve_params(
     if let Some(attempts) = args.attempts {
         params.attempts = attempts.max(1);
     }
-    let _ = inputs;
     Ok(params)
 }
 

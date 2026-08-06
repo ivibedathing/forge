@@ -394,6 +394,105 @@ fn default_rotations() -> u32 {
     1
 }
 
+/// An inclusive `[min, max]`, either end optional.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Bounds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u32>,
+}
+
+impl Bounds {
+    pub fn admits(&self, value: usize) -> bool {
+        self.min.is_none_or(|m| value >= m as usize) && self.max.is_none_or(|m| value <= m as usize)
+    }
+
+    /// Whether this bound can be satisfied at all — a `min` above a `max` is an
+    /// authoring mistake that would otherwise reject every block silently.
+    pub fn is_satisfiable(&self) -> bool {
+        match (self.min, self.max) {
+            (Some(min), Some(max)) => min <= max,
+            _ => true,
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        match (self.min, self.max) {
+            (Some(min), Some(max)) => format!("between {min} and {max}"),
+            (Some(min), None) => format!("at least {min}"),
+            (None, Some(max)) => format!("at most {max}"),
+            (None, None) => "any number of".to_string(),
+        }
+    }
+}
+
+/// What each region of a constraint's tiles must hold.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RegionContains {
+    /// Authored tile names to count inside each region.
+    pub tiles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u32>,
+}
+
+/// A property of the solved grid that face adjacency cannot state (M49).
+///
+/// A socket is a statement about one *interface*. "This mass of walls encloses
+/// a room", "the street reaches everywhere", "a building is smaller than the
+/// village" are statements about a **region**, and constraint propagation over
+/// adjacency has no representation for one. Without them the M47 village came
+/// out as a single 60-cell mass covering 75% of its grid, and the tour's hamlet
+/// as 24 wall pieces enclosing zero rooms.
+///
+/// One shape, four optional predicates, over a set of tiles named by their
+/// **authored** names — four rotations of a wall are one kind of wall to
+/// whoever writes this, and a constraint listing `wall@0..wall@3` would stop
+/// covering a tile whose `rotations` changed.
+///
+/// Evaluated over the **ground layer**, 4-connected in XZ. A terrace step does
+/// not split a region: the lift moves geometry, and two columns at different
+/// lifts are still neighbours on the ground plan.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Constraint {
+    /// What this rule is for. Quoted back when it rejects a block, which is the
+    /// difference between "the village came out bland" and a named cause.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The authored tile names this applies to.
+    pub tiles: Vec<String>,
+    /// How many such cells the grid holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<Bounds>,
+    /// How many connected regions they form. `max: 1` is connectivity, and is
+    /// why this needs no separate kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regions: Option<Bounds>,
+    /// The size of each region — the predicate that breaks one sprawling mass
+    /// into buildings, and that refuses a lone wall standing on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_size: Option<Bounds>,
+    /// What each region must contain — "a building has a room in it".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_contains: Option<RegionContains>,
+}
+
+impl Constraint {
+    /// A label for messages: the author's `name`, else the tiles it is about.
+    pub fn label(&self) -> String {
+        if self.name.is_empty() {
+            format!("the constraint on {}", self.tiles.join(", "))
+        } else {
+            format!("{:?}", self.name)
+        }
+    }
+}
+
 /// A tileset file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -408,6 +507,9 @@ pub struct Tileset {
     #[serde(default)]
     pub palette: BTreeMap<String, Material>,
     pub tiles: Vec<TileDef>,
+    /// Region properties the solver must satisfy (M49). Empty is M47 exactly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<Constraint>,
 }
 
 fn default_cell() -> Vec3 {
@@ -514,6 +616,16 @@ pub fn digest(tileset: &Tileset) -> String {
         // spelling out twenty fields here is a list that silently stops
         // matching the day one is added.
         h.str(&serde_json::to_string(material).unwrap_or_default());
+    }
+    // Fed in only when there are some, so a tileset that does not use M49
+    // digests exactly as it did — and every layout solved before this milestone
+    // stays current rather than reporting stale for a field it never had. The
+    // house rule that let M16 add five features without re-blessing anything.
+    if !tileset.constraints.is_empty() {
+        h.u32(tileset.constraints.len() as u32);
+        for constraint in &tileset.constraints {
+            h.str(&serde_json::to_string(constraint).unwrap_or_default());
+        }
     }
     h.u32(tileset.tiles.len() as u32);
     for tile in &tileset.tiles {
@@ -974,6 +1086,7 @@ mod tests {
                     material: "stone".into(),
                 }],
             }],
+            constraints: Vec::new(),
         }
     }
 
@@ -1222,6 +1335,35 @@ mod tests {
             tokens,
             ["wall@0", "wall@1", "wall@2", "wall@3", "floor@0"],
             "the order is a format contract: bitsets index into it"
+        );
+    }
+
+    /// A tileset that declares no constraints digests exactly as one written
+    /// before the field existed — which is what keeps every layout solved
+    /// before M49 from reporting stale for a feature it never used.
+    #[test]
+    fn an_absent_constraint_list_does_not_reach_the_digest() {
+        let plain = wall();
+        let mut empty = wall();
+        empty.constraints = Vec::new();
+        assert_eq!(digest(&plain), digest(&empty));
+
+        let mut constrained = wall();
+        constrained.constraints = vec![Constraint {
+            name: "something".into(),
+            tiles: vec!["wall".into()],
+            count: Some(Bounds {
+                min: Some(1),
+                max: None,
+            }),
+            regions: None,
+            region_size: None,
+            region_contains: None,
+        }];
+        assert_ne!(
+            digest(&plain),
+            digest(&constrained),
+            "but an edited rule must move it, or a stale layout reads as current"
         );
     }
 
