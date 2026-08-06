@@ -30,7 +30,15 @@ could have moved in an already-blessed frame — does not move.
 village *reached* in one leg is a village already finished by the time it is looked at. Leg 5 is the
 approach and leg 6 is the crossing, and the crossing is the only leg in the tour whose two aim keys
 are the same point — a constant aim is what keeps the hamlet centred for the three seconds it takes
-to solve. Rhai's
+to solve.
+
+**The build is four calls, one per block, over locked plots (M51).** The hamlet's layout locks four
+floor cells — building plots, one centred per 8×7 quadrant block — and the director's four
+`world.synthesize` discs are those plots at radius 1, so each quadrant solves exactly once per lap
+and a house grows around each plot by propagation. Not a raster: a disc re-solves the whole blocks
+it meets, so overlapping discs re-roll a block and the houses flicker. The plots hold still across
+laps (locks survive `clear_tiles`); the seed advances with the step, so each lap's houses differ in
+shape around the same four hearths. Rhai's
 function-expression depth budget is **16 in a debug build**, which is why the director spells
 sub-expressions into `let`s instead of nesting one more paren.
 

@@ -1,41 +1,31 @@
-// M50's fixture: a village that builds itself while the scene runs.
+// M50/M51's fixture: a village that builds itself while the scene runs.
 //
-// Step 1 clears the grid to the known-good fill — cobble on the ground layer,
-// air above it — and every eighth step after that solves the blocks meeting a
-// disc that sweeps west to east across the 20 m footprint. What the baseline
-// frame shows is therefore the *product* of the runtime path: a frame rendered
-// at step 0, or with the feature deleted, is bare cobble.
+// Step 0 clears the grid to the known-good fill — cobble below, air above,
+// with the two locked **plot** floors kept, because locks are the one thing a
+// clear does not throw away (M51: a plot is how a layout says "a house goes
+// here"; the sockets then force a whole house to grow around it). Four calls
+// then re-solve the grid one block at a time, in the solver's own scan order.
 //
-// The clear is what makes this a build rather than a churn. M49's rule is that
-// a block may not increase the violations blamed on it, which means a village
-// re-solved in place stays the village it already was; from the fill there are
-// no violations to increase, so the solve is strict and the buildings come out
-// of nothing.
-
+// One call per block, not a raster of overlapping discs: a disc re-solves
+// whole blocks, so two discs meeting one block re-roll it twice and the houses
+// flicker through arrangements. The committed layout is solved at block 6,5
+// for the same lattice — the disc centres below are the four block centres,
+// at radius 1 so no disc can reach a neighbouring block's interior.
+//
 // A script's `step` is 0-based — it is the index the step *begins* at — so the
-// clear is step 0 and the sweep starts at 8. Ordering these the other way round
-// wipes the first pass, which the `synthesized` count catches and a picture
-// does not.
+// clear is step 0. Ordering it after the first solve wipes it, which the
+// `synthesized` count catches and a picture does not.
+
 fn step(world, step) {
     if step == 0 {
         world.clear_tiles("Village");
         return;
     }
 
-    // One pass of the disc across the grid, one block-ish at a time. The grid
-    // is 10x8 cells of 2 m centred on the origin, so the sweep runs from
-    // x = -11 to x = +11 and both ends overhang deliberately — an overhanging
-    // disc clamps, which is the behaviour a camera flying past an edge
-    // depends on.
-    if step % 8 != 0 { return; }
-
-    let pass = step / 8;
-    if pass > 8 { return; }
-
-    let x = -11.0 + (pass - 1).to_float() * 2.75;
-    let radius = 2.5;
-    // The seed advances with the sweep so each disc is its own roll rather
-    // than the same one re-applied; two runs of this file still agree, because
-    // the sequence is a function of the step and nothing else.
-    world.synthesize("Village", x, 0.0, radius, 700 + pass * 13);
+    // World-metre centres of the four blocks' plots and streets. The grid is
+    // 10x8 cells of 2 m centred on the origin.
+    if step == 8  { world.synthesize("Village", -5.0, -3.0, 1.0, 713); } // plot A
+    if step == 24 { world.synthesize("Village",  5.0, -3.0, 1.0, 726); } // street
+    if step == 40 { world.synthesize("Village", -5.0,  5.0, 1.0, 739); } // street
+    if step == 56 { world.synthesize("Village",  5.0,  5.0, 1.0, 752); } // plot B
 }

@@ -149,26 +149,25 @@ fn step(world, step) {
     // grows a different village on the same ground, which a still layout
     // cannot show and is the whole reason this is a station.
     if p == 900 { world.clear_tiles("Hamlet"); }
-    if p >= 1080 && p < 1260 && p % 12 == 0 {
-        // A **raster**, not a line. `world.synthesize` takes a disc, so a
-        // radius wide enough to reach the far side of the grid in z is also
-        // wide enough to re-solve all of it in x; a line sweep at a usable
-        // radius only ever meets the middle band of blocks and leaves the
-        // north and south thirds standing as cobble. Fifteen positions, z outer
-        // and x inner — the solver's own scan order — build the hamlet row by
-        // row over the three seconds the camera spends crossing it.
+    if p >= 1080 && p < 1260 && (p - 1080) % 44 == 0 {
+        // One call per **block**, not a raster of discs (M51). A disc
+        // re-solves the whole blocks it meets, so overlapping discs re-roll a
+        // block repeatedly and the houses flicker through arrangements. The
+        // committed layout is solved at block 8,7 — four quadrants — and the
+        // four discs below are the quadrants' plot positions at radius 1, so
+        // each quadrant is solved exactly once per lap and the hamlet builds
+        // house by house while the camera crosses it.
         //
-        // The spacing is load-bearing for a second reason: a disc re-solves
-        // whole *blocks*, and passing over one repeatedly grows a single roof
-        // mass with no street in it. Do-no-harm counts violations rather than
-        // measuring them, so once one over-size region exists, adding to it is
-        // free. One pass per block is what leaves a village with rooms.
-        let pass = (p - 1080) / 12;
-        if pass < 15 {
-            let x = -58.0 + (pass % 5).to_float() * 6.0;
-            let z = -6.0 + (pass / 5).to_float() * 8.0;
-            world.synthesize("Hamlet", x, z, 4.0, 900 + step);
-        }
+        // The plots themselves are locked floor cells in the layout file:
+        // `clear_tiles` keeps locks, and the sockets then force a whole house
+        // to grow around each plot — which is what makes a lap's rebuild
+        // houses rather than junk. The seed still advances with the step, so
+        // every lap's houses differ in shape; only their plots hold still.
+        let quadrant = (p - 1080) / 44;
+        if quadrant == 0 { world.synthesize("Hamlet", -53.0, -1.0, 1.0, 900 + step); }
+        if quadrant == 1 { world.synthesize("Hamlet", -39.0, -1.0, 1.0, 900 + step); }
+        if quadrant == 2 { world.synthesize("Hamlet", -53.0,  9.0, 1.0, 900 + step); }
+        if quadrant == 3 { world.synthesize("Hamlet", -39.0,  9.0, 1.0, 900 + step); }
     }
 
     // Blast dust: one second of it, then silence. An emitter that cannot be

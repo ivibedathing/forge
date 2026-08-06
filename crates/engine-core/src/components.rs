@@ -4374,6 +4374,16 @@ pub struct TileGrid {
     /// offset leaves a slot down every wall between two columns at different
     /// heights, and no tile knows what its neighbour's offset is.
     pub ground: String,
+
+    /// What lies beyond the grid's free edges — its borders, and its terrace
+    /// seams (M51).
+    ///
+    /// `open` (the default, and M47 exactly) constrains nothing there: the
+    /// patch is a window onto a larger world, and a structure may run off the
+    /// edge. `closed` constrains every free edge as the **fill** — street at
+    /// ground level, air above — so a structure must complete inside the grid
+    /// and on its own terrace. Closed is what keeps a village's houses whole.
+    pub edges: crate::tilelayout::Edges,
 }
 
 impl Default for TileGrid {
@@ -4386,6 +4396,7 @@ impl Default for TileGrid {
             fill_ground: String::new(),
             fill_background: String::new(),
             ground: String::new(),
+            edges: crate::tilelayout::Edges::Open,
         }
     }
 }

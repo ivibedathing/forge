@@ -298,7 +298,7 @@ mod tests {
         let nx = rows[0].len() as u32;
         let grid = Grid {
             size: [nx, 1, nz],
-            offsets: Vec::new(),
+            offsets: Vec::new(), edges: Default::default(),
         };
         let mut cells = vec![0usize; grid.cell_count()];
         for (z, row) in rows.iter().enumerate() {

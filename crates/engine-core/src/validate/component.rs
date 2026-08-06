@@ -1594,6 +1594,18 @@ fn check_tile_grid(
         ));
         return errors;
     }
+    if layout.header.edges != component.edges {
+        errors.push(here(
+            codes::TILE_LAYOUT_MISMATCH,
+            format!(
+                "entity {entity:?} wants {:?} edges but its layout was solved with \
+                 {:?} ones; re-run `engine synthesize --reset --write`",
+                component.edges, layout.header.edges
+            ),
+            "edges",
+        ));
+        return errors;
+    }
 
     let resolved = match layout.resolve(&tiles) {
         Ok(resolved) => resolved,
@@ -1636,7 +1648,14 @@ fn check_tile_grid(
     // unlocked one is a hand-edit or a solver bug.
     let grid = layout.grid();
     let compat = crate::tileset::Compat::build(&tiles);
-    for bad in crate::tilelayout::verify_adjacency(&layout, &grid, &tiles, &resolved, &compat) {
+    // The fill pair is only consulted on a closed grid's free edges (M51); an
+    // unresolvable fill name was already reported by the fill checks above, so
+    // falling back to the defaults here cannot mask anything.
+    let fill = crate::tilegrid::fill_indices(component, &tileset, &tiles)
+        .unwrap_or((0, tiles.len().saturating_sub(1)));
+    for bad in
+        crate::tilelayout::verify_adjacency(&layout, &grid, &tiles, &resolved, &compat, fill)
+    {
         let (x, y, z) = grid.coords(bad.cell);
         let placed = &tiles[resolved[bad.cell]].token;
         let against = match bad.against {

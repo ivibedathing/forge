@@ -99,6 +99,13 @@ pub struct LayoutHeader {
     /// meaningful beside the offsets it was solved against.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub offsets: Vec<i32>,
+
+    /// What the free edges were solved as (M51). Absent means open — every
+    /// pre-M51 layout stays byte-identical, and so does every solve that does
+    /// not ask. In the header for `offsets`' reason: it is an input to the
+    /// solve, and the file is only meaningful beside it.
+    #[serde(default, skip_serializing_if = "Edges::is_open")]
+    pub edges: Edges,
 }
 
 /// One row of the grid.
@@ -284,6 +291,7 @@ impl TileLayout {
         Grid {
             size: self.header.size,
             offsets: self.header.offsets.clone(),
+            edges: self.header.edges,
         }
     }
 
@@ -310,6 +318,32 @@ impl TileLayout {
     }
 }
 
+/// What lies beyond a grid's free edges — its borders, and its terrace seams
+/// (M51).
+///
+/// `Open` is M47 exactly: a free edge constrains nothing, the patch is a
+/// window onto a larger world. `Closed` is the WFC literature's *boundary
+/// condition*: everything beyond a free edge is taken to be the fill — street
+/// at ground level, air above — so an interior can never leak off the world.
+/// A building must then complete inside the grid and on its own terrace,
+/// which is what stops houses being truncated at the border or cut open by a
+/// lift step.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Edges {
+    #[default]
+    Open,
+    Closed,
+}
+
+impl Edges {
+    pub fn is_open(&self) -> bool {
+        matches!(self, Edges::Open)
+    }
+}
+
 /// The shape a layout is indexed by: extent in cells, and the per-column Y
 /// offset a grid following a `Terrain` terraces to.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -317,6 +351,8 @@ pub struct Grid {
     pub size: [u32; 3],
     /// Cells of lift per column, `x + nx*z`. Empty for a flat grid.
     pub offsets: Vec<i32>,
+    /// Whether the free edges constrain as the fill (M51).
+    pub edges: Edges,
 }
 
 /// What lies across one face of a cell.
@@ -330,6 +366,10 @@ pub enum Neighbour {
     /// Outside the grid and unconstrained — a horizontal edge, where the patch
     /// is a window onto a larger world, and the exposed side of a terrace step.
     Open,
+    /// A free edge of a **closed** grid (M51): constrained as if the fill tile
+    /// of layer `y` stood there — street at ground, air above. The boundary
+    /// condition that keeps an interior from leaking off the world.
+    Fill { y: u32 },
 }
 
 impl Grid {
@@ -387,16 +427,24 @@ impl Grid {
         let (x, y, z) = self.coords(index);
         let step = face.step();
 
+        // A free edge — sideways off the patch, or across a terrace seam — is
+        // open or fill-constrained by the grid's `edges` mode (M51). Open is
+        // M47: a village is a window onto a larger world, and its edge tiles
+        // must not be constrained as if the world ended there. Closed is the
+        // boundary condition: the world beyond a free edge is the empty
+        // street, so a building has to finish before it reaches one.
+        let free = || match self.edges {
+            Edges::Open => Neighbour::Open,
+            Edges::Closed => Neighbour::Fill { y },
+        };
+
         let (Some(tx), Some(tz)) = (checked_step(x, step[0], nx), checked_step(z, step[2], nz))
         else {
-            // Sideways off the patch: open, because a village is a window onto
-            // a larger world and its edge tiles must not be constrained as if
-            // the world ended there.
-            return Neighbour::Open;
+            return free();
         };
 
         if self.offset(x, z) != self.offset(tx, tz) {
-            return Neighbour::Open;
+            return free();
         }
 
         let target = y as i64 + i64::from(step[1]);
@@ -444,7 +492,9 @@ pub fn verify_adjacency(
     tiles: &[ExpandedTile],
     resolved: &[usize],
     compat: &crate::tileset::Compat,
+    fill: (usize, usize),
 ) -> Vec<Violation> {
+    let (fill_ground, fill_background) = fill;
     let mut violations = Vec::new();
     for (cell, &here) in resolved.iter().enumerate() {
         for face in Face::ALL {
@@ -458,6 +508,13 @@ pub fn verify_adjacency(
                     crate::tileset::Socket::Empty
                 ),
                 Neighbour::Open => true,
+                // A closed grid's free edge behaves as the fill (M51), so the
+                // check is an ordinary compatibility question against it.
+                Neighbour::Fill { y } => compat.allows(
+                    face.index(),
+                    here,
+                    if y == 0 { fill_ground } else { fill_background },
+                ),
             };
             if !ok {
                 let against = match grid.neighbour(cell, face) {
@@ -501,7 +558,7 @@ mod tests {
             overlap: 1,
             attempts: 10,
             fallbacks: 0,
-            offsets: Vec::new(),
+            offsets: Vec::new(), edges: Default::default(),
         }
     }
 
@@ -590,7 +647,7 @@ mod tests {
     fn indexing_agrees_with_the_files_traversal() {
         let grid = Grid {
             size: [3, 2, 4],
-            offsets: Vec::new(),
+            offsets: Vec::new(), edges: Default::default(),
         };
         for index in 0..grid.cell_count() {
             let (x, y, z) = grid.coords(index);
@@ -604,7 +661,7 @@ mod tests {
     fn the_stack_is_closed_and_the_footprint_is_open() {
         let grid = Grid {
             size: [2, 2, 2],
-            offsets: Vec::new(),
+            offsets: Vec::new(), edges: Default::default(),
         };
         let ground = grid.index(0, 0, 0);
         assert_eq!(grid.neighbour(ground, Face::NegY), Neighbour::Closed);
@@ -628,6 +685,7 @@ mod tests {
             size: [3, 2, 1],
             // The +X-most column stands one cell higher than the other two.
             offsets: vec![0, 0, 1],
+            edges: Default::default(),
         };
         for y in 0..2 {
             assert_eq!(
@@ -649,6 +707,61 @@ mod tests {
         // And the stack is still closed at both ends, on every column.
         assert_eq!(grid.neighbour(grid.index(2, 0, 0), Face::NegY), Neighbour::Closed);
         assert_eq!(grid.neighbour(grid.index(2, 1, 0), Face::PosY), Neighbour::Closed);
+    }
+
+    /// A closed grid's free edges — the border and the terrace seam alike —
+    /// constrain as the fill of their own layer (M51). This is the boundary
+    /// condition that keeps a building from being truncated at the border or
+    /// cut open by a lift step, which is exactly how the tour's hamlet lost
+    /// its walls.
+    #[test]
+    fn closed_edges_turn_free_edges_into_fill() {
+        let grid = Grid {
+            size: [3, 2, 1],
+            offsets: vec![0, 0, 1],
+            edges: Edges::Closed,
+        };
+        // The border...
+        assert_eq!(
+            grid.neighbour(grid.index(0, 0, 0), Face::NegX),
+            Neighbour::Fill { y: 0 }
+        );
+        assert_eq!(
+            grid.neighbour(grid.index(0, 1, 0), Face::NegX),
+            Neighbour::Fill { y: 1 }
+        );
+        // ...and the terrace seam, from both sides.
+        assert_eq!(
+            grid.neighbour(grid.index(1, 0, 0), Face::PosX),
+            Neighbour::Fill { y: 0 }
+        );
+        assert_eq!(
+            grid.neighbour(grid.index(2, 0, 0), Face::NegX),
+            Neighbour::Fill { y: 0 }
+        );
+        // Within one terrace, and at the vertical ends, nothing changes.
+        assert_eq!(
+            grid.neighbour(grid.index(0, 0, 0), Face::PosX),
+            Neighbour::Cell(grid.index(1, 0, 0))
+        );
+        assert_eq!(
+            grid.neighbour(grid.index(0, 0, 0), Face::NegY),
+            Neighbour::Closed
+        );
+    }
+
+    /// The header round-trips the mode, and its absence is open — every
+    /// pre-M51 layout parses to the grid it was solved with.
+    #[test]
+    fn the_header_defaults_to_open_edges() {
+        let open = layout([2, 1, 2]);
+        assert_eq!(open.header.edges, Edges::Open);
+        assert!(!open.to_text().contains("edges"));
+
+        let mut closed = layout([2, 1, 2]);
+        closed.header.edges = Edges::Closed;
+        let reparsed = TileLayout::parse(&closed.to_text()).unwrap();
+        assert_eq!(reparsed.header.edges, Edges::Closed);
     }
 
     #[test]

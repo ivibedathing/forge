@@ -234,10 +234,22 @@ valid JSON and renders a wrong world. A `!` before a token locks that cell: a
 hard constraint the solver never re-picks, byte-identical after a full re-solve,
 and the way an author says "the door goes *there*".
 
-The grid's **vertical ends are closed and its horizontal edges are open**: a
-patch is a window onto a larger world sideways, but there is no storey below the
-ground or above the sky. That single rule is what keeps roofs off the ground
-floor without any tile having to say so.
+The grid's **vertical ends are closed and its horizontal edges are open** by
+default: a patch is a window onto a larger world sideways, but there is no
+storey below the ground or above the sky. That single rule is what keeps roofs
+off the ground floor without any tile having to say so. Since M51 the
+component may say `"edges": "closed"`, which constrains every free edge — the
+border **and** every terrace seam — as the fill pair (street at ground, air
+above), so a structure must complete inside the grid and on its own terrace.
+Closed is what keeps a village's houses whole; open remains the default and is
+M47 exactly.
+
+**A locked floor cell is a building plot** (M51). Under a tileset whose floors
+only mate wall interiors, a `!floor@0` in the layout forces propagation to
+grow a complete house around it — which is the reliable way to *place*
+buildings, since a constraint solver rarely completes a large structure by
+luck. `clear_tiles` and `--reset` both keep locks, so plots survive every
+rebuild.
 
 Since M50 a script can re-solve part of a grid while the scene runs:
 `world.synthesize("Village", x, z, radius)` re-solves the blocks meeting a

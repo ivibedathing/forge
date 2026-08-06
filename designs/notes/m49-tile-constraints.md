@@ -75,6 +75,10 @@ think. A saturated counter looks like a flat response.
 
 ## Authoring, in practice
 
+*(M51 reworked the village's sockets and grew this list to four rules — see
+`m51-village-coherence.md`. The two below are as this milestone authored them,
+and the sizing lesson stands.)*
+
 The village's rules are two:
 
 ```json

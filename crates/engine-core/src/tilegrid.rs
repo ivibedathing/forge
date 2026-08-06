@@ -351,7 +351,7 @@ mod region_tests {
         let (placement, size, cell) = placed();
         let grid = Grid {
             size,
-            offsets: Vec::new(),
+            offsets: Vec::new(), edges: Default::default(),
         };
         for index in 0..grid.cell_count() {
             let (x, _, z) = grid.coords(index);
@@ -429,7 +429,7 @@ mod tests {
     fn grid() -> Grid {
         Grid {
             size: [4, 1, 4],
-            offsets: Vec::new(),
+            offsets: Vec::new(), edges: Default::default(),
         }
     }
 
@@ -517,7 +517,7 @@ mod tests {
         let tileset = tileset();
         let grid = Grid {
             size: [4, 2, 4],
-            offsets: Vec::new(),
+            offsets: Vec::new(), edges: Default::default(),
         };
         // Four cells of 2 m span 8 m, so the first cell's centre is at −3.
         assert_eq!(
@@ -542,6 +542,7 @@ mod tests {
         let mut grid = Grid {
             size: [2, 2, 1],
             offsets: vec![0, 2],
+            edges: Default::default(),
         };
         assert_eq!(cell_origin(&tileset, &grid, grid.index(1, 0, 0)).y, 5.0);
         assert_eq!(cell_origin(&tileset, &grid, grid.index(1, 1, 0)).y, 7.5);

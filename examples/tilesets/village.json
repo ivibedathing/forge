@@ -41,14 +41,66 @@
   "constraints": [
     {
       "name": "a building, not a curtain wall",
-      "tiles": ["wall", "wall_door", "wall_window", "corner", "floor"],
-      "region_size": { "min": 4, "max": 18 },
-      "region_contains": { "tiles": ["floor"], "min": 1 }
+      "tiles": [
+        "wall",
+        "wall_door",
+        "wall_window",
+        "corner",
+        "floor"
+      ],
+      "region_size": {
+        "min": 9,
+        "max": 18
+      },
+      "region_contains": {
+        "tiles": [
+          "floor"
+        ],
+        "min": 1
+      }
+    },
+    {
+      "name": "a house has four corners",
+      "tiles": [
+        "wall",
+        "wall_door",
+        "wall_window",
+        "corner",
+        "floor"
+      ],
+      "region_contains": {
+        "tiles": [
+          "corner"
+        ],
+        "min": 4,
+        "max": 4
+      }
+    },
+    {
+      "name": "every house has a door",
+      "tiles": [
+        "wall",
+        "wall_door",
+        "wall_window",
+        "corner",
+        "floor"
+      ],
+      "region_contains": {
+        "tiles": [
+          "wall_door"
+        ],
+        "min": 1
+      }
     },
     {
       "name": "the street reaches every door",
-      "tiles": ["cobble", "post"],
-      "regions": { "max": 1 }
+      "tiles": [
+        "cobble",
+        "post"
+      ],
+      "regions": {
+        "max": 1
+      }
     }
   ],
   "tiles": [
@@ -97,7 +149,7 @@
     },
     {
       "name": "post",
-      "weight": 1.0,
+      "weight": 0.8,
       "rotations": 1,
       "faces": {
         "px": "out",
@@ -155,7 +207,7 @@
     },
     {
       "name": "floor",
-      "weight": 5.0,
+      "weight": 2.0,
       "rotations": 1,
       "faces": {
         "px": "in",
@@ -198,11 +250,11 @@
     },
     {
       "name": "wall",
-      "weight": 7.0,
+      "weight": 2.0,
       "rotations": 4,
       "faces": {
-        "px": "wallrun",
-        "nx": "wallrun",
+        "px": "run_r",
+        "nx": "run_l",
         "pz": "in",
         "nz": "out",
         "py": "wtop_i",
@@ -297,11 +349,11 @@
     },
     {
       "name": "wall_door",
-      "weight": 1.5,
+      "weight": 0.5,
       "rotations": 4,
       "faces": {
-        "px": "wallrun",
-        "nx": "wallrun",
+        "px": "run_r",
+        "nx": "run_l",
         "pz": "in",
         "nz": "out",
         "py": "wtop_i",
@@ -424,11 +476,11 @@
     },
     {
       "name": "wall_window",
-      "weight": 2.5,
+      "weight": 0.8,
       "rotations": 4,
       "faces": {
-        "px": "wallrun",
-        "nx": "wallrun",
+        "px": "run_r",
+        "nx": "run_l",
         "pz": "in",
         "nz": "out",
         "py": "wtop_i",
@@ -579,12 +631,12 @@
     },
     {
       "name": "corner",
-      "weight": 1.5,
+      "weight": 0.4,
       "rotations": 4,
       "faces": {
-        "px": "wallrun",
+        "px": "run_r",
         "nx": "out",
-        "pz": "wallrun",
+        "pz": "run_l",
         "nz": "out",
         "py": "wtop_i",
         "ny": "0"
@@ -697,7 +749,52 @@
       "faces": {
         "px": "above",
         "nx": "above",
-        "pz": "above",
+        "pz": "ridge",
+        "nz": "ridge",
+        "py": "0",
+        "ny": "wtop_i"
+      },
+      "parts": [
+        {
+          "kind": "wedge",
+          "at": [
+            -0.5,
+            0.6,
+            0.0
+          ],
+          "size": [
+            1.0,
+            1.2,
+            2.0
+          ],
+          "rise": "px",
+          "material": "thatch"
+        },
+        {
+          "kind": "wedge",
+          "at": [
+            0.5,
+            0.6,
+            0.0
+          ],
+          "size": [
+            1.0,
+            1.2,
+            2.0
+          ],
+          "rise": "nx",
+          "material": "thatch"
+        }
+      ]
+    },
+    {
+      "name": "roof_gable_end",
+      "weight": 3.0,
+      "rotations": 4,
+      "faces": {
+        "px": "above",
+        "nx": "above",
+        "pz": "ridge",
         "nz": "above",
         "py": "0",
         "ny": "wtop_i"
@@ -737,37 +834,53 @@
     },
     {
       "name": "chimney",
-      "weight": 1.0,
-      "rotations": 1,
+      "weight": 0.6,
+      "rotations": 2,
       "faces": {
         "px": "above",
         "nx": "above",
-        "pz": "above",
-        "nz": "above",
+        "pz": "ridge",
+        "nz": "ridge",
         "py": "0",
         "ny": "wtop_i"
       },
       "parts": [
         {
-          "kind": "box",
+          "kind": "wedge",
           "at": [
-            0.0,
-            0.15,
+            -0.5,
+            0.6,
             0.0
           ],
           "size": [
-            2.0,
-            0.3,
+            1.0,
+            1.2,
             2.0
           ],
+          "rise": "px",
+          "material": "thatch"
+        },
+        {
+          "kind": "wedge",
+          "at": [
+            0.5,
+            0.6,
+            0.0
+          ],
+          "size": [
+            1.0,
+            1.2,
+            2.0
+          ],
+          "rise": "nx",
           "material": "thatch"
         },
         {
           "kind": "box",
           "at": [
-            0.45,
+            0.35,
             1.1,
-            0.45
+            0.0
           ],
           "size": [
             0.5,

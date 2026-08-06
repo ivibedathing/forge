@@ -60,7 +60,7 @@ actually says.
 | `Tree` | A grown tree — bark plus leaves — from a parameter recipe, not a mesh file. Since M46 it moves: `wind` bends the branches, `flutter` beats the leaves. | `m19-trees.md`, `m46-foliage-sway.md` |
 | `Cloud` | A cluster of interpenetrating lobes that drifts; **owns its mesh**. | `m20-clouds.md` |
 | `Meadow` | Ground cover on a seed→grass→weeds→straw→collapse life cycle, animated entirely in the vertex stage. | `m29-meadows.md` |
-| `TileGrid` | A grid filled by **model synthesis** from a `tilesets/*.json`, drawn as one merged mesh per palette material. **Owns its geometry**, and carries no geometry of its own in the scene: it names a tileset and a solved `layout`, and renders nothing until `engine synthesize` has written one. Since M50 a script can re-solve part of it mid-run. | `m47-tile-synthesis.md`, `m50-runtime-synthesis.md` |
+| `TileGrid` | A grid filled by **model synthesis** from a `tilesets/*.json`, drawn as one merged mesh per palette material. **Owns its geometry**, and carries no geometry of its own in the scene: it names a tileset and a solved `layout`, and renders nothing until `engine synthesize` has written one. Since M50 a script can re-solve part of it mid-run; since M51 `edges: "closed"` makes the border and every terrace seam behave as street/air, which is what keeps buildings whole. | `m47-tile-synthesis.md`, `m50-runtime-synthesis.md`, `m51-village-coherence.md` |
 | `LightProbeVolume` | A box of baked irradiance probes; replaces the hemispheric fill with one that knows what is above a surface. Since M45 its `sun_samples` also bounce the *sun*, so a red wall reddens its neighbour. At most one per scene, and it carries no geometry. | `m35-global-illumination.md`, `m45-sun-bounce.md` |
 | `HudText` | Screen-anchored text at an integer scale of the 8×8 font. | `m11_6-hud.md` |
 | `HudRect` | A screen-anchored coloured rectangle — bars, backdrops, gauges. | `m11_6-hud.md` |
@@ -97,9 +97,9 @@ M28 the mouse, M29 meadows, M30 skeletal animation, M31 the UI system, M32 locom
 planting, M33 skinned collider proxies, M34 the metre, M36 the game shell, M37 entity spawning,
 M38 shadow cascades, M39 ragdolls, M40 road authoring, M41 buoyancy, M42 terrain basins,
 M43 material-aware fracture, M44 the break's dust, M35 global illumination, M45 bounced
-sunlight, M46 foliage sway, M47 tile synthesis, M48 its ergonomics, M49 tile constraints, and
-M50 runtime synthesis. (M7 editor at scope E0–E2 + validation
-panel + `--watch`.)
+sunlight, M46 foliage sway, M47 tile synthesis, M48 its ergonomics, M49 tile constraints,
+M50 runtime synthesis, and M51 closed edges + village coherence. (M7 editor at scope E0–E2 +
+validation panel + `--watch`.)
 
 JSON scenes load into hecs, render headlessly to PNG with PBR lighting, validate with
 all-errors-at-once reporting under a formalized CLI contract, reference glTF mesh files, pin their
@@ -364,6 +364,13 @@ The cross-cutting ones. Per-system traps are in each note.
   already drawn; a fresh draw would have shifted every subsequent draw and **reshaped every tree in
   the repo** to gain the animation. The same reasoning is why `tree.rs`'s jitter helpers consume a
   draw even at `jitter: 0`.
+- **Enclosure cannot be rejected into existence; it must be propagated from a seed** (M51). Chiral
+  sockets made a house an atomic structure, and min-entropy collapse almost never completes one by
+  luck: a 16-seed sweep gave at best one 3×3 house and mostly bare streets, because any partial
+  building violates and the attempt that finally settles is the empty one. The answer is the WFC
+  literature's "fixed tiles draw the floorplan": a **locked floor cell is a building plot**, whose
+  `in` faces force a whole house to grow by propagation — with tile weights low enough that
+  construction rarely starts anywhere else. Rejection is then cleanup, not the generator.
 - **A constraint that rejects must reject *worsening*, not imperfection** (M49). Strict rejection —
   re-roll a block on any violation — cannot converge: a region breaking a rule usually extends past
   every block that could be blamed for it, so no block can fix it and all of them fall back. It
@@ -372,19 +379,21 @@ The cross-cutting ones. Per-system traps are in each note.
   from the known-good fill. Two corollaries: an already-broken layout is never **repaired** (hence
   `synthesize --reset`, or adding constraints to a tileset silently does nothing), and a rule
   nothing can satisfy is a **no-op** rather than a wipe.
-- **A rejection rule that *counts* is not a rule that bounds** (M50). M49's do-no-harm accepts a
-  block that does not increase the number of violations blamed on it, so once one over-size built
-  region exists, extending it is free. Sweeping the tour's village with overlapping discs — five or
-  six solves per block — took it from the committed layout's 13 rooms and 103 open cells to **3 and
-  53**: one raft of roofs with no street, which is the exact failure M49 exists to fix, reintroduced
-  by re-solving rather than by a bad rule. **One pass per block** is the spacing that keeps rooms.
-  The general form: a constraint checked by counting violations cannot stop the violation it has
-  already counted from growing.
-- **A world-space disc cannot sweep a grid** (M50). `radius` is one number for both axes, so a disc
-  wide enough in z to reach the far side of a 24 m grid is wide enough in x to re-solve all of it —
-  a line of discs across the tour's hamlet solved the same two z rows fourteen times and built the
-  middle third only. A **raster**, z outer and x inner, is the shape. The trace is what says so:
-  every line read `region: [.., 5, .., 6]`, where the picture just looked sparse.
+- **A rejection rule that *counts* is not a rule that bounds** (M50/M51). M49's do-no-harm accepts
+  a block that does not increase the violations blamed on it, so once one over-size region exists,
+  extending it is free — and a *locked* cell makes it worse, because a plot sitting in the fill is
+  itself a violation and hands the solver a junk budget. M51's two amendments in `synthesize.rs`:
+  the baseline skips violations touching a locked cell (they are the solver's job, not its
+  allowance) and acceptance takes the **best** attempt rather than the first tolerable one. Both
+  are invisible from a clean fill. The general form stands: a constraint checked by counting
+  cannot stop the violation it already counted from growing.
+- **Runtime synthesis re-solves whole blocks, so drive it one call per block** (M50/M51). A disc
+  re-solves every block it meets; overlapping discs re-roll a block repeatedly and the houses
+  flicker through arrangements. The tour's village leg is four calls at four quadrant centres,
+  radius 1 — each block solved exactly once per lap. And **a locked plot must fit its whole house
+  inside one block, clear of every seam**: a plot in a block's *border ring* forces a wall run the
+  block can never terminate, which measures as the whole budget contradicting with `rejected: []`
+  — contradictions report nothing, so read `rejected` beside `retries` before blaming a rule.
 - **A saturated counter looks like a flat response** (M49). Sweeping a tileset weight over four
   values reported *identical* retry counts, which reads as "the weight does not matter" and actually
   meant every attempt was failing regardless, so the budget was spent in full every time. Check
@@ -612,6 +621,14 @@ Each owns its geometry, so the entity carries **no `Mesh` and no `Material`**.
   a tileset's own tiles, enforced by rejecting a block that breaks them. Without it the village was
   one 60-cell mass and the tour's hamlet was 24 walls enclosing **zero** rooms. Rejection is
   **do no harm**, which is the only form that converges — and why `--reset` exists.
+- **Closed edges and village coherence (M51)** → `m51-village-coherence.md`, design in
+  `designs/tile-edges-design.md`. Why the village's houses used to come out with missing walls, and
+  the four mechanisms that fixed it: `TileGrid.edges: "closed"` (the WFC boundary condition — the
+  border *and* every terrace seam constrain as street/air, so a house must complete inside the grid
+  on one terrace), chiral `run_l`/`run_r` wall sockets (an interior that cannot flip sides), `ridge`
+  sockets with `roof_gable_end` (roofs are straight runs with closed ends, chimneys on the ridge
+  line), and **plot locks** — a locked floor cell whose enclosure propagation forces into a whole
+  house. `open` is the default and M47 exactly.
 - **Runtime synthesis (M50)** → `m50-runtime-synthesis.md`, design in
   `designs/runtime-synthesis-design.md`. The solver, reachable from a script:
   `world.synthesize(entity, x, z, radius[, seed])` re-solves the blocks meeting a world-space disc

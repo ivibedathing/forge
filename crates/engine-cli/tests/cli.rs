@@ -7921,8 +7921,14 @@ fn a_region_re_solve_leaves_the_rest_of_the_village_alone() {
     // than measuring what the region touched.
     let before = layout_rows(&repo_path(M47_LAYOUT));
 
-    // A different seed, so anything the region *may* touch visibly does.
-    let report = synthesize_into(&dir, &["--region", "0,0,2,2", "--seed", "404"]);
+    // A different seed, so anything the region *may* touch visibly does. The
+    // committed layout is one block since M51 (a hamlet needs no seams), so a
+    // multi-block lattice is asked for explicitly — the property under test is
+    // the region selecting a subset.
+    let report = synthesize_into(
+        &dir,
+        &["--region", "0,0,2,2", "--seed", "404", "--block", "6,5"],
+    );
     let after = layout_rows(&dir.join("layout.tiles.json"));
 
     assert!(
@@ -7935,9 +7941,10 @@ fn a_region_re_solve_leaves_the_rest_of_the_village_alone() {
         for (x, (was, is)) in row.iter().zip(&after[key]).enumerate() {
             if was != is {
                 changed += 1;
-                // The fixture's blocks are 8 wide with an overlap of 1, so the
-                // block holding 0,0..2,2 spans x 0..7 — the only cells reachable.
-                assert!(x < 8, "cell x={x} moved and no selected block holds it");
+                // Blocks are 6x5 with an overlap of 1, so the block holding
+                // 0,0..2,2 spans x 0..5, z 0..4 — the only cells reachable.
+                assert!(x < 6, "cell x={x} moved and no selected block holds it");
+                assert!(key.1 < 5, "row z={} moved and no selected block holds it", key.1);
             }
         }
     }
@@ -8077,8 +8084,8 @@ fn list_tiles_reports_every_expansion_and_its_partners() {
     assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
     let report = json_out(&output);
 
-    assert_eq!(report["authored"], 10);
-    assert_eq!(report["expanded"], 23, "rotations expand before the solver");
+    assert_eq!(report["authored"], 11);
+    assert_eq!(report["expanded"], 28, "rotations expand before the solver");
 
     // Authored order, then rotation — cobble, post and floor take one turn
     // each, so `wall`'s four start at index 3. The order is a format contract:
@@ -8395,7 +8402,7 @@ fn list_tiles_writes_a_contact_sheet_that_renders() {
     let sheet = json_out(&output)["sheet"].clone();
 
     // Tiles across, rotations down, with a blank column between tiles.
-    assert_eq!(sheet["size"], serde_json::json!([19, 1, 4]));
+    assert_eq!(sheet["size"], serde_json::json!([21, 1, 4]));
     assert!(scene.is_file());
     assert!(dir.join("village.tiles.json").is_file());
 
@@ -8527,8 +8534,9 @@ fn the_committed_village_is_buildings_rather_than_one_mass() {
 fn the_tours_hamlet_encloses_rooms() {
     let plan = ground_plan(&repo_path("examples/scenes/layouts/tour_village.tiles.json"));
     let built = regions_of(&plan, |name| !OPEN.contains(&name));
+    assert!(built.len() >= 2, "several houses, not one mass: {built:?}");
     for size in &built {
-        assert!((4..=18).contains(size), "{built:?}");
+        assert!((9..=18).contains(size), "{built:?}");
     }
     assert!(
         plan.values().any(|name| name == "floor"),
@@ -8580,10 +8588,16 @@ fn reset_puts_a_violating_layout_back_under_constraint() {
     let before = regions_of(&ground_plan(&layout), |name| !OPEN.contains(&name));
     assert_eq!(before, vec![80], "the whole ground floor is one mass");
 
-    // A plain re-solve tolerates it: do no harm, and the harm is already done.
+    // A plain re-solve on a **multi-block** lattice tolerates it: each block's
+    // borders are the mass itself, so no block can fix what it cannot reach,
+    // and do-no-harm keeps what stood. (On a single block the borders are only
+    // the closed edges, so a plain solve since M51 can and does repair — which
+    // is why the lattice is forced here.)
     let plain = engine()
         .arg("synthesize")
         .arg(&scene)
+        .arg("--block")
+        .arg("4,4")
         .arg("--write")
         .output()
         .unwrap();
@@ -8603,7 +8617,7 @@ fn reset_puts_a_violating_layout_back_under_constraint() {
     assert_eq!(reset.status.code(), Some(0), "{:?}", stderr_lines(&reset));
     let after = regions_of(&ground_plan(&layout), |name| !OPEN.contains(&name));
     for size in &after {
-        assert!((4..=18).contains(size), "after --reset: {after:?}");
+        assert!((9..=18).contains(size), "after --reset: {after:?}");
     }
 }
 
@@ -8615,14 +8629,19 @@ fn the_report_names_the_rule_that_rejected() {
     let dir = tile_scratch("rejected");
     let report = synthesize_into(&dir, &["--reset"]);
 
+    // Since M51's plot locks the village solves nearly clean, so what is
+    // pinned is the *shape*: every rejecting rule quotes its own name back,
+    // and rejection converges rather than falling back.
     let rejected = report["rejected"].as_array().unwrap();
-    assert_eq!(rejected.len(), 1, "{report}");
-    assert_eq!(
-        rejected[0]["constraint"], "\"a building, not a curtain wall\"",
-        "the rule quotes its own name back"
-    );
-    assert!(rejected[0]["attempts"].as_u64().unwrap() > 10);
-    // It still converged: rejection that never succeeds shows up as fallbacks.
+    assert!(!rejected.is_empty(), "{report}");
+    for entry in rejected {
+        let name = entry["constraint"].as_str().unwrap();
+        assert!(
+            name.starts_with('"') && name.ends_with('"'),
+            "the rule quotes its own name back: {entry}"
+        );
+        assert!(entry["attempts"].as_u64().unwrap() > 0);
+    }
     assert_eq!(report["fallbacks"], 0, "{report}");
 }
 
@@ -8780,7 +8799,7 @@ fn a_runtime_solve_leaves_the_committed_layout_behind() {
 }
 
 /// `simulate` counts what it applied — M25's rule that a run reports what it
-/// did. Both verbs count: one clear plus eight sweeps.
+/// did. Both verbs count: one clear plus four quadrant solves (M51).
 #[test]
 fn simulate_reports_the_solves_it_applied() {
     let output = engine()
@@ -8791,7 +8810,7 @@ fn simulate_reports_the_solves_it_applied() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{:?}", stderr_lines(&output));
-    assert_eq!(json_out(&output)["synthesized"], 9);
+    assert_eq!(json_out(&output)["synthesized"], 5);
 }
 
 /// A scene that synthesizes nothing at runtime reports exactly what it did

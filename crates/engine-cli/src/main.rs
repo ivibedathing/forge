@@ -2344,6 +2344,7 @@ fn synthesize(args: SynthesizeArgs) -> Result<()> {
             attempts: params.attempts,
             fallbacks: outcome.fallbacks,
             offsets: inputs.grid.offsets.clone(),
+            edges: inputs.grid.edges,
         },
         cells: outcome
             .cells
@@ -2454,6 +2455,7 @@ fn read_grid(args: &SynthesizeArgs) -> Result<GridInputs> {
     let grid = engine_core::tilelayout::Grid {
         size: component.size,
         offsets: scene.tile_grid_offsets(&name, &component, tileset.cell),
+        edges: component.edges,
     };
     // Resolved here because `--around` needs the scene, which nothing
     // downstream of this function keeps.
@@ -2699,6 +2701,11 @@ fn inputs_digest(
     h.u32(inputs.grid.offsets.len() as u32);
     for offset in &inputs.grid.offsets {
         h.u32(*offset as u32);
+    }
+    // Only when closed (M51) — feeding the default in would mark every
+    // pre-M51 layout stale for a field it never had, the M49 digest rule.
+    if !inputs.grid.edges.is_open() {
+        h.str("edges:closed");
     }
     // Which cells are pinned, not what they hold: what they hold is the
     // layout's own content, and hashing it would make the digest a checksum of
@@ -3141,6 +3148,9 @@ fn write_contact_sheet(
             attempts: 1,
             fallbacks: 0,
             offsets: Vec::new(),
+            // A sheet locks every cell and cares about no adjacency, so it
+            // keeps the open default a closed tileset would otherwise fail.
+            edges: Default::default(),
         },
         cells,
     };
@@ -3153,6 +3163,7 @@ fn write_contact_sheet(
     let grid = engine_core::tilelayout::Grid {
         size: [nx, 1, nz],
         offsets: Vec::new(),
+        edges: Default::default(),
     };
     let (mut low, mut high) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
     for (index, cell) in layout.cells.iter().enumerate() {

@@ -48,7 +48,8 @@
           "size": [10, 2, 8],
           "seed": 5,
           "fill_ground": "cobble",
-          "fill_background": "air"
+          "fill_background": "air",
+          "edges": "closed"
         }
       ]
     },

@@ -273,6 +273,12 @@ impl LiveGrids {
                 grid: Grid {
                     size: component.size,
                     offsets: layout.header.offsets.clone(),
+                    // The header's, not the component's: a runtime solve
+                    // builds on the committed layout, and the file is only
+                    // meaningful beside the edge mode it was solved with. A
+                    // component that disagrees is `tile_layout_mismatch` at
+                    // validation, before a run gets this far.
+                    edges: layout.header.edges,
                 },
                 placement: scene.transform_of(entity),
                 locked: layout.cells.iter().map(|c| c.locked).collect(),

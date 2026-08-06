@@ -146,14 +146,24 @@ pub fn synthesize(request: &Request<'_>) -> Result<Outcome> {
         }
 
         // What this block is already answerable for, before it changes
-        // anything. A block is asked to **do no harm**, not to be perfect:
-        // strict rejection cannot converge on a layout that already violates,
-        // because the offending region extends past every block that could be
-        // blamed for it, so every block falls back forever. From the
-        // known-good fill this is empty, so a fresh solve is strict.
-        let before = blamed(request, &cells, &inside).len();
+        // anything. A block is asked to **do the least harm available**, never
+        // more than it inherited: strict rejection cannot converge on a layout
+        // that already violates, because the offending region extends past
+        // every block that could be blamed for it, so every block falls back
+        // forever. From the known-good fill the baseline is zero, so a fresh
+        // solve is exactly strict.
+        //
+        // Best-of rather than first-non-worsening (M51): a *locked* cell can
+        // make the baseline itself non-zero — a plot floor sitting in the fill
+        // is a one-cell building — and under first-accept that baseline is a
+        // budget any junk may spend. The tour's fixture accepted a floorless
+        // 3×2 wall blob that way, because the two plots it started from
+        // already counted 2. Taking the attempt with the fewest violations
+        // (early exit at zero) keeps every convergence property and closes
+        // that hole.
+        let before = blamed(request, &cells, &inside, true).len();
 
-        let mut settled = None;
+        let mut settled: Option<(usize, Vec<usize>)> = None;
         for attempt in 0..request.params.attempts.max(1) {
             if attempt > 0 {
                 outcome.retries += 1;
@@ -163,7 +173,7 @@ pub fn synthesize(request: &Request<'_>) -> Result<Outcome> {
                 continue;
             };
             if request.rules.is_empty() {
-                settled = Some(result);
+                settled = Some((0, result));
                 break;
             }
             // The grid as it would stand if this block were accepted: a
@@ -173,15 +183,22 @@ pub fn synthesize(request: &Request<'_>) -> Result<Outcome> {
             for (local, cell) in interior.iter().enumerate() {
                 candidate[*cell] = result[local];
             }
-            let after = blamed(request, &candidate, &inside);
-            if after.len() <= before {
-                settled = Some(result);
+            let after = blamed(request, &candidate, &inside, false);
+            if after.is_empty() {
+                settled = Some((0, result));
                 break;
             }
-            outcome.rejected[after[0]] += 1;
+            let best = settled.as_ref().map_or(usize::MAX, |(count, _)| *count);
+            if after.len() <= before && after.len() < best {
+                settled = Some((after.len(), result));
+            } else {
+                // Attributed to the first constraint the attempt broke: the
+                // count that turns "the village came out bland" into a name.
+                outcome.rejected[after[0]] += 1;
+            }
         }
         match settled {
-            Some(result) => {
+            Some((_, result)) => {
                 for (local, cell) in interior.iter().enumerate() {
                     cells[*cell] = result[local];
                 }
@@ -215,13 +232,33 @@ pub fn synthesize(request: &Request<'_>) -> Result<Outcome> {
 /// forever — most of it lies outside anything that block can change. A
 /// violation counts only when the cells it is about meet this block's own
 /// interior.
-fn blamed(request: &Request<'_>, cells: &[usize], inside: &[bool]) -> Vec<usize> {
+///
+/// `spare_locked` is the asymmetry that makes plot locks work (M51). A locked
+/// floor sitting in the fill is a one-cell building breaking every building
+/// rule at once, and counting that in the **baseline** hands the solver a
+/// budget it will happily spend on unrelated junk — the fixture accepted a
+/// floorless wall blob against exactly that allowance. So the baseline skips
+/// violations touching a locked cell (they are the solver's *job*), while the
+/// candidate counts them all (leaving the job undone is still a failure).
+fn blamed(
+    request: &Request<'_>,
+    cells: &[usize],
+    inside: &[bool],
+    spare_locked: bool,
+) -> Vec<usize> {
     if request.rules.is_empty() {
         return Vec::new();
     }
     crate::constraints::evaluate(request.rules, request.grid, cells)
         .into_iter()
         .filter(|violation| violation.cells.iter().any(|cell| inside[*cell]))
+        .filter(|violation| {
+            !spare_locked
+                || !violation
+                    .cells
+                    .iter()
+                    .any(|cell| request.locked.get(*cell).copied().unwrap_or(false))
+        })
         .map(|violation| violation.constraint)
         .collect()
 }
@@ -451,6 +488,20 @@ fn solve_block(
                     mask
                 }
                 Neighbour::Open => continue,
+                // A closed grid's free edge is the fill (M51): the same
+                // restriction a border cell holding the fill would apply, so a
+                // building has to finish before the border or a terrace seam.
+                Neighbour::Fill { y } => request
+                    .compat
+                    .row(
+                        face.opposite().index(),
+                        if y == 0 {
+                            request.fill_ground
+                        } else {
+                            request.fill_background
+                        },
+                    )
+                    .to_vec(),
             };
             for word in 0..words {
                 domain[local * words + word] &= allowed[word];
@@ -831,7 +882,7 @@ mod tests {
     fn grid_of(nx: u32, ny: u32, nz: u32) -> Grid {
         Grid {
             size: [nx, ny, nz],
-            offsets: Vec::new(),
+            offsets: Vec::new(), edges: Default::default(),
         }
     }
 
@@ -855,9 +906,31 @@ mod tests {
                         grid.coords(cell),
                     ),
                     Neighbour::Open => {}
+                    Neighbour::Fill { y } => {
+                        let fill = if y == 0 {
+                            fixture_fill_ground(fixture)
+                        } else {
+                            fixture_fill_background(fixture)
+                        };
+                        assert!(
+                            fixture.compat.allows(face.index(), here, fill),
+                            "{} at {:?} refuses the fill across the closed edge {face:?}",
+                            fixture.tiles[here].token,
+                            grid.coords(cell),
+                        );
+                    }
                 }
             }
         }
+    }
+
+    /// The fill pair every fixture request uses, named so `assert_legal` can
+    /// check a closed grid's edges against the same tiles the solver read.
+    fn fixture_fill_ground(fixture: &Fixture) -> usize {
+        fixture.ground
+    }
+    fn fixture_fill_background(fixture: &Fixture) -> usize {
+        fixture.background
     }
 
     #[test]
@@ -868,6 +941,36 @@ mod tests {
         let outcome = synthesize(&request(&fixture, &grid, &locked, 7)).unwrap();
         assert_eq!(outcome.fallbacks, 0, "this tileset is not over-constrained");
         assert_legal(&fixture, &grid, &outcome.cells);
+    }
+
+    /// A closed grid's solve is legal *at its edges too* (M51): every border
+    /// face mates the fill, so no interior tile leans on the world beyond the
+    /// patch. `assert_legal` checks the `Fill` arm, which is what makes this
+    /// more than the open test re-run.
+    #[test]
+    fn a_closed_grid_finishes_its_buildings_inside() {
+        let fixture = fixture();
+        let mut grid = grid_of(12, 2, 10);
+        grid.edges = crate::tilelayout::Edges::Closed;
+        let locked = vec![false; grid.cell_count()];
+        let outcome = synthesize(&request(&fixture, &grid, &locked, 7)).unwrap();
+        assert_eq!(outcome.fallbacks, 0, "closing the edges must not starve it");
+        assert_legal(&fixture, &grid, &outcome.cells);
+        // And concretely: no `in`-faced tile (floor, a wall's interior) sits
+        // against the border, which is the truncated-house failure itself.
+        let [nx, _, nz] = grid.size;
+        for z in 0..nz {
+            for x in 0..nx {
+                if x != 0 && x != nx - 1 && z != 0 && z != nz - 1 {
+                    continue;
+                }
+                let token = &fixture.tiles[outcome.cells[grid.index(x, 0, z)]].token;
+                assert!(
+                    !token.starts_with("floor"),
+                    "a floor at the closed border ({x},{z}) is a truncated house"
+                );
+            }
+        }
     }
 
     /// The closed floor and open sky are what keep the two storeys apart, with

@@ -1,5 +1,11 @@
 # Runtime synthesis (M50)
 
+*The tour choreography this note describes — the raster sweep and its
+spacing — was revised by M51, which replaced it with one call per block over
+locked building plots. The mechanism (the verbs, the queue, `LiveGrids`, the
+refusals) is unchanged; read `m51-village-coherence.md` for why the sweep
+went.*
+
 *Design doc: `designs/runtime-synthesis-design.md` — it holds the rejected
 alternatives. This note holds what building it taught.*
 

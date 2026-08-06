@@ -54,7 +54,8 @@
           "seed": 41,
           "fill_ground": "cobble",
           "fill_background": "air",
-          "ground": "Ground"
+          "ground": "Ground",
+          "edges": "closed"
         },
         { "type": "Collider", "shape": "trimesh" }
       ]

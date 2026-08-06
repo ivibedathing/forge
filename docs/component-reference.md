@@ -913,6 +913,7 @@ straddling it.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
+| `edges` | `"open"` \| `"closed"` | — | What lies beyond a grid's free edges — its borders, and its terrace seams (M51).  `Open` is M47 exactly: a free edge constrains nothing, the patch is a window onto a larger world. `Closed` is the WFC literature's *boundary condition*: everything beyond a free edge is taken to be the fill — street at ground level, air above — so an interior can never leak off the world. A building must then complete inside the grid and on its own terrace, which is what stops houses being truncated at the border or cut open by a lift step. |
 | `fill_background` | `string` | `""` | The tile every unlocked cell starts as above `y == 0`. Empty means the tileset's last tile. |
 | `fill_ground` | `string` | `""` | The tile every unlocked cell starts as at `y == 0`, and the arrangement a block reverts to having never been solved.  Empty means the tileset's first tile. Both fills must be able to tile the grid on their own, or the initial state is itself a contradiction — `tile_fill_not_self_compatible`. |
 | `ground` | `string` | `""` | A `Terrain` entity the grid terraces to, by whole cells.  Empty means flat. Whole cells rather than metres because a continuous offset leaves a slot down every wall between two columns at different heights, and no tile knows what its neighbour's offset is. |

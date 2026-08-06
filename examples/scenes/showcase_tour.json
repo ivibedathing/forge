@@ -4091,7 +4091,8 @@
           "seed": 4,
           "fill_ground": "cobble",
           "fill_background": "air",
-          "ground": "Ground"
+          "ground": "Ground",
+          "edges": "closed"
         }
       ]
     },
